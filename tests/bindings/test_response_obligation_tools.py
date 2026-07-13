@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -71,6 +72,13 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
                 "response_obligation": {
                     "responsible_harness_id": "harness-responder",
                     "response_schema_id": "inventory.lookup.result",
+                    "response_schema": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {"quantity": {"type": "integer"}},
+                        "required": ["quantity"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "conversation_id": "conversation:binding",
@@ -147,6 +155,13 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     assert request["actor"] is actor
     assert request["action"]["response_obligation"]["response_required"] is True
     assert core.calls[-1][1]["action"]["kind"] == "obligation_response"
+
+
+def test_pi_extension_exposes_the_same_canonical_journey_as_mcp() -> None:
+    source = Path("src/agentnet/bindings/pi_extension.ts").read_text(encoding="utf-8")
+    for method in CANONICAL_TOOL_NAMES:
+        assert f'"{method}"' in source
+        assert f'name: "{method.replace(".", "_")}"' in source
 
 
 def test_canonical_binding_rejects_identity_injection_and_non_obligation_marker() -> None:

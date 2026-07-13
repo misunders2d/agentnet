@@ -13,6 +13,7 @@ authors = [{ name = "AgentNet contributors" }]
 dependencies = [
   "a2a-sdk[http-server]==1.1.0",
   "cryptography==49.0.0",
+  "jsonschema==4.26.0",
   "mcp==1.28.1",
   "psycopg[binary]==3.3.4",
   "pydantic==2.13.4",
@@ -69,6 +70,7 @@ only-include = [
   "docs/final-verification.md",
   "docs/implementation-guide.md",
   "docs/requirements.md",
+  "docs/response-obligations.md",
   "docs/specification.md",
   "pyproject.toml",
   "schemas/README.md",

@@ -262,7 +262,7 @@ rclone help backends
 .venv/bin/pytest -q -p no:cacheprovider tests/artifacts
 ```
 
-The filesystem artifact corpus is implemented and included in the 957-test run. S3-compatible tests remain blocked by the absence of a pinned local server and container runner.
+The filesystem artifact corpus is implemented and included in the 983-test run. S3-compatible tests remain blocked by the absence of a pinned local server and container runner.
 
 **Accept filesystem/rclone-local at E3 only for:** the explicitly weaker synthetic pilot.  
 **Accept production backend at E5 only if:** immutable version, replication, encryption, backup, restore, and non-disclosure gates pass.  

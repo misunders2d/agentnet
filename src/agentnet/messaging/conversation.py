@@ -108,6 +108,16 @@ class StructuredRequestAction(_ConversationAction):
             raise ValueError("structured request identifiers are invalid")
         return value
 
+    @model_validator(mode="after")
+    def obligation_schema_matches_request(self) -> "StructuredRequestAction":
+        if (
+            self.response_schema_id is not None
+            and self.response_obligation is not None
+            and self.response_schema_id != self.response_obligation.response_schema_id
+        ):
+            raise ValueError("structured request and obligation schema identifiers differ")
+        return self
+
 
 class ObligationResponseAction(_ConversationAction):
     """Typed terminal answer bound to one exact open response obligation.
@@ -716,6 +726,10 @@ class ConversationService:
                     raise ValidationError(
                         "obligation response must declare the exact demanded response schema"
                     )
+                self.obligations.validate_structured_response(
+                    obligation_row,
+                    parsed.structured_response,
+                )
 
             obligation_spec: ResponseObligationSpec | None = getattr(
                 parsed, "response_obligation", None

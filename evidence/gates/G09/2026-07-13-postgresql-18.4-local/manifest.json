@@ -4,7 +4,7 @@
   "evaluated_at": "2026-07-13T18:44:00+03:00",
   "status": "partial",
   "evidence_tier": ["L"],
-  "release_source_tree_sha256": "c94517c2c83d2d5af0aeebbd22127aff2dc763efbe03c78041a9aae599e8c373",
+  "release_source_tree_sha256": "e9f13233cab0751369e8da25cbc067594dcb6b6c0b0a550b75c22c77cdb419ea",
   "operator": "local Codex implementation session",
   "review": "local evidence reviewed; no independent external reviewer",
   "official_gate_green": false,

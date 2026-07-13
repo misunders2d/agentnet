@@ -35,7 +35,24 @@ CREATE TABLE IF NOT EXISTS cursors (
     harness_id TEXT PRIMARY KEY,
     core_cursor INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS obligation_snapshots (
+    harness_id TEXT PRIMARY KEY,
+    snapshot_digest TEXT NOT NULL,
+    snapshot_encrypted TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
+
+OBLIGATION_COUNTER_KEYS = frozenset(
+    {
+        "unread_information",
+        "action_required",
+        "awaiting_peer",
+        "awaiting_human",
+        "overdue",
+        "failed",
+    }
+)
 
 
 class LocalQueue:
@@ -307,6 +324,58 @@ class LocalQueue:
                 (harness_id,),
             ).fetchall()
         return {row["state"]: row["count"] for row in rows}
+
+    def store_obligation_snapshot(
+        self,
+        *,
+        harness_id: str,
+        counters: dict[str, int],
+    ) -> None:
+        """Durably retain only privacy-safe obligation attention counters."""
+
+        if (
+            not harness_id
+            or set(counters) != OBLIGATION_COUNTER_KEYS
+            or any(type(value) is not int or value < 0 for value in counters.values())
+        ):
+            raise ValidationError("obligation counter snapshot schema is invalid")
+        digest = canonical_digest(counters)
+        encrypted = self.cipher.encrypt_json(
+            counters,
+            purpose=f"obligation-snapshot:{harness_id}",
+        )
+        with self._lock:
+            self._connection.execute(
+                """INSERT INTO obligation_snapshots(
+                       harness_id,snapshot_digest,snapshot_encrypted,updated_at
+                   ) VALUES(?,?,?,?)
+                   ON CONFLICT(harness_id) DO UPDATE SET
+                       snapshot_digest=excluded.snapshot_digest,
+                       snapshot_encrypted=excluded.snapshot_encrypted,
+                       updated_at=excluded.updated_at""",
+                (harness_id, digest, encrypted, int(time.time())),
+            )
+
+    def obligation_snapshot(self, harness_id: str) -> dict[str, int]:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT snapshot_digest,snapshot_encrypted FROM obligation_snapshots WHERE harness_id=?",
+                (harness_id,),
+            ).fetchone()
+        if row is None:
+            return {key: 0 for key in OBLIGATION_COUNTER_KEYS}
+        value = self.cipher.decrypt_json(
+            row["snapshot_encrypted"],
+            purpose=f"obligation-snapshot:{harness_id}",
+        )
+        if (
+            not isinstance(value, dict)
+            or set(value) != OBLIGATION_COUNTER_KEYS
+            or any(type(item) is not int or item < 0 for item in value.values())
+            or canonical_digest(value) != row["snapshot_digest"]
+        ):
+            raise ValidationError("durable obligation counter snapshot is invalid")
+        return {key: int(value[key]) for key in OBLIGATION_COUNTER_KEYS}
 
     def cursor(self, harness_id: str) -> int:
         with self._lock:

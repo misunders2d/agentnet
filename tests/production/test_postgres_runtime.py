@@ -76,10 +76,9 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 2
+    assert CURRENT_SCHEMA_VERSION == 1
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
-        (2, "agentnet_response_obligation_schema"),
     ]
     schema = "\n".join(migration.sql for migration in MIGRATIONS)
     assert "AUTOINCREMENT" not in schema

@@ -90,6 +90,12 @@ class FailFirstResultUpload:
             self.last_item = items[0]
         return items
 
+    def reconcile_obligations(self, *, limit: int):
+        return self.inner.reconcile_obligations(limit=limit)
+
+    def obligation_inbox(self):
+        return self.inner.obligation_inbox()
+
     def authorize_background(self, item):
         value = self.inner.authorize_background(item)
         self.last_authorization = value

@@ -214,6 +214,16 @@ AgentNet must support:
 - first-class files and typed artifacts in all authorized topologies;
 - verified human and originating-harness attribution on every contribution.
 
+Requests that require an answer use a durable `ResponseObligation`, not an
+inbox classifier or prose convention. The obligation binds the exact request,
+one responsible harness, optional deadline, and optional self-contained JSON
+response schema. Permissions and read visibility remain human-principal scoped,
+so an active sibling harness may inspect the principal's obligations; progress
+and terminal response ownership remain exact-harness scoped. Revoked harnesses
+must fail every read and mutation. The shared supervisor—not any Pi-, Claude-,
+Codex-, or Antigravity-specific adapter—automatically reconciles obligation
+state and durably retains only encrypted content-free attention counters.
+
 Rooms require explicit ownership/sequencing, membership epochs, invitation and
 removal rules, from-join/history policy, guest constraints, moderation,
 transfer, tombstone recovery, archival, retention, and deletion behavior.
@@ -331,6 +341,11 @@ Arguments must never establish caller identity. Local bindings derive the actor
 from the enrolled current credential and measured parent/child context, use
 owner-only capability roots and sockets, fence generation/TTL/epoch/revocation,
 and reject replay or uncertain reconnect outcomes.
+
+Every supported local binding must expose the same canonical send, inbox,
+conversation, and response-obligation operations. A harness-specific adapter
+may change only framing and presentation, never omit lifecycle operations or
+change their authorization semantics.
 
 ### Internal network mechanisms
 

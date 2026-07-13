@@ -1,16 +1,16 @@
 {
   "run_id": "2026-07-13-final",
-  "evaluated_at": "2026-07-13T18:58:00+03:00",
+  "evaluated_at": "2026-07-13T22:00:25+03:00",
   "scope": "local_hermetic_and_real_local_service_evidence",
   "release_certified": false,
-  "release_source_tree_sha256": "c94517c2c83d2d5af0aeebbd22127aff2dc763efbe03c78041a9aae599e8c373",
-  "release_manifest_sha256": "789c1aeef9d0eb4d145e3aa0be93eb7352746617ece6d67f23afc4a031e658f0",
+  "release_source_tree_sha256": "e9f13233cab0751369e8da25cbc067594dcb6b6c0b0a550b75c22c77cdb419ea",
+  "release_manifest_sha256": "ad5a8b66d87c5729746f96ed2c5f65e468f59166abc5497daf30bda0af0d38c9",
   "operator": "local Codex implementation session",
-  "review": "local Codex subagent adversarial review; no independent external reviewer",
+  "review": "local Codex review; no independent external reviewer",
   "commands": [
     {
       "command": "AGENTNET_TEST_POSTGRES_URL='postgresql:///agentnet_test_final?host=/tmp/agentnet-pgsocket-20260713-final&port=55432' AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q -p no:cacheprovider",
-      "result": "957 passed; 0 failed; 0 skipped; 0 xfailed"
+      "result": "983 passed; 0 failed; 0 skipped; 0 xfailed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python scripts/verify_release.py",
@@ -21,54 +21,54 @@
       "result": "pinned Hatchling 1.28.0/editables 0.5 backend; offline sdist and wheel build succeeded; second independent output directory produced byte-identical SHA-256 archives"
     },
     {
-      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv pip install --offline --python /tmp/agentnet-final-install-20260713-v2/bin/python /tmp/agentnet-final-build-20260713/agentnet-0.1.0-py3-none-any.whl",
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv pip install --python /tmp/agentnet-final-install-20260713-v3/bin/python /tmp/agentnet-final-build-20260713/agentnet-0.1.0-py3-none-any.whl",
       "result": "45 packages installed into a new virtual environment"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet init --config /tmp/agentnet-final-owner-20260713-v2/config.json --data-dir /tmp/agentnet-final-owner-20260713-v2/data --domain final-v2.agentnet.example",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet init --config /tmp/agentnet-final-owner-20260713-v3/config.json --data-dir /tmp/agentnet-final-owner-20260713-v3/data --domain final-v3.agentnet.example",
       "result": "fresh local-conformance configuration initialized"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet status --config /tmp/agentnet-final-owner-20260713-v2/config.json --local-only",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet status --config /tmp/agentnet-final-owner-20260713-v3/config.json --local-only",
       "result": "schema version 1; ready true; accepted_local; release_certified false"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet harness-probe --data-dir /tmp/agentnet-final-owner-20260713-v2/harness-probe",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet harness-probe --data-dir /tmp/agentnet-final-owner-20260713-v3/harness-probe",
       "result": "Claude 2.1.207, Codex 0.144.3, Pi 0.80.6, and Antigravity 1.1.1 all matched their exact pins"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet harness-demo --data-dir /tmp/agentnet-final-owner-20260713-v2/harness-demo",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet harness-demo --data-dir /tmp/agentnet-final-owner-20260713-v3/harness-demo",
       "result": "all four deterministic background lifecycles ready; no semantic content sent"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet demo --data-dir /tmp/agentnet-final-owner-20260713-v2/demo",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet demo --data-dir /tmp/agentnet-final-owner-20260713-v3/demo",
       "result": "schema version 1; accepted_local offline mailbox round trip with exact causal/provenance record; ready true"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet a2a-demo",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet a2a-demo",
       "result": "HTTP 200 inert tainted submitted proposal; no corporate authority or effect permission"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet backup sqlite --config /tmp/agentnet-final-owner-20260713-v2/config.json --archive /tmp/agentnet-final-owner-20260713-v2/backup.tar.gz --manifest /tmp/agentnet-final-owner-20260713-v2/backup-manifest.json --seal /tmp/agentnet-final-custody-20260713-v2/backup-seal.json --backup-id final-clean-install-20260713-v2 --audit-private-key /tmp/agentnet-final-owner-20260713-v2/audit-private.pem --seal-private-key /tmp/agentnet-final-owner-20260713-v2/data/secrets/backup-seal.key.pem --application-offline",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet backup sqlite --config /tmp/agentnet-final-owner-20260713-v3/config.json --archive /tmp/agentnet-final-owner-20260713-v3/data/backup.tar.gz --manifest /tmp/agentnet-final-owner-20260713-v3/data/backup-manifest.json --seal /tmp/agentnet-final-custody-20260713-v3/backup-seal.json --backup-id final-clean-install-20260713-v3 --audit-private-key /tmp/agentnet-final-owner-20260713-v3/audit-private.pem --seal-private-key /tmp/agentnet-final-owner-20260713-v3/data/secrets/backup-seal.key.pem --application-offline",
       "result": "signed exact schema-v1 SQLite backup completed; separate-custody seal written; HA and PITR both false"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet restore sqlite --config /tmp/agentnet-final-owner-20260713-v2/config.json --archive /tmp/agentnet-final-owner-20260713-v2/backup.tar.gz --manifest /tmp/agentnet-final-owner-20260713-v2/backup-manifest.json --seal /tmp/agentnet-final-custody-20260713-v2/backup-seal.json --audit-public-key /tmp/agentnet-final-owner-20260713-v2/audit-public.pem --target /tmp/agentnet-final-owner-20260713-v2/restored.sqlite3 --application-offline",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet restore sqlite --config /tmp/agentnet-final-owner-20260713-v3/config.json --archive /tmp/agentnet-final-owner-20260713-v3/data/backup.tar.gz --manifest /tmp/agentnet-final-owner-20260713-v3/data/backup-manifest.json --seal /tmp/agentnet-final-custody-20260713-v3/backup-seal.json --audit-public-key /tmp/agentnet-final-owner-20260713-v3/audit-public.pem --target /tmp/agentnet-final-owner-20260713-v3/data/restored.sqlite3 --application-offline",
       "result": "archive, signed manifest seal, audit checkpoint, domain snapshot, and schema version 1 verified; restore completed; service_safe_to_resume false"
     },
     {
-      "command": "/tmp/agentnet-final-install-20260713-v2/bin/agentnet serve --config /tmp/agentnet-final-owner-20260713-v2/config.json --host 127.0.0.1 --port 8080 --log-level warning; loopback GET /healthz and /readyz; then terminate",
+      "command": "/tmp/agentnet-final-install-20260713-v3/bin/agentnet serve --config /tmp/agentnet-final-owner-20260713-v3/config.json --host 127.0.0.1 --port 8080 --log-level warning; loopback GET /healthz and /readyz; then terminate",
       "result": "health alive; readiness true; schema version 1; accepted_local; release_certified false; process stopped and port released"
     }
   ],
   "artifacts": [
     {
       "path": "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
-      "sha256": "17f403bf1f5bcefd5b8dd339684c5e165bc9cde240dcdcd2c6533f6fd9d68686"
+      "sha256": "b81d8f170a30d97df7eb709f938ca5ede7ab0d0b3e19615e87b326b66a9c8604"
     },
     {
       "path": "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
-      "sha256": "63086177eda01e204ec4e8dd0d75c1582b0514faa2e18554a2595936f8bcee16"
+      "sha256": "dcdb4e219d5390d7d14c269535d00347a1c41b5508c6987c3d6325469031623b"
     }
   ],
   "dependency_note": "The production container installs the committed uv.lock, including Hatchling and editables, with uv sync --frozen --no-build-isolation and owner-supplied immutable Python and uv image digests. A generic wheel consumer resolves transitive dependencies under project metadata and is not an attested production image.",

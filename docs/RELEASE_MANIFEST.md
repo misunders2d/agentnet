@@ -23,14 +23,16 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `cd77d97577a1cfbab0d74b29d59956b1d4930fee48d27c094e7b55b017020575` |
-| `pyproject.toml` | SHA-256 `c9602cac31fe102aad86e1e429ce8a1f5b91410ee607298786c52bcc001ec5a4` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `86338775a8f2d994adafa0ea875ae8ea4cdc2ab9a2299f41d1f2e6b058c8c56a` |
+| `pyproject.toml` | SHA-256 `11dc12350785961c4ed93929324b5b405b765903baf1f926b38da33873fbd713` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
 the project with `uv sync --frozen --no-build-isolation`. Runtime, test, and
 build direct dependencies are exact-pinned and checked against the complete
 locked name/version resolution.
+`jsonschema==4.26.0` is now a direct runtime pin for validating the immutable,
+self-contained response schema bound to each typed response obligation.
 
 ## Protocol pins
 

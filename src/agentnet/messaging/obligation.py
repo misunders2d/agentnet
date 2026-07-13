@@ -18,6 +18,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError as JsonSchemaError
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agentnet.authorization.policy import (
@@ -29,7 +32,7 @@ from agentnet.authorization.policy import (
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.protocol.models import Classification, DeliveryFact
-from agentnet.security.signatures import canonical_json
+from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 from agentnet.storage.response_obligation_schema import require_response_obligation_schema
 
@@ -124,6 +127,7 @@ class ResponseObligationSpec(BaseModel):
     responsible_harness_id: str | None = Field(default=None, min_length=1, max_length=256)
     deadline_at: datetime | None = None
     response_schema_id: str | None = None
+    response_schema: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def response_is_actually_required(self) -> "ResponseObligationSpec":
@@ -131,7 +135,38 @@ class ResponseObligationSpec(BaseModel):
             raise ValueError(
                 "response_obligation is only valid when response_required is true"
             )
+        if (self.response_schema_id is None) != (self.response_schema is None):
+            raise ValueError(
+                "response schema identifier and inline schema must be supplied together"
+            )
+        if self.response_schema is not None:
+            encoded = canonical_json(self.response_schema)
+            if len(encoded) > 65_536:
+                raise ValueError("response schema exceeds the bounded size")
+            try:
+                Draft202012Validator.check_schema(self.response_schema)
+            except JsonSchemaError as exc:
+                raise ValueError("response schema is not valid JSON Schema 2020-12") from exc
+            self._require_local_references(self.response_schema)
         return self
+
+    @classmethod
+    def _require_local_references(cls, value: Any) -> None:
+        pending = [value]
+        while pending:
+            current = pending.pop()
+            if isinstance(current, dict):
+                for keyword in ("$ref", "$dynamicRef"):
+                    reference = current.get(keyword)
+                    if (
+                        isinstance(reference, str)
+                        and reference != ""
+                        and not reference.startswith("#")
+                    ):
+                        raise ValueError("response schema references must be self-contained")
+                pending.extend(current.values())
+            elif isinstance(current, list):
+                pending.extend(current)
 
     @field_validator("response_schema_id")
     @classmethod
@@ -172,6 +207,7 @@ def _row_view(row: Any) -> dict[str, Any]:
         "responsible_harness_id": row["responsible_harness_id"],
         "response_required": bool(row["response_required"]),
         "response_schema_id": row["response_schema_id"],
+        "response_schema_digest": row["response_schema_digest"],
         "state": row["state"],
         "state_reason": row["state_reason"],
         "revision": int(row["revision"]),
@@ -411,9 +447,10 @@ class ResponseObligationService:
                 obligation_id,domain_id,conversation_id,thread_id,request_event_id,
                 request_payload_digest,request_envelope_digest,requester_authority_id,
                 requester_harness_id,responsible_authority_id,responsible_harness_id,
-                response_required,response_schema_id,state,state_reason,revision,
+                response_required,response_schema_id,response_schema_json,response_schema_digest,
+                state,state_reason,revision,
                 deadline_at,policy_revision,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'created','requested',1,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'created','requested',1,?,?,?,?)""",
             (
                 obligation_id,
                 request_event.domain_id,
@@ -428,6 +465,12 @@ class ResponseObligationService:
                 responsible_harness_id,
                 int(spec.response_required),
                 spec.response_schema_id,
+                (
+                    canonical_json(spec.response_schema).decode("utf-8")
+                    if spec.response_schema is not None
+                    else None
+                ),
+                canonical_digest(spec.response_schema) if spec.response_schema is not None else None,
                 int(spec.deadline_at.timestamp()) if spec.deadline_at else None,
                 policy_revision,
                 now,
@@ -490,6 +533,30 @@ class ResponseObligationService:
         if row["state"] in OBLIGATION_TERMINAL_STATES:
             raise ConflictError("response obligation already has a terminal outcome")
         return row
+
+    @staticmethod
+    def validate_structured_response(row: Any, structured_response: dict[str, Any]) -> None:
+        """Validate against the exact immutable schema stored with the request."""
+
+        schema_json = row["response_schema_json"]
+        schema_digest = row["response_schema_digest"]
+        schema_id = row["response_schema_id"]
+        if schema_json is None:
+            if schema_id is not None or schema_digest is not None:
+                raise ValidationError("response obligation schema binding is incomplete")
+            return
+        if schema_id is None or schema_digest is None:
+            raise ValidationError("response obligation schema binding is incomplete")
+        try:
+            schema = json.loads(str(schema_json))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValidationError("response obligation schema binding is invalid") from exc
+        if canonical_digest(schema) != schema_digest:
+            raise ValidationError("response obligation schema digest does not match")
+        try:
+            Draft202012Validator(schema).validate(structured_response)
+        except JsonSchemaValidationError as exc:
+            raise ValidationError("structured response does not satisfy the demanded schema") from exc
 
     def close_with_response_in_transaction(
         self,
@@ -755,8 +822,14 @@ class ResponseObligationService:
 
     # -- exact-fetch and inbox visibility -------------------------------------
 
-    def _require_party(self, actor: VerifiedActor, row: Any) -> str:
-        authority_id = self._authority_id(actor)
+    def _require_party(self, connection: Any, actor: VerifiedActor, row: Any) -> str:
+        classification = self._classification(connection, row["conversation_id"])
+        authority_id, _revision = self._require_current_actor(
+            connection,
+            actor,
+            now=int(time.time()),
+            classification=classification,
+        )
         if row["domain_id"] != actor.domain_id:
             raise AuthorizationError("response obligation is unavailable")
         if row["requester_authority_id"] == authority_id:
@@ -773,7 +846,7 @@ class ResponseObligationService:
             ).fetchone()
             if row is None:
                 raise AuthorizationError("response obligation is unavailable")
-            role = self._require_party(actor, row)
+            role = self._require_party(connection, actor, row)
             transitions = connection.execute(
                 """SELECT revision,from_state,to_state,detail_json,response_event_id,created_at
                      FROM response_obligation_transitions
@@ -808,28 +881,34 @@ class ResponseObligationService:
         known_states = set(OBLIGATION_TRANSITIONS) | OBLIGATION_TERMINAL_STATES
         if any(state not in known_states for state in states):
             raise ValidationError("obligation list names an unknown state")
-        authority_id = self._authority_id(actor)
-        clauses = ["domain_id=?"]
-        parameters: list[Any] = [actor.domain_id]
-        if role == "requester":
-            clauses.append("requester_authority_id=?")
-            parameters.append(authority_id)
-        elif role == "responsible":
-            clauses.append("responsible_authority_id=?")
-            parameters.append(authority_id)
-        else:
-            clauses.append("(requester_authority_id=? OR responsible_authority_id=?)")
-            parameters.extend((authority_id, authority_id))
-        if states:
-            clauses.append(f"state IN ({','.join('?' for _ in states)})")
-            parameters.extend(states)
-        parameters.append(limit)
-        rows = self.store.fetch_all(
-            f"""SELECT * FROM response_obligations WHERE {' AND '.join(clauses)}
-                ORDER BY created_at,obligation_id LIMIT ?""",
-            tuple(parameters),
-        )
-        return [_row_view(row) for row in rows]
+        with self.store.transaction(immediate=False) as connection:
+            authority_id, _revision = self._require_current_actor(
+                connection,
+                actor,
+                now=int(time.time()),
+                classification=Classification.C0_PUBLIC,
+            )
+            clauses = ["domain_id=?"]
+            parameters: list[Any] = [actor.domain_id]
+            if role == "requester":
+                clauses.append("requester_authority_id=?")
+                parameters.append(authority_id)
+            elif role == "responsible":
+                clauses.append("responsible_authority_id=?")
+                parameters.append(authority_id)
+            else:
+                clauses.append("(requester_authority_id=? OR responsible_authority_id=?)")
+                parameters.extend((authority_id, authority_id))
+            if states:
+                clauses.append(f"state IN ({','.join('?' for _ in states)})")
+                parameters.extend(states)
+            parameters.append(limit)
+            rows = connection.execute(
+                f"""SELECT * FROM response_obligations WHERE {' AND '.join(clauses)}
+                    ORDER BY created_at,obligation_id LIMIT ?""",
+                tuple(parameters),
+            ).fetchall()
+            return [_row_view(row) for row in rows]
 
     def inbox(self, *, actor: VerifiedActor, now: int | None = None) -> dict[str, int]:
         """Privacy-safe counters distinguishing why attention is needed.
@@ -839,10 +918,15 @@ class ResponseObligationService:
         item stays owned until it is answered, canceled, or expired.
         """
 
-        authority_id = self._authority_id(actor)
         now = int(time.time()) if now is None else now
         open_states = ("created", "recipient_committed", "acknowledged", "in_progress", "blocked")
         with self.store.transaction(immediate=False) as connection:
+            authority_id, _revision = self._require_current_actor(
+                connection,
+                actor,
+                now=now,
+                classification=Classification.C0_PUBLIC,
+            )
             def count(sql: str, parameters: tuple[Any, ...]) -> int:
                 row = connection.execute(sql, parameters).fetchone()
                 return int(row["total"]) if row is not None else 0

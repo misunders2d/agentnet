@@ -59,7 +59,20 @@ function binding(): Binding {
 	return cachedBinding;
 }
 
-function invoke(method: "agentnet.inbox" | "agentnet.send", args: Record<string, unknown>): Promise<unknown> {
+type CanonicalMethod =
+	| "agentnet.inbox"
+	| "agentnet.send"
+	| "agentnet.conversation.create"
+	| "agentnet.conversation.action"
+	| "agentnet.conversation.thread"
+	| "agentnet.obligation.inbox"
+	| "agentnet.obligation.list"
+	| "agentnet.obligation.get"
+	| "agentnet.obligation.transition"
+	| "agentnet.obligation.cancel"
+	| "agentnet.obligation.reconcile";
+
+function invoke(method: CanonicalMethod, args: Record<string, unknown>): Promise<unknown> {
 	const local = binding();
 	const nonce = randomBytes(24).toString("hex");
 	const request = { arguments: args, method };
@@ -140,5 +153,150 @@ export default function (pi: ExtensionAPI) {
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},
 	});
+	pi.registerTool({
+		name: "agentnet_conversation_create",
+		label: "AgentNet create conversation",
+		description: "Create an authorized corporate conversation for this harness.",
+		parameters: Type.Object({
+			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
+			member_harness_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
+			classification: Type.Optional(Type.Union([
+				Type.Literal("C0"), Type.Literal("C1"), Type.Literal("C2"), Type.Literal("C3"),
+			])),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.conversation.create", {
+				conversation_id: params.conversation_id,
+				member_harness_ids: params.member_harness_ids,
+				classification: params.classification ?? "C1",
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_conversation_action",
+		label: "AgentNet conversation action",
+		description: "Post a typed action, request obligation, or bound obligation response.",
+		parameters: Type.Object({
+			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
+			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
+			thread_id: Type.String({ minLength: 1, maxLength: 256 }),
+			action: Type.Record(Type.String(), Type.Unknown()),
+			idempotency_key: Type.String({ minLength: 16, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.conversation.action", params);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_conversation_thread",
+		label: "AgentNet conversation thread",
+		description: "Read one authorized corporate conversation thread.",
+		parameters: Type.Object({
+			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
+			thread_id: Type.String({ minLength: 1, maxLength: 256 }),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.conversation.thread", {
+				conversation_id: params.conversation_id,
+				thread_id: params.thread_id,
+				limit: params.limit ?? 100,
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_inbox",
+		label: "AgentNet obligation inbox",
+		description: "Read content-free response-obligation attention counters.",
+		parameters: Type.Object({}, { additionalProperties: false }),
+		async execute() {
+			const result = await invoke("agentnet.obligation.inbox", {});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_list",
+		label: "AgentNet obligation list",
+		description: "List response obligations visible to this authenticated harness.",
+		parameters: Type.Object({
+			role: Type.Optional(Type.Union([
+				Type.Literal("requester"), Type.Literal("responsible"), Type.Literal("any"),
+			])),
+			states: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.list", {
+				role: params.role ?? "any",
+				states: params.states ?? [],
+				limit: params.limit ?? 100,
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_get",
+		label: "AgentNet obligation detail",
+		description: "Fetch one response obligation and its transition history.",
+		parameters: Type.Object({
+			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.get", params);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_transition",
+		label: "AgentNet obligation progress",
+		description: "Record responsible-recipient progress on an obligation.",
+		parameters: Type.Object({
+			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
+			to_state: Type.Union([
+				Type.Literal("recipient_committed"), Type.Literal("acknowledged"),
+				Type.Literal("in_progress"), Type.Literal("pending_human"), Type.Literal("blocked"),
+			]),
+			reason: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+			expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.transition", {
+				...params,
+				reason: params.reason ?? "recipient_update",
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_cancel",
+		label: "AgentNet obligation cancel",
+		description: "Cancel an open obligation as its accountable requester.",
+		parameters: Type.Object({
+			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
+			reason_code: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+			expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.cancel", {
+				...params,
+				reason_code: params.reason_code ?? "requester_canceled",
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_obligation_reconcile",
+		label: "AgentNet obligation reconcile",
+		description: "Reconcile durable obligation custody and deadlines.",
+		parameters: Type.Object({
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.reconcile", { limit: params.limit ?? 100 });
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
 }
-

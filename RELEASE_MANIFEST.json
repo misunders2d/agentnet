@@ -14,7 +14,7 @@
   "authoritative_sources": {
     "concept": {
       "path": "docs/specification.md",
-      "sha256": "b44b3e1467dbc8752fd77d4605231d31b42d400e3938cb7117946ca01a859c30"
+      "sha256": "c772fdf9653fa66bf3418a631a23568b01128bd4e44d1472d073b3087310c3f4"
     },
     "requirements": {
       "path": "docs/requirements.md",
@@ -32,21 +32,21 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "cd77d97577a1cfbab0d74b29d59956b1d4930fee48d27c094e7b55b017020575",
+    "sha256": "86338775a8f2d994adafa0ea875ae8ea4cdc2ab9a2299f41d1f2e6b058c8c56a",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "c9602cac31fe102aad86e1e429ce8a1f5b91410ee607298786c52bcc001ec5a4"
+      "sha256": "11dc12350785961c4ed93929324b5b405b765903baf1f926b38da33873fbd713"
     },
     "direct_dependencies": {
       "build": {
-        "editables": {
-          "version": "0.5",
-          "extras": []
-        },
         "hatchling": {
           "version": "1.28.0",
+          "extras": []
+        },
+        "editables": {
+          "version": "0.5",
           "extras": []
         }
       },
@@ -61,6 +61,10 @@
           "version": "49.0.0",
           "extras": []
         },
+        "jsonschema": {
+          "version": "4.26.0",
+          "extras": []
+        },
         "mcp": {
           "version": "1.28.1",
           "extras": []
@@ -71,15 +75,15 @@
             "binary"
           ]
         },
-      "pydantic": {
-        "version": "2.13.4",
-        "extras": []
-      },
-      "starlette": {
-        "version": "1.3.1",
-        "extras": []
-      },
-      "uvicorn": {
+        "pydantic": {
+          "version": "2.13.4",
+          "extras": []
+        },
+        "starlette": {
+          "version": "1.3.1",
+          "extras": []
+        },
+        "uvicorn": {
           "version": "0.51.0",
           "extras": []
         }
@@ -147,9 +151,9 @@
       "sortedcontainers": "2.4.0",
       "sse-starlette": "3.4.5",
       "starlette": "1.3.1",
+      "trove-classifiers": "2026.6.1.19",
       "typing-extensions": "4.16.0",
       "typing-inspection": "0.4.2",
-      "trove-classifiers": "2026.6.1.19",
       "tzdata": "2026.3",
       "urllib3": "2.7.0",
       "uvicorn": "0.51.0"
@@ -158,11 +162,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "0db8a65ac511415373c8320ac3e466329a56198b6e32a654f4b6d087bfaca20c"
+      "sha256": "12673069975ce1289cbe1fa2018faf3042a04ec2363f4d24260451f0d56c41ae"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "557a76623ad67b05a6083fec13c1c83418e4af9353122e83d64d01f193af8ee3"
+      "sha256": "6e501a3294b59f96facb9abe0c33a958926eacca8c0f2843ea6336192c7d6848"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -182,11 +186,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "ab2247fecd8461cf1a8fc02e4cb0fad1061d97e6be8bdbc76b695f587e2f8b6b"
+      "sha256": "b824b034dc70f36cb65465d76c77365c264ae3a0606bf8ea9054484fb8394169"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "41df5d9a30a11ab8f4c3a91ca07832521a30d721da62e1f7ca843045be3c478a"
+      "sha256": "993a9291a50c221694fc2cf6cbfac9cc52700dd0dc067630d2fc7d203a657546"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -202,7 +206,7 @@
     },
     "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json": {
       "path": "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
-      "sha256": "c1c05c819596169401f208de3657afde96c66b79725a8be0fed558cabe30a642"
+      "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb"
     },
     "scripts/export_schemas.py": {
       "path": "scripts/export_schemas.py",
@@ -210,13 +214,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "6ecf259e79d019b22c6cc2b5105d9ac3c44a56f5e8b6d568833cc995a8e85370"
+      "sha256": "d8795f18ba00da64df3283a3647ff7ec8a1a4a91ec51d75bddd2943b07c2b1b0"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "c94517c2c83d2d5af0aeebbd22127aff2dc763efbe03c78041a9aae599e8c373"
+    "sha256": "e9f13233cab0751369e8da25cbc067594dcb6b6c0b0a550b75c22c77cdb419ea"
   },
   "protocols": {
     "a2a": {

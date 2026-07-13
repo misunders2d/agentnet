@@ -100,8 +100,10 @@ is never a command-line, MCP, A2A, or caller-supplied bearer.
   eligibility, one coherent revision, exact task grants, and audited decisions;
 - directed `may_assign`: in-scope administrator-to-subordinate custody becomes
   `accepted_queued`; reverse/lateral/out-of-scope remains `pending_human`;
-- encrypted local supervisor queues, separate worker lifecycle, explicit-open
-  inbox, content-free status, and no foreground message API;
+- encrypted local supervisor queues, authenticated live watch plus cursor
+  fallback, separate worker lifecycle, explicit-open inbox, automatic durable
+  obligation-counter reconciliation, content-free status, and no foreground
+  message API;
 - transactional per-recipient mailbox, at-least-once/idempotent submission,
   actor-owned receipts, expiry, cancellation, and `effect_unknown` controls;
 - staged artifact reservation, immutable encrypted quarantine, exact manifest,

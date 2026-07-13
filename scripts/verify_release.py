@@ -33,7 +33,7 @@ MANIFEST_PATH = ROOT / "RELEASE_MANIFEST.json"
 EXPECTED_SOURCES = {
     "concept": (
         "docs/specification.md",
-        "b44b3e1467dbc8752fd77d4605231d31b42d400e3938cb7117946ca01a859c30",
+        "c772fdf9653fa66bf3418a631a23568b01128bd4e44d1472d073b3087310c3f4",
     ),
     "requirements": (
         "docs/requirements.md",
@@ -183,6 +183,7 @@ EXPECTED_SDIST_ONLY_INCLUDE = (
     "docs/final-verification.md",
     "docs/implementation-guide.md",
     "docs/requirements.md",
+    "docs/response-obligations.md",
     "docs/specification.md",
     "pyproject.toml",
     "schemas/README.md",

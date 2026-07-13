@@ -14,7 +14,7 @@ from typing import Any
 from agentnet.errors import GateBlocked
 
 
-RESPONSE_OBLIGATION_SCHEMA_VERSION = 2
+RESPONSE_OBLIGATION_SCHEMA_VERSION = 1
 
 RESPONSE_OBLIGATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS response_obligations (
@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS response_obligations (
     responsible_harness_id TEXT NOT NULL REFERENCES harnesses(harness_id),
     response_required INTEGER NOT NULL CHECK (response_required IN (0,1)),
     response_schema_id TEXT,
+    response_schema_json TEXT,
+    response_schema_digest TEXT,
     state TEXT NOT NULL CHECK (state IN (
         'created','recipient_committed','acknowledged','in_progress',
         'pending_human','blocked','completed','failed','canceled','expired'
@@ -45,6 +47,12 @@ CREATE TABLE IF NOT EXISTS response_obligations (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     closed_at INTEGER,
+    CHECK (
+        (response_schema_id IS NULL AND response_schema_json IS NULL AND response_schema_digest IS NULL)
+        OR
+        (response_schema_id IS NOT NULL AND response_schema_json IS NOT NULL
+            AND response_schema_digest IS NOT NULL AND length(response_schema_digest) = 64)
+    ),
     UNIQUE(request_event_id,responsible_harness_id)
 );
 CREATE INDEX IF NOT EXISTS idx_response_obligations_responsible
@@ -73,7 +81,7 @@ RESPONSE_OBLIGATION_REQUIRED_INDEXES = frozenset(
 
 
 def require_response_obligation_schema(store: Any) -> None:
-    """Fail closed unless migration 2 and every obligation relation are present."""
+    """Fail closed unless the clean first-release schema is complete."""
 
     backend = getattr(store, "backend_name", "")
     try:

@@ -40,6 +40,7 @@ source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["http-server"] },
     { name = "cryptography" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -64,6 +65,7 @@ requires-dist = [
     { name = "a2a-sdk", extras = ["http-server"], specifier = "==1.1.0" },
     { name = "cryptography", specifier = "==49.0.0" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = "==6.156.6" },
+    { name = "jsonschema", specifier = "==4.26.0" },
     { name = "mcp", specifier = "==1.28.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
     { name = "pydantic", specifier = "==2.13.4" },

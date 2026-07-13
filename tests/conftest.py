@@ -32,11 +32,12 @@ def identity_factory(store: SQLiteStore):
         kind: str = "codex",
         email: str | None = None,
         binding_assurance: str = "lab",
+        principal_id: str | None = None,
     ):
         if binding_assurance not in {"lab", "os_bound", "hardware_bound"}:
             raise ValueError("test identity binding assurance is invalid")
         suffix = uuid4().hex[:12]
-        principal_id = f"principal-{suffix}"
+        principal_id = principal_id or f"principal-{suffix}"
         harness_id = f"harness-{suffix}"
         credential_id = f"credential-{suffix}"
         key = P256KeyPair.generate()
@@ -46,12 +47,26 @@ def identity_factory(store: SQLiteStore):
                 "INSERT OR IGNORE INTO domains(domain_id,status,created_at) VALUES(?,'active',?)",
                 (domain, now),
             )
-            connection.execute(
-                """INSERT INTO principals(
-                    principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at
-                ) VALUES(?,?,?,?,?,'active',?)""",
-                (principal_id, domain, "https://idp.example", f"subject-{suffix}", email or f"{suffix}@example.test", now),
-            )
+            principal = connection.execute(
+                "SELECT domain_id,status FROM principals WHERE principal_id=?",
+                (principal_id,),
+            ).fetchone()
+            if principal is None:
+                connection.execute(
+                    """INSERT INTO principals(
+                        principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at
+                    ) VALUES(?,?,?,?,?,'active',?)""",
+                    (
+                        principal_id,
+                        domain,
+                        "https://idp.example",
+                        f"subject-{suffix}",
+                        email or f"{suffix}@example.test",
+                        now,
+                    ),
+                )
+            elif principal["domain_id"] != domain or principal["status"] != "active":
+                raise ValueError("test sibling harness requires an active principal in the same domain")
             connection.execute(
                 """INSERT INTO harnesses(
                     harness_id,domain_id,principal_id,kind,display_name,status,binding_assurance,capabilities_json,created_at

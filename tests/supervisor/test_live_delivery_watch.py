@@ -32,6 +32,28 @@ class StubSignedClient:
         )
 
 
+class StubObligationClient:
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> httpx.Response:
+        assert timeout_seconds is None
+        self.calls.append((method, path, json_body))
+        return httpx.Response(
+            200,
+            json=self.responses.pop(0),
+            request=httpx.Request(method, f"https://agent.example{path}"),
+        )
+
+
 def test_signed_watch_is_strict_content_free_and_only_a_reconciliation_hint() -> None:
     signed = StubSignedClient(
         {
@@ -101,3 +123,36 @@ def test_watch_fails_closed_on_authentication_or_unbounded_wait() -> None:
     )
     with pytest.raises(ValidationError, match="bounds"):
         valid.watch(after_cursor=0, wait_seconds=31)
+
+
+def test_signed_supervisor_obligation_reconciliation_and_counters_are_strict() -> None:
+    signed = StubObligationClient(
+        [
+            {"recipient_committed": ["obligation-1"], "expired": []},
+            {
+                "unread_information": 1,
+                "action_required": 2,
+                "awaiting_peer": 3,
+                "awaiting_human": 4,
+                "overdue": 5,
+                "failed": 6,
+            },
+        ]
+    )
+    client = AgentNetSupervisorCoreClient(signed)  # type: ignore[arg-type]
+
+    assert client.reconcile_obligations(limit=25) == {
+        "recipient_committed": ["obligation-1"],
+        "expired": [],
+    }
+    assert client.obligation_inbox()["action_required"] == 2
+    assert signed.calls == [
+        ("POST", "/v1/response-obligations/reconcile", {"limit": 25}),
+        ("GET", "/v1/response-obligations/inbox", None),
+    ]
+
+    malformed = AgentNetSupervisorCoreClient(
+        StubObligationClient([{"action_required": True}])  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValidationError, match="inbox response schema"):
+        malformed.obligation_inbox()

@@ -174,7 +174,9 @@ The lifecycle is `created`, `recipient_committed`, `acknowledged`,
 - every transition is revision-fenced, recorded in the transition table, and
   audited;
 - exact-fetch and list visibility is limited to the requester and responsible
-  authorities; inbox counters (`unread_information`, `action_required`,
+  authorities and validates current harness state; an active sibling harness
+  shares principal-level visibility but cannot claim the exact responsible
+  harness's progress or response ownership; inbox counters (`unread_information`, `action_required`,
   `awaiting_peer`, `awaiting_human`, `overdue`, `failed`) are derived,
   content-free, and never mutate state.
 
@@ -188,12 +190,18 @@ dispatcher shared by MCP and Pi direct Unix IPC. This keeps answer ownership
 reachable from every supported harness binding without trusting model-supplied
 identity fields.
 
+The common supervisor runs obligation reconciliation alongside authoritative
+mailbox cursor reconciliation after startup, reconnect, wake, and the bounded
+fallback interval. It stores the content-free counter snapshot encrypted in the
+local WAL queue, so attention survives a supervisor restart without injecting
+message content into the foreground. Wake events still carry no authority.
+
 ## First-release storage authority boundary
 
-AgentNet starts at storage schema version 1; schema version 2 adds the
-response-obligation tables. SQLite initializes the complete current schema
-atomically; PostgreSQL applies the contiguous, checksum-bound migration
-catalog containing the same authority model. Relationship authority exists only in the
+AgentNet starts at storage schema version 1, which includes the
+response-obligation tables. SQLite and PostgreSQL initialize that same complete
+clean-start authority model atomically from the single checksum-bound baseline.
+Relationship authority exists only in the
 bilateral governance transaction and exact policy-exception records. Startup
 requires the exact current metadata, migration catalog, tables, indexes, constraints,
 and security triggers and fails closed on missing, altered, older, or newer

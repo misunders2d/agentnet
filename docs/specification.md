@@ -716,6 +716,18 @@ The local supervisor stores encrypted drafts and committed inbox content. On rec
 4. persists recipient bytes before acknowledgment;
 5. wakes a model only for authorized semantic work.
 
+Requests that require an answer carry an opt-in durable `ResponseObligation`
+bound to the exact accepted request and one responsible recipient harness. Only
+a typed response repeating the request event ID and digest can close it; prose
+cannot. If the request supplies a response schema, its identifier and bounded
+self-contained JSON Schema are both part of the signed payload and the stored
+schema digest is validated before terminal closure. The authenticated common
+supervisor reconciles obligations at startup, reconnect, live wake, and the
+bounded cursor fallback and stores only encrypted content-free attention
+counters locally. Active sibling harnesses share principal-level visibility,
+but cannot claim the specifically responsible harness's progress or response;
+revoked harnesses fail closed.
+
 WSS, SSE, push, and broker notifications are wake hints. Cursor reconciliation is authoritative. Offline is a normal availability state, not identity failure.
 
 Presence is a signed/authorized expiring lease with live, recent, stale, and unknown states. Presence never proves readiness, authorization, or receipt.

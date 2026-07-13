@@ -47,9 +47,19 @@ class DeviceSupervisor:
         """Only a human-initiated call returns message content."""
         return self.local_queue.claim(harness_id=harness_id, direction="inbox", limit=limit)
 
+    def update_obligation_status(self, harness_id: str, counters: dict[str, int]) -> None:
+        self.local_queue.store_obligation_snapshot(
+            harness_id=harness_id,
+            counters=counters,
+        )
+
     def passive_status(self, harness_id: str) -> dict[str, int]:
         """Content-free, noninteractive counts only."""
-        return self.local_queue.content_free_counts(harness_id)
+        queue_counts = self.local_queue.content_free_counts(harness_id)
+        obligation_counts = self.local_queue.obligation_snapshot(harness_id)
+        return queue_counts | {
+            f"obligation_{key}": value for key, value in obligation_counts.items()
+        }
 
     def recover(self) -> int:
         return self.local_queue.recover_processing()

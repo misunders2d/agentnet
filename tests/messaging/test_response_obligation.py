@@ -4,11 +4,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.mailbox.service import MailboxService
-from agentnet.messaging.conversation import ConversationService
+from agentnet.messaging.conversation import ConversationService, StructuredRequestAction
 from agentnet.messaging.obligation import (
     OBLIGATION_TERMINAL_STATES,
     OBLIGATION_TRANSITIONS,
@@ -50,12 +51,16 @@ def grant_actions(policy, actor, conversation_id: str) -> None:
 def stack(store, identity_factory):
     requester, _ = identity_factory()
     responder, _ = identity_factory(kind="pi")
+    responder_sibling, _ = identity_factory(
+        kind="codex",
+        principal_id=responder.principal_id,
+    )
     observer, _ = identity_factory(kind="claude")
     policy = LocalConformancePolicyEngine(store)
     mailbox = MailboxService(store)
     service = ConversationService(store, policy, mailbox)
     conversation_id = f"conversation:obligation-{uuid4().hex[:8]}"
-    for actor in (requester, responder, observer):
+    for actor in (requester, responder, responder_sibling, observer):
         grant_actions(policy, actor, conversation_id)
     service.create(
         actor=requester,
@@ -72,11 +77,20 @@ def stack(store, identity_factory):
         "conversation_id": conversation_id,
         "requester": requester,
         "responder": responder,
+        "responder_sibling": responder_sibling,
         "observer": observer,
     }
 
 
-def post_request(stack, *, deadline=None, idempotency_key=None, responsible=None, schema=None):
+def post_request(
+    stack,
+    *,
+    deadline=None,
+    idempotency_key=None,
+    responsible=None,
+    schema=None,
+    response_schema=None,
+):
     spec: dict[str, object] = {}
     if deadline is not None:
         spec["deadline_at"] = deadline.isoformat()
@@ -84,6 +98,10 @@ def post_request(stack, *, deadline=None, idempotency_key=None, responsible=None
         spec["responsible_harness_id"] = responsible
     if schema is not None:
         spec["response_schema_id"] = schema
+        spec["response_schema"] = response_schema or {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+        }
     return stack["service"].post(
         actor=stack["requester"],
         recipients=(stack["responder"].harness_id,),
@@ -102,8 +120,18 @@ def request_digest(stack, obligation_id: str) -> str:
     return str(row["request_payload_digest"])
 
 
-def post_response(stack, *, obligation_id, request_event_id, digest=None, outcome="completed",
-                  actor=None, idempotency_key=None, schema=None):
+def post_response(
+    stack,
+    *,
+    obligation_id,
+    request_event_id,
+    digest=None,
+    outcome="completed",
+    actor=None,
+    idempotency_key=None,
+    schema=None,
+    structured_response=None,
+):
     action = {
         "kind": "obligation_response",
         "obligation_id": obligation_id,
@@ -111,6 +139,7 @@ def post_response(stack, *, obligation_id, request_event_id, digest=None, outcom
         "request_digest": digest or request_digest(stack, obligation_id),
         "outcome": outcome,
         "body": "the exact answer",
+        "structured_response": structured_response or {},
     }
     if schema is not None:
         action["response_schema_id"] = schema
@@ -326,17 +355,117 @@ def test_failed_outcome_and_failed_counter(stack) -> None:
 
 
 def test_demanded_response_schema_must_be_declared(stack) -> None:
-    result = post_request(stack, schema="inventory.lookup.result")
+    result = post_request(
+        stack,
+        schema="inventory.lookup.result",
+        response_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"quantity": {"type": "integer", "minimum": 0}},
+            "required": ["quantity"],
+            "additionalProperties": False,
+        },
+    )
     obligation_id = result["response_obligation"]["obligation_id"]
     with pytest.raises(ValidationError, match="exact demanded response schema"):
         post_response(stack, obligation_id=obligation_id, request_event_id=result["event_id"])
+    with pytest.raises(ValidationError, match="does not satisfy"):
+        post_response(
+            stack,
+            obligation_id=obligation_id,
+            request_event_id=result["event_id"],
+            schema="inventory.lookup.result",
+            structured_response={"quantity": "four"},
+        )
     closed = post_response(
         stack,
         obligation_id=obligation_id,
         request_event_id=result["event_id"],
         schema="inventory.lookup.result",
+        structured_response={"quantity": 4},
     )
     assert closed["response_obligation"]["state"] == "completed"
+
+
+def test_response_schema_binding_rejects_named_only_and_remote_references(stack) -> None:
+    with pytest.raises(PydanticValidationError, match="inline schema must be supplied together"):
+        stack["service"].post(
+            actor=stack["requester"],
+            recipients=(stack["responder"].harness_id,),
+            conversation_id=stack["conversation_id"],
+            thread_id="thread:obligation",
+            action={
+                "kind": "post",
+                "body": "named but unbound schema",
+                "response_obligation": {"response_schema_id": "inventory.lookup.result"},
+            },
+            idempotency_key=f"request-{uuid4()}",
+        )
+    with pytest.raises(PydanticValidationError, match="self-contained"):
+        post_request(
+            stack,
+            schema="inventory.lookup.result",
+            response_schema={"$ref": "https://schemas.example/result.json"},
+        )
+    with pytest.raises(PydanticValidationError, match="self-contained"):
+        post_request(
+            stack,
+            schema="inventory.lookup.result",
+            response_schema={"$dynamicRef": "https://schemas.example/result.json"},
+        )
+
+
+def test_structured_request_rejects_conflicting_obligation_schema_identifier() -> None:
+    with pytest.raises(PydanticValidationError, match="schema identifiers differ"):
+        StructuredRequestAction.model_validate(
+            {
+                "kind": "structured_request",
+                "request_type": "inventory.lookup",
+                "arguments": {"sku": "ABC"},
+                "response_schema_id": "inventory.lookup.result.v1",
+                "response_obligation": {
+                    "response_schema_id": "inventory.lookup.result.v2",
+                    "response_schema": {"type": "object"},
+                },
+            }
+        )
+
+
+def test_sibling_harness_shares_principal_visibility_but_not_response_ownership(stack) -> None:
+    result = post_request(stack)
+    obligation_id = result["response_obligation"]["obligation_id"]
+    sibling = stack["responder_sibling"]
+
+    assert stack["obligations"].get(actor=sibling, obligation_id=obligation_id)[
+        "viewer_role"
+    ] == "responsible"
+    assert [
+        item["obligation_id"]
+        for item in stack["obligations"].list_for(actor=sibling, role="responsible")
+    ] == [obligation_id]
+    with pytest.raises(AuthorizationError, match="exact responsible recipient harness"):
+        post_response(
+            stack,
+            obligation_id=obligation_id,
+            request_event_id=result["event_id"],
+            actor=sibling,
+        )
+    with pytest.raises(AuthorizationError, match="exact responsible recipient harness"):
+        stack["obligations"].transition(
+            actor=sibling,
+            obligation_id=obligation_id,
+            to_state="acknowledged",
+        )
+
+    with stack["store"].transaction() as connection:
+        connection.execute(
+            "UPDATE harnesses SET status='revoked' WHERE harness_id=?",
+            (sibling.harness_id,),
+        )
+    with pytest.raises(AuthorizationError, match="not current"):
+        stack["obligations"].get(actor=sibling, obligation_id=obligation_id)
+    with pytest.raises(AuthorizationError, match="not current"):
+        stack["obligations"].list_for(actor=sibling, role="responsible")
 
 
 def test_recipient_progress_transitions_and_revision_fencing(stack) -> None:

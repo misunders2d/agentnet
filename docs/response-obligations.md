@@ -19,7 +19,14 @@ conversation action. The spec is part of the exact request payload digest.
     "response_required": true,
     "responsible_harness_id": "harness-abc",
     "deadline_at": "2026-07-14T12:00:00+00:00",
-    "response_schema_id": "inventory.lookup.result"
+    "response_schema_id": "inventory.lookup.result.v1",
+    "response_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {"quantity": {"type": "integer", "minimum": 0}},
+      "required": ["quantity"],
+      "additionalProperties": false
+    }
   }
 }
 ```
@@ -34,6 +41,9 @@ Rules:
   the spec may omit `responsible_harness_id`, otherwise it is mandatory and
   must be one of the recipients;
 - the deadline, when present, must be timezone-aware and in the future;
+- `response_schema_id` and `response_schema` must be supplied together. The
+  schema must be valid, self-contained JSON Schema 2020-12, is bounded to 64
+  KiB, and is stored with an exact digest as part of the request transaction;
 - the obligation row commits in the same transaction as request acceptance;
   an idempotent request retry never creates a second obligation and returns
   the existing obligation identifier, state, and revision;
@@ -79,12 +89,14 @@ repeat the original binding:
   "request_digest": "<sha256 of the exact request payload>",
   "outcome": "completed",
   "body": "answer text",
+  "response_schema_id": "inventory.lookup.result.v1",
   "structured_response": {"quantity": 4}
 }
 ```
 
 A wrong request event ID, wrong digest, wrong harness, missing demanded
-`response_schema_id`, or an already-terminal obligation fails closed. The
+`response_schema_id`, structured output that fails the exact stored schema, or
+an already-terminal obligation fails closed. The
 response event and the terminal obligation state commit in one transaction,
 so the system can never report `awaiting peer` after the answer is durable.
 A duplicate idempotent retry returns the original acceptance; a second,
@@ -105,10 +117,21 @@ mutations re-execute already-authorized durable facts. Overdue visibility
 never depends on reconciliation: the `overdue` inbox counter is derived at
 read time.
 
+The common background supervisor calls reconciliation and refreshes the
+content-free inbox counters after startup, reconnect, a live wake, and the
+bounded cursor-reconciliation fallback. It commits the encrypted counter
+snapshot to the local SQLite/WAL queue before exposing the passive count, so a
+restart cannot silently erase known answer ownership. This behavior is shared
+by every harness adapter; it is not Pi-specific and it never injects message
+content into an active user conversation.
+
 ## Visibility
 
 - `GET /v1/response-obligations/{id}` — exact fetch with full transition
-  history; requester and responsible authorities only.
+  history; requester and responsible authorities only. Active sibling harnesses
+  share their human principal's visibility, while only the exact responsible
+  harness may claim progress or post the terminal response. Revoked harnesses
+  fail closed.
 - `GET /v1/response-obligations?role=&state=&limit=` — participant-scoped
   list.
 - `GET /v1/response-obligations/inbox` — content-free counters:

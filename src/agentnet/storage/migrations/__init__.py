@@ -105,17 +105,13 @@ def _postgres_first_release_schema() -> str:
         OPERATIONAL_CONTROL_SCHEMA,
         RELATIONSHIP_GOVERNANCE_POSTGRES_MIGRATION,
         POST_AUDIT_SCHEMA,
+        RESPONSE_OBLIGATION_SCHEMA,
     )
     return "\n".join(fragment.replace(" INTEGER", " BIGINT") for fragment in fragments)
 
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "agentnet_first_release_schema", _postgres_first_release_schema()),
-    Migration(
-        2,
-        "agentnet_response_obligation_schema",
-        RESPONSE_OBLIGATION_SCHEMA.replace(" INTEGER", " BIGINT"),
-    ),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

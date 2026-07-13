@@ -25,6 +25,10 @@ class SupervisorCoreClient(Protocol):
 
     def reconcile(self, *, after_cursor: int, limit: int) -> list[dict[str, Any]]: ...
 
+    def reconcile_obligations(self, *, limit: int) -> dict[str, list[str]]: ...
+
+    def obligation_inbox(self) -> dict[str, int]: ...
+
     def authorize_background(self, item: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def acknowledge_custody(
@@ -218,6 +222,14 @@ class BackgroundHarnessIntegration:
             if reconcile_remote
             else []
         )
+        obligations_reconciled = 0
+        if reconcile_remote:
+            obligation_result = self.core_client.reconcile_obligations(limit=limit)
+            obligations_reconciled = sum(len(items) for items in obligation_result.values())
+            self.supervisor.update_obligation_status(
+                harness_id,
+                self.core_client.obligation_inbox(),
+            )
         enqueued = 0
         for item in fetched:
             event_id, cursor, envelope_digest = self._mailbox_item(item)
@@ -303,7 +315,13 @@ class BackgroundHarnessIntegration:
                 self.supervisor.local_queue.retry(queued["queue_id"], delay_seconds=1)
                 raise
         self._last_cycle_at[harness_id] = int(time.time())
-        return {"fetched": len(fetched), "enqueued": enqueued, "dispatched": dispatched, "uploaded": uploaded}
+        return {
+            "fetched": len(fetched),
+            "enqueued": enqueued,
+            "dispatched": dispatched,
+            "uploaded": uploaded,
+            "obligations_reconciled": obligations_reconciled,
+        }
 
     def explicit_pull(self, harness_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
         """Human-initiated inspection path, separate from autonomous dispatch."""
@@ -352,8 +370,27 @@ class BackgroundHarnessIntegration:
     def passive_status(self, harness_id: str) -> dict[str, Any]:
         runtime = self._runtime(harness_id)
         thread = self._daemon_threads.get(harness_id)
+        counts = self.supervisor.passive_status(harness_id)
+        queue_counts = {
+            key: value for key, value in counts.items() if not key.startswith("obligation_")
+        }
+        obligation_counts = [
+            value for key, value in counts.items() if key.startswith("obligation_")
+        ]
+        activity_counts = {
+            **queue_counts,
+            # Obligation counters deliberately overlap (for example, an item can
+            # be both action-required and overdue).  Use their maximum as the
+            # content-free attention floor instead of inflating the indicator.
+            "obligation_attention": max(obligation_counts, default=0),
+        }
         return {
-            "activity": status_indicator(self.supervisor.passive_status(harness_id)),
+            "activity": status_indicator(activity_counts),
+            "obligations": {
+                key.removeprefix("obligation_"): value
+                for key, value in counts.items()
+                if key.startswith("obligation_")
+            },
             "daemon": {
                 "errors": self._daemon_errors.get(harness_id, 0),
                 "last_error_at": self._last_daemon_error_at.get(harness_id),

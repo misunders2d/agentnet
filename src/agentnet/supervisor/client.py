@@ -97,6 +97,46 @@ class AgentNetSupervisorCoreClient:
             raise ValidationError("corporate mailbox item schema is invalid")
         return value["items"]
 
+    def reconcile_obligations(self, *, limit: int) -> dict[str, list[str]]:
+        if not 1 <= limit <= 100:
+            raise ValidationError("supervisor obligation reconciliation limit is invalid")
+        value = self._value(
+            self.client.request(
+                "POST",
+                "/v1/response-obligations/reconcile",
+                json_body={"limit": limit},
+            )
+        )
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"recipient_committed", "expired"}
+            or any(
+                not isinstance(items, list)
+                or any(not isinstance(item, str) or not item for item in items)
+                for items in value.values()
+            )
+        ):
+            raise ValidationError("obligation reconciliation response schema is invalid")
+        return value
+
+    def obligation_inbox(self) -> dict[str, int]:
+        required = {
+            "unread_information",
+            "action_required",
+            "awaiting_peer",
+            "awaiting_human",
+            "overdue",
+            "failed",
+        }
+        value = self._value(self.client.request("GET", "/v1/response-obligations/inbox"))
+        if (
+            not isinstance(value, dict)
+            or set(value) != required
+            or any(type(item) is not int or item < 0 for item in value.values())
+        ):
+            raise ValidationError("obligation inbox response schema is invalid")
+        return value
+
     def watch(self, *, after_cursor: int, wait_seconds: float) -> bool:
         """Wait for a content-free hint; authoritative bytes come from reconcile()."""
 

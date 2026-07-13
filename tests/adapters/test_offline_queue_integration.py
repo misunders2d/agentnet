@@ -40,6 +40,15 @@ class FakeCorporateClient:
         self.uploaded: list[dict[str, object]] = []
         self.watch_calls = 0
         self.reconcile_calls = 0
+        self.obligation_reconcile_calls = 0
+        self.obligation_counts = {
+            "unread_information": 0,
+            "action_required": 0,
+            "awaiting_peer": 0,
+            "awaiting_human": 0,
+            "overdue": 0,
+            "failed": 0,
+        }
         self.available = not deliver_on_watch
         self.watch_failures_before_wake = watch_failures_before_wake
         self.item = {
@@ -65,6 +74,14 @@ class FakeCorporateClient:
         assert limit > 0
         self.reconcile_calls += 1
         return [self.item] if self.available and after_cursor < 11 else []
+
+    def reconcile_obligations(self, *, limit: int):
+        assert limit > 0
+        self.obligation_reconcile_calls += 1
+        return {"recipient_committed": [], "expired": []}
+
+    def obligation_inbox(self):
+        return dict(self.obligation_counts)
 
     def authorize_background(self, item):
         assert item == self.item
@@ -383,12 +400,57 @@ def test_cursor_does_not_advance_when_local_durable_enqueue_crashes(
             "enqueued": 1,
             "dispatched": 0,
             "uploaded": 0,
+            "obligations_reconciled": 0,
         }
         assert queue.cursor(harness_id) == 11
         assert queue.content_free_counts(harness_id) == {"queued": 1}
     finally:
         integration.close()
         queue.close()
+
+
+def test_obligation_attention_is_automatically_reconciled_and_survives_restart(
+    tmp_path: Path,
+    fake_harnesses,
+) -> None:
+    harness_id = "pi-durable-obligation-attention"
+    database = tmp_path / "obligation-attention.sqlite3"
+    key_file = tmp_path / "obligation-attention.key"
+    queue = LocalQueue(database, LocalEnvelopeCipher.from_key_file(key_file))
+    client = FakeCorporateClient(harness_id)
+    client.available = False
+    client.obligation_counts["action_required"] = 2
+    client.obligation_counts["overdue"] = 1
+    integration = BackgroundHarnessIntegration(DeviceSupervisor(queue), core_client=client)
+    runtime = BackgroundAdapterRuntime(
+        build_launch_spec(
+            "pi",
+            harness_id=harness_id,
+            root=tmp_path / "obligation-attention-runtime",
+            executable=fake_harnesses["pi"],
+        ),
+        request_timeout_seconds=0.5,
+        heartbeat_interval_seconds=0.05,
+    )
+    integration.register(runtime)
+    try:
+        integration.start(harness_id)
+        assert integration.run_once(harness_id)["obligations_reconciled"] == 0
+        status = integration.passive_status(harness_id)
+        assert status["obligations"]["action_required"] == 2
+        assert status["obligations"]["overdue"] == 1
+        # The overdue item is already represented in action_required.
+        assert status["activity"] == {"kind": "agentnet_count", "count": 2}
+        assert client.obligation_reconcile_calls == 1
+    finally:
+        integration.close()
+        queue.close()
+
+    reopened = LocalQueue(database, LocalEnvelopeCipher.from_key_file(key_file))
+    try:
+        assert reopened.obligation_snapshot(harness_id)["action_required"] == 2
+    finally:
+        reopened.close()
 
 
 def test_low_frequency_reconciliation_recovers_a_missed_authority_free_wake(
@@ -482,7 +544,13 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
     try:
         integration.start(harness_id)
         result = integration.run_once(harness_id)
-        assert result == {"fetched": 1, "enqueued": 1, "dispatched": 1, "uploaded": 1}
+        assert result == {
+            "fetched": 1,
+            "enqueued": 1,
+            "dispatched": 1,
+            "uploaded": 1,
+            "obligations_reconciled": 0,
+        }
         assert client.acknowledged == ["corporate-task-event"]
         assert len(client.uploaded) == 1
         assert client.uploaded[0]["authorization"]["task_grant_id"] == "task-grant-1"
@@ -499,6 +567,7 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
             "enqueued": 0,
             "dispatched": 0,
             "uploaded": 0,
+            "obligations_reconciled": 0,
         }
         assert "run autonomously" not in json.dumps(
             integration.passive_status(harness_id), sort_keys=True
