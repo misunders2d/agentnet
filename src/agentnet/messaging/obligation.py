@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agentnet.authorization.policy import (
     AuthorizationRequest,
@@ -124,6 +124,14 @@ class ResponseObligationSpec(BaseModel):
     responsible_harness_id: str | None = Field(default=None, min_length=1, max_length=256)
     deadline_at: datetime | None = None
     response_schema_id: str | None = None
+
+    @model_validator(mode="after")
+    def response_is_actually_required(self) -> "ResponseObligationSpec":
+        if not self.response_required:
+            raise ValueError(
+                "response_obligation is only valid when response_required is true"
+            )
+        return self
 
     @field_validator("response_schema_id")
     @classmethod
@@ -862,6 +870,7 @@ class ResponseObligationService:
             awaiting_peer = count(
                 f"""SELECT COUNT(*) AS total FROM response_obligations
                     WHERE domain_id=? AND requester_authority_id=?
+                      AND response_required=1
                       AND state IN ({open_marks})""",
                 (actor.domain_id, authority_id, *open_states),
             )

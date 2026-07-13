@@ -601,7 +601,7 @@ class ConversationService:
                     or exact_payload != expected_payload
                 ):
                     raise AuthorizationError("conversation idempotency key names different exact action bytes")
-                return {
+                result: dict[str, Any] = {
                     "event_id": existing["event_id"],
                     "fact": existing["acceptance_fact"],
                     "duplicate": True,
@@ -609,6 +609,19 @@ class ConversationService:
                     "action_kind": parsed.kind,
                     "conversation_id": conversation_id,
                 }
+                obligation = connection.execute(
+                    """SELECT obligation_id,state,revision FROM response_obligations
+                         WHERE request_event_id=? OR response_event_id=?
+                         ORDER BY obligation_id LIMIT 1""",
+                    (existing["event_id"], existing["event_id"]),
+                ).fetchone()
+                if obligation is not None:
+                    result["response_obligation"] = {
+                        "obligation_id": obligation["obligation_id"],
+                        "state": obligation["state"],
+                        "revision": int(obligation["revision"]),
+                    }
+                return result
 
             parent_event_id: str | None = None
             task_row: Any | None = None

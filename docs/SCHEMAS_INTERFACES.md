@@ -112,6 +112,12 @@ state atomically with the accepted response event.
 The operator CLI mirrors these routes under `agentnet obligation
 list|show|inbox|transition|cancel|reconcile`.
 
+Credential-free local bindings mirror the conversation and obligation journey
+with exact `agentnet.conversation.*` and `agentnet.obligation.*` methods. Their
+argument models are strict and intentionally contain no caller identity; MCP
+and direct Unix IPC derive the actor from the current supervisor-bound harness
+session.
+
 ## Schema evolution
 
 The handshake selects the highest mutually allowed protocol/schema profile.

@@ -181,6 +181,13 @@ The lifecycle is `created`, `recipient_committed`, `acknowledged`,
 Multi-recipient `any`/`all`/quorum satisfaction rules remain future scope: an
 obligation names exactly one responsible recipient harness.
 
+The supervisor's credential-free local binding exposes conversation creation,
+strict typed conversation actions, thread reads, and obligation
+inbox/list/get/transition/cancel/reconcile operations through the canonical
+dispatcher shared by MCP and Pi direct Unix IPC. This keeps answer ownership
+reachable from every supported harness binding without trusting model-supplied
+identity fields.
+
 ## First-release storage authority boundary
 
 AgentNet starts at storage schema version 1; schema version 2 adds the
@@ -188,7 +195,7 @@ response-obligation tables. SQLite initializes the complete current schema
 atomically; PostgreSQL applies the contiguous, checksum-bound migration
 catalog containing the same authority model. Relationship authority exists only in the
 bilateral governance transaction and exact policy-exception records. Startup
-requires the exact v1 metadata, migration catalog, tables, indexes, constraints,
+requires the exact current metadata, migration catalog, tables, indexes, constraints,
 and security triggers and fails closed on missing, altered, older, or newer
 state.
 

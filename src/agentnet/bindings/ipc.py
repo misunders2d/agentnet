@@ -26,12 +26,13 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError, model_validator
 
+from agentnet.bindings.tools import CANONICAL_TOOL_NAMES, CanonicalToolName
 from agentnet.errors import AuthenticationError, ReplayError, ValidationError
 from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 
 
-CanonicalIPCMethod = Literal["agentnet.inbox", "agentnet.send"]
+CanonicalIPCMethod = CanonicalToolName
 LocalBindingMechanism = Literal["direct_ipc", "mcp"]
 ProcessBindingMode = Literal["exact", "direct_child"]
 Handler = Callable[["IPCSessionClaims", dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -53,7 +54,10 @@ class IPCSessionClaims(BaseModel):
         default=None,
         pattern=r"^sha256:[0-9a-f]{64}$",
     )
-    allowed_methods: tuple[CanonicalIPCMethod, ...] = Field(min_length=1, max_length=2)
+    allowed_methods: tuple[CanonicalIPCMethod, ...] = Field(
+        min_length=1,
+        max_length=len(CANONICAL_TOOL_NAMES),
+    )
     uid: int = Field(ge=0)
     pid: int = Field(gt=0)
     process_start_time: str = Field(pattern=r"^[0-9]{1,128}$")

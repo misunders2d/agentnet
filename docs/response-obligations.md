@@ -26,6 +26,8 @@ conversation action. The spec is part of the exact request payload digest.
 
 Rules:
 
+- `response_required` must be `true`; omit `response_obligation` entirely for
+  informational content that does not create answer ownership;
 - the requester must be the request author and hold the
   `conversation.response_obligation.create` entitlement for the conversation;
 - exactly one responsible recipient harness is bound; with a single recipient
@@ -33,7 +35,8 @@ Rules:
   must be one of the recipients;
 - the deadline, when present, must be timezone-aware and in the future;
 - the obligation row commits in the same transaction as request acceptance;
-  an idempotent request retry never creates a second obligation;
+  an idempotent request retry never creates a second obligation and returns
+  the existing obligation identifier, state, and revision;
 - multi-recipient `any`/`all`/quorum rules are not implemented; create one
   obligation per responsible recipient.
 
@@ -114,6 +117,21 @@ read time.
   `awaiting_human` (`pending_human` either side), `overdue` (open past
   deadline), `failed` (my requests that terminally failed). `overdue`
   intentionally overlaps the ownership counters.
+
+## Harness-local tools
+
+The credential-free local adapter surface exposes the same journey through MCP
+and direct Unix IPC. Identity comes only from the supervisor-bound harness
+session; none of these tools accepts actor, principal, credential, or domain
+arguments.
+
+- `agentnet.conversation.create`, `.action`, and `.thread`
+- `agentnet.obligation.inbox`, `.list`, `.get`, `.transition`, `.cancel`, and
+  `.reconcile`
+
+The strict conversation action accepts both requests carrying
+`response_obligation` and typed `obligation_response` closures. Installed
+harnesses therefore do not need to hand-craft signed HTTP requests.
 
 ## Authorization actions
 

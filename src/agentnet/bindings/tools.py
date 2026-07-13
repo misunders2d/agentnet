@@ -14,11 +14,36 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentnet.identity.actors import VerifiedActor
+from agentnet.messaging.conversation import ConversationAction
 from agentnet.protocol.models import Classification
 
 
-CanonicalToolName = Literal["agentnet.inbox", "agentnet.send"]
-CANONICAL_TOOL_NAMES: tuple[CanonicalToolName, ...] = ("agentnet.inbox", "agentnet.send")
+CanonicalToolName = Literal[
+    "agentnet.inbox",
+    "agentnet.send",
+    "agentnet.conversation.create",
+    "agentnet.conversation.action",
+    "agentnet.conversation.thread",
+    "agentnet.obligation.inbox",
+    "agentnet.obligation.list",
+    "agentnet.obligation.get",
+    "agentnet.obligation.transition",
+    "agentnet.obligation.cancel",
+    "agentnet.obligation.reconcile",
+]
+CANONICAL_TOOL_NAMES: tuple[CanonicalToolName, ...] = (
+    "agentnet.inbox",
+    "agentnet.send",
+    "agentnet.conversation.create",
+    "agentnet.conversation.action",
+    "agentnet.conversation.thread",
+    "agentnet.obligation.inbox",
+    "agentnet.obligation.list",
+    "agentnet.obligation.get",
+    "agentnet.obligation.transition",
+    "agentnet.obligation.cancel",
+    "agentnet.obligation.reconcile",
+)
 
 
 class BoundCore(Protocol):
@@ -39,6 +64,79 @@ class BoundCore(Protocol):
         after_cursor: int,
         limit: int,
     ) -> list[dict[str, Any]]: ...
+
+    def create_conversation(
+        self,
+        *,
+        actor: VerifiedActor,
+        conversation_id: str,
+        member_harness_ids: tuple[str, ...],
+        classification: Classification = Classification.C1_INTERNAL,
+    ) -> dict[str, Any]: ...
+
+    def post_conversation_action(
+        self,
+        *,
+        actor: VerifiedActor,
+        recipients: tuple[str, ...],
+        conversation_id: str,
+        thread_id: str,
+        action: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]: ...
+
+    def conversation_thread(
+        self,
+        *,
+        actor: VerifiedActor,
+        conversation_id: str,
+        thread_id: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]: ...
+
+    def response_obligation_inbox(self, *, actor: VerifiedActor) -> dict[str, int]: ...
+
+    def response_obligation_list(
+        self,
+        *,
+        actor: VerifiedActor,
+        role: str = "any",
+        states: tuple[str, ...] = (),
+        limit: int = 100,
+    ) -> list[dict[str, Any]]: ...
+
+    def response_obligation(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+    ) -> dict[str, Any]: ...
+
+    def response_obligation_transition(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+        to_state: str,
+        reason: str = "recipient_update",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    def response_obligation_cancel(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+        reason_code: str = "requester_canceled",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    def response_obligation_reconcile(
+        self,
+        *,
+        actor: VerifiedActor,
+        limit: int = 100,
+    ) -> dict[str, Any]: ...
 
 
 ActorProvider = Callable[[], VerifiedActor]
@@ -67,6 +165,69 @@ class InboxArguments(BaseModel):
     limit: int = Field(default=25, ge=1, le=100)
 
 
+class EmptyArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ConversationCreateArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: str = Field(min_length=1, max_length=256)
+    member_harness_ids: tuple[str, ...] = Field(min_length=1, max_length=1000)
+    classification: Classification = Classification.C1_INTERNAL
+
+
+class ConversationActionArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
+    conversation_id: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=256)
+    action: ConversationAction
+    idempotency_key: str = Field(min_length=16, max_length=256)
+
+
+class ConversationThreadArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=256)
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class ObligationListArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    role: Literal["requester", "responsible", "any"] = "any"
+    states: tuple[str, ...] = Field(default=(), max_length=10)
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class ObligationGetArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    obligation_id: str = Field(min_length=1, max_length=256)
+
+
+class ObligationTransitionArguments(ObligationGetArguments):
+    to_state: Literal[
+        "recipient_committed", "acknowledged", "in_progress", "pending_human", "blocked"
+    ]
+    reason: str = Field(default="recipient_update", min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ObligationCancelArguments(ObligationGetArguments):
+    reason_code: str = Field(default="requester_canceled", min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ObligationReconcileArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
 class CanonicalToolDispatcher:
     """Dispatch exact local tools under a fresh server-derived actor."""
 
@@ -86,12 +247,75 @@ class CanonicalToolDispatcher:
                 idempotency_key=parsed.idempotency_key,
                 classification=parsed.classification,
             )
-        parsed = InboxArguments.model_validate(request.arguments)
-        return self.core.mailbox(
-            actor=actor,
-            after_cursor=parsed.after_cursor,
-            limit=parsed.limit,
-        )
+        if request.method == "agentnet.inbox":
+            parsed = InboxArguments.model_validate(request.arguments)
+            return self.core.mailbox(
+                actor=actor,
+                after_cursor=parsed.after_cursor,
+                limit=parsed.limit,
+            )
+        if request.method == "agentnet.conversation.create":
+            parsed = ConversationCreateArguments.model_validate(request.arguments)
+            return self.core.create_conversation(
+                actor=actor,
+                conversation_id=parsed.conversation_id,
+                member_harness_ids=parsed.member_harness_ids,
+                classification=parsed.classification,
+            )
+        if request.method == "agentnet.conversation.action":
+            parsed = ConversationActionArguments.model_validate(request.arguments)
+            return self.core.post_conversation_action(
+                actor=actor,
+                recipients=parsed.recipients,
+                conversation_id=parsed.conversation_id,
+                thread_id=parsed.thread_id,
+                action=parsed.action.model_dump(mode="json", exclude_none=True),
+                idempotency_key=parsed.idempotency_key,
+            )
+        if request.method == "agentnet.conversation.thread":
+            parsed = ConversationThreadArguments.model_validate(request.arguments)
+            return self.core.conversation_thread(
+                actor=actor,
+                conversation_id=parsed.conversation_id,
+                thread_id=parsed.thread_id,
+                limit=parsed.limit,
+            )
+        if request.method == "agentnet.obligation.inbox":
+            EmptyArguments.model_validate(request.arguments)
+            return self.core.response_obligation_inbox(actor=actor)
+        if request.method == "agentnet.obligation.list":
+            parsed = ObligationListArguments.model_validate(request.arguments)
+            return self.core.response_obligation_list(
+                actor=actor,
+                role=parsed.role,
+                states=parsed.states,
+                limit=parsed.limit,
+            )
+        if request.method == "agentnet.obligation.get":
+            parsed = ObligationGetArguments.model_validate(request.arguments)
+            return self.core.response_obligation(
+                actor=actor,
+                obligation_id=parsed.obligation_id,
+            )
+        if request.method == "agentnet.obligation.transition":
+            parsed = ObligationTransitionArguments.model_validate(request.arguments)
+            return self.core.response_obligation_transition(
+                actor=actor,
+                obligation_id=parsed.obligation_id,
+                to_state=parsed.to_state,
+                reason=parsed.reason,
+                expected_revision=parsed.expected_revision,
+            )
+        if request.method == "agentnet.obligation.cancel":
+            parsed = ObligationCancelArguments.model_validate(request.arguments)
+            return self.core.response_obligation_cancel(
+                actor=actor,
+                obligation_id=parsed.obligation_id,
+                reason_code=parsed.reason_code,
+                expected_revision=parsed.expected_revision,
+            )
+        parsed = ObligationReconcileArguments.model_validate(request.arguments)
+        return self.core.response_obligation_reconcile(actor=actor, limit=parsed.limit)
 
 
 __all__ = [
@@ -102,5 +326,14 @@ __all__ = [
     "CanonicalToolName",
     "CanonicalToolRequest",
     "InboxArguments",
+    "ConversationActionArguments",
+    "ConversationCreateArguments",
+    "ConversationThreadArguments",
+    "EmptyArguments",
+    "ObligationCancelArguments",
+    "ObligationGetArguments",
+    "ObligationListArguments",
+    "ObligationReconcileArguments",
+    "ObligationTransitionArguments",
     "SendArguments",
 ]

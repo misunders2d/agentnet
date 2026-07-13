@@ -113,8 +113,11 @@ is never a command-line, MCP, A2A, or caller-supplied bearer.
 - one canonical local-tool composition service for MCP and Pi direct Unix IPC,
   with server-derived actors, current credential-epoch fencing, measured
   per-child capabilities, persistent replay rejection, and no caller
-bearer/identity arguments; the ordinary supervisor launches owner-only,
-parent-measured MCP endpoints and directly delivers sealed Pi capabilities;
+  bearer/identity arguments; the ordinary supervisor launches owner-only,
+  parent-measured MCP endpoints and directly delivers sealed Pi capabilities;
+  the exact local tool set includes direct send/inbox, conversation
+  create/action/thread, and response-obligation inbox/list/get/progress/cancel/
+  reconcile operations;
 - provider-neutral interfaces for PostgreSQL, artifact storage, Cedar,
   SPIFFE/SPIRE, maintained MLS, workflow engines, and future mailbox relays;
 - audit hash chain/checkpoints, quotas, privacy classes, redacted attention,

@@ -155,6 +155,7 @@ def test_obligation_binds_request_and_idempotent_retry_creates_one(stack) -> Non
 
     retry = post_request(stack, idempotency_key=key)
     assert retry["duplicate"] is True
+    assert retry["response_obligation"] == obligation
     rows = stack["store"].fetch_all(
         "SELECT obligation_id FROM response_obligations WHERE request_event_id=?",
         (result["event_id"],),
@@ -303,6 +304,7 @@ def test_duplicate_and_conflicting_terminal_responses(stack) -> None:
         stack, obligation_id=obligation_id, request_event_id=result["event_id"], idempotency_key=key
     )
     assert retry["duplicate"] is True and retry["event_id"] == closed["event_id"]
+    assert retry["response_obligation"] == closed["response_obligation"]
     record = stack["obligations"].get(actor=stack["requester"], obligation_id=obligation_id)
     assert record["state"] == "completed" and record["response_event_id"] == closed["event_id"]
 
