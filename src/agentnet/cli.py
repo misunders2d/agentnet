@@ -1478,6 +1478,83 @@ def command_message_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def _obligation_request(
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    *,
+    json_body: dict[str, object] | None = None,
+) -> int:
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        if json_body is None:
+            response = client.request(method, path)
+        else:
+            response = client.request(method, path, json_body=json_body)
+    finally:
+        client.close()
+    if response.status_code != 200:
+        raise SystemExit(
+            f"response obligation call was rejected with HTTP {response.status_code}"
+        )
+    print(json.dumps(response.json(), indent=2, sort_keys=True))
+    return 0
+
+
+def command_obligation_list(args: argparse.Namespace) -> int:
+    if args.limit < 1 or args.limit > 1000:
+        raise SystemExit("obligation limit is outside the supported range")
+    query = f"?role={args.role}&limit={args.limit}"
+    for state in args.state or ():
+        query += f"&state={state}"
+    return _obligation_request(args, "GET", f"/v1/response-obligations{query}")
+
+
+def command_obligation_show(args: argparse.Namespace) -> int:
+    return _obligation_request(
+        args, "GET", f"/v1/response-obligations/{args.obligation_id}"
+    )
+
+
+def command_obligation_inbox(args: argparse.Namespace) -> int:
+    return _obligation_request(args, "GET", "/v1/response-obligations/inbox")
+
+
+def command_obligation_transition(args: argparse.Namespace) -> int:
+    body: dict[str, object] = {"to_state": args.to_state, "reason": args.reason}
+    if args.expected_revision is not None:
+        body["expected_revision"] = args.expected_revision
+    return _obligation_request(
+        args,
+        "POST",
+        f"/v1/response-obligations/{args.obligation_id}/transition",
+        json_body=body,
+    )
+
+
+def command_obligation_cancel(args: argparse.Namespace) -> int:
+    body: dict[str, object] = {"reason_code": args.reason_code}
+    if args.expected_revision is not None:
+        body["expected_revision"] = args.expected_revision
+    return _obligation_request(
+        args,
+        "POST",
+        f"/v1/response-obligations/{args.obligation_id}/cancel",
+        json_body=body,
+    )
+
+
+def command_obligation_reconcile(args: argparse.Namespace) -> int:
+    if args.limit < 1 or args.limit > 1000:
+        raise SystemExit("obligation reconcile limit is outside the supported range")
+    return _obligation_request(
+        args,
+        "POST",
+        "/v1/response-obligations/reconcile",
+        json_body={"limit": args.limit},
+    )
+
+
 def command_message_inbox(args: argparse.Namespace) -> int:
     if args.after < 0 or args.limit < 1 or args.limit > 1000:
         raise SystemExit("mailbox cursor or limit is outside the supported range")
@@ -2406,6 +2483,53 @@ def build_parser() -> argparse.ArgumentParser:
     message_inbox.add_argument("--after", type=int, default=0)
     message_inbox.add_argument("--limit", type=int, default=100)
     message_inbox.set_defaults(func=command_message_inbox)
+
+    obligation = commands.add_parser(
+        "obligation",
+        help="inspect and operate durable response obligations",
+    )
+    obligation_commands = obligation.add_subparsers(dest="obligation_command", required=True)
+    obligation_list = obligation_commands.add_parser("list")
+    obligation_list.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_list.add_argument(
+        "--role", choices=("requester", "responsible", "any"), default="any"
+    )
+    obligation_list.add_argument("--state", action="append")
+    obligation_list.add_argument("--limit", type=int, default=100)
+    obligation_list.set_defaults(func=command_obligation_list)
+    obligation_show = obligation_commands.add_parser("show")
+    obligation_show.add_argument("obligation_id")
+    obligation_show.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_show.set_defaults(func=command_obligation_show)
+    obligation_inbox = obligation_commands.add_parser("inbox")
+    obligation_inbox.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_inbox.set_defaults(func=command_obligation_inbox)
+    obligation_transition = obligation_commands.add_parser("transition")
+    obligation_transition.add_argument("obligation_id")
+    obligation_transition.add_argument(
+        "to_state",
+        choices=(
+            "recipient_committed",
+            "acknowledged",
+            "in_progress",
+            "pending_human",
+            "blocked",
+        ),
+    )
+    obligation_transition.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_transition.add_argument("--reason", default="recipient_update")
+    obligation_transition.add_argument("--expected-revision", type=int)
+    obligation_transition.set_defaults(func=command_obligation_transition)
+    obligation_cancel = obligation_commands.add_parser("cancel")
+    obligation_cancel.add_argument("obligation_id")
+    obligation_cancel.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_cancel.add_argument("--reason-code", default="requester_canceled")
+    obligation_cancel.add_argument("--expected-revision", type=int)
+    obligation_cancel.set_defaults(func=command_obligation_cancel)
+    obligation_reconcile = obligation_commands.add_parser("reconcile")
+    obligation_reconcile.add_argument("--identity", default=".agentnet/identity.json")
+    obligation_reconcile.add_argument("--limit", type=int, default=100)
+    obligation_reconcile.set_defaults(func=command_obligation_reconcile)
 
     admin = commands.add_parser("admin", help="perform signed, revision-fenced human administration")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)

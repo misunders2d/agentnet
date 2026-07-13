@@ -69,6 +69,7 @@ from agentnet.interfaces.contracts import ApprovalVerifier
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.conversation import ConversationService
 from agentnet.messaging.events import new_event
+from agentnet.messaging.obligation import ResponseObligationService
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
 from agentnet.operations.authority_inspection import AuthorityInspectionService
 from agentnet.operations.incident import DomainIncidentService
@@ -240,11 +241,13 @@ class CommunicationCore:
             attenuation_policy=config.policies.attenuation,
             outage_gate=self.outage,
         )
+        self.response_obligations = ResponseObligationService(store, self.policy)
         self.conversations = ConversationService(
             store,
             self.policy,
             self.mailboxes,
             assignments=self.assignments,
+            obligations=self.response_obligations,
             retention_days=config.policies.operations.retention_days,
         )
         self.relationships = RelationshipService(
@@ -1081,6 +1084,91 @@ class CommunicationCore:
             thread_id=thread_id,
             limit=limit,
         )
+
+    def _consume_obligation_mutation_quota(self, actor: VerifiedActor) -> None:
+        self.quotas.consume(
+            scope=actor.harness_id or "unknown",
+            metric="conversation_mutations",
+            amount=1,
+            limit=self.config.policies.operations.per_actor_requests_per_minute,
+        )
+
+    def response_obligation_transition(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+        to_state: str,
+        reason: str = "recipient_update",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        self._consume_obligation_mutation_quota(actor)
+        return self.response_obligations.transition(
+            actor=actor,
+            obligation_id=obligation_id,
+            to_state=to_state,
+            reason=reason,
+            expected_revision=expected_revision,
+        )
+
+    def response_obligation_cancel(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+        reason_code: str = "requester_canceled",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        self._consume_obligation_mutation_quota(actor)
+        return self.response_obligations.cancel(
+            actor=actor,
+            obligation_id=obligation_id,
+            reason_code=reason_code,
+            expected_revision=expected_revision,
+        )
+
+    def response_obligation_reconcile(
+        self,
+        *,
+        actor: VerifiedActor,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        self._consume_obligation_mutation_quota(actor)
+        return self.response_obligations.reconcile(actor=actor, limit=limit)
+
+    def response_obligation(
+        self,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+    ) -> dict[str, Any]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        return self.response_obligations.get(actor=actor, obligation_id=obligation_id)
+
+    def response_obligation_list(
+        self,
+        *,
+        actor: VerifiedActor,
+        role: str = "any",
+        states: tuple[str, ...] = (),
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        if role not in {"requester", "responsible", "any"}:
+            raise ValidationError("obligation list role is invalid")
+        return self.response_obligations.list_for(
+            actor=actor,
+            role=role,  # type: ignore[arg-type]
+            states=states,
+            limit=limit,
+        )
+
+    def response_obligation_inbox(self, *, actor: VerifiedActor) -> dict[str, int]:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        return self.response_obligations.inbox(actor=actor)
 
     def mailbox(self, *, actor: VerifiedActor, after_cursor: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)

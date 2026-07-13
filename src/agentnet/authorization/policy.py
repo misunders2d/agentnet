@@ -55,6 +55,10 @@ _LOCAL_CONFORMANCE_C0_ACTIONS = frozenset(
     {
         "conversation.create",
         "conversation.message.send",
+        "conversation.response_obligation.cancel",
+        "conversation.response_obligation.create",
+        "conversation.response_obligation.respond",
+        "conversation.response_obligation.update",
         "conversation.structured_request.send",
         "conversation.task.cancel_request",
         "conversation.task.complete",

@@ -448,11 +448,10 @@ def test_a2a_restart_selects_explicit_current_key_only_within_rotation_lineage(
 def test_a2a_schema_is_numbered_and_missing_relation_is_not_runtime_created(store) -> None:
     validate_migration_catalog()
     assert [item.version for item in MIGRATIONS] == list(range(1, CURRENT_SCHEMA_VERSION + 1))
-    assert len(MIGRATIONS) == 1
     migration = MIGRATIONS[0]
     assert migration.name == "agentnet_first_release_schema"
     assert migration.version == A2A_SCHEMA_VERSION
-    assert CURRENT_SCHEMA_VERSION == A2A_SCHEMA_VERSION == 1
+    assert A2A_SCHEMA_VERSION == 1
     for table in A2A_REQUIRED_TABLES:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in migration.sql
     assert store.readiness()["schema_version"] == CURRENT_SCHEMA_VERSION

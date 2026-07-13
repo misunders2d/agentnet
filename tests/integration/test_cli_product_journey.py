@@ -15,6 +15,7 @@ import pytest
 from agentnet.cli import _authority_command, _write_private_config, build_parser
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair, verify_signature
+from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION
 
 
 def _free_loopback_port() -> int:
@@ -308,7 +309,7 @@ def test_real_cli_executes_sealed_sqlite_backup_restore_and_compromise_plan(
     )
     assert backup.returncode == 0, backup.stderr
     backup_result = json.loads(backup.stdout)
-    assert backup_result["schema_version"] == 1
+    assert backup_result["schema_version"] == CURRENT_SCHEMA_VERSION
     assert backup_result["ha_proven"] is False
     assert archive.stat().st_mode & 0o777 == 0o600
     assert manifest.stat().st_mode & 0o777 == 0o600
@@ -381,7 +382,7 @@ def test_real_cli_executes_sealed_sqlite_backup_restore_and_compromise_plan(
     with sqlite3.connect(target) as connection:
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone() == ("1",)
+        ).fetchone() == (str(CURRENT_SCHEMA_VERSION),)
 
     replay = subprocess.run(
         restored.args,

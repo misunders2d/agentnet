@@ -126,6 +126,27 @@ class ConversationActionBody(BaseModel):
     idempotency_key: str = Field(min_length=16, max_length=256)
 
 
+class ObligationTransitionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_state: str = Field(min_length=1, max_length=64)
+    reason: str = Field(default="recipient_update", min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ObligationCancelBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason_code: str = Field(default="requester_canceled", min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ObligationReconcileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
 class TaskProposalDecisionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -352,6 +373,70 @@ def create_app(core: CommunicationCore) -> Starlette:
             }
         )
 
+    async def response_obligation_inbox(request: Request) -> Response:
+        _body, actor = await _body_and_actor(request, core)
+        return JSONResponse(core.response_obligation_inbox(actor=actor))
+
+    async def response_obligation_reconcile(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = ObligationReconcileBody.model_validate_json(body or b"{}")
+        return JSONResponse(core.response_obligation_reconcile(actor=actor, limit=parsed.limit))
+
+    async def response_obligation_list(request: Request) -> Response:
+        _body, actor = await _body_and_actor(request, core)
+        role = request.query_params.get("role", "any")
+        states = tuple(
+            value for value in request.query_params.getlist("state") if value
+        )
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError as exc:
+            raise ValidationError("obligation list limit must be an integer") from exc
+        return JSONResponse(
+            {
+                "items": core.response_obligation_list(
+                    actor=actor,
+                    role=role,
+                    states=states,
+                    limit=limit,
+                )
+            }
+        )
+
+    async def response_obligation_get(request: Request) -> Response:
+        _body, actor = await _body_and_actor(request, core)
+        return JSONResponse(
+            core.response_obligation(
+                actor=actor,
+                obligation_id=request.path_params["obligation_id"],
+            )
+        )
+
+    async def response_obligation_transition(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = ObligationTransitionBody.model_validate_json(body)
+        return JSONResponse(
+            core.response_obligation_transition(
+                actor=actor,
+                obligation_id=request.path_params["obligation_id"],
+                to_state=parsed.to_state,
+                reason=parsed.reason,
+                expected_revision=parsed.expected_revision,
+            )
+        )
+
+    async def response_obligation_cancel(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = ObligationCancelBody.model_validate_json(body)
+        return JSONResponse(
+            core.response_obligation_cancel(
+                actor=actor,
+                obligation_id=request.path_params["obligation_id"],
+                reason_code=parsed.reason_code,
+                expected_revision=parsed.expected_revision,
+            )
+        )
+
     async def task_proposals(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
         try:
@@ -436,6 +521,20 @@ def create_app(core: CommunicationCore) -> Starlette:
         Route(
             "/v1/task-proposals/{proposal_id}/reauthorize",
             reauthorize_task_proposal,
+            methods=["POST"],
+        ),
+        Route("/v1/response-obligations", response_obligation_list, methods=["GET"]),
+        Route("/v1/response-obligations/inbox", response_obligation_inbox, methods=["GET"]),
+        Route("/v1/response-obligations/reconcile", response_obligation_reconcile, methods=["POST"]),
+        Route("/v1/response-obligations/{obligation_id}", response_obligation_get, methods=["GET"]),
+        Route(
+            "/v1/response-obligations/{obligation_id}/transition",
+            response_obligation_transition,
+            methods=["POST"],
+        ),
+        Route(
+            "/v1/response-obligations/{obligation_id}/cancel",
+            response_obligation_cancel,
             methods=["POST"],
         ),
         Route("/v1/conversations", create_conversation, methods=["POST"]),

@@ -59,3 +59,12 @@ durable arrival, retrieval, typed tasks, retries, and duplicate handling, but
 did not test the complete ordinary-conversation outcome: “a request requiring
 an answer arrived; was its answer durably recognized, or was it escalated when
 unanswered?”
+
+Status: a local implementation now exists (`messaging/obligation.py`, storage
+schema version 2, `/v1/response-obligations` routes, `agentnet obligation`
+CLI, and hermetic tests) with the lifecycle spelled `created`,
+`recipient_committed`, `acknowledged`, `in_progress`, `pending_human`,
+`blocked`, `completed`, `failed`, `canceled`, `expired`. Evidence is H-tier
+local only. Multi-recipient `any`/`all`/quorum satisfaction rules and
+escalation-channel policy (PD-011) remain open; an obligation currently binds
+exactly one responsible recipient harness.

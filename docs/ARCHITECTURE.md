@@ -143,11 +143,50 @@ There is no protected TaskGrant payload-release route in the current build; ther
 task execution is unavailable through AgentNet while the custody-only
 non-grant invariant is enforced. Ordinary non-task messages are unchanged.
 
+## Durable response obligations
+
+Ordinary conversations and structured requests may opt in to a first-class
+`ResponseObligation` (`messaging/obligation.py`, tables
+`response_obligations`/`response_obligation_transitions`). Creation happens in
+the same transaction as request acceptance and binds the request event ID and
+exact payload/envelope digests, the accountable requester authority and
+harness, one exact responsible recipient harness and authority, the
+`response_required` flag, an optional deadline, and an optional response
+schema ID.
+
+The lifecycle is `created`, `recipient_committed`, `acknowledged`,
+`in_progress`, `pending_human`, `blocked`, and the terminal states
+`completed`, `failed`, `canceled`, `expired`. Invariants:
+
+- delivery custody stays authoritative in `recipients`;
+  `recipient_committed` is only mirrored from the durable mailbox fact and can
+  never be independently asserted;
+- only a typed `obligation_response` conversation action that repeats the
+  original request event ID and payload digest, posted by the exact
+  responsible recipient harness, can produce `completed`/`failed`, and the
+  response event and terminal state commit in one transaction — prose replies
+  and unrelated events never close an obligation;
+- `canceled` requires the exact accountable requester; `expired` executes only
+  the deadline that was bound at authorized creation;
+- reconciliation (`reconcile`) is idempotent and restart/offline-safe: it
+  mirrors already-durable recipient commitments and expires the requester's
+  own overdue obligations, minting no new authority;
+- every transition is revision-fenced, recorded in the transition table, and
+  audited;
+- exact-fetch and list visibility is limited to the requester and responsible
+  authorities; inbox counters (`unread_information`, `action_required`,
+  `awaiting_peer`, `awaiting_human`, `overdue`, `failed`) are derived,
+  content-free, and never mutate state.
+
+Multi-recipient `any`/`all`/quorum satisfaction rules remain future scope: an
+obligation names exactly one responsible recipient harness.
+
 ## First-release storage authority boundary
 
-AgentNet starts at storage schema version 1. SQLite initializes the complete v1
-schema atomically; PostgreSQL applies one contiguous, checksum-bound migration
-containing the same authority model. Relationship authority exists only in the
+AgentNet starts at storage schema version 1; schema version 2 adds the
+response-obligation tables. SQLite initializes the complete current schema
+atomically; PostgreSQL applies the contiguous, checksum-bound migration
+catalog containing the same authority model. Relationship authority exists only in the
 bilateral governance transaction and exact policy-exception records. Startup
 requires the exact v1 metadata, migration catalog, tables, indexes, constraints,
 and security triggers and fails closed on missing, altered, older, or newer

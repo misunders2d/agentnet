@@ -27,6 +27,10 @@ from agentnet.errors import AuthorizationError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
+from agentnet.messaging.obligation import (
+    ResponseObligationService,
+    ResponseObligationSpec,
+)
 from agentnet.protocol.models import (
     Classification,
     EventEnvelope,
@@ -56,6 +60,7 @@ class PostAction(_ConversationAction):
     kind: Literal["post"]
     body: str = Field(min_length=1, max_length=65_536)
     mentions: tuple[str, ...] = ()
+    response_obligation: ResponseObligationSpec | None = None
 
 
 class ReplyAction(_ConversationAction):
@@ -94,12 +99,46 @@ class StructuredRequestAction(_ConversationAction):
     request_type: str
     arguments: dict[str, Any]
     response_schema_id: str | None = None
+    response_obligation: ResponseObligationSpec | None = None
 
     @field_validator("request_type", "response_schema_id")
     @classmethod
     def bounded_identifiers(cls, value: str | None) -> str | None:
         if value is not None and not IDENTIFIER.fullmatch(value):
             raise ValueError("structured request identifiers are invalid")
+        return value
+
+
+class ObligationResponseAction(_ConversationAction):
+    """Typed terminal answer bound to one exact open response obligation.
+
+    Only this action can close an obligation.  It must repeat the original
+    request event identifier and payload digest so a prose reply, a reply to
+    the wrong request, or a tampered digest can never silently satisfy the
+    obligation.
+    """
+
+    kind: Literal["obligation_response"]
+    obligation_id: str = Field(min_length=1, max_length=256)
+    request_event_id: str = Field(min_length=1, max_length=256)
+    request_digest: str
+    outcome: Literal["completed", "failed"]
+    body: str = Field(min_length=1, max_length=65_536)
+    structured_response: dict[str, Any] = Field(default_factory=dict)
+    response_schema_id: str | None = None
+
+    @field_validator("request_digest")
+    @classmethod
+    def exact_request_digest(cls, value: str) -> str:
+        if not DIGEST.fullmatch(value):
+            raise ValueError("obligation response must bind an exact SHA-256 request digest")
+        return value
+
+    @field_validator("response_schema_id")
+    @classmethod
+    def bounded_schema_id(cls, value: str | None) -> str | None:
+        if value is not None and not IDENTIFIER.fullmatch(value):
+            raise ValueError("obligation response schema identifier is invalid")
         return value
 
 
@@ -144,6 +183,7 @@ ConversationAction = Annotated[
     | TaskAction
     | HandoffAction
     | StructuredRequestAction
+    | ObligationResponseAction
     | CancellationAction
     | CompletionAcknowledgementAction,
     Field(discriminator="kind"),
@@ -200,6 +240,8 @@ def build_conversation_event(
         parent_id = parsed.reply_to_event_id
     elif isinstance(parsed, HandoffAction):
         parent_id = parsed.source_event_id
+    elif isinstance(parsed, ObligationResponseAction):
+        parent_id = parsed.request_event_id
     elif isinstance(parsed, (CancellationAction, CompletionAcknowledgementAction)):
         parent_id = parsed.target_event_id
 
@@ -244,6 +286,7 @@ class ConversationService:
         mailbox: MailboxService,
         *,
         assignments: AssignmentService | None = None,
+        obligations: ResponseObligationService | None = None,
         artifact_binding_validator: Callable[..., ReleasedArtifactBinding] | None = None,
         retention_days: int = 30,
     ) -> None:
@@ -257,6 +300,7 @@ class ConversationService:
             mailbox=mailbox,
             policy=policy,
         )
+        self.obligations = obligations or ResponseObligationService(store, policy)
         self.artifact_binding_validator = artifact_binding_validator
         self.retention_days = retention_days
 
@@ -638,6 +682,41 @@ class ConversationService:
             elif isinstance(parsed, StructuredRequestAction):
                 policy_action = "conversation.structured_request.send"
 
+            obligation_row: Any | None = None
+            if isinstance(parsed, ObligationResponseAction):
+                policy_action = "conversation.response_obligation.respond"
+                parent_event_id = parsed.request_event_id
+                obligation_row = self.obligations.require_open_for_response_in_transaction(
+                    connection,
+                    actor=actor,
+                    responder_authority_id=authority_id,
+                    obligation_id=parsed.obligation_id,
+                    request_event_id=parsed.request_event_id,
+                    request_digest=parsed.request_digest,
+                    conversation_id=conversation_id,
+                    thread_id=thread_id,
+                )
+                if (
+                    obligation_row["response_schema_id"] is not None
+                    and parsed.response_schema_id != obligation_row["response_schema_id"]
+                ):
+                    raise ValidationError(
+                        "obligation response must declare the exact demanded response schema"
+                    )
+
+            obligation_spec: ResponseObligationSpec | None = getattr(
+                parsed, "response_obligation", None
+            )
+            responsible_harness_id: str | None = None
+            if obligation_spec is not None:
+                responsible_harness_id = obligation_spec.responsible_harness_id or (
+                    recipients[0] if len(recipients) == 1 else None
+                )
+                if responsible_harness_id is None or responsible_harness_id not in recipients:
+                    raise ValidationError(
+                        "a response obligation requires one exact responsible recipient harness"
+                    )
+
             event = build_conversation_event(
                 actor=actor,
                 recipients=recipients,
@@ -852,6 +931,35 @@ class ConversationService:
                         parsed.task_id,
                     ),
                 )
+            obligation_result: dict[str, Any] | None = None
+            if obligation_spec is not None and responsible_harness_id is not None:
+                obligation_result = self.obligations.create_in_transaction(
+                    connection,
+                    actor=actor,
+                    requester_authority_id=authority_id,
+                    spec=obligation_spec,
+                    request_event=event,
+                    request_envelope_digest=accepted["envelope_digest"],
+                    responsible_harness_id=responsible_harness_id,
+                    responsible_authority_id=recipient_authorities[responsible_harness_id],
+                    classification=classification,
+                    policy_revision=revision,
+                    now=now,
+                )
+            elif isinstance(parsed, ObligationResponseAction) and obligation_row is not None:
+                # Atomic linkage: the accepted typed response and the terminal
+                # obligation state commit or fail together, so the system can
+                # never report "awaiting peer" once this response is durable.
+                obligation_result = self.obligations.close_with_response_in_transaction(
+                    connection,
+                    row=obligation_row,
+                    actor=actor,
+                    outcome=parsed.outcome,
+                    response_event_id=event.event_id,
+                    response_payload_digest=event.payload_digest,
+                    policy_decision_id=decision.decision_id,
+                    now=now,
+                )
             connection.execute(
                 "UPDATE conversations SET updated_at=? WHERE conversation_id=?",
                 (now, conversation_id),
@@ -870,11 +978,14 @@ class ConversationService:
             )
             if phase_hook is not None:
                 phase_hook("before_conversation_action_commit")
-        return accepted | {
+        result = accepted | {
             "action_kind": parsed.kind,
             "conversation_id": conversation_id,
             "policy_decision_id": decision.decision_id,
         }
+        if obligation_result is not None:
+            result["response_obligation"] = obligation_result
+        return result
 
     def thread(
         self,

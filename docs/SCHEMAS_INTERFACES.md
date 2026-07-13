@@ -88,6 +88,30 @@ and cannot promote it to work. The current build defines no protected TaskGrant
 payload-release route, so task execution remains unavailable. Ordinary
 non-task message projections retain their existing authorized payload shape.
 
+## Response-obligation wire and storage contract
+
+`PostAction` and `StructuredRequestAction` accept an optional strict
+`response_obligation` spec (`response_required`, `responsible_harness_id`,
+`deadline_at`, `response_schema_id`). The spec is part of the exact request
+payload digest, and the obligation row is created in the same transaction as
+request acceptance. A new `obligation_response` conversation action is the
+only closure path: it must repeat the obligation ID, the original request
+event ID, and the exact request payload digest, must come from the exact
+responsible recipient harness, and commits the terminal `completed`/`failed`
+state atomically with the accepted response event.
+
+| Operation | Exact body/evidence | Authority effect |
+|---|---|---|
+| `POST /v1/conversations/{id}/actions` with `response_obligation` | strict spec inside the digested request payload | creates one obligation bound to the accepted request |
+| `POST /v1/conversations/{id}/actions` kind `obligation_response` | obligation ID plus exact request event ID and digest | atomically closes the obligation as `completed`/`failed` |
+| `POST /v1/response-obligations/{id}/transition` | `to_state` in recipient progress states, optional `expected_revision` | responsible-recipient progress only; `recipient_committed` additionally requires the durable mailbox fact |
+| `POST /v1/response-obligations/{id}/cancel` | bounded `reason_code`, optional `expected_revision` | exact accountable requester cancellation |
+| `POST /v1/response-obligations/reconcile` | bounded `limit` | derived, idempotent restart/offline reconciliation; no new authority |
+| `GET /v1/response-obligations` / `/{id}` / `/inbox` | authenticated participant read | requester/responsible-scoped, non-enumerating; inbox counters are content-free |
+
+The operator CLI mirrors these routes under `agentnet obligation
+list|show|inbox|transition|cancel|reconcile`.
+
 ## Schema evolution
 
 The handshake selects the highest mutually allowed protocol/schema profile.
@@ -96,11 +120,13 @@ precede backfill/verification and contraction. Revocation/security state never
 rolls back. Unsupported events remain queued or receive a typed rejection;
 intermediaries never strip unknown signed fields.
 
-AgentNet's first release uses storage schema version 1. SQLite initializes the
-complete v1 schema; PostgreSQL has one contiguous checksum-bound v1 migration.
-The relationship governance and policy-exception tables are part of that first
-schema, not a retrofit. Startup fails closed on a missing or altered migration,
-table, index, trigger/constraint, or unsupported version.
+AgentNet's storage schema is currently version 2: version 1 is the complete
+first-release schema and version 2 adds the response-obligation tables. SQLite
+initializes the complete current schema; PostgreSQL has a contiguous
+checksum-bound migration catalog. The relationship governance and
+policy-exception tables are part of the first schema, not a retrofit. Startup
+fails closed on a missing or altered migration, table, index,
+trigger/constraint, or unsupported version.
 
 No pre-release or differently named database is accepted as an authority
 source, and no unilateral relationship can be converted into consent. Import

@@ -50,6 +50,9 @@ from agentnet.storage.post_audit_schema import POST_AUDIT_SCHEMA
 from agentnet.storage.relationship_governance_schema import (
     RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA,
 )
+from agentnet.storage.response_obligation_schema import (
+    RESPONSE_OBLIGATION_SCHEMA,
+)
 from agentnet.storage.supervisor_schema import SUPERVISOR_SCHEMA, SUPERVISOR_SCHEMA_VERSION
 from agentnet.storage.task_custody_schema import (
     TASK_CUSTODY_SCHEMA,
@@ -520,6 +523,7 @@ SCHEMA = (
     + OPERATIONAL_CONTROL_SCHEMA
     + RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA
     + POST_AUDIT_SCHEMA
+    + RESPONSE_OBLIGATION_SCHEMA
 )
 
 _SCHEMA_CATALOG_QUERY = (

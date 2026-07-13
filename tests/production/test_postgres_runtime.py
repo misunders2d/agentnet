@@ -76,12 +76,12 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 1
+    assert CURRENT_SCHEMA_VERSION == 2
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
-        (1, "agentnet_first_release_schema")
+        (1, "agentnet_first_release_schema"),
+        (2, "agentnet_response_obligation_schema"),
     ]
-    migration = MIGRATIONS[0]
-    schema = migration.sql
+    schema = "\n".join(migration.sql for migration in MIGRATIONS)
     assert "AUTOINCREMENT" not in schema
     assert " INTEGER" not in schema
     assert "BIGSERIAL" in schema
@@ -89,8 +89,8 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
         "CREATE TABLE IF NOT EXISTS effect_reservations"
     )
 
-    # Every table and explicit index in the local first-release schema has a
-    # PostgreSQL counterpart in the one immutable production migration.
+    # Every table and explicit index in the local schema has a PostgreSQL
+    # counterpart in the immutable numbered production migrations.
     sqlite = SQLiteStore(tmp_path / "catalog-shape.sqlite3", LocalEnvelopeCipher(b"s" * 32))
     try:
         objects = sqlite.fetch_all(
@@ -123,7 +123,7 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
         assert required in schema
     assert "ON CONFLICT(reservation_id) DO NOTHING" in schema
 
-    assert RELATIONSHIP_GOVERNANCE_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION
+    assert RELATIONSHIP_GOVERNANCE_SCHEMA_VERSION == 1
     for table in (
         "relationship_governance_lineages",
         "relationship_governance_transactions",
@@ -137,7 +137,7 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
     assert "legacy_unilateral_relationship" not in schema
     assert "UPDATE relationships" not in schema
 
-    assert POST_AUDIT_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION
+    assert POST_AUDIT_SCHEMA_VERSION == 1
     for table in POST_AUDIT_REQUIRED_TABLES:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
     for index in POST_AUDIT_REQUIRED_INDEXES:
@@ -176,10 +176,15 @@ def test_sqlite_fresh_database_records_exact_first_release_catalog(tmp_path: Pat
     path = tmp_path / "fresh.sqlite3"
     store = SQLiteStore(path, LocalEnvelopeCipher(b"g" * 32))
     try:
-        assert store.fetch_one("SELECT value FROM metadata WHERE key='schema_version'")["value"] == "1"
+        assert store.fetch_one("SELECT value FROM metadata WHERE key='schema_version'")["value"] == str(
+            CURRENT_SCHEMA_VERSION
+        )
         assert [tuple(row) for row in store.fetch_all(
             "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
-        )] == [(1, MIGRATIONS[0].name, MIGRATIONS[0].checksum)]
+        )] == [
+            (migration.version, migration.name, migration.checksum)
+            for migration in MIGRATIONS
+        ]
         require_relationship_governance_schema(store)
         require_post_audit_schema(store)
         for table in POST_AUDIT_REQUIRED_TABLES | {
@@ -349,7 +354,7 @@ def test_sqlite_first_release_schema_verifiers_accept_only_complete_fresh_schema
     try:
         require_relationship_governance_schema(store)
         require_post_audit_schema(store)
-        assert store.readiness()["schema_version"] == 1
+        assert store.readiness()["schema_version"] == CURRENT_SCHEMA_VERSION
         assert {
             row["name"]
             for row in store.fetch_all(
@@ -415,8 +420,8 @@ def test_sqlite_migration_catalog_tamper_is_never_silently_repaired(
         )
     else:
         raw.execute(
-            "INSERT INTO installed_migration_catalog(version,name,checksum) VALUES(2,'future',?)",
-            ("f" * 64,),
+            "INSERT INTO installed_migration_catalog(version,name,checksum) VALUES(?,'future',?)",
+            (CURRENT_SCHEMA_VERSION + 1, "f" * 64),
         )
     raw.commit()
     raw.close()
@@ -437,18 +442,26 @@ def test_qmark_translation_ignores_exact_quoted_literals() -> None:
 
 def test_migration_history_rejects_gaps_future_and_checksum_tamper() -> None:
     first = MIGRATIONS[0]
-    assert validate_applied_migrations(
-        [{"version": 1, "name": first.name, "checksum": first.checksum}]
-    ) == 1
+    applied_prefix = [{"version": 1, "name": first.name, "checksum": first.checksum}]
+    assert validate_applied_migrations(applied_prefix) == 1
+    complete = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS
+    ]
+    assert validate_applied_migrations(complete) == CURRENT_SCHEMA_VERSION
     with pytest.raises(GateBlocked, match="contiguous"):
         validate_applied_migrations(
             [{"version": 2, "name": first.name, "checksum": first.checksum}]
         )
     with pytest.raises(GateBlocked, match="newer"):
         validate_applied_migrations(
-            [
-                {"version": 1, "name": first.name, "checksum": first.checksum},
-                {"version": 2, "name": "future_schema", "checksum": "f" * 64},
+            complete
+            + [
+                {
+                    "version": CURRENT_SCHEMA_VERSION + 1,
+                    "name": "future_schema",
+                    "checksum": "f" * 64,
+                }
             ]
         )
     with pytest.raises(GateBlocked, match="checksum"):
