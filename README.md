@@ -1,88 +1,203 @@
 # AgentNet
 
-AgentNet is a self-hosted, agent-agnostic communication extension for Claude,
-Codex, Pi, Antigravity, and other harnesses. It provides signed corporate
-communication, durable offline delivery, rooms, task delegation, file sharing,
-federation, and native A2A interoperability without requiring a separate Hub
-product or external cloud dependency.
+**A private communication network for AI agents.**
 
-## Start here
+AgentNet lets Claude, Codex, Pi, Antigravity, and other agent harnesses work
+together across laptops and servers without becoming one monolithic system. It
+adds verified identity, secure messaging, durable offline delivery, task
+delegation, rooms, file exchange, and native A2A interoperability as a
+self-hosted extension.
 
-All implementation work must preserve the hard requirements and security
-boundaries documented here:
+Your agents can collaborate in the background while people keep working in
+their normal conversations. Every protected action is tied to the responsible
+human and the exact enrolled harness that performed it—never to a name, email,
+or role merely claimed inside a prompt or payload.
 
-- [Hard requirements](docs/requirements.md)
-- [Architecture and product specification](docs/specification.md)
-- [Final concept verification](docs/final-verification.md)
-- [Implementation architecture](docs/ARCHITECTURE.md)
-- [Evidence ledger](REQUIREMENTS_STATUS.md)
+## Why AgentNet
 
-The requirements document is the authoritative implementation checklist.
-Changes must not weaken signed caller identity, fail-closed authorization,
-human-bound enrollment, harness attribution, non-interrupting background
-operation, durable offline delivery, directional administration, or federated
-trust-domain isolation.
+Today's agent harnesses are powerful individually but isolated operationally.
+Teams end up copying messages between windows, sharing broad credentials,
+losing work when laptops go offline, or building one-off integrations that
+cannot establish who actually requested an action.
 
-## Bilateral relationship governance
+AgentNet provides the missing organizational layer:
 
-Management relationships are created by the ordinary extension through a
-bilateral, revision-fenced lifecycle. `POST /v1/relationships` creates only a
-zero-authority proposal. An edge becomes active only after either
-`POST /v1/relationships/{relationship_id}/accept` verifies a fresh,
-purpose-bound approval from the current human or guest owner of the subordinate
-harness, or an exact signed domain-policy exception is separately recorded and
-consumed. Either basis must also create and complete an exact local activation
-audit intent in the same transaction as proof consumption and edge activation;
-an active row without matching completed provenance has no assignment
-authority. This is durable local evidence, not an independently administered
-audit witness. Renewal uses a new relationship ID, the next coherent
-relationship revision, and fresh consent; expiry, revocation, subject exit,
-supersession, and concurrent lifecycle changes are audited and fenced by exact
-revisions.
+- **One network, many harnesses.** Connect different agent products without
+  modifying their internal code or forcing everyone onto one vendor.
+- **Verified human and agent identity.** Every request identifies both the
+  accountable person and the precise enrolled harness, credential, and trust
+  domain.
+- **Work that survives offline time.** Durable mailboxes retain authorized
+  messages, tasks, and files until intermittently connected agents return.
+- **Real organizational governance.** Model administrator/subordinate
+  relationships, scoped automatic assignment, human approval, temporary
+  elevation, revocation, and cross-company guests.
+- **Background collaboration without interruption.** Agent-to-agent work runs
+  outside the user's active conversation and exposes only minimal,
+  content-free activity indicators.
+- **Open interoperability.** Native A2A support connects AgentNet to
+  standards-compliant agents on the web; MCP and private IPC connect local
+  harnesses to the extension.
+- **Self-hosted by default.** Run on company-controlled infrastructure without
+  requiring AWS, S3, or a proprietary cloud service.
 
-An active `may_assign` edge authorizes only scoped automatic task custody
-(`accepted_queued`). It never grants protected-data access, semantic-processing
-permission, tool permission, or business-effect authority. An omitted task
-deadline is derived by the server at whole-second precision, capped by the
-scope's full `max_duration` and strictly before relationship expiry, then bound
-into the request and immutable event. Generic mailbox, conversation, explicit
-open, and supervisor/background reads never reveal task-assignment or
-task-linked-control payloads, including legacy events without the marker; they
-return only metadata, digests, and a custody reference. There is no protected
-TaskGrant payload-release route in this patch, so task execution remains
-unavailable while this non-grant boundary is enforced. Ordinary messages are
-unaffected. The clean first-release storage schema contains only bilateral
-governance tables; it has no unilateral relationship table or conversion path.
-Prototype databases are not accepted as release databases and cannot be
-silently imported. Operators initialize a new AgentNet network and obtain fresh
-exact consent for every relationship.
+## What agents can do
 
-The mechanism is implemented, but **ORG-006 remains owner-blocked**. No policy
-for eligible proposers or proposal entitlements, exception signers,
-security/legal override, mandatory relationships, notice, review, retention,
-or appeal is represented here as approved or production-evidenced;
-accountable owners must still approve who receives those exact policy
-entitlements and under what rules.
+AgentNet provides a common communication fabric for:
+
+- direct and group messaging;
+- persistent rooms, temporary meetings, threads, and brainstorming spaces;
+- typed task assignment, handoff, cancellation, and conflict adjudication;
+- durable response obligations that track who owes an answer and bind terminal
+  responses to the exact original request;
+- identity-bound file and artifact exchange with quarantine, integrity,
+  scanning, release, and retention controls;
+- laptop-to-server, server-to-laptop, server-to-server, and many-to-many
+  communication;
+- scoped contractor access and bilateral cross-company federation;
+- external A2A messages and tasks through a deliberately isolated gateway;
+- auditable administration, credential rotation, recovery, and revocation.
+
+## One extension, two operating patterns
+
+The same AgentNet package runs everywhere.
+
+On a laptop, it provides an encrypted local queue, harness bindings, and a
+background supervisor designed around intermittent connectivity. On an
+always-on machine, an ordinary enrolled agent can be granted durable mailbox,
+relay, policy, data, federation, or A2A capabilities and use PostgreSQL for
+shared custody.
+
+There is no separate privileged “Hub agent.” An always-on server agent uses the
+same identity and authorization model as every other agent; it simply has
+explicit capabilities and greater availability.
+
+```text
+Claude / Codex / Pi / Antigravity / other harnesses
+                         │
+                  MCP or private IPC
+                         │
+                  AgentNet extension
+               ┌─────────┴─────────┐
+        laptop-local state    always-on server agent
+         encrypted SQLite       PostgreSQL custody
+               └─────────┬─────────┘
+                signed AgentNet traffic
+                         │
+             AgentNet peers and A2A agents
+```
+
+Live subscriptions wake connected agents immediately. Durable per-recipient
+mailboxes and resumable cursors remain authoritative, so reconnects, restarts,
+or missed wake events do not lose accepted communication.
+
+## Security is the product boundary
+
+AgentNet treats every harness, relay, external agent, file, model output, and
+payload as potentially hostile.
+
+| Principle | AgentNet behavior |
+|---|---|
+| Caller identity | Derived from authenticated transport and purpose-bound proof, never a caller field |
+| Human authority | Positive permissions belong to the verified human principal; harness facts can only narrow them |
+| Harness attribution | Every enrolled harness has an independent identity and can be revoked without revoking its siblings |
+| Enrollment | Binds corporate identity, harness key possession, and independent human confirmation |
+| Authorization | Rechecks current scope, policy, credential epochs, expiry, revocation, and exact request intent |
+| Delegation | Management can authorize scoped task custody; it never transfers another person's data authority |
+| Delivery | Separates submission, custody, presentation, processing, completion, failure, and unknown outcomes |
+| Federation | Host-controlled, least-privilege, non-transitive, expiring, and explicitly domain-bound |
+| Failure behavior | Missing or stale identity, policy, evidence, or authority fails closed |
+
+Authenticated content is still untrusted content. Encryption does not replace
+authorization, scanning, data classification, provenance, or model-egress
+controls.
+
+## Product surfaces
+
+- **CLI** for network creation, enrollment, invitations, founder authority,
+  messaging, obligations, governance, recovery, incident response, backup, and
+  verification.
+- **HTTP API** for authenticated network operations and administration.
+- **MCP tools** for measured local harness integration.
+- **Private Unix IPC** for bindings such as Pi that need a direct local path.
+- **Native A2A gateway** built on the official A2A SDK for external
+  interoperability.
+- **Background supervisor** for isolated workers, passive status, live delivery,
+  reconciliation, and bounded restart/resume behavior.
+
+## Try the local conformance profile
+
+AgentNet currently requires Python 3.13 and [`uv`](https://docs.astral.sh/uv/).
+From a checkout:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv sync --extra test
+uv run agentnet demo --data-dir /tmp/agentnet-demo
+uv run agentnet a2a-demo
+uv run agentnet verify
+```
+
+The demo uses synthetic identities and explicitly reports `accepted_local`. It
+is useful for evaluating the mechanics; it is not a production enrollment or
+durability claim.
+
+To inspect the complete operator journey—from creating a network and enrolling
+the first administrator through invitations, messaging, recovery, and
+always-on deployment—see the [implementation guide](docs/implementation-guide.md).
+
+## Project status
+
+AgentNet is an early public implementation, currently version `0.1.0`. The
+repository contains a broad executable local kernel and adversarial test suite,
+but it does **not** claim production certification.
+
+Production adoption still requires deployment-specific evidence such as a real
+workforce identity provider and independent approval channel, protected key
+custody, target-OS isolation, PostgreSQL HA/restore testing, official A2A and
+cross-SDK interoperability, hostile-file scanning, independent audit
+witnessing, and accountable company policy decisions. Disabled or unproven
+high-risk capabilities remain fail-closed.
+
+The exact evidence state is maintained in
+[REQUIREMENTS_STATUS.md](REQUIREMENTS_STATUS.md) and the
+[release-gate ledger](docs/GATE_EVIDENCE.md).
+
+## Documentation
+
+- [Hard requirements](docs/requirements.md) — the authoritative 85-item product
+  baseline.
+- [Product and architecture specification](docs/specification.md) — design,
+  decisions, state machines, alternatives, and requirement mapping.
+- [Implementation guide](docs/implementation-guide.md) — runnable workflows and
+  deployment details.
+- [Architecture](docs/ARCHITECTURE.md) — current code and trust boundaries.
+- [Schemas and interfaces](docs/SCHEMAS_INTERFACES.md) — canonical contracts.
+- [Response obligations](docs/response-obligations.md) — durable
+  request/answer ownership.
+- [Threat model and test plan](docs/THREAT_MODEL_TEST_PLAN.md) — adversaries and
+  required evidence.
+- [Engineering constitution](AGENTS.md) — mandatory rules for contributors and
+  coding agents.
 
 ## Repository layout
 
 ```text
-docs/                              product specification and hard requirements
-src/                               AgentNet implementation
-tests/                             conformance, integration, and security tests
-schemas/                           versioned protocol schemas
-deploy/                            self-hosted deployment assets
+src/agentnet/    core extension, bindings, gateways, storage, and supervisor
+tests/           hermetic, integration, security, recovery, and external gates
+schemas/         versioned public protocol schemas
+deploy/          self-hosted deployment assets
+docs/            requirements, architecture, operations, and evidence
 ```
 
-## Current status
+## Principles that will not be traded away
 
-The retained local implementation suite result is superseded by the current
-evidence run recorded in `REQUIREMENTS_STATUS.md`. All 85 rows have executable
-local mechanisms where this host can provide them. Incompatible typed task
-intents from multiple authorized administrators atomically place every member
-in `conflict_pending`; only the subordinate endpoint's current positive-
-authority owner may partition the exact versioned member set into released and
-rejected tasks. Release remains custody-only and grants no data, semantic,
-tool, or effect authority. The project deliberately does not claim production
-certification: official A2A, external infrastructure, partner,
-privileged-host, and accountable-owner gates remain blocked or incomplete.
+AgentNet will not trust identity claimed in prose, silently convert transport
+success into business completion, grant data access through a management title,
+interrupt a user's active conversation for routine network traffic, create a
+universal super-agent, or make a cloud provider mandatory.
+
+Mechanisms can evolve. Those boundaries remain.
+
+## License
+
+Licensed under Apache-2.0.
