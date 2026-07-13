@@ -1,0 +1,568 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "verified_human_harness",
+        "host_guest_harness",
+        "workload",
+        "external_human_unverified"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "EventType": {
+      "enum": [
+        "message",
+        "task_assignment",
+        "room_event",
+        "artifact_event",
+        "control"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "ReleasedArtifactBinding": {
+      "additionalProperties": false,
+      "description": "Exact, non-fetching reference to one corporately released object version.\n\nThe binding intentionally excludes the plaintext digest and object key:\nboth are private manifest data whose disclosure would create equality and\nstorage-topology side channels.  Consumers must resolve ``artifact_id``\nthrough the authoritative artifact service and compare every field before\nmaking bytes available.",
+      "properties": {
+        "artifact_id": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "domain_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "media_type": {
+          "maxLength": 255,
+          "minLength": 3,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "object_version": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Object Version",
+          "type": "string"
+        },
+        "release_intent_id": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+          "title": "Release Intent Id",
+          "type": "string"
+        },
+        "released_at": {
+          "format": "date-time",
+          "title": "Released At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "domain_id",
+        "object_version",
+        "size",
+        "media_type",
+        "classification",
+        "release_intent_id",
+        "released_at"
+      ],
+      "title": "ReleasedArtifactBinding",
+      "type": "object"
+    },
+    "VerifiedActor": {
+      "additionalProperties": false,
+      "description": "An exact, discriminated actor shape.\n\nPydantic cannot expose a union alias while preserving the long-standing\n``VerifiedActor(...)`` constructor used throughout the core.  This model\ntherefore enforces the same tagged-union invariant at both parse and copy\nboundaries: a field belonging to another actor kind is an error even when\nits value is ``null``.  Authority code can consequently branch on ``kind``\nwithout also having to defend against smuggled cross-kind identity fields.",
+      "properties": {
+        "binding_assurance": {
+          "enum": [
+            "external",
+            "lab",
+            "os_bound",
+            "hardware_bound",
+            "internal_process",
+            "synthetic_lab",
+            "workload_mtls"
+          ],
+          "title": "Binding Assurance",
+          "type": "string"
+        },
+        "credential_epoch": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Credential Epoch",
+          "type": "integer"
+        },
+        "credential_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Id"
+        },
+        "domain_id": {
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "external_peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Peer Id"
+        },
+        "guest_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guest Id"
+        },
+        "harness_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "parent_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Event Id"
+        },
+        "principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Principal Id"
+        },
+        "task_grant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Grant Id"
+        },
+        "workload_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Id"
+        },
+        "workload_process_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Id"
+        },
+        "workload_process_start_time": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Start Time"
+        },
+        "workload_registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Registration Id"
+        },
+        "workload_revocation_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Revocation Epoch"
+        },
+        "workload_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Role"
+        },
+        "workload_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Session Id"
+        }
+      },
+      "required": [
+        "kind",
+        "domain_id",
+        "binding_assurance"
+      ],
+      "title": "VerifiedActor",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/event.json",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/VerifiedActor"
+    },
+    "causal_parent_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Causal Parent Ids",
+      "type": "array"
+    },
+    "classification": {
+      "$ref": "#/$defs/Classification"
+    },
+    "conversation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conversation Id"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "credential_epoch": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Credential Epoch",
+      "type": "integer"
+    },
+    "delivery_expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delivery Expires At"
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "effect_deadline": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effect Deadline"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "$ref": "#/$defs/EventType"
+    },
+    "idempotency_key": {
+      "maxLength": 256,
+      "minLength": 16,
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "legal_hold": {
+      "default": false,
+      "title": "Legal Hold",
+      "type": "boolean"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "payload_access": {
+      "anyOf": [
+        {
+          "const": "task_grant_required",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Payload Access"
+    },
+    "payload_digest": {
+      "title": "Payload Digest",
+      "type": "string"
+    },
+    "policy_revision": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Policy Revision",
+      "type": "integer"
+    },
+    "protocol_profile": {
+      "const": "agentnet.internal/1.0",
+      "default": "agentnet.internal/1.0",
+      "title": "Protocol Profile",
+      "type": "string"
+    },
+    "recipients": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Recipients",
+      "type": "array"
+    },
+    "released_artifacts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReleasedArtifactBinding"
+      },
+      "title": "Released Artifacts",
+      "type": "array"
+    },
+    "retention_delete_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retention Delete At"
+    },
+    "room_application_epoch": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Room Application Epoch"
+    },
+    "room_control_sequence": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Room Control Sequence"
+    },
+    "room_file_key_epoch": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Room File Key Epoch"
+    },
+    "room_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Room Id"
+    },
+    "room_mls_epoch": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Room Mls Epoch"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Id"
+    },
+    "thread_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Thread Id"
+    }
+  },
+  "required": [
+    "domain_id",
+    "actor",
+    "event_type",
+    "classification",
+    "payload",
+    "payload_digest",
+    "idempotency_key",
+    "recipients"
+  ],
+  "title": "EventEnvelope",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

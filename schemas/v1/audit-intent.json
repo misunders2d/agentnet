@@ -1,0 +1,287 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "verified_human_harness",
+        "host_guest_harness",
+        "workload",
+        "external_human_unverified"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "VerifiedActor": {
+      "additionalProperties": false,
+      "description": "An exact, discriminated actor shape.\n\nPydantic cannot expose a union alias while preserving the long-standing\n``VerifiedActor(...)`` constructor used throughout the core.  This model\ntherefore enforces the same tagged-union invariant at both parse and copy\nboundaries: a field belonging to another actor kind is an error even when\nits value is ``null``.  Authority code can consequently branch on ``kind``\nwithout also having to defend against smuggled cross-kind identity fields.",
+      "properties": {
+        "binding_assurance": {
+          "enum": [
+            "external",
+            "lab",
+            "os_bound",
+            "hardware_bound",
+            "internal_process",
+            "synthetic_lab",
+            "workload_mtls"
+          ],
+          "title": "Binding Assurance",
+          "type": "string"
+        },
+        "credential_epoch": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Credential Epoch",
+          "type": "integer"
+        },
+        "credential_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Id"
+        },
+        "domain_id": {
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "external_peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Peer Id"
+        },
+        "guest_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guest Id"
+        },
+        "harness_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "parent_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Event Id"
+        },
+        "principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Principal Id"
+        },
+        "task_grant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Grant Id"
+        },
+        "workload_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Id"
+        },
+        "workload_process_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Id"
+        },
+        "workload_process_start_time": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Start Time"
+        },
+        "workload_registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Registration Id"
+        },
+        "workload_revocation_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Revocation Epoch"
+        },
+        "workload_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Role"
+        },
+        "workload_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Session Id"
+        }
+      },
+      "required": [
+        "kind",
+        "domain_id",
+        "binding_assurance"
+      ],
+      "title": "VerifiedActor",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/audit-intent.json",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "title": "Action",
+      "type": "string"
+    },
+    "actor": {
+      "$ref": "#/$defs/VerifiedActor"
+    },
+    "committed_at": {
+      "format": "date-time",
+      "title": "Committed At",
+      "type": "string"
+    },
+    "credential_epoch": {
+      "minimum": 0,
+      "title": "Credential Epoch",
+      "type": "integer"
+    },
+    "data_class": {
+      "$ref": "#/$defs/Classification"
+    },
+    "intent_id": {
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "policy_revision": {
+      "minimum": 1,
+      "title": "Policy Revision",
+      "type": "integer"
+    },
+    "resource_digest": {
+      "title": "Resource Digest",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "intent_id",
+    "action",
+    "actor",
+    "resource_digest",
+    "policy_revision",
+    "credential_epoch",
+    "data_class",
+    "committed_at"
+  ],
+  "title": "AuditIntent",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

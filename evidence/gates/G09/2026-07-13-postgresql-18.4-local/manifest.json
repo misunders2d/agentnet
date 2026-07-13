@@ -1,0 +1,56 @@
+{
+  "gate": "G09",
+  "run_id": "2026-07-13-postgresql-18.4-local",
+  "evaluated_at": "2026-07-13T18:44:00+03:00",
+  "status": "partial",
+  "evidence_tier": ["L"],
+  "release_source_tree_sha256": "c94517c2c83d2d5af0aeebbd22127aff2dc763efbe03c78041a9aae599e8c373",
+  "operator": "local Codex implementation session",
+  "review": "local evidence reviewed; no independent external reviewer",
+  "official_gate_green": false,
+  "postgresql": {
+    "version": "18.4",
+    "source": "https://ftp.postgresql.org/pub/source/v18.4/",
+    "binary": "/tmp/pg18/bin/postgres",
+    "data_directory": "/tmp/agentnet-pgdata-20260713-final",
+    "unix_socket_directory": "/tmp/agentnet-pgsocket-20260713-final",
+    "port": 55432,
+    "encoding": "UTF8",
+    "dedicated_test_database": "agentnet_test_final"
+  },
+  "command": "AGENTNET_TEST_POSTGRES_URL='postgresql:///agentnet_test_final?host=/tmp/agentnet-pgsocket-20260713-final&port=55432' AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q -p no:cacheprovider tests/production/test_postgres_runtime.py",
+  "pytest": {
+    "selected": 44,
+    "passed": 44,
+    "failed": 0,
+    "skipped": 0,
+    "xfailed": 0,
+    "real_postgresql_cases": 7,
+    "hermetic_fake_or_sqlite_cases": 37
+  },
+  "environment": {
+    "os": "Arch Linux rolling",
+    "kernel": "Linux 6.18.38-1-lts",
+    "architecture": "x86_64"
+  },
+  "results": {
+    "pre_release_nonempty_schema_rejection_proven": true,
+    "clean_schema_v1_catalog_and_tamper_fencing_proven": true,
+    "exact_schema_table_index_constraint_tamper_fencing_proven": true,
+    "cross_instance_mailbox_visibility": true,
+    "real_postgresql_reconnect_fencing_proven": true,
+    "cross_instance_artifact_quota_admission_proven": true,
+    "cross_instance_half_open_breaker_cas_proven": true,
+    "cross_instance_task_conflict_and_adjudication_race_proven": true,
+    "hermetic_storage_contracts_exercised": true,
+    "production_ha_claimed": false,
+    "independent_failure_domains_proven": false,
+    "pitr_restore_proven": false
+  },
+  "remaining_required_evidence": [
+    "fenced multi-node failover on independent failure domains",
+    "PITR and host-loss restore drills for database and artifacts",
+    "owner-approved RPO, RTO, durability topology, and stop rules"
+  ],
+  "review_conclusion": "The 44-test file passed; seven tests exercised the real UTF-8 PostgreSQL 18.4 process and proved pre-release nonempty-schema rejection, exact clean schema-v1 installation and DDL tamper fencing, two-instance mailbox visibility, reconnect-only-next-operation fencing, atomic cross-instance artifact quota admission, one-winner half-open breaker admission, and two-store task-conflict admission plus opposite owner-adjudication serialization with one revision-fenced winner. Thirty-seven used hermetic connections or SQLite. Multi-node HA, PITR, independent failure domains, restore, and owner approval remain unproven, so G09 is release-blocking."
+}

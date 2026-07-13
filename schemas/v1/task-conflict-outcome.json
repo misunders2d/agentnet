@@ -1,0 +1,72 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/task-conflict-outcome.json",
+  "additionalProperties": false,
+  "properties": {
+    "conflict_id": {
+      "title": "Conflict Id",
+      "type": "string"
+    },
+    "data_access_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Data Access Authorized",
+      "type": "boolean"
+    },
+    "decision_digest": {
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "effect_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Effect Authorized",
+      "type": "boolean"
+    },
+    "rejected_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rejected Event Ids",
+      "type": "array"
+    },
+    "released_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Released Event Ids",
+      "type": "array"
+    },
+    "revision": {
+      "title": "Revision",
+      "type": "integer"
+    },
+    "semantic_processing_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Semantic Processing Authorized",
+      "type": "boolean"
+    },
+    "state": {
+      "const": "resolved",
+      "default": "resolved",
+      "title": "State",
+      "type": "string"
+    },
+    "tool_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Tool Authorized",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "conflict_id",
+    "revision",
+    "decision_digest",
+    "released_event_ids",
+    "rejected_event_ids"
+  ],
+  "title": "TaskConflictOutcome",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

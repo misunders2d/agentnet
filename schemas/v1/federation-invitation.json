@@ -1,0 +1,59 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/federation-invitation.json",
+  "additionalProperties": false,
+  "properties": {
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "home_domain_id": {
+      "title": "Home Domain Id",
+      "type": "string"
+    },
+    "host_domain_id": {
+      "title": "Host Domain Id",
+      "type": "string"
+    },
+    "invitation_id": {
+      "title": "Invitation Id",
+      "type": "string"
+    },
+    "non_transitive": {
+      "const": true,
+      "default": true,
+      "title": "Non Transitive",
+      "type": "boolean"
+    },
+    "pairwise_subject": {
+      "title": "Pairwise Subject",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sponsor_principal_id": {
+      "title": "Sponsor Principal Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "invitation_id",
+    "host_domain_id",
+    "home_domain_id",
+    "sponsor_principal_id",
+    "pairwise_subject",
+    "grant_digest",
+    "expires_at"
+  ],
+  "title": "FederationInvitationRecord",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

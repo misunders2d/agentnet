@@ -1,0 +1,335 @@
+{
+  "$defs": {
+    "AssignmentScope": {
+      "additionalProperties": false,
+      "description": "Complete automatic-custody scope; never data or effect authority.",
+      "properties": {
+        "authority_effect": {
+          "const": "custody_only",
+          "default": "custody_only",
+          "title": "Authority Effect",
+          "type": "string"
+        },
+        "data_classes": {
+          "items": {
+            "$ref": "#/$defs/Classification"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Data Classes",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "max_budget": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Max Budget",
+          "type": "integer"
+        },
+        "max_concurrency": {
+          "default": 1,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Max Concurrency",
+          "type": "integer"
+        },
+        "max_duration_seconds": {
+          "maximum": 31536000,
+          "minimum": 1,
+          "title": "Max Duration Seconds",
+          "type": "integer"
+        },
+        "resources": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Resources",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "task_types": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Task Types",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tools": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Tools",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "task_types",
+        "resources",
+        "data_classes",
+        "max_budget",
+        "max_duration_seconds"
+      ],
+      "title": "AssignmentScope",
+      "type": "object"
+    },
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "EmptyAssignmentScope": {
+      "additionalProperties": false,
+      "description": "The only valid scope representation when assignment is disabled.",
+      "properties": {},
+      "title": "EmptyAssignmentScope",
+      "type": "object"
+    },
+    "Relationship": {
+      "additionalProperties": false,
+      "properties": {
+        "administrator_harness_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Administrator Harness Id",
+          "type": "string"
+        },
+        "assignment_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssignmentScope"
+            },
+            {
+              "$ref": "#/$defs/EmptyAssignmentScope"
+            }
+          ],
+          "title": "Assignment Scope"
+        },
+        "domain_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "may_assign": {
+          "default": false,
+          "title": "May Assign",
+          "type": "boolean"
+        },
+        "relationship_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "revision": {
+          "default": 1,
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revoked At"
+        },
+        "subordinate_harness_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Subordinate Harness Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain_id",
+        "administrator_harness_id",
+        "subordinate_harness_id",
+        "expires_at"
+      ],
+      "title": "Relationship",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/relationship-consent-transaction.json",
+  "additionalProperties": false,
+  "description": "Canonical bytes the subordinate owner independently approves.",
+  "properties": {
+    "administrator_credential_epoch": {
+      "minimum": 1,
+      "title": "Administrator Credential Epoch",
+      "type": "integer"
+    },
+    "administrator_owner_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Administrator Owner Id",
+      "type": "string"
+    },
+    "administrator_owner_kind": {
+      "enum": [
+        "human",
+        "guest"
+      ],
+      "title": "Administrator Owner Kind",
+      "type": "string"
+    },
+    "domain_revocation_epoch": {
+      "minimum": 1,
+      "title": "Domain Revocation Epoch",
+      "type": "integer"
+    },
+    "lineage_revocation_epoch": {
+      "minimum": 0,
+      "title": "Lineage Revocation Epoch",
+      "type": "integer"
+    },
+    "policy_revision": {
+      "minimum": 1,
+      "title": "Policy Revision",
+      "type": "integer"
+    },
+    "predecessor_lifecycle_revision": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Lifecycle Revision"
+    },
+    "predecessor_relationship_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Relationship Id"
+    },
+    "predecessor_relationship_revision": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Relationship Revision"
+    },
+    "predecessor_state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor State"
+    },
+    "proposal_expires_at": {
+      "format": "date-time",
+      "title": "Proposal Expires At",
+      "type": "string"
+    },
+    "proposed_at": {
+      "format": "date-time",
+      "title": "Proposed At",
+      "type": "string"
+    },
+    "relationship": {
+      "$ref": "#/$defs/Relationship"
+    },
+    "schema": {
+      "const": "agentnet.relationship-consent-transaction.v1",
+      "default": "agentnet.relationship-consent-transaction.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "subordinate_credential_epoch": {
+      "minimum": 1,
+      "title": "Subordinate Credential Epoch",
+      "type": "integer"
+    },
+    "subordinate_owner_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Subordinate Owner Id",
+      "type": "string"
+    },
+    "subordinate_owner_kind": {
+      "enum": [
+        "human",
+        "guest"
+      ],
+      "title": "Subordinate Owner Kind",
+      "type": "string"
+    },
+    "transaction_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Transaction Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "transaction_id",
+    "relationship",
+    "proposal_expires_at",
+    "administrator_owner_kind",
+    "administrator_owner_id",
+    "subordinate_owner_kind",
+    "subordinate_owner_id",
+    "policy_revision",
+    "domain_revocation_epoch",
+    "administrator_credential_epoch",
+    "subordinate_credential_epoch",
+    "lineage_revocation_epoch",
+    "proposed_at"
+  ],
+  "title": "RelationshipConsentTransaction",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

@@ -1,0 +1,199 @@
+{
+  "gate": "G04",
+  "run_id": "2026-07-13-alpha2-http-json",
+  "evaluated_at": "2026-07-13T18:03:27+03:00",
+  "official_gate_green": false,
+  "remaining_official_failures": 12,
+  "failure_outcomes_classified": 12,
+  "skip_outcomes_exhaustively_adjudicated": true,
+  "tck": {
+    "source": "https://github.com/a2aproject/a2a-tck",
+    "tag": "1.0.0.alpha2",
+    "source_tree": "/tmp/a2a-tck-1.0.0.alpha2",
+    "lock_sha256": "7650dafd015617312c49f87bfafaa17e96f6af5d7d73540ce0ef4a2f46dfe404"
+  },
+  "sut": {
+    "profile": "local_conformance",
+    "composition": "agentnet.http_api.create_app",
+    "request_handler": "DurableA2ARuntime",
+    "transport": "HTTP+JSON",
+    "a2a_protocol_version": "1.0",
+    "a2a_sdk_version": "1.1.0",
+    "dependency_lock_sha256": "cd77d97577a1cfbab0d74b29d59956b1d4930fee48d27c094e7b55b017020575",
+    "temporary_origin": "http://127.0.0.1:18995",
+    "temporary_route": "/a2a/TCKAgentNetFinalRouteToken_20260713",
+    "production_authority_reachable": false,
+    "cleanup": "temporary SUT stopped after report collection"
+  },
+  "command": "TCK_STREAMING_TIMEOUT=2.0 .venv/bin/python ./run_tck.py --sut-host http://127.0.0.1:18995/a2a/TCKAgentNetFinalRouteToken_20260713 --transport http_json --level must -v",
+  "pytest": {
+    "selected": 235,
+    "passed": 46,
+    "failed": 12,
+    "skipped": 177,
+    "errors": 0,
+    "deselected": 30,
+    "xfailed": 0
+  },
+  "reports": [
+    {
+      "name": "compatibility.json",
+      "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.json",
+      "sha256": "750387e17bd8fbe3fcb229a9a046ecaf59811f31b4b67bdc659221f3c1b092dc"
+    },
+    {
+      "name": "compatibility.html",
+      "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
+      "sha256": "a83d6329cf88185f53e95540ffe452ca17655839cd2e7ab706ecdab1da7bfabf"
+    },
+    {
+      "name": "tck_report.html",
+      "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
+      "sha256": "8b8a7ed10382e3bc56682c2dfc292a78ab0d6b8e9a6f01d7dc5a7c7f5f714c1e"
+    },
+    {
+      "name": "junitreport.xml",
+      "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
+      "sha256": "7ea79f30a931174d74c268a5d538ec95b6955fbc57db08f5ecece85eb9a98800"
+    }
+  ],
+  "reviewed_failures": [
+    {
+      "test_id": "tests.compatibility.core_operations.test_artifacts.TestTextArtifact::test_task_has_text_artifact[http_json]",
+      "requirement_id": "DM-ART-001",
+      "classification": "executor_profile_compatibility_gap",
+      "reason": "The request text is identical to the other artifact fixtures; the TCK requires exact Generated text content selected only by its messageId prefix."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_artifacts.TestFileArtifact::test_task_has_file_artifact[http_json]",
+      "requirement_id": "DM-ART-001",
+      "classification": "executor_profile_compatibility_gap",
+      "reason": "The TCK requires an exact output.txt raw artifact selected only by its messageId prefix, not by distinct semantic input."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_artifacts.TestFileUrlArtifact::test_task_has_file_url_artifact[http_json]",
+      "requirement_id": "DM-ART-001",
+      "classification": "executor_profile_compatibility_gap",
+      "reason": "The TCK requires an exact output.txt URL artifact selected only by its messageId prefix; emitting it would also bypass AgentNet released-artifact containment."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_artifacts.TestDataArtifact::test_task_has_data_artifact[http_json]",
+      "requirement_id": "DM-ART-001",
+      "classification": "executor_profile_compatibility_gap",
+      "reason": "The TCK requires exact hard-coded data selected only by its messageId prefix although the semantic input is identical to the other artifact requests."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_artifacts.TestMessageResponse::test_returns_message_with_text_part[http_json]",
+      "requirement_id": "DM-MSG-001",
+      "classification": "executor_profile_compatibility_gap",
+      "reason": "The TCK requires an exact Direct message response selected only by its messageId prefix; Task and Message are both valid SendMessage response variants."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-SEND-003-http_json]",
+      "requirement_id": "CORE-SEND-003",
+      "classification": "official_error_expectation_mismatch",
+      "reason": "AgentNet returns ContentTypeNotSupported for unsupported raw media as required, but this RequirementSpec omits expected_error so the generic runner marks every required error response failed."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-EXECUTION-MODE-001-http_json]",
+      "requirement_id": "CORE-EXECUTION-MODE-001",
+      "classification": "idempotency_profile_conflict",
+      "reason": "The suite reuses tck-complete-task with a different body after an earlier request; A2A permits messageId-based idempotency and AgentNet correctly rejects the digest conflict."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-EXECUTION-MODE-002-http_json]",
+      "requirement_id": "CORE-EXECUTION-MODE-002",
+      "classification": "idempotency_profile_conflict",
+      "reason": "The suite reuses tck-complete-task with a different body and returnImmediately value; AgentNet correctly rejects the messageId digest conflict."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-001a-http_json]",
+      "requirement_id": "CORE-MULTI-001a",
+      "classification": "idempotency_profile_conflict",
+      "reason": "The suite reuses tck-complete-task with different message content; AgentNet's permitted exact idempotency rejects the conflicting reuse before generating a contextId."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-002a-http_json]",
+      "requirement_id": "CORE-MULTI-002a",
+      "classification": "idempotency_profile_conflict",
+      "reason": "The suite reuses tck-complete-task with a different body and contextId; AgentNet correctly rejects the digest conflict rather than weakening replay semantics."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-003-http_json]",
+      "requirement_id": "CORE-MULTI-003",
+      "classification": "idempotency_profile_conflict",
+      "reason": "The suite requests a new task while reusing tck-complete-task with different content; AgentNet correctly treats that as conflicting reuse of an idempotency identifier."
+    },
+    {
+      "test_id": "tests.compatibility.core_operations.test_transport_behavior.TestRestStreaming::test_streaming_content_type",
+      "requirement_id": "HTTP_JSON-SSE-001",
+      "classification": "official_stream_client_failure",
+      "reason": "The TCK accesses response.json before reading the httpx streaming response while trying to skip AgentNet's correct UnsupportedOperation response for disabled streaming."
+    }
+  ],
+  "reviewed_skips": [
+    {
+      "count": 44,
+      "exact_messages": [
+        "Transport 'grpc' not configured",
+        "Transport 'grpc' not configured (filtered by --transport)",
+        "gRPC transport not configured"
+      ],
+      "classification": "binding_outside_selected_run",
+      "reason": "This run selected HTTP+JSON only. gRPC was neither configured nor advertised, so these are expected non-executions for an untested binding, not passing gRPC evidence."
+    },
+    {
+      "count": 60,
+      "exact_messages": [
+        "Transport 'jsonrpc' not configured",
+        "Transport 'jsonrpc' not configured (filtered by --transport)",
+        "JSON-RPC transport not configured"
+      ],
+      "classification": "binding_outside_selected_run",
+      "reason": "This run selected HTTP+JSON only. JSON-RPC was not configured in the TCK invocation, so these outcomes do not provide JSON-RPC conformance evidence."
+    },
+    {
+      "count": 28,
+      "exact_messages": [
+        "Agent does not support streaming",
+        "Agent card does not declare capabilities for: ['streaming']"
+      ],
+      "classification": "disabled_optional_capability",
+      "reason": "The card truthfully advertises streaming=false and the ordinary extension rejects streaming rather than silently downgrading. The complete streaming matrix remains absent external evidence."
+    },
+    {
+      "count": 30,
+      "exact_messages": [
+        "Agent does not support push notifications"
+      ],
+      "classification": "disabled_optional_capability",
+      "reason": "The card truthfully advertises pushNotifications=false. No push-notification behavior is claimed or waived."
+    },
+    {
+      "count": 6,
+      "exact_messages": [
+        "Agent card does not declare capabilities for: ['agent-card']"
+      ],
+      "classification": "disabled_optional_capability",
+      "reason": "Extended authenticated Agent Card retrieval is not advertised by this local route and receives no passing evidence from this run."
+    },
+    {
+      "count": 2,
+      "exact_messages": [
+        "Agent card does not declare urn:a2a:tck:required-extension as required"
+      ],
+      "classification": "tck_fixture_extension_not_advertised",
+      "reason": "The synthetic TCK required-extension fixture is not a production AgentNet extension and is intentionally not advertised. These outcomes are reviewed non-executions, not extension conformance evidence."
+    },
+    {
+      "count": 7,
+      "exact_messages": [
+        "Expected task state 'TASK_STATE_COMPLETED' but got 'TASK_STATE_SUBMITTED'",
+        "Expected task state 'TASK_STATE_INPUT_REQUIRED' but got 'TASK_STATE_SUBMITTED'"
+      ],
+      "classification": "executor_fixture_precondition_not_met",
+      "reason": "The TCK skipped assertions after the inert AgentNet proposal executor returned SUBMITTED instead of its fixture-selected terminal/input-required state. This is an explicit executor compatibility gap and not a passing lifecycle result."
+    }
+  ],
+  "review_conclusion": "Every one of the 12 official failures and all 177 skipped outcomes is classified without waiver. The invalid-task-reference defect from the preceding run was fixed. Binding/capability skips remain non-evidence and executor-profile conflicts remain gaps; G04 is failed and not certified."
+}

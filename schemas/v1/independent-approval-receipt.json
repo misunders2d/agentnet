@@ -1,0 +1,107 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/independent-approval-receipt.json",
+  "additionalProperties": false,
+  "description": "Strict wire shape for a purpose-bound independent approval receipt.\n\nParsing this model never establishes trust.  Only\n:class:`IndependentApprovalVerifier` may turn it into a verified approval\nfact, using its preconfigured trust registry and the exact canonical\ntransaction bytes.",
+  "properties": {
+    "approval_purpose": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Approval Purpose",
+      "type": "string"
+    },
+    "approved": {
+      "const": true,
+      "title": "Approved",
+      "type": "boolean"
+    },
+    "approver_principal_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Approver Principal Id",
+      "type": "string"
+    },
+    "authenticated_at": {
+      "title": "Authenticated At",
+      "type": "integer"
+    },
+    "authentication_method": {
+      "const": "webauthn_uv",
+      "title": "Authentication Method",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "integer"
+    },
+    "issued_at": {
+      "title": "Issued At",
+      "type": "integer"
+    },
+    "nonce": {
+      "maxLength": 256,
+      "minLength": 24,
+      "title": "Nonce",
+      "type": "string"
+    },
+    "receipt_id": {
+      "maxLength": 128,
+      "minLength": 16,
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "schema": {
+      "const": "agentnet.independent-approval.receipt.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "signature": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Signature",
+      "type": "string"
+    },
+    "signer_key_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Signer Key Id",
+      "type": "string"
+    },
+    "transaction_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Transaction Digest",
+      "type": "string"
+    },
+    "verifier_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Verifier Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "approved",
+    "approval_purpose",
+    "approver_principal_id",
+    "authenticated_at",
+    "authentication_method",
+    "domain_id",
+    "expires_at",
+    "issued_at",
+    "nonce",
+    "receipt_id",
+    "schema",
+    "signature",
+    "signer_key_id",
+    "transaction_digest",
+    "verifier_id"
+  ],
+  "title": "IndependentApprovalReceipt",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

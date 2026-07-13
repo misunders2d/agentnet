@@ -1,0 +1,70 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/enrollment-transaction.json",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_key": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Candidate Key",
+      "type": "object"
+    },
+    "challenge_id": {
+      "title": "Challenge Id",
+      "type": "string"
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "integer"
+    },
+    "harness": {
+      "additionalProperties": true,
+      "title": "Harness",
+      "type": "object"
+    },
+    "human": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Human",
+      "type": "object"
+    },
+    "issued_at": {
+      "title": "Issued At",
+      "type": "integer"
+    },
+    "nonce": {
+      "title": "Nonce",
+      "type": "string"
+    },
+    "purpose": {
+      "const": "human_harness_credential_binding",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "schema": {
+      "const": "agentnet.enrollment.challenge.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "challenge_id",
+    "domain_id",
+    "human",
+    "harness",
+    "candidate_key",
+    "nonce",
+    "issued_at",
+    "expires_at",
+    "purpose"
+  ],
+  "title": "EnrollmentTransaction",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

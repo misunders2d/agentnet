@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/artifact-manifest.json",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "ciphertext_digest": {
+      "title": "Ciphertext Digest",
+      "type": "string"
+    },
+    "classification": {
+      "$ref": "#/$defs/Classification"
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "media_type": {
+      "title": "Media Type",
+      "type": "string"
+    },
+    "object_key": {
+      "title": "Object Key",
+      "type": "string"
+    },
+    "object_version": {
+      "title": "Object Version",
+      "type": "string"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    },
+    "reservation_id": {
+      "title": "Reservation Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "size": {
+      "minimum": 0,
+      "title": "Size",
+      "type": "integer"
+    },
+    "state": {
+      "enum": [
+        "quarantined",
+        "scan_passed",
+        "held",
+        "released",
+        "deleted",
+        "tombstoned"
+      ],
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "reservation_id",
+    "domain_id",
+    "object_key",
+    "object_version",
+    "ciphertext_digest",
+    "size",
+    "media_type",
+    "classification",
+    "state",
+    "provenance"
+  ],
+  "title": "ArtifactManifestRecord",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

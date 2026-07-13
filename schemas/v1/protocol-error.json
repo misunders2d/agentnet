@@ -1,0 +1,44 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/protocol-error.json",
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "title": "Code",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "opaque_reference": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opaque Reference"
+    },
+    "retryable": {
+      "default": false,
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "title": "ProtocolError",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

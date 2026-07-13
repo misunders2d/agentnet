@@ -1,0 +1,286 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "verified_human_harness",
+        "host_guest_harness",
+        "workload",
+        "external_human_unverified"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "VerifiedActor": {
+      "additionalProperties": false,
+      "description": "An exact, discriminated actor shape.\n\nPydantic cannot expose a union alias while preserving the long-standing\n``VerifiedActor(...)`` constructor used throughout the core.  This model\ntherefore enforces the same tagged-union invariant at both parse and copy\nboundaries: a field belonging to another actor kind is an error even when\nits value is ``null``.  Authority code can consequently branch on ``kind``\nwithout also having to defend against smuggled cross-kind identity fields.",
+      "properties": {
+        "binding_assurance": {
+          "enum": [
+            "external",
+            "lab",
+            "os_bound",
+            "hardware_bound",
+            "internal_process",
+            "synthetic_lab",
+            "workload_mtls"
+          ],
+          "title": "Binding Assurance",
+          "type": "string"
+        },
+        "credential_epoch": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Credential Epoch",
+          "type": "integer"
+        },
+        "credential_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Id"
+        },
+        "domain_id": {
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "external_peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Peer Id"
+        },
+        "guest_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guest Id"
+        },
+        "harness_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "parent_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Event Id"
+        },
+        "principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Principal Id"
+        },
+        "task_grant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Grant Id"
+        },
+        "workload_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Id"
+        },
+        "workload_process_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Id"
+        },
+        "workload_process_start_time": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Start Time"
+        },
+        "workload_registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Registration Id"
+        },
+        "workload_revocation_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Revocation Epoch"
+        },
+        "workload_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Role"
+        },
+        "workload_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Session Id"
+        }
+      },
+      "required": [
+        "kind",
+        "domain_id",
+        "binding_assurance"
+      ],
+      "title": "VerifiedActor",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-acceptance.json",
+  "additionalProperties": false,
+  "description": "Created identity binding; it deliberately contains no entitlement.",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/VerifiedActor"
+    },
+    "credential_epoch": {
+      "const": 1,
+      "default": 1,
+      "title": "Credential Epoch",
+      "type": "integer"
+    },
+    "credential_expires_at": {
+      "format": "date-time",
+      "title": "Credential Expires At",
+      "type": "string"
+    },
+    "credential_id": {
+      "title": "Credential Id",
+      "type": "string"
+    },
+    "harness_id": {
+      "title": "Harness Id",
+      "type": "string"
+    },
+    "invitation_id": {
+      "title": "Invitation Id",
+      "type": "string"
+    },
+    "key_id": {
+      "title": "Key Id",
+      "type": "string"
+    },
+    "positive_entitlements_issued": {
+      "const": 0,
+      "default": 0,
+      "title": "Positive Entitlements Issued",
+      "type": "integer"
+    },
+    "principal_id": {
+      "title": "Principal Id",
+      "type": "string"
+    },
+    "requested_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Capabilities",
+      "type": "array"
+    }
+  },
+  "required": [
+    "invitation_id",
+    "principal_id",
+    "harness_id",
+    "credential_id",
+    "key_id",
+    "credential_expires_at",
+    "actor",
+    "requested_capabilities"
+  ],
+  "title": "InternalInvitationAcceptance",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

@@ -1,0 +1,85 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/task-conflict-adjudication.json",
+  "additionalProperties": false,
+  "description": "Exact, replay-fenced partition of every member at one conflict revision.",
+  "properties": {
+    "conflict_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Conflict Id",
+      "type": "string"
+    },
+    "expected_domain_revocation_epoch": {
+      "minimum": 1,
+      "title": "Expected Domain Revocation Epoch",
+      "type": "integer"
+    },
+    "expected_member_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "minItems": 2,
+      "title": "Expected Member Event Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "expected_policy_revision": {
+      "minimum": 1,
+      "title": "Expected Policy Revision",
+      "type": "integer"
+    },
+    "expected_recipient_credential_epoch": {
+      "minimum": 1,
+      "title": "Expected Recipient Credential Epoch",
+      "type": "integer"
+    },
+    "expected_revision": {
+      "minimum": 1,
+      "title": "Expected Revision",
+      "type": "integer"
+    },
+    "reason_code": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "reject_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "title": "Reject Event Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "release_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "title": "Release Event Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "conflict_id",
+    "expected_revision",
+    "expected_policy_revision",
+    "expected_domain_revocation_epoch",
+    "expected_recipient_credential_epoch",
+    "expected_member_event_ids",
+    "reason_code"
+  ],
+  "title": "TaskConflictAdjudication",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

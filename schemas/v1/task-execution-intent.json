@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "TaskAccessMode": {
+      "enum": [
+        "read",
+        "write"
+      ],
+      "title": "TaskAccessMode",
+      "type": "string"
+    },
+    "TaskExclusivity": {
+      "enum": [
+        "shared",
+        "exclusive"
+      ],
+      "title": "TaskExclusivity",
+      "type": "string"
+    },
+    "TaskResourceIntent": {
+      "additionalProperties": false,
+      "description": "One exact operation over one canonical assignment resource.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/TaskAccessMode"
+        },
+        "exclusivity": {
+          "$ref": "#/$defs/TaskExclusivity"
+        },
+        "operation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        },
+        "resource": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "operation",
+        "access",
+        "exclusivity"
+      ],
+      "title": "TaskResourceIntent",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/task-execution-intent.json",
+  "additionalProperties": false,
+  "description": "Complete, typed intent bound into an accepted assignment transaction.",
+  "properties": {
+    "resources": {
+      "items": {
+        "$ref": "#/$defs/TaskResourceIntent"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Resources",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "resources"
+  ],
+  "title": "TaskExecutionIntent",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

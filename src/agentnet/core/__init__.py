@@ -1,0 +1,2 @@
+"""Transactional corporate core composition."""
+

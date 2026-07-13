@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
+import pytest
+
+from agentnet.authorization.policy import HumanEntitlement
+from agentnet.client import proof_headers
+from agentnet.core.app import CommunicationCore
+from agentnet.http_api import create_app
+from agentnet.operations.config import ExtensionConfig
+from agentnet.security.dpop import create_request_proof
+from agentnet.security.signatures import canonical_json
+
+
+def signed(key, actor, method: str, path: str, body: bytes, *, query: str = "") -> dict[str, str]:
+    return proof_headers(
+        create_request_proof(
+            key,
+            harness_id=actor.harness_id,
+            credential_id=actor.credential_id,
+            domain_id=actor.domain_id,
+            audience=f"urn:agentnet:{actor.domain_id}:corporate-api",
+            method=method,
+            scheme="http",
+            authority="127.0.0.1:19101",
+            path=path,
+            query=query,
+            body=body,
+        )
+    )
+
+
+@pytest.mark.anyio
+async def test_signed_http_conversation_create_post_and_thread_round_trip(
+    store,
+    identity_factory,
+    tmp_path: Path,
+) -> None:
+    creator, creator_key = identity_factory()
+    recipient, recipient_key = identity_factory(kind="pi")
+    conversation_id = "conversation:http-e2e"
+    config = ExtensionConfig(
+        domain_id=creator.domain_id,
+        data_dir=tmp_path / "data",
+        database_url=f"sqlite:///{tmp_path / 'unused.sqlite3'}",
+        artifact_dir=tmp_path / "artifacts",
+        public_base_url="http://127.0.0.1:19101",
+    )
+    core = CommunicationCore(config, store)
+    for action in ("conversation.create", "conversation.message.send"):
+        core.policy.bootstrap_entitlement_for_local_conformance(
+            HumanEntitlement(
+                domain_id=creator.domain_id,
+                principal_id=creator.principal_id,
+                action=action,
+                resource_pattern=f"conversation:{conversation_id}",
+                revision=1,
+            )
+        )
+    app = create_app(core)
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:19101") as client:
+        create_value = {
+            "conversation_id": conversation_id,
+            "member_harness_ids": [recipient.harness_id],
+            "classification": "C0",
+        }
+        create_body = canonical_json(create_value)
+        response = await client.post(
+            "/v1/conversations",
+            content=create_body,
+            headers={"Content-Type": "application/json", **signed(creator_key, creator, "POST", "/v1/conversations", create_body)},
+        )
+        assert response.status_code == 201
+
+        action_path = f"/v1/conversations/{conversation_id}/actions"
+        action_value = {
+            "recipients": [recipient.harness_id],
+            "thread_id": "thread:http-e2e",
+            "action": {"kind": "post", "body": "durable background hello"},
+            "idempotency_key": "conversation-http-action-0001",
+        }
+        action_body = canonical_json(action_value)
+        posted = await client.post(
+            action_path,
+            content=action_body,
+            headers={"Content-Type": "application/json", **signed(creator_key, creator, "POST", action_path, action_body)},
+        )
+        assert posted.status_code == 202
+        assert posted.json()["fact"] == "accepted_local"
+
+        thread_path = f"/v1/conversations/{conversation_id}/threads/thread:http-e2e"
+        query = "limit=10"
+        fetched = await client.get(
+            f"{thread_path}?{query}",
+            headers=signed(recipient_key, recipient, "GET", thread_path, b"", query=query),
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["items"][0]["payload"] == {
+            "kind": "post",
+            "body": "durable background hello",
+            "mentions": [],
+        }

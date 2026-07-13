@@ -1,0 +1,127 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-request.json",
+  "additionalProperties": false,
+  "description": "Strict sponsor request for one candidate human/harness binding.",
+  "properties": {
+    "candidate_binding_assurance": {
+      "enum": [
+        "lab",
+        "os_bound",
+        "hardware_bound"
+      ],
+      "title": "Candidate Binding Assurance",
+      "type": "string"
+    },
+    "candidate_harness_display_name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Candidate Harness Display Name",
+      "type": "string"
+    },
+    "candidate_harness_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Candidate Harness Id",
+      "type": "string"
+    },
+    "candidate_harness_kind": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Candidate Harness Kind",
+      "type": "string"
+    },
+    "candidate_key_id": {
+      "maxLength": 256,
+      "minLength": 16,
+      "title": "Candidate Key Id",
+      "type": "string"
+    },
+    "candidate_public_key_pem": {
+      "maxLength": 16384,
+      "minLength": 128,
+      "title": "Candidate Public Key Pem",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "invitation_id": {
+      "maxLength": 128,
+      "minLength": 16,
+      "title": "Invitation Id",
+      "type": "string"
+    },
+    "invited_oidc_issuer": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Invited Oidc Issuer",
+      "type": "string"
+    },
+    "invited_oidc_subject": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Invited Oidc Subject",
+      "type": "string"
+    },
+    "invited_verified_email": {
+      "maxLength": 320,
+      "minLength": 3,
+      "title": "Invited Verified Email",
+      "type": "string"
+    },
+    "predecessor_invitation_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 16,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Invitation Id"
+    },
+    "reason": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    },
+    "requested_capabilities": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "title": "Requested Capabilities",
+      "type": "array"
+    }
+  },
+  "required": [
+    "domain_id",
+    "invited_oidc_issuer",
+    "invited_oidc_subject",
+    "invited_verified_email",
+    "candidate_harness_id",
+    "candidate_harness_kind",
+    "candidate_harness_display_name",
+    "candidate_binding_assurance",
+    "candidate_key_id",
+    "candidate_public_key_pem",
+    "expires_at",
+    "reason"
+  ],
+  "title": "InternalInvitationRequest",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

@@ -1,0 +1,298 @@
+{
+  "name": "agentnet-self-hosted",
+  "services": {
+    "postgres": {
+      "image": "${AGENTNET_POSTGRES_IMAGE_REPOSITORY:-postgres}@sha256:${AGENTNET_POSTGRES_IMAGE_DIGEST:?owner-supplied PostgreSQL image digest is required}",
+      "environment": {
+        "POSTGRES_DB": "${AGENTNET_POSTGRES_DB:-agentnet}",
+        "POSTGRES_USER": "${AGENTNET_POSTGRES_USER:-agentnet}",
+        "POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_password"
+      },
+      "secrets": ["postgres_password"],
+      "volumes": ["agentnet-postgres-data:/var/lib/postgresql/data"],
+      "networks": ["agentnet-backplane"],
+      "healthcheck": {
+        "test": ["CMD", "pg_isready", "-U", "${AGENTNET_POSTGRES_USER:-agentnet}", "-d", "${AGENTNET_POSTGRES_DB:-agentnet}"],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 20,
+        "start_period": "10s"
+      },
+      "restart": "unless-stopped",
+      "security_opt": ["no-new-privileges:true"]
+    },
+    "agentnet-bootstrap": {
+      "image": "${AGENTNET_SERVER_AGENT_IMAGE_REPOSITORY:?owner-supplied AgentNet image repository is required}@sha256:${AGENTNET_SERVER_AGENT_IMAGE_DIGEST:?owner-supplied AgentNet image digest is required}",
+      "environment": {
+        "AGENTNET_COMMAND": "bootstrap",
+        "AGENTNET_RUNTIME_INSTANCE_ID": "bootstrap-agent",
+        "AGENTNET_ENROLLED_HARNESS_ID": "${AGENTNET_AGENT_A_HARNESS_ID:-}",
+        "AGENTNET_ENROLLED_CREDENTIAL_ID": "${AGENTNET_AGENT_A_CREDENTIAL_ID:-}",
+        "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_A_OIDC_ENROLLMENT_CONFIG_FILE:-}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:?agent A scanner trust public config path is required}",
+        "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_A_CAPABILITIES:-offline_custody,artifact_storage}",
+        "AGENTNET_FEATURES": "${AGENTNET_AGENT_A_FEATURES:-}",
+        "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_A_COMPONENT_EVIDENCE:-}",
+        "AGENTNET_DATABASE_HOST": "postgres",
+        "AGENTNET_DATABASE_PORT": "5432",
+        "AGENTNET_DATABASE_NAME": "${AGENTNET_POSTGRES_DB:-agentnet}",
+        "AGENTNET_DATABASE_USER": "${AGENTNET_POSTGRES_USER:-agentnet}",
+        "AGENTNET_DATABASE_PASSWORD_FILE": "/run/secrets/postgres_password",
+        "AGENTNET_DOMAIN_ID": "${AGENTNET_DOMAIN_ID:?AGENTNET_DOMAIN_ID is required}",
+        "AGENTNET_PUBLIC_BASE_URL": "${AGENTNET_AGENT_A_PUBLIC_BASE_URL:?AGENTNET_AGENT_A_PUBLIC_BASE_URL is required}",
+        "AGENTNET_SERVICE_AUDIENCE": "${AGENTNET_SERVICE_AUDIENCE:?AGENTNET_SERVICE_AUDIENCE is required}",
+        "AGENTNET_DATA_DIR": "/var/lib/agentnet",
+        "AGENTNET_ARTIFACT_DIR": "/var/lib/agentnet/artifacts",
+        "AGENTNET_A2A_PRIVATE_KEY_FILE": "/run/agentnet-private/a2a-signing.pem",
+        "AGENTNET_A2A_ROUTE_TOKEN": "${AGENTNET_AGENT_A_A2A_ROUTE_TOKEN:-}",
+        "AGENTNET_A2A_RECIPIENT_HARNESS_ID": "${AGENTNET_AGENT_A_A2A_RECIPIENT_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_HARNESS_ID": "${AGENTNET_AGENT_A_A2A_SIGNING_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_CREDENTIAL_ID": "${AGENTNET_AGENT_A_A2A_SIGNING_CREDENTIAL_ID:-}",
+        "AGENTNET_A2A_SIGNING_SUCCESSORS_FILE": "${AGENTNET_AGENT_A_A2A_SIGNING_SUCCESSORS_FILE:-}",
+        "AGENTNET_A2A_CARD_NAME": "${AGENTNET_AGENT_A_A2A_CARD_NAME:-}",
+        "AGENTNET_A2A_CARD_DESCRIPTION": "${AGENTNET_AGENT_A_A2A_CARD_DESCRIPTION:-}",
+        "AGENTNET_A2A_CARD_VERSION": "${AGENTNET_AGENT_A_A2A_CARD_VERSION:-}",
+        "AGENTNET_A2A_CARD_STREAMING": "${AGENTNET_AGENT_A_A2A_CARD_STREAMING:-true}",
+        "AGENTNET_A2A_CARD_PUSH_NOTIFICATIONS": "${AGENTNET_AGENT_A_A2A_CARD_PUSH_NOTIFICATIONS:-false}",
+        "AGENTNET_A2A_GRANT_ID": "${AGENTNET_AGENT_A_A2A_GRANT_ID:-}",
+        "AGENTNET_A2A_ALLOWED_ACTIONS": "${AGENTNET_AGENT_A_A2A_ALLOWED_ACTIONS:-}",
+        "AGENTNET_A2A_ALLOWED_PEER_NAMESPACES": "${AGENTNET_AGENT_A_A2A_ALLOWED_PEER_NAMESPACES:-}",
+        "AGENTNET_A2A_ALLOWED_OUTPUT_SINKS": "${AGENTNET_AGENT_A_A2A_ALLOWED_OUTPUT_SINKS:-}",
+        "AGENTNET_A2A_GRANT_EXPIRES_AT": "${AGENTNET_AGENT_A_A2A_GRANT_EXPIRES_AT:-}",
+        "AGENTNET_A2A_GRANT_REVOKED_AT": "${AGENTNET_AGENT_A_A2A_GRANT_REVOKED_AT:-}",
+        "AGENTNET_A2A_GRANT_REVISION": "${AGENTNET_AGENT_A_A2A_GRANT_REVISION:-1}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_HOSTS": "${AGENTNET_AGENT_A_A2A_CALLBACK_ALLOWED_HOSTS:-}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_PORTS": "${AGENTNET_AGENT_A_A2A_CALLBACK_ALLOWED_PORTS:-443}",
+        "AGENTNET_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB": "${AGENTNET_AGENT_A_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB:-false}"
+      },
+      "secrets": ["postgres_password"],
+      "volumes": [
+        "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
+        "${AGENTNET_AGENT_A_PRIVATE_CONFIG_DIR:-./private/agent-a}:/run/agentnet-private:ro",
+        "${AGENTNET_AGENT_A_PUBLIC_CONFIG_DIR:-./config/agent-a}:/run/agentnet-public:ro"
+      ],
+      "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=16m"],
+      "networks": ["agentnet-backplane"],
+      "depends_on": {
+        "postgres": {"condition": "service_healthy"}
+      },
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"]
+    },
+    "server-agent-a": {
+      "image": "${AGENTNET_SERVER_AGENT_IMAGE_REPOSITORY:?owner-supplied AgentNet image repository is required}@sha256:${AGENTNET_SERVER_AGENT_IMAGE_DIGEST:?owner-supplied AgentNet image digest is required}",
+      "environment": {
+        "AGENTNET_COMMAND": "serve",
+        "AGENTNET_RUNTIME_INSTANCE_ID": "server-agent-a",
+        "AGENTNET_ENROLLED_HARNESS_ID": "${AGENTNET_AGENT_A_HARNESS_ID:-}",
+        "AGENTNET_ENROLLED_CREDENTIAL_ID": "${AGENTNET_AGENT_A_CREDENTIAL_ID:-}",
+        "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_A_OIDC_ENROLLMENT_CONFIG_FILE:-}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:?agent A scanner trust public config path is required}",
+        "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_A_CAPABILITIES:-offline_custody,artifact_storage}",
+        "AGENTNET_FEATURES": "${AGENTNET_AGENT_A_FEATURES:-}",
+        "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_A_COMPONENT_EVIDENCE:-}",
+        "AGENTNET_DATABASE_HOST": "postgres",
+        "AGENTNET_DATABASE_PORT": "5432",
+        "AGENTNET_DATABASE_NAME": "${AGENTNET_POSTGRES_DB:-agentnet}",
+        "AGENTNET_DATABASE_USER": "${AGENTNET_POSTGRES_USER:-agentnet}",
+        "AGENTNET_DATABASE_PASSWORD_FILE": "/run/secrets/postgres_password",
+        "AGENTNET_DOMAIN_ID": "${AGENTNET_DOMAIN_ID:?AGENTNET_DOMAIN_ID is required}",
+        "AGENTNET_PUBLIC_BASE_URL": "${AGENTNET_AGENT_A_PUBLIC_BASE_URL:?AGENTNET_AGENT_A_PUBLIC_BASE_URL is required}",
+        "AGENTNET_SERVICE_AUDIENCE": "${AGENTNET_SERVICE_AUDIENCE:?AGENTNET_SERVICE_AUDIENCE is required}",
+        "AGENTNET_DATA_DIR": "/var/lib/agentnet",
+        "AGENTNET_ARTIFACT_DIR": "/var/lib/agentnet/artifacts",
+        "AGENTNET_BIND_HOST": "127.0.0.1",
+        "AGENTNET_BIND_PORT": "8080",
+        "AGENTNET_A2A_PRIVATE_KEY_FILE": "${AGENTNET_AGENT_A_A2A_PRIVATE_KEY_FILE:-/run/agentnet-private/a2a-signing.pem}",
+        "AGENTNET_A2A_ROUTE_TOKEN": "${AGENTNET_AGENT_A_A2A_ROUTE_TOKEN:-}",
+        "AGENTNET_A2A_RECIPIENT_HARNESS_ID": "${AGENTNET_AGENT_A_A2A_RECIPIENT_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_HARNESS_ID": "${AGENTNET_AGENT_A_A2A_SIGNING_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_CREDENTIAL_ID": "${AGENTNET_AGENT_A_A2A_SIGNING_CREDENTIAL_ID:-}",
+        "AGENTNET_A2A_SIGNING_SUCCESSORS_FILE": "${AGENTNET_AGENT_A_A2A_SIGNING_SUCCESSORS_FILE:-}",
+        "AGENTNET_A2A_CARD_NAME": "${AGENTNET_AGENT_A_A2A_CARD_NAME:-}",
+        "AGENTNET_A2A_CARD_DESCRIPTION": "${AGENTNET_AGENT_A_A2A_CARD_DESCRIPTION:-}",
+        "AGENTNET_A2A_CARD_VERSION": "${AGENTNET_AGENT_A_A2A_CARD_VERSION:-}",
+        "AGENTNET_A2A_CARD_STREAMING": "${AGENTNET_AGENT_A_A2A_CARD_STREAMING:-true}",
+        "AGENTNET_A2A_CARD_PUSH_NOTIFICATIONS": "${AGENTNET_AGENT_A_A2A_CARD_PUSH_NOTIFICATIONS:-false}",
+        "AGENTNET_A2A_GRANT_ID": "${AGENTNET_AGENT_A_A2A_GRANT_ID:-}",
+        "AGENTNET_A2A_ALLOWED_ACTIONS": "${AGENTNET_AGENT_A_A2A_ALLOWED_ACTIONS:-}",
+        "AGENTNET_A2A_ALLOWED_PEER_NAMESPACES": "${AGENTNET_AGENT_A_A2A_ALLOWED_PEER_NAMESPACES:-}",
+        "AGENTNET_A2A_ALLOWED_OUTPUT_SINKS": "${AGENTNET_AGENT_A_A2A_ALLOWED_OUTPUT_SINKS:-}",
+        "AGENTNET_A2A_GRANT_EXPIRES_AT": "${AGENTNET_AGENT_A_A2A_GRANT_EXPIRES_AT:-}",
+        "AGENTNET_A2A_GRANT_REVOKED_AT": "${AGENTNET_AGENT_A_A2A_GRANT_REVOKED_AT:-}",
+        "AGENTNET_A2A_GRANT_REVISION": "${AGENTNET_AGENT_A_A2A_GRANT_REVISION:-1}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_HOSTS": "${AGENTNET_AGENT_A_A2A_CALLBACK_ALLOWED_HOSTS:-}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_PORTS": "${AGENTNET_AGENT_A_A2A_CALLBACK_ALLOWED_PORTS:-443}",
+        "AGENTNET_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB": "${AGENTNET_AGENT_A_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB:-false}"
+      },
+      "secrets": ["postgres_password"],
+      "volumes": [
+        "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
+        "${AGENTNET_AGENT_A_PRIVATE_CONFIG_DIR:-./private/agent-a}:/run/agentnet-private:ro",
+        "${AGENTNET_AGENT_A_PUBLIC_CONFIG_DIR:-./config/agent-a}:/run/agentnet-public:ro"
+      ],
+      "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=16m"],
+      "networks": ["agentnet-backplane"],
+      "ports": ["${AGENTNET_AGENT_A_BIND_ADDRESS:-127.0.0.1}:${AGENTNET_AGENT_A_PORT:-8081}:8443"],
+      "depends_on": {
+        "agentnet-bootstrap": {"condition": "service_completed_successfully"}
+      },
+      "healthcheck": {
+        "test": ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"],
+        "interval": "10s",
+        "timeout": "3s",
+        "retries": 6,
+        "start_period": "15s"
+      },
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "init": true,
+      "restart": "unless-stopped",
+      "stop_grace_period": "30s"
+    },
+    "server-agent-b": {
+      "image": "${AGENTNET_SERVER_AGENT_IMAGE_REPOSITORY:?owner-supplied AgentNet image repository is required}@sha256:${AGENTNET_SERVER_AGENT_IMAGE_DIGEST:?owner-supplied AgentNet image digest is required}",
+      "environment": {
+        "AGENTNET_COMMAND": "serve",
+        "AGENTNET_RUNTIME_INSTANCE_ID": "server-agent-b",
+        "AGENTNET_ENROLLED_HARNESS_ID": "${AGENTNET_AGENT_B_HARNESS_ID:-}",
+        "AGENTNET_ENROLLED_CREDENTIAL_ID": "${AGENTNET_AGENT_B_CREDENTIAL_ID:-}",
+        "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_B_OIDC_ENROLLMENT_CONFIG_FILE:-}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_B_SCANNER_TRUST_CONFIG_FILE:?agent B scanner trust public config path is required}",
+        "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_B_CAPABILITIES:-offline_custody,artifact_storage}",
+        "AGENTNET_FEATURES": "${AGENTNET_AGENT_B_FEATURES:-}",
+        "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_B_COMPONENT_EVIDENCE:-}",
+        "AGENTNET_DATABASE_HOST": "postgres",
+        "AGENTNET_DATABASE_PORT": "5432",
+        "AGENTNET_DATABASE_NAME": "${AGENTNET_POSTGRES_DB:-agentnet}",
+        "AGENTNET_DATABASE_USER": "${AGENTNET_POSTGRES_USER:-agentnet}",
+        "AGENTNET_DATABASE_PASSWORD_FILE": "/run/secrets/postgres_password",
+        "AGENTNET_DOMAIN_ID": "${AGENTNET_DOMAIN_ID:?AGENTNET_DOMAIN_ID is required}",
+        "AGENTNET_PUBLIC_BASE_URL": "${AGENTNET_AGENT_B_PUBLIC_BASE_URL:?AGENTNET_AGENT_B_PUBLIC_BASE_URL is required}",
+        "AGENTNET_SERVICE_AUDIENCE": "${AGENTNET_SERVICE_AUDIENCE:?AGENTNET_SERVICE_AUDIENCE is required}",
+        "AGENTNET_DATA_DIR": "/var/lib/agentnet",
+        "AGENTNET_ARTIFACT_DIR": "/var/lib/agentnet/artifacts",
+        "AGENTNET_BIND_HOST": "127.0.0.1",
+        "AGENTNET_BIND_PORT": "8080",
+        "AGENTNET_A2A_PRIVATE_KEY_FILE": "${AGENTNET_AGENT_B_A2A_PRIVATE_KEY_FILE:-/run/agentnet-private/a2a-signing.pem}",
+        "AGENTNET_A2A_ROUTE_TOKEN": "${AGENTNET_AGENT_B_A2A_ROUTE_TOKEN:-}",
+        "AGENTNET_A2A_RECIPIENT_HARNESS_ID": "${AGENTNET_AGENT_B_A2A_RECIPIENT_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_HARNESS_ID": "${AGENTNET_AGENT_B_A2A_SIGNING_HARNESS_ID:-}",
+        "AGENTNET_A2A_SIGNING_CREDENTIAL_ID": "${AGENTNET_AGENT_B_A2A_SIGNING_CREDENTIAL_ID:-}",
+        "AGENTNET_A2A_SIGNING_SUCCESSORS_FILE": "${AGENTNET_AGENT_B_A2A_SIGNING_SUCCESSORS_FILE:-}",
+        "AGENTNET_A2A_CARD_NAME": "${AGENTNET_AGENT_B_A2A_CARD_NAME:-}",
+        "AGENTNET_A2A_CARD_DESCRIPTION": "${AGENTNET_AGENT_B_A2A_CARD_DESCRIPTION:-}",
+        "AGENTNET_A2A_CARD_VERSION": "${AGENTNET_AGENT_B_A2A_CARD_VERSION:-}",
+        "AGENTNET_A2A_CARD_STREAMING": "${AGENTNET_AGENT_B_A2A_CARD_STREAMING:-true}",
+        "AGENTNET_A2A_CARD_PUSH_NOTIFICATIONS": "${AGENTNET_AGENT_B_A2A_CARD_PUSH_NOTIFICATIONS:-false}",
+        "AGENTNET_A2A_GRANT_ID": "${AGENTNET_AGENT_B_A2A_GRANT_ID:-}",
+        "AGENTNET_A2A_ALLOWED_ACTIONS": "${AGENTNET_AGENT_B_A2A_ALLOWED_ACTIONS:-}",
+        "AGENTNET_A2A_ALLOWED_PEER_NAMESPACES": "${AGENTNET_AGENT_B_A2A_ALLOWED_PEER_NAMESPACES:-}",
+        "AGENTNET_A2A_ALLOWED_OUTPUT_SINKS": "${AGENTNET_AGENT_B_A2A_ALLOWED_OUTPUT_SINKS:-}",
+        "AGENTNET_A2A_GRANT_EXPIRES_AT": "${AGENTNET_AGENT_B_A2A_GRANT_EXPIRES_AT:-}",
+        "AGENTNET_A2A_GRANT_REVOKED_AT": "${AGENTNET_AGENT_B_A2A_GRANT_REVOKED_AT:-}",
+        "AGENTNET_A2A_GRANT_REVISION": "${AGENTNET_AGENT_B_A2A_GRANT_REVISION:-1}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_HOSTS": "${AGENTNET_AGENT_B_A2A_CALLBACK_ALLOWED_HOSTS:-}",
+        "AGENTNET_A2A_CALLBACK_ALLOWED_PORTS": "${AGENTNET_AGENT_B_A2A_CALLBACK_ALLOWED_PORTS:-443}",
+        "AGENTNET_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB": "${AGENTNET_AGENT_B_A2A_ALLOW_LOOPBACK_CALLBACK_HTTP_LAB:-false}"
+      },
+      "secrets": ["postgres_password"],
+      "volumes": [
+        "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
+        "${AGENTNET_AGENT_B_PRIVATE_CONFIG_DIR:-./private/agent-b}:/run/agentnet-private:ro",
+        "${AGENTNET_AGENT_B_PUBLIC_CONFIG_DIR:-./config/agent-b}:/run/agentnet-public:ro"
+      ],
+      "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=16m"],
+      "networks": ["agentnet-backplane"],
+      "ports": ["${AGENTNET_AGENT_B_BIND_ADDRESS:-127.0.0.1}:${AGENTNET_AGENT_B_PORT:-8082}:8443"],
+      "depends_on": {
+        "agentnet-bootstrap": {"condition": "service_completed_successfully"}
+      },
+      "healthcheck": {
+        "test": ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"],
+        "interval": "10s",
+        "timeout": "3s",
+        "retries": 6,
+        "start_period": "15s"
+      },
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "init": true,
+      "restart": "unless-stopped",
+      "stop_grace_period": "30s"
+    },
+    "tls-proxy-a": {
+      "image": "${AGENTNET_NGINX_IMAGE_REPOSITORY:-nginx}@sha256:${AGENTNET_NGINX_IMAGE_DIGEST:?owner-supplied NGINX image digest is required}",
+      "user": "101:101",
+      "network_mode": "service:server-agent-a",
+      "depends_on": {
+        "server-agent-a": {"condition": "service_healthy"}
+      },
+      "command": ["nginx", "-c", "/etc/nginx/nginx.conf", "-g", "daemon off;"],
+      "secrets": [
+        {"source": "agent_a_tls_cert", "target": "tls.crt", "mode": 292},
+        {"source": "agent_a_tls_key", "target": "tls.key", "mode": 292}
+      ],
+      "volumes": ["./nginx-agent.conf:/etc/nginx/nginx.conf:ro"],
+      "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=8m"],
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "init": true,
+      "restart": "unless-stopped"
+    },
+    "tls-proxy-b": {
+      "image": "${AGENTNET_NGINX_IMAGE_REPOSITORY:-nginx}@sha256:${AGENTNET_NGINX_IMAGE_DIGEST:?owner-supplied NGINX image digest is required}",
+      "user": "101:101",
+      "network_mode": "service:server-agent-b",
+      "depends_on": {
+        "server-agent-b": {"condition": "service_healthy"}
+      },
+      "command": ["nginx", "-c", "/etc/nginx/nginx.conf", "-g", "daemon off;"],
+      "secrets": [
+        {"source": "agent_b_tls_cert", "target": "tls.crt", "mode": 292},
+        {"source": "agent_b_tls_key", "target": "tls.key", "mode": 292}
+      ],
+      "volumes": ["./nginx-agent.conf:/etc/nginx/nginx.conf:ro"],
+      "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=8m"],
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "init": true,
+      "restart": "unless-stopped"
+    }
+  },
+  "secrets": {
+    "postgres_password": {
+      "file": "${AGENTNET_POSTGRES_PASSWORD_FILE:?absolute PostgreSQL password file is required}"
+    },
+    "agent_a_tls_cert": {
+      "file": "${AGENTNET_AGENT_A_TLS_CERT_FILE:?agent A TLS certificate file is required}"
+    },
+    "agent_a_tls_key": {
+      "file": "${AGENTNET_AGENT_A_TLS_KEY_FILE:?agent A TLS private key file is required}"
+    },
+    "agent_b_tls_cert": {
+      "file": "${AGENTNET_AGENT_B_TLS_CERT_FILE:?agent B TLS certificate file is required}"
+    },
+    "agent_b_tls_key": {
+      "file": "${AGENTNET_AGENT_B_TLS_KEY_FILE:?agent B TLS private key file is required}"
+    }
+  },
+  "volumes": {
+    "agentnet-postgres-data": {},
+    "agentnet-artifacts": {},
+    "agentnet-runtime-secrets": {}
+  },
+  "networks": {
+    "agentnet-backplane": {
+      "internal": true
+    }
+  }
+}

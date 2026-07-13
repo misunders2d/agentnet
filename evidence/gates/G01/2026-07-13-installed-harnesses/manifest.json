@@ -1,0 +1,43 @@
+{
+  "gate": "G01",
+  "run_id": "2026-07-13-installed-harnesses",
+  "evaluated_at": "2026-07-13T18:49:00+03:00",
+  "status": "partial",
+  "evidence_tier": ["L"],
+  "release_source_tree_sha256": "c94517c2c83d2d5af0aeebbd22127aff2dc763efbe03c78041a9aae599e8c373",
+  "operator": "local Codex implementation session",
+  "review": "local evidence reviewed; no independent external reviewer",
+  "official_gate_green": false,
+  "commands": [
+    "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q -p no:cacheprovider tests/adapters/test_installed_live_inference.py",
+    "result: 8 passed in 2.67s; version probes and deterministic private lifecycles only"
+  ],
+  "environment": {
+    "os": "Arch Linux rolling",
+    "kernel": "Linux 6.18.38-1-lts",
+    "architecture": "x86_64",
+    "harnesses": {
+      "claude": {"version": "2.1.207", "matches_pin": true},
+      "codex": {"version": "0.144.3", "matches_pin": true},
+      "pi": {"version": "0.80.6", "matches_pin": true},
+      "antigravity": {"version": "1.1.1", "matches_pin": true}
+    },
+    "codex_background_profile": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "ultra"
+    }
+  },
+  "results": {
+    "all_installed_versions_match": true,
+    "all_deterministic_lifecycle_probes_reached": "ready",
+    "semantic_content_sent": false,
+    "clean_worker_admitted": false,
+    "external_conformance_proven": false
+  },
+  "remaining_required_evidence": [
+    "credentialed semantic inference through the restricted broker for every exact harness/model profile",
+    "real foreground focus, input, turn, approval, and indicator isolation evidence",
+    "privileged target-host escape and secret-canary evidence"
+  ],
+  "review_conclusion": "Exact installed versions and deterministic background lifecycles passed. This is local detection/lifecycle evidence only and does not satisfy G01's required real semantic and foreground-isolation evidence."
+}

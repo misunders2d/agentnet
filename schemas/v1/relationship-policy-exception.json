@@ -1,0 +1,75 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/relationship-policy-exception.json",
+  "additionalProperties": false,
+  "description": "Exact domain-policy exception request; this model is not proof itself.",
+  "properties": {
+    "authority_effect": {
+      "const": "activate_governance_edge_only",
+      "default": "activate_governance_edge_only",
+      "title": "Authority Effect",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expected_lifecycle_revision": {
+      "minimum": 1,
+      "title": "Expected Lifecycle Revision",
+      "type": "integer"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "policy_exception_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Policy Exception Id",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    },
+    "relationship_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Relationship Id",
+      "type": "string"
+    },
+    "relationship_revision": {
+      "minimum": 1,
+      "title": "Relationship Revision",
+      "type": "integer"
+    },
+    "relationship_transaction_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Relationship Transaction Digest",
+      "type": "string"
+    },
+    "schema": {
+      "const": "agentnet.relationship-policy-exception.v1",
+      "default": "agentnet.relationship-policy-exception.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "domain_id",
+    "relationship_id",
+    "relationship_revision",
+    "expected_lifecycle_revision",
+    "relationship_transaction_digest",
+    "reason",
+    "expires_at"
+  ],
+  "title": "RelationshipPolicyException",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

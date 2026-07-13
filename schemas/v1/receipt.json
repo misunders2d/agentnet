@@ -1,0 +1,385 @@
+{
+  "$defs": {
+    "AcceptingStorageBoundary": {
+      "additionalProperties": false,
+      "description": "Non-actor owner of a transactionally established acceptance fact.\n\nAcceptance is evidence about the storage boundary that committed the\nenvelope bytes.  It is not a statement made by a human harness or a\nworkload, so representing it as a :class:`VerifiedActor` would fabricate\nan identity and an assurance mechanism that never authenticated.",
+      "properties": {
+        "acceptance_fact": {
+          "enum": [
+            "accepted_local",
+            "accepted_durable"
+          ],
+          "title": "Acceptance Fact",
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "event_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Digest",
+          "type": "string"
+        },
+        "kind": {
+          "const": "accepting_storage_boundary",
+          "default": "accepting_storage_boundary",
+          "title": "Kind",
+          "type": "string"
+        },
+        "storage_profile": {
+          "enum": [
+            "local_transactional",
+            "verified_durable"
+          ],
+          "title": "Storage Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain_id",
+        "storage_profile",
+        "acceptance_fact",
+        "event_digest"
+      ],
+      "title": "AcceptingStorageBoundary",
+      "type": "object"
+    },
+    "ActorKind": {
+      "enum": [
+        "verified_human_harness",
+        "host_guest_harness",
+        "workload",
+        "external_human_unverified"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "DeliveryFact": {
+      "enum": [
+        "created_local",
+        "submitted",
+        "rejected_before_accept",
+        "authorization_hold",
+        "accepted_local",
+        "accepted_durable",
+        "accepted_queued",
+        "pending_human",
+        "queued",
+        "retry_scheduled",
+        "dispatch_attempted",
+        "remote_accepted",
+        "remote_rejected",
+        "remote_delayed",
+        "recipient_committed",
+        "presented",
+        "processing",
+        "effect_prepared",
+        "completed",
+        "failed_retryable",
+        "failed_terminal",
+        "expired",
+        "cancel_requested",
+        "canceled",
+        "too_late",
+        "effect_unknown",
+        "reconciling",
+        "compensated",
+        "adjudication_required",
+        "quarantined",
+        "dead_lettered",
+        "conflict_pending"
+      ],
+      "title": "DeliveryFact",
+      "type": "string"
+    },
+    "VerifiedActor": {
+      "additionalProperties": false,
+      "description": "An exact, discriminated actor shape.\n\nPydantic cannot expose a union alias while preserving the long-standing\n``VerifiedActor(...)`` constructor used throughout the core.  This model\ntherefore enforces the same tagged-union invariant at both parse and copy\nboundaries: a field belonging to another actor kind is an error even when\nits value is ``null``.  Authority code can consequently branch on ``kind``\nwithout also having to defend against smuggled cross-kind identity fields.",
+      "properties": {
+        "binding_assurance": {
+          "enum": [
+            "external",
+            "lab",
+            "os_bound",
+            "hardware_bound",
+            "internal_process",
+            "synthetic_lab",
+            "workload_mtls"
+          ],
+          "title": "Binding Assurance",
+          "type": "string"
+        },
+        "credential_epoch": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Credential Epoch",
+          "type": "integer"
+        },
+        "credential_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Id"
+        },
+        "domain_id": {
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "external_peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Peer Id"
+        },
+        "guest_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guest Id"
+        },
+        "harness_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "parent_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Event Id"
+        },
+        "principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Principal Id"
+        },
+        "task_grant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Grant Id"
+        },
+        "workload_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Id"
+        },
+        "workload_process_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Id"
+        },
+        "workload_process_start_time": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Process Start Time"
+        },
+        "workload_registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Registration Id"
+        },
+        "workload_revocation_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Revocation Epoch"
+        },
+        "workload_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Role"
+        },
+        "workload_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Session Id"
+        }
+      },
+      "required": [
+        "kind",
+        "domain_id",
+        "binding_assurance"
+      ],
+      "title": "VerifiedActor",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/receipt.json",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "detail": {
+      "additionalProperties": true,
+      "title": "Detail",
+      "type": "object"
+    },
+    "event_digest": {
+      "title": "Event Digest",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "fact": {
+      "$ref": "#/$defs/DeliveryFact"
+    },
+    "owner": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifiedActor"
+        },
+        {
+          "$ref": "#/$defs/AcceptingStorageBoundary"
+        }
+      ],
+      "title": "Owner"
+    },
+    "receipt_id": {
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "recipient_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recipient Id"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "signature": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Signature"
+    }
+  },
+  "required": [
+    "event_id",
+    "fact",
+    "owner",
+    "event_digest"
+  ],
+  "title": "Receipt",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

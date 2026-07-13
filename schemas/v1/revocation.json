@@ -1,0 +1,83 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/revocation.json",
+  "additionalProperties": false,
+  "properties": {
+    "adjudicator_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Adjudicator Id"
+    },
+    "compromised_from": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Compromised From"
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "effective_at": {
+      "format": "date-time",
+      "title": "Effective At",
+      "type": "string"
+    },
+    "epoch": {
+      "minimum": 1,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "subject_id": {
+      "title": "Subject Id",
+      "type": "string"
+    },
+    "subject_type": {
+      "enum": [
+        "human",
+        "harness",
+        "credential",
+        "guest",
+        "room",
+        "domain",
+        "grant"
+      ],
+      "title": "Subject Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "domain_id",
+    "subject_type",
+    "subject_id",
+    "epoch",
+    "reason",
+    "effective_at"
+  ],
+  "title": "RevocationRecord",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

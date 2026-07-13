@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/task-grant.json",
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Actions",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "data_classes": {
+      "items": {
+        "$ref": "#/$defs/Classification"
+      },
+      "title": "Data Classes",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "harness_id": {
+      "title": "Harness Id",
+      "type": "string"
+    },
+    "input_sources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Sources",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "max_uses": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Max Uses",
+      "type": "integer"
+    },
+    "output_sinks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Sinks",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "principal_id": {
+      "title": "Principal Id",
+      "type": "string"
+    },
+    "resources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Resources",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "revoked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Revoked At"
+    }
+  },
+  "required": [
+    "domain_id",
+    "principal_id",
+    "harness_id",
+    "actions",
+    "resources",
+    "input_sources",
+    "output_sinks",
+    "data_classes",
+    "expires_at"
+  ],
+  "title": "TaskGrant",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "Classification": {
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "ProvenanceObjectType": {
+      "enum": [
+        "event",
+        "task",
+        "artifact",
+        "model_output",
+        "tool_output",
+        "parser_output"
+      ],
+      "title": "ProvenanceObjectType",
+      "type": "string"
+    },
+    "ReviewState": {
+      "enum": [
+        "unreviewed",
+        "reviewed",
+        "rejected",
+        "quarantined"
+      ],
+      "title": "ReviewState",
+      "type": "string"
+    },
+    "ScanState": {
+      "enum": [
+        "not_required",
+        "pending",
+        "passed",
+        "failed",
+        "stale"
+      ],
+      "title": "ScanState",
+      "type": "string"
+    },
+    "SinkSet": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sinks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Sinks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "sinks"
+      ],
+      "title": "SinkSet",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentnet.invalid/schemas/v1/provenance-reference.json",
+  "additionalProperties": false,
+  "description": "Exact authority-neutral reference to one durable provenance version.\n\nA reference is useful only after :meth:`ProvenanceService.require_reference`\nresolves it against the authoritative ledger.  Every copied constraint is\ncompared with that record; none is a caller assertion that can authorize an\noperation.  In particular, this type deliberately has no ``verified``,\nentitlement, grant, approval, or actor field.",
+  "properties": {
+    "allowed_sinks": {
+      "$ref": "#/$defs/SinkSet"
+    },
+    "authority_effect": {
+      "const": "none",
+      "default": "none",
+      "title": "Authority Effect",
+      "type": "string"
+    },
+    "classification": {
+      "$ref": "#/$defs/Classification"
+    },
+    "content_digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Digest",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "object_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+      "title": "Object Id",
+      "type": "string"
+    },
+    "object_type": {
+      "$ref": "#/$defs/ProvenanceObjectType"
+    },
+    "policy_revision": {
+      "minimum": 1,
+      "title": "Policy Revision",
+      "type": "integer"
+    },
+    "provenance_digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Provenance Digest",
+      "type": "string"
+    },
+    "review_state": {
+      "$ref": "#/$defs/ReviewState"
+    },
+    "scan_state": {
+      "$ref": "#/$defs/ScanState"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tainted": {
+      "title": "Tainted",
+      "type": "boolean"
+    },
+    "version": {
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "object_type",
+    "object_id",
+    "version",
+    "domain_id",
+    "provenance_digest",
+    "content_digest",
+    "classification",
+    "allowed_sinks",
+    "policy_revision",
+    "review_state",
+    "scan_state",
+    "tainted"
+  ],
+  "title": "ProvenanceReferenceV1",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}

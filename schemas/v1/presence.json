@@ -1,0 +1,41 @@
+{
+  "$id": "https://agentnet.invalid/schemas/v1/presence.json",
+  "additionalProperties": false,
+  "properties": {
+    "capability_hints": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Capability Hints",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "domain_id": {
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "harness_id": {
+      "title": "Harness Id",
+      "type": "string"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "harness_id",
+    "domain_id",
+    "expires_at"
+  ],
+  "title": "PresenceLease",
+  "type": "object",
+  "x-agentnet-schema-version": "1.0"
+}
