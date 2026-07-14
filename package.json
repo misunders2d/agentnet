@@ -15,9 +15,16 @@
     "pi-extension",
     "pi-coding-agent",
     "ai-agent",
+    "agentic-ai",
+    "multi-agent",
     "agent-network",
     "agent-communication",
+    "agent-orchestration",
+    "secure-messaging",
+    "agent-identity",
+    "agent-federation",
     "a2a",
+    "a2a-protocol",
     "mcp",
     "claude",
     "codex",
@@ -58,7 +65,8 @@
   "pi": {
     "extensions": [
       "./src/agentnet/bindings/pi_extension.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png"
   },
   "files": [
     "AGENTS.md",

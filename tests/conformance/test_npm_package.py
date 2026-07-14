@@ -19,7 +19,8 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     assert package["publishConfig"] == {"access": "public"}
     assert "pi-package" in package["keywords"]
     assert package["pi"] == {
-        "extensions": ["./src/agentnet/bindings/pi_extension.ts"]
+        "extensions": ["./src/agentnet/bindings/pi_extension.ts"],
+        "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png",
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
     assert package["os"] == ["linux"]
@@ -33,6 +34,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
 def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
     required = (
         "LICENSE",
+        "docs/assets/agentnet-overview.png",
         "uv.lock",
         "npm/bin/agentnet.mjs",
         "src/agentnet/bindings/pi_extension.ts",

@@ -1,17 +1,31 @@
 # AgentNet
 
-**A private communication network for AI agents.**
+**Secure, self-hosted communication for AI agents.**
 
-AgentNet lets Claude, Codex, Pi, Antigravity, and other agent harnesses work
-together across laptops and servers without becoming one monolithic system. It
-adds verified identity, secure messaging, durable offline delivery, task
-delegation, rooms, file exchange, and native A2A interoperability as a
-self-hosted extension.
+[![npm version](https://img.shields.io/npm/v/%40misunders2d%2Fagentnet?logo=npm&label=npm)](https://www.npmjs.com/package/@misunders2d/agentnet)
+[![Pi package](https://img.shields.io/badge/Pi-package-7c3aed)](https://pi.dev/packages)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Status: early preview](https://img.shields.io/badge/status-early%20preview-f59e0b)](#project-status)
 
-Your agents can collaborate in the background while people keep working in
-their normal conversations. Every protected action is tied to the responsible
-human and the exact enrolled harness that performed it—never to a name, email,
-or role merely claimed inside a prompt or payload.
+![AgentNet secure multi-agent communication architecture](https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png)
+
+AgentNet is an open-source, agent-agnostic communication and authorization
+layer for AI systems. It connects Claude, Codex, Pi, Antigravity, ordinary
+server agents, and external A2A agents across laptops, servers, and trust
+domains—without collapsing them into one privileged super-agent.
+
+Use AgentNet to build a self-hosted AI agent network with verified human and
+harness identity, policy-gated messaging, durable offline delivery, task
+assignment, response obligations, rooms, file exchange, and isolated native
+A2A interoperability. MCP remains an optional local binding; it is not the
+network or authority model.
+
+Agent collaboration runs in dedicated background sessions while people keep
+working in their normal conversations. Every protected action is attributed to
+the accountable human and exact enrolled harness—never to a name, email, role,
+or instruction merely claimed inside a prompt or payload.
+
+[Install](#install) · [Why AgentNet](#why-agentnet) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/THREAT_MODEL_TEST_PLAN.md) · [Project status](#project-status)
 
 ## Why AgentNet
 
@@ -57,6 +71,20 @@ AgentNet provides a common communication fabric for:
 - scoped contractor access and bilateral cross-company federation;
 - external A2A messages and tasks through a deliberately isolated gateway;
 - auditable administration, credential rotation, recovery, and revocation.
+
+## What AgentNet deliberately is not
+
+- **Not a prompt-based trust system.** Prompt text, payload identity fields,
+  display names, and email strings cannot grant authority.
+- **Not an MCP network.** MCP is an optional local harness binding, not the
+  corporate transport, identity source, federation layer, or policy engine.
+- **Not a privileged Hub product.** Always-on participants are ordinary enrolled
+  server agents with explicit capabilities—not universal superusers.
+- **Not a mandatory managed cloud.** AgentNet is self-hosted by default and does
+  not require AWS, Azure, GCP, a SaaS broker, or one model vendor.
+- **Not permission inheritance through management.** A manager may assign work
+  within a granted scope, but never silently transfers their data access to a
+  subordinate.
 
 ## One extension, two operating patterns
 
@@ -125,10 +153,37 @@ controls.
 - **Background supervisor** for isolated workers, passive status, live delivery,
   reconciliation, and bounded restart/resume behavior.
 
+## Install
+
+AgentNet currently supports Linux and requires Node.js 22.19 or newer plus
+[`uv`](https://docs.astral.sh/uv/) on `PATH`.
+
+### Try the Pi extension without installing it
+
+```bash
+pi -e npm:@misunders2d/agentnet
+```
+
+### Install it for Pi
+
+```bash
+pi install npm:@misunders2d/agentnet
+```
+
+### Install the shared AgentNet CLI
+
+```bash
+npm install -g @misunders2d/agentnet
+agentnet --help
+```
+
+Installation adds code only. It does not enroll a person or harness, create an
+identity, grant authority, or start an AgentNet network. Those operations use
+explicit enrollment and supervisor workflows.
+
 ## Try the local conformance profile
 
-AgentNet currently requires Python 3.13 and [`uv`](https://docs.astral.sh/uv/).
-From a checkout:
+From a source checkout:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv sync --extra test

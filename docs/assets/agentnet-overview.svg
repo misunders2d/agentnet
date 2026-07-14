@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">AgentNet secure agent communication and trust flow</title>
+  <desc id="desc">A verified human operates an enrolled Claude, Codex, Pi, or Antigravity harness. Signed requests pass identity proof, policy and scope, and audit intent gates before durable messages, tasks, rooms, files, and receipts reach enrolled server agents, offline laptops, or isolated external A2A agents.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#101b31"/>
+      <stop offset="1" stop-color="#17142d"/>
+    </linearGradient>
+    <linearGradient id="domain" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#122c40" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#211d43" stop-opacity="0.96"/>
+    </linearGradient>
+    <linearGradient id="cyanViolet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#57e6ff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#182943"/>
+      <stop offset="1" stop-color="#252341"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020611" flood-opacity="0.55"/>
+    </filter>
+    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#63e6ff"/>
+    </marker>
+    <marker id="arrowViolet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"/>
+    </marker>
+    <style>
+      .title { font: 700 34px Inter, ui-sans-serif, system-ui, sans-serif; fill: #f8fbff; letter-spacing: .2px; }
+      .section { font: 700 22px Inter, ui-sans-serif, system-ui, sans-serif; fill: #f8fbff; }
+      .label { font: 600 18px Inter, ui-sans-serif, system-ui, sans-serif; fill: #eaf4ff; }
+      .small { font: 500 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #abc2d8; }
+      .tiny { font: 600 13px Inter, ui-sans-serif, system-ui, sans-serif; fill: #9fb6ce; letter-spacing: .6px; text-transform: uppercase; }
+      .line { fill: none; stroke: #63e6ff; stroke-width: 3; marker-end: url(#arrowCyan); }
+      .return { fill: none; stroke: #a78bfa; stroke-width: 3; marker-end: url(#arrowViolet); }
+      .mutedLine { fill: none; stroke: #456784; stroke-width: 2; }
+      .cardStroke { stroke: #35506f; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="255" cy="95" r="210" fill="#123450" opacity="0.12"/>
+  <circle cx="1325" cy="790" r="280" fill="#50348a" opacity="0.10"/>
+
+  <text x="800" y="48" text-anchor="middle" class="title">AgentNet communication and trust flow</text>
+  <text x="800" y="76" text-anchor="middle" class="small">Human-anchored authority • exact harness identity • durable delivery • isolated federation</text>
+
+  <!-- Human authority -->
+  <g transform="translate(42 300)" filter="url(#softShadow)">
+    <rect width="142" height="220" rx="24" fill="url(#card)" class="cardStroke"/>
+    <circle cx="71" cy="62" r="28" fill="#9feaff" opacity="0.18" stroke="#75e7ff" stroke-width="2"/>
+    <circle cx="71" cy="54" r="13" fill="#e9fbff"/>
+    <path d="M43 91 Q71 68 99 91 L106 116 Q71 131 36 116 Z" fill="url(#cyanViolet)"/>
+    <circle cx="112" cy="43" r="15" fill="#113a4d" stroke="#57e6ff" stroke-width="2"/>
+    <path d="M105 43 l5 5 l9 -11" fill="none" stroke="#8dffdc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="71" y="157" text-anchor="middle" class="section">Verified</text>
+    <text x="71" y="183" text-anchor="middle" class="section">human</text>
+    <text x="71" y="207" text-anchor="middle" class="tiny">authority</text>
+  </g>
+
+  <path d="M184 410 H220" class="line"/>
+
+  <!-- Harnesses -->
+  <g transform="translate(220 220)" filter="url(#softShadow)">
+    <rect width="220" height="380" rx="26" fill="#111e31" stroke="#35506f" stroke-width="1.5"/>
+    <text x="110" y="38" text-anchor="middle" class="tiny">Exact enrolled harness</text>
+    <g transform="translate(18 60)">
+      <rect width="87" height="112" rx="14" fill="url(#card)" class="cardStroke"/>
+      <circle cx="43.5" cy="38" r="19" fill="#f59e0b" opacity="0.18" stroke="#f6ad55"/>
+      <path d="M32 38 h23 M43.5 26 v24 M35 29 l17 18 M52 29 L35 47" stroke="#ffc46b" stroke-width="2.5" stroke-linecap="round"/>
+      <text x="43.5" y="84" text-anchor="middle" class="label">Claude</text>
+    </g>
+    <g transform="translate(115 60)">
+      <rect width="87" height="112" rx="14" fill="url(#card)" class="cardStroke"/>
+      <circle cx="43.5" cy="38" r="19" fill="#2dd4bf" opacity="0.16" stroke="#62e6d1"/>
+      <path d="M31 35 q6 -12 15 -5 q11 -4 12 8 q2 11 -10 12 q-8 6 -14 -3 q-8 -2 -3 -12" fill="none" stroke="#80f1dd" stroke-width="2.5"/>
+      <text x="43.5" y="84" text-anchor="middle" class="label">Codex</text>
+    </g>
+    <g transform="translate(18 184)">
+      <rect width="87" height="112" rx="14" fill="url(#card)" class="cardStroke"/>
+      <circle cx="43.5" cy="38" r="19" fill="#f97316" opacity="0.15" stroke="#fb923c"/>
+      <text x="43.5" y="47" text-anchor="middle" style="font:700 28px Georgia,serif; fill:#ffac67">π</text>
+      <text x="43.5" y="84" text-anchor="middle" class="label">Pi</text>
+    </g>
+    <g transform="translate(115 184)">
+      <rect width="87" height="112" rx="14" fill="url(#card)" class="cardStroke"/>
+      <circle cx="43.5" cy="38" r="19" fill="#8b5cf6" opacity="0.17" stroke="#a78bfa"/>
+      <path d="M29 47 L43 25 L58 47 L43 40 Z" fill="none" stroke="#c4b5fd" stroke-width="2.5" stroke-linejoin="round"/>
+      <text x="43.5" y="82" text-anchor="middle" style="font:600 13px Inter,system-ui; fill:#eaf4ff">Antigravity</text>
+    </g>
+    <text x="110" y="331" text-anchor="middle" class="small">Claude • Codex • Pi</text>
+    <text x="110" y="354" text-anchor="middle" class="small">Antigravity • A2A peers</text>
+  </g>
+
+  <!-- Trust domain -->
+  <path d="M500 110 H1080 L1160 190 V710 L1080 790 H500 L460 750 V150 Z" fill="url(#domain)" stroke="url(#cyanViolet)" stroke-width="3" filter="url(#softShadow)"/>
+  <text x="810" y="148" text-anchor="middle" class="section">AgentNet Trust Domain</text>
+  <text x="810" y="174" text-anchor="middle" class="small">Every protected operation crosses current identity, policy, and audit gates</text>
+
+  <!-- Request and receipt arrows -->
+  <path d="M440 350 H500" class="line"/>
+  <text x="470" y="328" text-anchor="middle" class="small">Signed request</text>
+  <path d="M500 545 H440" class="return"/>
+  <text x="470" y="573" text-anchor="middle" class="small">Receipt</text>
+
+  <!-- Gate 1 -->
+  <g transform="translate(515 240)">
+    <rect width="155" height="235" rx="22" fill="#10263a" stroke="#2e6178"/>
+    <text x="77.5" y="34" text-anchor="middle" class="tiny">Gate 1</text>
+    <path d="M78 61 L116 77 V119 Q116 157 78 179 Q40 157 40 119 V77 Z" fill="#173f53" stroke="#64e8ff" stroke-width="2.5" filter="url(#glow)"/>
+    <path d="M59 117 l13 13 l27 -31" fill="none" stroke="#adffe9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="77.5" y="207" text-anchor="middle" class="label">Identity proof</text>
+    <text x="77.5" y="229" text-anchor="middle" class="small">human + harness</text>
+  </g>
+
+  <path d="M670 357 H698" class="line"/>
+
+  <!-- Gate 2 -->
+  <g transform="translate(700 240)">
+    <rect width="155" height="235" rx="22" fill="#10263a" stroke="#3d5e79"/>
+    <text x="77.5" y="34" text-anchor="middle" class="tiny">Gate 2</text>
+    <path d="M78 61 L116 77 V119 Q116 157 78 179 Q40 157 40 119 V77 Z" fill="#253a52" stroke="#8ba7ff" stroke-width="2.5" filter="url(#glow)"/>
+    <path d="M59 117 l13 13 l27 -31" fill="none" stroke="#c7d2fe" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="77.5" y="207" text-anchor="middle" class="label">Policy &amp; scope</text>
+    <text x="77.5" y="229" text-anchor="middle" class="small">intent + authority</text>
+  </g>
+
+  <path d="M855 357 H883" class="line"/>
+
+  <!-- Gate 3 -->
+  <g transform="translate(885 240)">
+    <rect width="155" height="235" rx="22" fill="#10263a" stroke="#554c86"/>
+    <text x="77.5" y="34" text-anchor="middle" class="tiny">Gate 3</text>
+    <path d="M78 61 L116 77 V119 Q116 157 78 179 Q40 157 40 119 V77 Z" fill="#313052" stroke="#b09cff" stroke-width="2.5" filter="url(#glow)"/>
+    <path d="M59 117 l13 13 l27 -31" fill="none" stroke="#ddd6fe" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="77.5" y="207" text-anchor="middle" class="label">Audit intent</text>
+    <text x="77.5" y="229" text-anchor="middle" class="small">before disclosure</text>
+  </g>
+
+  <path d="M1040 357 H1072" class="line"/>
+
+  <!-- Durable core -->
+  <g transform="translate(1035 205)">
+    <rect width="105" height="335" rx="22" fill="#151f39" stroke="#765bb0" stroke-width="1.5"/>
+    <g transform="translate(23 28)">
+      <ellipse cx="30" cy="14" rx="28" ry="12" fill="#304a65" stroke="#78e4ff" stroke-width="2"/>
+      <path d="M2 14 v69 c0 7 13 12 28 12 s28 -5 28 -12 V14" fill="#243a56" stroke="#78e4ff" stroke-width="2"/>
+      <path d="M2 37 c0 7 13 12 28 12 s28 -5 28 -12 M2 60 c0 7 13 12 28 12 s28 -5 28 -12" fill="none" stroke="#78e4ff" stroke-width="1.5"/>
+    </g>
+    <text x="52.5" y="150" text-anchor="middle" class="label">Durable</text>
+    <text x="52.5" y="173" text-anchor="middle" class="label">custody</text>
+    <text x="52.5" y="210" text-anchor="middle" class="small">Messages</text>
+    <text x="52.5" y="234" text-anchor="middle" class="small">Tasks</text>
+    <text x="52.5" y="258" text-anchor="middle" class="small">Rooms</text>
+    <text x="52.5" y="282" text-anchor="middle" class="small">Files</text>
+    <text x="52.5" y="316" text-anchor="middle" class="tiny">offline-safe</text>
+  </g>
+
+  <!-- File quarantine path -->
+  <g transform="translate(585 600)">
+    <rect width="380" height="118" rx="20" fill="#111f33" stroke="#3e5c78"/>
+    <g transform="translate(24 23)">
+      <path d="M0 0 h42 l16 16 v55 H0 Z" fill="#213b51" stroke="#79e6ff" stroke-width="2"/>
+      <path d="M42 0 v18 h16" fill="none" stroke="#79e6ff" stroke-width="2"/>
+    </g>
+    <path d="M98 59 H150" class="line"/>
+    <g transform="translate(160 17)">
+      <path d="M42 0 L75 14 V49 Q75 76 42 92 Q9 76 9 49 V14 Z" fill="#282f4d" stroke="#b09cff" stroke-width="2"/>
+      <path d="M26 47 h32 M42 31 v32" stroke="#e6ddff" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <text x="286" y="50" class="label">Quarantine &amp; scan</text>
+    <text x="286" y="76" class="small">Files release only after policy</text>
+  </g>
+  <path d="M965 659 H1088 V540" class="line"/>
+
+  <!-- Enrolled recipients -->
+  <g transform="translate(1210 185)">
+    <rect width="180" height="190" rx="22" fill="url(#card)" class="cardStroke" filter="url(#softShadow)"/>
+    <rect x="65" y="30" width="50" height="72" rx="5" fill="#213b51" stroke="#7ee8ff" stroke-width="2"/>
+    <path d="M76 47 h28 M76 58 h28 M76 69 h20" stroke="#a4dff0" stroke-width="2"/>
+    <circle cx="90" cy="88" r="4" fill="#78ffc9"/>
+    <text x="90" y="132" text-anchor="middle" class="label">Ordinary server</text>
+    <text x="90" y="155" text-anchor="middle" class="label">agent</text>
+    <text x="90" y="178" text-anchor="middle" class="tiny">explicit capability</text>
+  </g>
+  <path d="M1140 320 H1210" class="line"/>
+  <text x="1175" y="298" text-anchor="middle" class="small">Authorized delivery</text>
+
+  <g transform="translate(1210 420)">
+    <rect width="180" height="175" rx="22" fill="url(#card)" class="cardStroke" filter="url(#softShadow)"/>
+    <path d="M49 43 h82 v54 H49 Z" fill="#203950" stroke="#a6b9ff" stroke-width="2"/>
+    <path d="M36 104 h108 l-13 16 H49 Z" fill="#293a5b" stroke="#a6b9ff" stroke-width="2"/>
+    <circle cx="132" cy="40" r="10" fill="#27213f" stroke="#a78bfa" stroke-width="2"/>
+    <path d="M127 40 h10" stroke="#ddd6fe" stroke-width="2"/>
+    <text x="90" y="144" text-anchor="middle" class="label">Offline laptop</text>
+    <text x="90" y="165" text-anchor="middle" class="tiny">reconnect + resume</text>
+  </g>
+  <path d="M1140 485 H1210" class="line"/>
+
+  <!-- Isolated external gateway -->
+  <path d="M1420 165 V710" stroke="#7656a4" stroke-width="2" stroke-dasharray="8 10" opacity="0.75"/>
+  <g transform="translate(1438 290)">
+    <rect width="118" height="205" rx="22" fill="#211a3b" stroke="#a77cff" stroke-width="2" filter="url(#softShadow)"/>
+    <rect x="29" y="34" width="60" height="60" rx="14" fill="#30285a" stroke="#bda8ff" stroke-width="2"/>
+    <path d="M42 54 H76 l-9 -9 M76 74 H42 l9 9" fill="none" stroke="#e0d8ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="59" y="126" text-anchor="middle" class="label">Isolated</text>
+    <text x="59" y="149" text-anchor="middle" class="label">A2A gateway</text>
+    <text x="59" y="180" text-anchor="middle" class="tiny">no implicit trust</text>
+  </g>
+  <path d="M1390 390 H1438" class="return"/>
+
+  <g transform="translate(1445 560)">
+    <circle cx="55" cy="35" r="18" fill="#322957" stroke="#bda8ff" stroke-width="2"/>
+    <circle cx="25" cy="75" r="15" fill="#213e54" stroke="#75e7ff" stroke-width="2"/>
+    <circle cx="86" cy="77" r="15" fill="#213e54" stroke="#75e7ff" stroke-width="2"/>
+    <path d="M45 50 L31 63 M65 50 L80 64 M40 75 H71" class="mutedLine"/>
+    <text x="55" y="123" text-anchor="middle" class="label">External agents</text>
+  </g>
+  <path d="M1497 495 V560" class="return"/>
+
+  <text x="800" y="846" text-anchor="middle" class="label">Prompt text, payload fields, names, and roles never grant authority.</text>
+  <text x="800" y="875" text-anchor="middle" class="small">Authenticated transport establishes identity. Current policy establishes permission. Receipts state only what their issuer can prove.</text>
+</svg>
