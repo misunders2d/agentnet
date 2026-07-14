@@ -1,0 +1,83 @@
+{
+  "name": "@misunders2d/agentnet",
+  "version": "0.1.0",
+  "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "os": [
+    "linux"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "ai-agent",
+    "agent-network",
+    "agent-communication",
+    "a2a",
+    "mcp",
+    "claude",
+    "codex",
+    "antigravity",
+    "self-hosted",
+    "offline-first"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/misunders2d/agentnet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/misunders2d/agentnet/issues"
+  },
+  "homepage": "https://github.com/misunders2d/agentnet#readme",
+  "bin": {
+    "agentnet": "npm/bin/agentnet.mjs"
+  },
+  "scripts": {
+    "check:package": "node npm/scripts/check-package.mjs",
+    "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+    "test": "npm run check",
+    "prepack": "npm run check:package",
+    "prepublishOnly": "npm run check"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/agentnet/bindings/pi_extension.ts"
+    ]
+  },
+  "files": [
+    "AGENTS.md",
+    "LICENSE",
+    "README.md",
+    "RELEASE_MANIFEST.json",
+    "REQUIREMENTS_STATUS.md",
+    "deploy/.env.production.example",
+    "deploy/Dockerfile",
+    "deploy/*.json",
+    "deploy/*.conf",
+    "deploy/*.py",
+    "docs/**/*.md",
+    "evidence/**/*.json",
+    "evidence/**/*.whl",
+    "evidence/**/*.gz",
+    "npm/**/*.mjs",
+    "pyproject.toml",
+    "schemas/**/*.json",
+    "schemas/**/*.md",
+    "scripts/**/*.py",
+    "src/**/*.py",
+    "src/**/*.ts",
+    "tests/**/*.py",
+    "uv.lock"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
