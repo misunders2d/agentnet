@@ -99,6 +99,48 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
     )["scripts"]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_npm_launcher_rejects_unsupported_uv_before_runtime_creation(tmp_path: Path) -> None:
+    package_root = tmp_path / "package"
+    launcher = package_root / "npm/bin/agentnet.mjs"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
+    (package_root / "package.json").write_text(
+        json.dumps({"version": "0.1.5"}),
+        encoding="utf-8",
+    )
+    fake_uv = tmp_path / "old-uv"
+    fake_uv.write_text(
+        f"#!{sys.executable}\nprint('uv 0.9.13')\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o700)
+    state_root = tmp_path / "state"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "AGENTNET_UV": str(fake_uv),
+            "XDG_STATE_HOME": str(state_root),
+        }
+    )
+
+    completed = subprocess.run(
+        ["node", str(launcher), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == (
+        "AgentNet requires uv 0.11.28 or newer; found 0.9.13. "
+        "Upgrade uv explicitly, then retry.\n"
+    )
+    assert not state_root.exists()
+
+
 @pytest.mark.skipif(shutil.which("npm") is None, reason="npm is unavailable")
 def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
     completed = subprocess.run(
@@ -131,7 +173,10 @@ def test_same_version_npm_installs_use_distinct_runtime_roots(tmp_path: Path) ->
     fake_uv = tmp_path / "fake-uv"
     fake_uv.write_text(
         f"#!{sys.executable}\n"
-        "import json, os\n"
+        "import json, os, sys\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        "    print('uv 0.11.28')\n"
+        "    raise SystemExit(0)\n"
         "from pathlib import Path\n"
         "Path(os.environ['AGENTNET_TEST_CAPTURE']).write_text(json.dumps({\n"
         "  'package_root': os.environ['AGENTNET_PACKAGE_ROOT'],\n"

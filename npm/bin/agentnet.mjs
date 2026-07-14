@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
@@ -18,6 +18,41 @@ const installIdentity = createHash("sha256")
 
 if (process.platform !== "linux") {
   console.error("AgentNet 0.1.x npm packages support Linux only; this platform is not qualified.");
+  process.exit(1);
+}
+
+const uvExecutable = process.env.AGENTNET_UV || "uv";
+const minimumUvVersion = [0, 11, 28];
+const uvVersion = spawnSync(uvExecutable, ["--version"], {
+  encoding: "utf8",
+  shell: false,
+});
+if (uvVersion.error?.code === "ENOENT") {
+  console.error("AgentNet requires uv 0.11.28 or newer on PATH: https://docs.astral.sh/uv/");
+  process.exit(1);
+}
+if (uvVersion.error || uvVersion.status !== 0) {
+  console.error("AgentNet could not determine the installed uv version.");
+  process.exit(1);
+}
+const uvMatch = /^uv (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(uvVersion.stdout.trim());
+if (!uvMatch) {
+  console.error("AgentNet could not parse the installed uv version.");
+  process.exit(1);
+}
+const actualUvVersion = uvMatch.slice(1).map(Number);
+const versionAtLeast = (actual, minimum) => {
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] > minimum[index]) return true;
+    if (actual[index] < minimum[index]) return false;
+  }
+  return true;
+};
+if (!versionAtLeast(actualUvVersion, minimumUvVersion)) {
+  console.error(
+    `AgentNet requires uv 0.11.28 or newer; found ${actualUvVersion.join(".")}. ` +
+      "Upgrade uv explicitly, then retry.",
+  );
   process.exit(1);
 }
 
@@ -50,7 +85,6 @@ const uvArguments = [
 if (verify) uvArguments.push("--extra", "test");
 uvArguments.push("agentnet", ...userArguments);
 
-const uvExecutable = process.env.AGENTNET_UV || "uv";
 const child = spawn(uvExecutable, uvArguments, {
   stdio: "inherit",
   env: {

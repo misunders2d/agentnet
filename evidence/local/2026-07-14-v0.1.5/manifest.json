@@ -1,12 +1,12 @@
 {
   "run_id": "2026-07-14-v0.1.5",
-  "evaluated_at": "2026-07-14T15:31:00+00:00",
+  "evaluated_at": "2026-07-14T16:25:00+00:00",
   "scope": "focused_packed_npm_release_repair",
   "release_certified": false,
   "release_source_tree_sha256": "5163628bf1e7b14a6dad03827fd5e51edd10f01ded21293a78be43d4acba1d08",
   "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-14-v0.1.4/manifest.json",
-  "change_boundary": "Exact npm evidence-file inclusion, artifact-retention metadata, certified npm interpreter selection, and a full clean packed-tarball prepublication gate; no identity, authorization, protocol, storage, delivery, A2A, or production-gate semantics change.",
+  "change_boundary": "Exact npm evidence-file inclusion, artifact-retention metadata, certified npm interpreter selection, explicit uv 0.11.28+ enforcement without host mutation, and a full clean packed-tarball prepublication gate; no identity, authorization, protocol, storage, delivery, A2A, or production-gate semantics change.",
   "commands": [
     {
       "command": "public @misunders2d/agentnet@0.1.4 tarball clean install; full agentnet verify from unrelated cwd",
@@ -18,11 +18,11 @@
     },
     {
       "command": "release source suite with the three separately gated host-specific files excluded",
-      "result": "910 passed; 7 expected PostgreSQL skips"
+      "result": "911 passed; 7 expected PostgreSQL skips"
     },
     {
       "command": "npm run check:packed",
-      "result": "clean installed npm tarball; CPython 3.13.13; full agentnet verify from unrelated cwd; 910 passed; 7 expected PostgreSQL skips"
+      "result": "clean installed npm tarball; uv 0.11.28+ enforced; CPython 3.13.13; full agentnet verify from unrelated cwd; 911 passed; 7 expected PostgreSQL skips"
     },
     {
       "command": "uv run --python 3.13.13 python scripts/verify_release.py",
@@ -32,11 +32,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-07-14-v0.1.5/artifacts/agentnet-0.1.5.tar.gz",
-      "sha256": "cb98099ca8acf8aaa500684888fdd1e0693bcca6590d40164c74be4180d85203"
+      "sha256": "b77a614bba6c23162a671bd484787018d350d8d06e6bfa0e1e6358565f6551e6"
     },
     {
       "path": "evidence/local/2026-07-14-v0.1.5/artifacts/agentnet-0.1.5-py3-none-any.whl",
-      "sha256": "4ce3d691c3441ae1e6af4fc0e3b1a91819818f1ef1bd1fe9069681f0f761cc40"
+      "sha256": "1428a65792a2c4170d5f002d809bb8c43a9378607940a33a4e76fb876071f9c6"
     }
   ]
 }

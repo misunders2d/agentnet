@@ -74,5 +74,8 @@ const launcherText = readFileSync(launcher, "utf8");
 if (!launcherText.includes('"3.13.13"') || launcherText.includes('">=3.13,<3.15"')) {
   fail("npm launcher is not pinned to certified CPython 3.13.13");
 }
+if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
+  fail("npm launcher does not enforce the minimum supported uv version");
+}
 
 if (!process.exitCode) console.log("npm package check: PASS");

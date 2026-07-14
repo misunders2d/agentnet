@@ -24,7 +24,7 @@ pi install git:github.com/misunders2d/agentnet
 
 - Linux
 - Node.js 22.19 or newer
-- [`uv`](https://docs.astral.sh/uv/) on `PATH`
+- [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer on `PATH`
 
 The launcher uses the committed `uv.lock` and selects the release-certified CPython `3.13.13` runtime. The Python package remains compatible with `>=3.13,<3.15`, but the npm launcher is deliberately stricter so different hosts cannot silently verify the same release with different interpreter minors. It keeps an environment keyed by package version and install identity under the current user's state directory. Global npm and Pi-managed copies therefore do not rebind each other's Python environment. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
 
@@ -47,7 +47,7 @@ Also verify `uv` independently:
 command -v uv
 ```
 
-Install `uv` from <https://docs.astral.sh/uv/> if that command prints nothing.
+Run `uv --version` and require 0.11.28 or newer. Install or explicitly upgrade `uv` from <https://docs.astral.sh/uv/> when needed; AgentNet never modifies the host `uv` installation automatically.
 
 ## Verify a source checkout before publication
 
