@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-07-14-v0.1.3",
+  "evaluated_at": "2026-07-14T10:38:00+03:00",
+  "scope": "npm_release_runner_host_test_separation",
+  "release_certified": false,
+  "release_source_tree_sha256": "bbfd47d93169889e0c91f011bd11c106bf98f1d1d5e19023b665c2f62a87f070",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "change_boundary": "README, Pi gallery metadata/image, npm search keywords, release-runner host-test separation, version strings, and release-evidence plumbing only; no authorization, protocol, storage, or delivery behavior change.",
+  "commands": [
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv build --offline --no-build-isolation runs",
+      "result": "byte-identical sdist and wheel archives"
+    },
+    {
+      "command": "npm test",
+      "result": "900 passed, 7 explicitly infrastructure-gated PostgreSQL skips; host-specific live-harness, lifecycle, and Bubblewrap evidence remain separate gates; release manifest verification passed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-14-v0.1.3/artifacts/agentnet-0.1.3.tar.gz",
+      "sha256": "79091d779662fded2e95b63d2ed13fdab000690fb4c571b1938a7026119b2d67"
+    },
+    {
+      "path": "evidence/local/2026-07-14-v0.1.3/artifacts/agentnet-0.1.3-py3-none-any.whl",
+      "sha256": "c7fb1d2072322595031fa4c8ce8cb44c6efd232e196d8bfc0db9fd82c024c7de"
+    }
+  ]
+}
