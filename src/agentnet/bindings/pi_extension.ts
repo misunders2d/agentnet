@@ -29,7 +29,12 @@ function canonical(value: unknown): string {
 function binding(): Binding {
 	if (cachedBinding) return cachedBinding;
 	const rendered = process.env.AGENTNET_LOCAL_BINDING_FD;
-	if (!rendered || !/^[0-9]+$/.test(rendered)) throw new Error("AgentNet local binding is unavailable");
+	if (!rendered || !/^[0-9]+$/.test(rendered)) {
+		throw new Error(
+			"AgentNet local binding is unavailable: package installation alone does not activate it; " +
+			"launch this measured Pi through agentnet supervisor-run with local_bindings_required=true",
+		);
+	}
 	const descriptor = Number(rendered);
 	const size = fstatSync(descriptor).size;
 	if (size < 2 || size > 65536) throw new Error("AgentNet local binding was not activated");

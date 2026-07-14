@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +28,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png",
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
+    assert "docs/assets/agentnet-overview.png" in package["files"]
     assert package["os"] == ["linux"]
     assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", package["version"])
     assert package["peerDependenciesMeta"] == {
@@ -47,6 +53,20 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
     assert os.access(ROOT / "npm/bin/agentnet.mjs", os.X_OK)
 
 
+def test_pi_binding_failure_explains_supervisor_activation() -> None:
+    extension = (ROOT / "src/agentnet/bindings/pi_extension.ts").read_text(
+        encoding="utf-8"
+    )
+    assert "package installation alone does not activate it" in extension
+    assert "local_bindings_required=true" in extension
+    for fail_closed_message in (
+        "AgentNet local binding was not activated",
+        "AgentNet local binding read failed",
+        "AgentNet local binding schema is invalid",
+    ):
+        assert fail_closed_message in extension
+
+
 def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
     launcher = (ROOT / "npm/bin/agentnet.mjs").read_text(encoding="utf-8")
     for required in (
@@ -54,6 +74,9 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         '"--no-default-groups"',
         "UV_PROJECT_ENVIRONMENT:",
         "AGENTNET_NPM_RUNTIME_DIR",
+        "AGENTNET_PACKAGE_ROOT: packageRoot",
+        'createHash("sha256")',
+        "realpathSync",
         'shell: false',
     ):
         assert required in launcher
@@ -61,3 +84,70 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
     assert "postinstall" not in json.loads(
         (ROOT / "package.json").read_text(encoding="utf-8")
     )["scripts"]
+
+
+@pytest.mark.skipif(shutil.which("npm") is None, reason="npm is unavailable")
+def test_npm_dry_run_tarball_contains_preview_image() -> None:
+    completed = subprocess.run(
+        ["npm", "pack", "--dry-run", "--json", "--ignore-scripts"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    packed = json.loads(completed.stdout)
+    manifest = next(iter(packed.values())) if isinstance(packed, dict) else packed[0]
+    filenames = {entry["path"] for entry in manifest["files"]}
+    assert "docs/assets/agentnet-overview.png" in filenames
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_same_version_npm_installs_use_distinct_runtime_roots(tmp_path: Path) -> None:
+    fake_uv = tmp_path / "fake-uv"
+    fake_uv.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['AGENTNET_TEST_CAPTURE']).write_text(json.dumps({\n"
+        "  'package_root': os.environ['AGENTNET_PACKAGE_ROOT'],\n"
+        "  'runtime_root': os.environ['UV_PROJECT_ENVIRONMENT'],\n"
+        "}), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o700)
+    state_root = tmp_path / "state"
+    package_version = json.loads(
+        (ROOT / "package.json").read_text(encoding="utf-8")
+    )["version"]
+    captures: list[dict[str, str]] = []
+
+    for name in ("global-copy", "pi-copy"):
+        package_root = tmp_path / name
+        launcher = package_root / "npm/bin/agentnet.mjs"
+        launcher.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
+        (package_root / "package.json").write_text(
+            json.dumps({"version": package_version}),
+            encoding="utf-8",
+        )
+        capture = tmp_path / f"{name}.json"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "AGENTNET_TEST_CAPTURE": str(capture),
+                "AGENTNET_UV": str(fake_uv),
+                "XDG_STATE_HOME": str(state_root),
+            }
+        )
+        subprocess.run(
+            ["node", str(launcher), "--version"],
+            check=True,
+            env=environment,
+            timeout=30,
+        )
+        captures.append(json.loads(capture.read_text(encoding="utf-8")))
+
+    assert captures[0]["package_root"] != captures[1]["package_root"]
+    assert captures[0]["runtime_root"] != captures[1]["runtime_root"]
+    assert all(f"{package_version}-" in item["runtime_root"] for item in captures)

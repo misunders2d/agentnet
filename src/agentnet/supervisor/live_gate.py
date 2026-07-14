@@ -80,10 +80,14 @@ def _auth_for(harness: HarnessKind, environment: Mapping[str, str]) -> HarnessAu
     )
 
 
-def installed_probe_report(root: Path) -> dict[str, dict[str, Any]]:
-    """Evaluate every exact installed binary without making inference claims."""
+def installed_probe_report(
+    root: Path,
+    *,
+    harnesses: tuple[HarnessKind, ...] = ("claude", "codex", "pi", "antigravity"),
+) -> dict[str, dict[str, Any]]:
+    """Evaluate requested installed binaries without making inference claims."""
 
-    probes = detect_installed_harnesses(root)
+    probes = detect_installed_harnesses(root, harnesses=harnesses)
     return {harness: asdict(probe) for harness, probe in probes.items()}
 
 

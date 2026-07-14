@@ -1,6 +1,6 @@
 {
   "name": "@misunders2d/agentnet",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -80,6 +80,7 @@
     "deploy/nginx-agent.conf",
     "deploy/render_and_run.py",
     "docs/**/*.md",
+    "docs/assets/agentnet-overview.png",
     "evidence/**/*.json",
     "evidence/**/*.whl",
     "evidence/**/*.gz",

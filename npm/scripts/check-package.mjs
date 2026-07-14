@@ -21,6 +21,9 @@ if (metadata.pi?.extensions?.[0] !== "./src/agentnet/bindings/pi_extension.ts") 
 if (metadata.pi?.image !== "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png") {
   fail("Pi package preview image missing or changed");
 }
+if (!metadata.files?.includes("docs/assets/agentnet-overview.png")) {
+  fail("Pi package preview image is excluded from published files");
+}
 if (metadata.bin?.agentnet !== "npm/bin/agentnet.mjs") fail("agentnet launcher missing");
 if (!metadata.os?.includes("linux") || metadata.os.length !== 1) fail("Linux-only qualification changed");
 const version = pyproject.match(/^version = "([^"]+)"$/m)?.[1];

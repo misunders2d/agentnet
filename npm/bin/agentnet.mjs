@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const packageRoot = realpathSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+);
 const metadata = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const installIdentity = createHash("sha256")
+  .update(packageRoot, "utf8")
+  .digest("hex")
+  .slice(0, 12);
 
 if (process.platform !== "linux") {
   console.error("AgentNet 0.1.x npm packages support Linux only; this platform is not qualified.");
@@ -19,7 +26,7 @@ const stateRoot = process.env.XDG_STATE_HOME
   : path.join(os.homedir(), ".local", "state");
 const runtimeRoot = process.env.AGENTNET_NPM_RUNTIME_DIR
   ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
-  : path.join(stateRoot, "agentnet", "npm-runtime", metadata.version);
+  : path.join(stateRoot, "agentnet", "npm-runtime", `${metadata.version}-${installIdentity}`);
 
 mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
 const runtimeStat = lstatSync(runtimeRoot);
@@ -48,6 +55,7 @@ const child = spawn(uvExecutable, uvArguments, {
   stdio: "inherit",
   env: {
     ...process.env,
+    AGENTNET_PACKAGE_ROOT: packageRoot,
     UV_NO_MODIFY_PATH: "1",
     UV_PROJECT_ENVIRONMENT: runtimeRoot,
   },

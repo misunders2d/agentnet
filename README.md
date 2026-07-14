@@ -174,12 +174,13 @@ pi install npm:@misunders2d/agentnet
 
 ```bash
 npm install -g @misunders2d/agentnet
+agentnet --version
 agentnet --help
 ```
 
 Installation adds code only. It does not enroll a person or harness, create an
-identity, grant authority, or start an AgentNet network. Those operations use
-explicit enrollment and supervisor workflows.
+identity, activate the Pi local binding, grant authority, or start an AgentNet
+network. Those operations use explicit enrollment and supervisor workflows.
 
 ## Try the local conformance profile
 
@@ -202,7 +203,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation, currently version `0.1.3`. The
+AgentNet is an early public implementation, currently version `0.1.4`. The
 repository contains a broad executable local kernel and adversarial test suite,
 but it does **not** claim production certification.
 

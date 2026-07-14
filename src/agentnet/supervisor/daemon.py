@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError as PydanticValidationError,
+    model_validator,
+)
 
 from agentnet.adapters.auth import (
     EphemeralBrokerEnvironment,
@@ -136,7 +143,16 @@ def load_supervisor_config(path: Path) -> SupervisorDaemonConfig:
             raise ValidationError("supervisor config changed during bounded read")
     finally:
         os.close(descriptor)
-    return SupervisorDaemonConfig.model_validate_json(value)
+    try:
+        return SupervisorDaemonConfig.model_validate_json(value)
+    except PydanticValidationError as exc:
+        first = exc.errors(include_url=False, include_input=False)[0]
+        location = ".".join(str(part) for part in first.get("loc", ())) or "document"
+        reason = str(first.get("msg", "invalid value"))
+        raise ValidationError(
+            f"supervisor daemon config is invalid at {location}: {reason}; "
+            "expected agentnet-supervisor.json, not the core agentnet.json"
+        ) from exc
 
 
 def _owner_private_key(path: Path) -> P256KeyPair:

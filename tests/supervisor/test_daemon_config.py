@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from agentnet.cli import main
 from agentnet.errors import GateBlocked, ValidationError
@@ -76,6 +77,36 @@ def test_supervisor_config_rejects_group_or_world_access(tmp_path: Path) -> None
 
     with pytest.raises(ValidationError, match="owner-only"):
         load_supervisor_config(config)
+
+
+def test_supervisor_config_reports_wrong_config_kind_concisely(tmp_path: Path) -> None:
+    config = tmp_path / "agentnet.json"
+    config.write_text("{}", encoding="utf-8")
+    os.chmod(config, 0o600)
+
+    with pytest.raises(
+        ValidationError,
+        match=(
+            "supervisor daemon config is invalid at core_base_url: Field required; "
+            "expected agentnet-supervisor.json, not the core agentnet.json"
+        ),
+    ) as stopped:
+        load_supervisor_config(config)
+
+    assert isinstance(stopped.value.__cause__, PydanticValidationError)
+
+
+def test_supervisor_run_check_hides_raw_pydantic_error(tmp_path: Path) -> None:
+    config = tmp_path / "agentnet.json"
+    config.write_text("{}", encoding="utf-8")
+    os.chmod(config, 0o600)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["supervisor-run", "--config", str(config), "--check"])
+
+    message = str(stopped.value)
+    assert "expected agentnet-supervisor.json, not the core agentnet.json" in message
+    assert "validation error for SupervisorDaemonConfig" not in message
 
 
 def test_supervisor_queue_key_is_exact_owner_file_and_never_followed(tmp_path: Path) -> None:

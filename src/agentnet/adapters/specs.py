@@ -321,11 +321,15 @@ def detect_executable(spec: AdapterLaunchSpec, *, timeout_seconds: float = 2.0) 
     )
 
 
-def detect_installed_harnesses(root: Path) -> dict[HarnessKind, ExecutableProbe]:
-    """Detect the actual local binaries without claiming gate evidence."""
+def detect_installed_harnesses(
+    root: Path,
+    *,
+    harnesses: tuple[HarnessKind, ...] = ("claude", "codex", "pi", "antigravity"),
+) -> dict[HarnessKind, ExecutableProbe]:
+    """Detect the requested local binaries without claiming gate evidence."""
 
     result: dict[HarnessKind, ExecutableProbe] = {}
-    for harness in ("claude", "codex", "pi", "antigravity"):
+    for harness in harnesses:
         spec = build_launch_spec(harness, harness_id=f"probe-{harness}", root=root)
         result[harness] = detect_executable(spec)
     return result

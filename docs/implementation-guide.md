@@ -24,6 +24,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv sync --extra test
 uv run agentnet demo --data-dir /tmp/agentnet-demo
 uv run agentnet a2a-demo
 uv run agentnet harness-probe --data-dir /tmp/agentnet-harness-probes
+uv run agentnet harness-probe --harness pi --data-dir /tmp/agentnet-harness-probes
 uv run agentnet harness-demo --data-dir /tmp/agentnet-harness-demo
 uv run agentnet init --config agentnet-config.json --data-dir .agentnet --domain local.example
 uv run agentnet status --config agentnet-config.json
@@ -51,8 +52,10 @@ offline recipient mailbox. It prints an explicit warning and only claims
 `accepted_local`; the lane cannot carry C1/C2/C3 data, tasks, grants, rooms, or
 effects and is not exposed over HTTP or MCP.
 
-`harness-probe` verifies the exact installed Claude, Codex, Pi, and Antigravity
-binary pins. `harness-demo` then starts each one in a distinct private
+By default, `harness-probe` verifies all four exact Claude, Codex, Pi, and
+Antigravity binary pins for the G01 gate. `--harness pi` (or another single
+harness) is a diagnostic-only probe: it reports only that executable and never
+claims four-harness readiness. `harness-demo` then starts each one in a distinct private
 background lifecycle, exercises durable local custody, content-free passive
 status, explicit human open, and bounded shutdown. It sends no semantic content
 to any model and makes no inference or external-conformance claim.
@@ -78,9 +81,22 @@ Credentials are injected only into their bound private worker and are never
 accepted as command-line arguments or printed. Missing evidence, binary, or
 credential fails the requested gate; it is never reported as a skip.
 
-Local harness bindings are an explicit ordinary-extension feature. Enable
-`local_bindings`, include the `local_binding` capability limit, and provide an
-owner-only capability-root file plus a private Unix-socket path. Production
+Local harness bindings are an explicit ordinary-extension feature. Package
+installation alone does not activate them. `agentnet supervisor-run` expects a
+separate owner-only `agentnet-supervisor.json`; do not pass the core
+`agentnet.json`. Validate it before launch:
+
+```bash
+agentnet supervisor-run --config agentnet-supervisor.json --check
+```
+
+Set `local_bindings_required` to `true` in that supervisor config. The measured
+child receives its capability only after launch; loading the Pi extension in an
+ordinary foreground Pi process therefore remains unavailable by design.
+
+Enable `local_bindings` in the core configuration, include the `local_binding`
+capability limit, and provide an owner-only capability-root file plus a private
+Unix-socket path. Production
 environment loading uses `AGENTNET_LOCAL_IPC_CAPABILITY_ROOT_FILE` and
 `AGENTNET_LOCAL_IPC_SOCKET_PATH` (with optional TTL/frame limits). The extension
 derives the actor from the enrolled current credential on every call. It issues

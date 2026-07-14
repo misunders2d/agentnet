@@ -363,10 +363,10 @@ def test_terminal_state_cannot_reopen(store, identity_factory, workload_factory)
         payload={"text": "short lived"},
         idempotency_key=f"message-{uuid4()}",
         recipients=(recipient.harness_id,),
-        delivery_expires_at=datetime.now(UTC) + timedelta(seconds=1),
+        delivery_expires_at=datetime.now(UTC) + timedelta(seconds=30),
     )
     mailbox.accept(event)
-    expiry_now = datetime.now(UTC) + timedelta(seconds=2)
+    expiry_now = datetime.now(UTC) + timedelta(seconds=60)
     dispatcher, dispatcher_key = workload_factory(
         domain=sender.domain_id,
         role="mailbox_dispatcher",

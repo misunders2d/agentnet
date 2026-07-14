@@ -22,6 +22,7 @@ from a2a.types import AgentCapabilities, AgentCard, Message, Part, Role, SendMes
 from google.protobuf.json_format import MessageToDict
 from starlette.applications import Starlette
 
+from agentnet import __version__
 from agentnet.audit.service import AuditService
 from agentnet.authorization import (
     AUTHORITY_COMMAND_PURPOSE,
@@ -32,7 +33,7 @@ from agentnet.authorization import (
 from agentnet.client import AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
-from agentnet.errors import GateBlocked
+from agentnet.errors import GateBlocked, ValidationError
 from agentnet.http_api import create_app
 from agentnet.gateways.a2a import (
     SSRFPolicy,
@@ -1952,7 +1953,10 @@ def command_serve(args: argparse.Namespace) -> int:
 def command_supervisor_run(args: argparse.Namespace) -> int:
     """Validate or run one persistent ordinary-harness supervisor."""
 
-    config = load_supervisor_config(Path(args.config))
+    try:
+        config = load_supervisor_config(Path(args.config))
+    except ValidationError as exc:
+        raise SystemExit(str(exc)) from None
     if args.check:
         print(json.dumps(redacted_supervisor_status(config), indent=2, sort_keys=True))
         return 0
@@ -2182,12 +2186,66 @@ def command_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verification_package_root() -> Path:
+    configured = os.environ.get("AGENTNET_PACKAGE_ROOT")
+    package_root = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else Path(__file__).resolve().parents[2]
+    )
+    tests_root = package_root / "tests"
+    if not tests_root.is_dir():
+        raise SystemExit(
+            "AgentNet packaged tests are unavailable; reinstall the complete npm package "
+            "or run verification from a source checkout"
+        )
+    return package_root
+
+
 def command_verify(args: argparse.Namespace) -> int:
-    return subprocess.call([sys.executable, "-m", "pytest", "-q", *args.pytest_args])
+    package_root = _verification_package_root()
+    tests_root = package_root / "tests"
+    host_specific = (
+        tests_root / "adapters/test_installed_live_inference.py",
+        tests_root / "adapters/test_subprocess_lifecycle.py",
+        tests_root / "components/test_bakeoff_evidence.py",
+    )
+    return subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            str(tests_root),
+            *(f"--ignore={path}" for path in host_specific),
+            *args.pytest_args,
+        ],
+        cwd=package_root,
+    )
 
 
 def command_harness_probe(args: argparse.Namespace) -> int:
-    report = installed_probe_report(Path(args.data_dir))
+    root = Path(args.data_dir)
+    if args.harness != "all":
+        report = installed_probe_report(root, harnesses=(args.harness,))
+        probe = report[args.harness]
+        ready = bool(probe.get("matches_pin") and probe.get("resolved_path"))
+        result: dict[str, object] = {
+            "diagnostic_only": True,
+            "harness": args.harness,
+            "probe": probe,
+            "ready": ready,
+            "scope": "single_harness",
+        }
+        if not ready:
+            result["error"] = {
+                "code": "installed_harness_mismatch",
+                "message": "requested installed harness is absent or version-mismatched",
+            }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if ready else 1
+
+    report = installed_probe_report(root)
     try:
         assert_installed_probe_report(report)
     except GateBlocked as exc:
@@ -2253,7 +2311,7 @@ def command_a2a_demo(_args: argparse.Namespace) -> int:
         template = AgentCard(
             name="Synthetic public proposal agent",
             description="Local A2A v1 conformance route",
-            version="0.1.3",
+            version="0.1.4",
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text/plain"],
             default_output_modes=["text/plain"],
@@ -2318,6 +2376,7 @@ def command_a2a_demo(_args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentnet", description="AgentNet")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     network = commands.add_parser("network", help="create and operate one AgentNet namespace")
@@ -2724,7 +2783,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     harness_probe = commands.add_parser(
         "harness-probe",
-        help="probe all four exact installed harness versions without inference",
+        help="probe exact installed harness versions without inference",
+    )
+    harness_probe.add_argument(
+        "--harness",
+        choices=("all", "claude", "codex", "pi", "antigravity"),
+        default="all",
+        help="use one diagnostic probe or the default four-harness G01 gate",
     )
     harness_probe.add_argument("--data-dir", default="/tmp/agentnet-harness-probes")
     harness_probe.set_defaults(func=command_harness_probe)

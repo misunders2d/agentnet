@@ -1,0 +1,33 @@
+{
+  "run_id": "2026-07-14-v0.1.4",
+  "evaluated_at": "2026-07-14T13:47:57+00:00",
+  "scope": "focused_installer_and_onboarding_repairs",
+  "release_certified": false,
+  "release_source_tree_sha256": "111f1fe532897bf1e63402bef566b64393cf6f6e0670b335f068495c787df5ba",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "change_boundary": "Hermetic packaged verification, npm asset inclusion and per-install runtime isolation, scoped harness diagnostics, CLI version output, supervisor-config diagnostics, Pi binding guidance, and one deterministic test-fixture timestamp; no identity, authorization, protocol, storage, or delivery semantics change.",
+  "commands": [
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv build --offline --no-build-isolation runs",
+      "result": "byte-identical sdist and wheel archives"
+    },
+    {
+      "command": "npm test",
+      "result": "910 passed, 7 explicitly infrastructure-gated PostgreSQL skips; release manifest verification passed"
+    },
+    {
+      "command": "clean npm tarball install from an unrelated working directory; agentnet --version; agentnet verify -- -k test_top_level_version_is_available",
+      "result": "0.1.4 reported; packaged test selected; caller-cwd tripwire not collected; preview image present in tarball"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-14-v0.1.4/artifacts/agentnet-0.1.4.tar.gz",
+      "sha256": "0e62c48eda8a125fbb3ca94bb88cb63e3dc39a5c7553b44006ae33221385d5a3"
+    },
+    {
+      "path": "evidence/local/2026-07-14-v0.1.4/artifacts/agentnet-0.1.4-py3-none-any.whl",
+      "sha256": "a3e0308ac310b6f3cf1a333bd6f568b8f825c6590c2ba1b3bd1d9f74d72d4d00"
+    }
+  ]
+}

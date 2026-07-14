@@ -696,7 +696,9 @@ def test_legacy_task_without_marker_redacts_and_marker_tamper_fails_closed(
     subordinate_actor,
     now,
     relationship_approval_authority,
+    monkeypatch,
 ):
+    monkeypatch.setattr("agentnet.mailbox.service.time.time", lambda: now.timestamp())
     legacy_mailbox = MailboxService(store)
     legacy = new_event(
         domain_id=admin_actor.domain_id,
@@ -708,7 +710,7 @@ def test_legacy_task_without_marker_redacts_and_marker_tamper_fails_closed(
         recipients=(subordinate_actor.harness_id,),
         task_id="legacy-task-no-marker",
         retention_delete_at=now + timedelta(hours=1),
-    )
+    ).model_copy(update={"created_at": now})
     legacy_mailbox.accept(legacy)
     legacy_item = legacy_mailbox.reconcile(subordinate_actor.harness_id)[0]
     assert legacy_item["event"].get("payload_access") is None

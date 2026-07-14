@@ -10,6 +10,7 @@ The same package exposes the shared AgentNet CLI for Claude, Codex, Pi, Antigrav
 
 ```bash
 npm install -g @misunders2d/agentnet
+agentnet --version
 agentnet --help
 ```
 
@@ -25,9 +26,28 @@ pi install git:github.com/misunders2d/agentnet
 - Node.js 22.19 or newer
 - [`uv`](https://docs.astral.sh/uv/) on `PATH`
 
-The launcher uses the committed `uv.lock`, asks `uv` for Python `>=3.13,<3.15`, and keeps its versioned environment under the current user's state directory. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
+The launcher uses the committed `uv.lock`, asks `uv` for Python `>=3.13,<3.15`, and keeps an environment keyed by package version and install identity under the current user's state directory. Global npm and Pi-managed copies therefore do not rebind each other's Python environment. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
 
-Installation does not enroll a person, create an identity, start a supervisor, or grant authority. Use AgentNet's explicit network and enrollment commands after installing the package.
+Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension, not Pi skills. Its tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
+
+## PATH checks
+
+If npm reports a successful global install but `agentnet` is not found:
+
+```bash
+command -v agentnet
+npm prefix -g
+"$(npm prefix -g)/bin/agentnet" --version
+export PATH="$(npm prefix -g)/bin:$PATH"
+```
+
+Also verify `uv` independently:
+
+```bash
+command -v uv
+```
+
+Install `uv` from <https://docs.astral.sh/uv/> if that command prints nothing.
 
 ## Verify a source checkout before publication
 
