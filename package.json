@@ -1,6 +1,6 @@
 {
   "name": "@misunders2d/agentnet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -45,7 +45,7 @@
   },
   "scripts": {
     "check:package": "node npm/scripts/check-package.mjs",
-    "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+    "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
     "test": "npm run check",
     "prepack": "npm run check:package",
     "prepublishOnly": "npm run check"

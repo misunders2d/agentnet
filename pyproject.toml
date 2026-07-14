@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentnet"
-version = "0.1.0"
+version = "0.1.1"
 description = "Self-hosted, agent-agnostic secure communication conformance kernel"
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
@@ -50,6 +50,7 @@ packages = ["src/agentnet"]
 [tool.hatch.build.targets.sdist]
 only-include = [
   ".gitignore",
+  "LICENSE",
   "README.md",
   "RELEASE_MANIFEST.json",
   "REQUIREMENTS_STATUS.md",

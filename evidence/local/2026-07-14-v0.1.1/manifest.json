@@ -1,0 +1,33 @@
+{
+  "run_id": "2026-07-14-v0.1.1",
+  "evaluated_at": "2026-07-14T10:05:00+03:00",
+  "scope": "npm_packaging_marketing_and_discoverability_patch",
+  "release_certified": false,
+  "release_source_tree_sha256": "0465f002266ad52351e5237c448a78736fce77e951103a326de4fc41e8732bfa",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "change_boundary": "README, Pi gallery metadata and image, npm search keywords, version strings, and release-evidence plumbing only; no authorization, protocol, storage, delivery, or runtime behavior change.",
+  "commands": [
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir /tmp/agentnet-build-0.1.1-a; repeated with /tmp/agentnet-build-0.1.1-b",
+      "result": "pinned Hatchling 1.28.0/editables 0.5 backend; both independent builds produced byte-identical sdist and wheel archives"
+    },
+    {
+      "command": "npm test",
+      "result": "971 passed, 7 explicitly infrastructure-gated PostgreSQL skips; installed live-harness probes remain a separate external gate; release manifest verification passed"
+    },
+    {
+      "command": "npm pack --ignore-scripts",
+      "result": "340 files, zero prohibited cache, credential, database, or private-key paths; SHA-256 f4a050f7a6200b11ca90362dc4587758084ea46e6c768fd7efec19c80c2adfad"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-14-v0.1.1/artifacts/agentnet-0.1.1.tar.gz",
+      "sha256": "c8b5a771e22bfc00842fd6ea6410c477a1cfa04346e80764a259afc0a90cbd5d"
+    },
+    {
+      "path": "evidence/local/2026-07-14-v0.1.1/artifacts/agentnet-0.1.1-py3-none-any.whl",
+      "sha256": "9015481fa5d75a47d929e29ccb1e3a79ddd598214e33615a4ed76a2137787e5e"
+    }
+  ]
+}
