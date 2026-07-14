@@ -21,11 +21,26 @@ if (metadata.pi?.extensions?.[0] !== "./src/agentnet/bindings/pi_extension.ts") 
 if (metadata.pi?.image !== "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png") {
   fail("Pi package preview image missing or changed");
 }
-if (!metadata.files?.includes("docs/assets/agentnet-overview.png")) {
-  fail("Pi package preview image is excluded from published files");
+const requiredPublishedFiles = [
+  ".gitignore",
+  "docs/assets/agentnet-overview.png",
+  "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
+  "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
+  "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
+  "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
+  "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+];
+for (const relative of requiredPublishedFiles) {
+  if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
 }
 if (metadata.bin?.agentnet !== "npm/bin/agentnet.mjs") fail("agentnet launcher missing");
 if (!metadata.os?.includes("linux") || metadata.os.length !== 1) fail("Linux-only qualification changed");
+if (metadata.scripts?.["check:packed"] !== "node npm/scripts/check-packed-package.mjs") {
+  fail("full packed-package check is not wired");
+}
+if (!metadata.scripts?.check?.endsWith("&& npm run check:packed")) {
+  fail("prepublication check does not run the full packed-package gate");
+}
 const version = pyproject.match(/^version = "([^"]+)"$/m)?.[1];
 if (!version || version !== metadata.version) fail("npm and Python versions differ");
 if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(metadata.version)) {
@@ -39,6 +54,7 @@ for (const relative of [
   "uv.lock",
   "pyproject.toml",
   "npm/bin/agentnet.mjs",
+  "npm/scripts/check-packed-package.mjs",
   "src/agentnet/bindings/pi_extension.ts",
   "src/agentnet/adapters/claude.py",
   "src/agentnet/adapters/codex.py",
@@ -54,5 +70,9 @@ for (const relative of [
 
 const launcher = path.join(root, "npm/bin/agentnet.mjs");
 if ((lstatSync(launcher).mode & 0o111) === 0) fail("agentnet launcher is not executable");
+const launcherText = readFileSync(launcher, "utf8");
+if (!launcherText.includes('"3.13.13"') || launcherText.includes('">=3.13,<3.15"')) {
+  fail("npm launcher is not pinned to certified CPython 3.13.13");
+}
 
 if (!process.exitCode) console.log("npm package check: PASS");

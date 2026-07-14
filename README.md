@@ -203,7 +203,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation, currently version `0.1.4`. The
+AgentNet is an early public implementation, currently version `0.1.5`. The
 repository contains a broad executable local kernel and adversarial test suite,
 but it does **not** claim production certification.
 

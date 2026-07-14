@@ -1,6 +1,6 @@
 {
   "name": "@misunders2d/agentnet",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -45,7 +45,8 @@
   },
   "scripts": {
     "check:package": "node npm/scripts/check-package.mjs",
-    "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+    "check:packed": "node npm/scripts/check-packed-package.mjs",
+    "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py && npm run check:packed",
     "test": "npm run check",
     "prepack": "npm run check:package",
     "prepublishOnly": "npm run check"
@@ -69,6 +70,7 @@
     "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png"
   },
   "files": [
+    ".gitignore",
     "AGENTS.md",
     "LICENSE",
     "README.md",
@@ -81,6 +83,11 @@
     "deploy/render_and_run.py",
     "docs/**/*.md",
     "docs/assets/agentnet-overview.png",
+    "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
+    "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
+    "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
+    "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
+    "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
     "evidence/**/*.json",
     "evidence/**/*.whl",
     "evidence/**/*.gz",

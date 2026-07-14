@@ -45,7 +45,7 @@ const uvArguments = [
   "--frozen",
   "--no-default-groups",
   "--python",
-  ">=3.13,<3.15",
+  "3.13.13",
 ];
 if (verify) uvArguments.push("--extra", "test");
 uvArguments.push("agentnet", ...userArguments);

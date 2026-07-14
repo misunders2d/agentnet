@@ -35,7 +35,7 @@ http-server = [
 
 [[package]]
 name = "agentnet"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["http-server"] },

@@ -28,7 +28,17 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png",
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
-    assert "docs/assets/agentnet-overview.png" in package["files"]
+    assert {
+        ".gitignore",
+        "docs/assets/agentnet-overview.png",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
+        "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+    } <= set(package["files"])
+    assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
+    assert package["scripts"]["check"].endswith("&& npm run check:packed")
     assert package["os"] == ["linux"]
     assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", package["version"])
     assert package["peerDependenciesMeta"] == {
@@ -43,6 +53,7 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
         "docs/assets/agentnet-overview.png",
         "uv.lock",
         "npm/bin/agentnet.mjs",
+        "npm/scripts/check-packed-package.mjs",
         "src/agentnet/bindings/pi_extension.ts",
         "src/agentnet/adapters/claude.py",
         "src/agentnet/adapters/codex.py",
@@ -78,8 +89,10 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         'createHash("sha256")',
         "realpathSync",
         'shell: false',
+        '"3.13.13"',
     ):
         assert required in launcher
+    assert '">=3.13,<3.15"' not in launcher
     assert "curl" not in launcher
     assert "postinstall" not in json.loads(
         (ROOT / "package.json").read_text(encoding="utf-8")
@@ -87,7 +100,7 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
 
 
 @pytest.mark.skipif(shutil.which("npm") is None, reason="npm is unavailable")
-def test_npm_dry_run_tarball_contains_preview_image() -> None:
+def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
     completed = subprocess.run(
         ["npm", "pack", "--dry-run", "--json", "--ignore-scripts"],
         cwd=ROOT,
@@ -99,7 +112,18 @@ def test_npm_dry_run_tarball_contains_preview_image() -> None:
     packed = json.loads(completed.stdout)
     manifest = next(iter(packed.values())) if isinstance(packed, dict) else packed[0]
     filenames = {entry["path"] for entry in manifest["files"]}
-    assert "docs/assets/agentnet-overview.png" in filenames
+    assert {
+        "docs/assets/agentnet-overview.png",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
+        "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
+        "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+    } <= filenames
+    if (ROOT / ".gitignore").is_file():
+        assert ".gitignore" in filenames
+    else:
+        assert (ROOT / ".npmignore").is_file()
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
