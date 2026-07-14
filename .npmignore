@@ -1,5 +1,7 @@
 .git/
 .github/
+.worktrees/
+package-lock.json
 .venv/
 .pytest_cache/
 .hypothesis/

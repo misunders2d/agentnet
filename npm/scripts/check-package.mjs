@@ -22,6 +22,9 @@ if (metadata.bin?.agentnet !== "npm/bin/agentnet.mjs") fail("agentnet launcher m
 if (!metadata.os?.includes("linux") || metadata.os.length !== 1) fail("Linux-only qualification changed");
 const version = pyproject.match(/^version = "([^"]+)"$/m)?.[1];
 if (!version || version !== metadata.version) fail("npm and Python versions differ");
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(metadata.version)) {
+  fail("package version is not valid semantic versioning");
+}
 
 for (const relative of [
   "LICENSE",

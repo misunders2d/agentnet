@@ -47,6 +47,14 @@
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "pi": {
     "extensions": [
       "./src/agentnet/bindings/pi_extension.ts"
@@ -60,9 +68,9 @@
     "REQUIREMENTS_STATUS.md",
     "deploy/.env.production.example",
     "deploy/Dockerfile",
-    "deploy/*.json",
-    "deploy/*.conf",
-    "deploy/*.py",
+    "deploy/compose.production.json",
+    "deploy/nginx-agent.conf",
+    "deploy/render_and_run.py",
     "docs/**/*.md",
     "evidence/**/*.json",
     "evidence/**/*.whl",

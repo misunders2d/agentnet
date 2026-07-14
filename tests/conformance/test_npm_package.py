@@ -23,6 +23,11 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
     assert package["os"] == ["linux"]
+    assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", package["version"])
+    assert package["peerDependenciesMeta"] == {
+        "@earendil-works/pi-ai": {"optional": True},
+        "@earendil-works/pi-coding-agent": {"optional": True},
+    }
 
 
 def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:

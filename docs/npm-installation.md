@@ -1,6 +1,6 @@
 # npm and Pi installation
 
-AgentNet ships as one multi-harness npm package. After Sergey publishes the public scoped package:
+AgentNet ships as one multi-harness npm package. After the maintainer publishes the public scoped package:
 
 ```bash
 pi install npm:@misunders2d/agentnet
@@ -37,4 +37,4 @@ npm pack --dry-run
 npm test
 ```
 
-Sergey owns npm publication. Maintainers prepare, test, commit, tag, and push the release but do not run `npm publish`.
+The package includes the retained local test and evidence set so `agentnet verify` can run from the installed artifact. Public publication remains owner-controlled; maintainers prepare, test, commit, tag, and push the release candidate.
