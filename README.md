@@ -153,6 +153,8 @@ controls.
 - **Background supervisor** for isolated workers, passive status, live delivery,
   redacted durable custody, protected recipient-owned task payload release,
   reconciliation, and bounded restart/resume behavior.
+- **Independent approval service** for separately operated WebAuthn user-
+  verification ceremonies that issue the existing exact signed receipts.
 
 ## Install
 
@@ -198,6 +200,22 @@ human ceremonies; they are not expected to write missing integrations. Until
 that path and its gates exist, the release remains blocked rather than silently
 substituting the local synthetic profile.
 
+### Independent approval component
+
+Unreleased source includes `agentnet approval`: a separately runnable,
+loopback-bound WebAuthn-UV ceremony service using pinned `webauthn==3.0.0`.
+It has strict owner-only config/key custody, encrypted exact-catalog SQLite
+state, one-time fragment capabilities, bounded no-store browser/API routes,
+exact transaction display, stable signed-receipt retry, expiry/audit, and
+credential revocation. It grants no authority during provisioning and does not
+change core receipt consumers.
+
+This software component is not proof of independence. Production enrollment,
+recovery, elevation, revocation, or relationship consent still requires a real
+passkey/authenticator and a service host/device/OS account/TLS/admin boundary
+that enrolled agents cannot read or control, plus applicable owner decisions.
+See [the implementation guide](docs/implementation-guide.md#independent-webauthn-uv-approval-service).
+
 ## Try the local conformance profile
 
 From a source checkout:
@@ -220,8 +238,8 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package remains
-`0.1.5`. This branch contains unreleased source changes that are not present in
-that immutable package/tag until a separately reviewed future release. The
+`0.1.5`. This branch prepares reviewed candidate `0.1.6`; it is not published
+until Sergey performs the separate npm publication step. The
 repository contains a broad executable local kernel and adversarial test suite,
 but it does **not** claim production certification.
 

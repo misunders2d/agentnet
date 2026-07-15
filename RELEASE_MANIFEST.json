@@ -1,10 +1,10 @@
 {
   "$schema": "https://agentnet.invalid/schemas/release-manifest-v1.json",
   "manifest_version": "1.0",
-  "snapshot_date": "2026-07-14",
+  "snapshot_date": "2026-07-15",
   "release": {
     "name": "agentnet",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "profile": "self_hosted_local_conformance_candidate",
     "status": "BLOCKED",
     "production_ready": false,
@@ -14,15 +14,15 @@
   "authoritative_sources": {
     "concept": {
       "path": "docs/specification.md",
-      "sha256": "c772fdf9653fa66bf3418a631a23568b01128bd4e44d1472d073b3087310c3f4"
+      "sha256": "73c8415622f3b328159e67ce84dfebe79bdee5df15f9923f4e2b9768eb8d1a8d"
     },
     "requirements": {
       "path": "docs/requirements.md",
-      "sha256": "00ec66f0b84f2c55566d777736776393a6092aec3afaa426981af6f106a5ebc4"
+      "sha256": "7f61f1ad1038997279a767864c444e1f79105bc5e3768bc31b1e7ffa1e72f8e3"
     },
     "final_verification": {
       "path": "docs/final-verification.md",
-      "sha256": "c7c67bf41f991f74a66195cb2c077976ae2e15a44cb612d0a97b381230b96f39"
+      "sha256": "dac5fd9cb17f8e303b0baf9abb9dace93585c6643dadbbb09221816821b04529"
     }
   },
   "runtime": {
@@ -32,12 +32,12 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "388f92db68bdb9b8fcddaf4647a3982029ed24030dea12efd410d7e54398d547",
+    "sha256": "ab316774b2df5c9853390930dbf303e4537c02660e150e8cc6f4e296f7f3a308",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "33a0571813f2696b9c2b70dedf1cc8b214fcd11236b1c5b6952838e9e98afe1d"
+      "sha256": "5f937c34306c3f1afc93fb13099903b91cc01906cd8a1ff098d6a38b3b70dfd4"
     },
     "direct_dependencies": {
       "build": {
@@ -86,6 +86,10 @@
         "uvicorn": {
           "version": "0.51.0",
           "extras": []
+        },
+        "webauthn": {
+          "version": "3.0.0",
+          "extras": []
         }
       },
       "test": {
@@ -104,6 +108,7 @@
       "annotated-types": "0.7.0",
       "anyio": "4.14.1",
       "attrs": "26.1.0",
+      "cbor2": "6.1.3",
       "certifi": "2026.6.17",
       "cffi": "2.1.0",
       "charset-normalizer": "3.4.9",
@@ -141,6 +146,7 @@
       "pydantic-settings": "2.14.2",
       "pygments": "2.20.0",
       "pyjwt": "2.13.0",
+      "pyopenssl": "26.3.0",
       "pytest": "9.1.1",
       "python-dotenv": "1.2.2",
       "python-multipart": "0.0.32",
@@ -156,17 +162,18 @@
       "typing-inspection": "0.4.2",
       "tzdata": "2026.3",
       "urllib3": "2.7.0",
-      "uvicorn": "0.51.0"
+      "uvicorn": "0.51.0",
+      "webauthn": "3.0.0"
     }
   },
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "51e1bd6d68bfa44cdedca963dcde5ed0d1b73f97ca0373af571ae419cd484834"
+      "sha256": "f506930db444adfcfd086fc22712313db67436252bb258f99a13fcd65adc934a"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "6e501a3294b59f96facb9abe0c33a958926eacca8c0f2843ea6336192c7d6848"
+      "sha256": "60d7fcfc795e0300c4b099a17777f771971059ba8bc5ca63033c6ac5a9762280"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -186,11 +193,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "bd78fcdf4615bcd672174d2b08583064196630c21063b9ce725708e11beb6957"
+      "sha256": "bd3e9c9838851cbb39b6a22cd4930ce6db0d4b01024eb5cf12031385ce6b623c"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "30bb53c4d01f535f0aa9a7ccded05f2a1044fe3e901e26679e61dd78e2296992"
+      "sha256": "40a0cdf27f4fd3e30af113b2923b8f90c8d71c68b928b2d6739fa5d441aef18d"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -214,13 +221,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "d33b5c28662ff914f433c88dd867b8382fa8a42bab892257e79162dc99e5f6a8"
+      "sha256": "cbec7c2e4d92f22d6f36fc8e85d2524066d192c94d988b16ae3f051bd2551ca2"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "5163628bf1e7b14a6dad03827fd5e51edd10f01ded21293a78be43d4acba1d08"
+    "sha256": "988388cc855e55cdf7b57f731f517976a589a21a6258d66ed8f12019e81c7267"
   },
   "protocols": {
     "a2a": {
@@ -379,7 +386,7 @@
     },
     "supervisor_harness_lifecycle": {
       "status": "BUILD_OWN_INTEGRATION",
-      "pin": "agentnet-0.1.5",
+      "pin": "agentnet-0.1.6",
       "boundary": "Exact human plus harness binding and foreground isolation remain owned."
     },
     "a2a_gateway": {
@@ -423,9 +430,9 @@
       "boundary": "Workload identity cannot impersonate a human."
     },
     "human_auth_approval": {
-      "status": "OIDC_APPROVAL_COMPOSED_EXTERNAL_OWNER_BLOCKED",
-      "pin": null,
-      "boundary": "No custom OIDC, WebAuthn, or same-boundary approval substitute."
+      "status": "OIDC_WEBAUTHN_COMPONENT_BUILT_EXTERNAL_OWNER_BLOCKED",
+      "pin": "webauthn==3.0.0",
+      "boundary": "Exact principal, purpose, transaction, receipt, audit, and independently administered deployment remain corporate; local component evidence does not prove independence."
     },
     "cedar": {
       "status": "OPTIONAL_TARGET_RUNTIME_NOT_ENABLED",

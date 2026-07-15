@@ -337,6 +337,48 @@ blanket private-network switch are not supported. These mechanics close the
 local DNS-rebinding/SSRF connection gap; they do not satisfy the real workforce
 IdP, independent WebAuthn/OOB, target-device custody, or owner-decision tiers.
 
+## Independent WebAuthn-UV approval service
+
+`agentnet approval` is a separately runnable component from the same AgentNet
+package, not authority inside an enrolled agent. Its configuration, SQLite
+database, AES-256-GCM record key, approval receipt signer keys, HTTPS origin,
+WebAuthn RP ID, OS account, and administration must be outside every enrolling
+or enrolled harness's control. The service binds only an explicit loopback IP;
+an independently administered TLS proxy exposes the exact configured HTTPS
+origin. Running it beside an agent under the same readable/control boundary is
+local mechanism testing only and cannot satisfy independence.
+
+Host-admin CLI creates one-time registration or exact-transaction requests.
+Capabilities are 32 random bytes with an `agcap1.` prefix; only SHA-256 hashes
+are stored, and browser URLs carry the capability in the fragment so it is not
+sent in the initial HTTP request. Browser JavaScript immediately removes the
+fragment, fetches bounded strict-JSON options, displays exact canonical
+transaction text, purpose, domain, digest, and expiry, then requires an explicit
+button action and WebAuthn user verification.
+
+Duo Labs `webauthn==3.0.0` verifies challenge, exact origin, exact RP ID,
+credential identity, signature, user verification, and sign-count progression.
+AgentNet retains purpose, domain, approver, transaction, receipt, audit, and
+lifecycle semantics. Challenge and canonical transaction custody is encrypted;
+unknown/modified SQLite catalog, non-owner-only files, stale/replayed
+capabilities, revoked credentials, expired challenges/requests/receipts, and
+missing configured purpose all fail closed. One receipt and audit record commit
+before response; response-loss retries return the exact encrypted stored receipt
+without re-signing or extending expiry.
+
+Core services remain receipt-only consumers through
+`IndependentApprovalVerifier`. No direct network trust from the approval
+service is introduced. Six purposes are mandatory in configuration:
+`identity.enrollment.approve`,
+`authorization.entitlement.bootstrap.approve`,
+`authorization.elevation.approve`,
+`identity.credential.recover.approve`,
+`identity.harness.revoke.approve`, and
+`organization.relationship.accept`. Optional purposes require explicit
+configuration. Local SQLite and mocked ceremony vectors provide H evidence
+only; real passkeys, independent host/device custody, TLS, key rotation and
+recovery drills, and PD-002/004/005/009 remain external/owner gates.
+
 ## Component seams
 
 Owned semantics sit in strict models and protocols. Implementations are

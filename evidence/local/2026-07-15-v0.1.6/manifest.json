@@ -1,0 +1,42 @@
+{
+  "run_id": "2026-07-15-v0.1.6",
+  "evaluated_at": "2026-07-15T15:15:00+00:00",
+  "scope": "p1_through_p5_local_conformance_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "988388cc855e55cdf7b57f731f517976a589a21a6258d66ed8f12019e81c7267",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-14-v0.1.5/manifest.json",
+  "change_boundary": "Validated-address OIDC transport, ordinary server-agent activation, authenticated mailbox custody acknowledgement, bounded artifact client/CLI, protected recipient-owned TaskGrant payload release, and a separately runnable WebAuthn-UV approval component. Existing production, independent-host, real-authenticator, owner, harness, A2A, HA, scanner, and cutover gates remain non-passed.",
+  "commands": [
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv build --offline --no-build-isolation runs",
+      "result": "byte-identical 0.1.6 sdist and wheel archives"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1049 passed; 7 expected PostgreSQL skips before candidate manifest refresh"
+    },
+    {
+      "command": "npm run check",
+      "result": "source package gate 999 passed; 7 expected PostgreSQL skips; release manifest verification PASS; clean packed npm tarball 999 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "npm run check:packed",
+      "result": "clean installed npm tarball from unrelated cwd; CPython 3.13.13; 999 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "uv run --python 3.13.13 python scripts/verify_release.py",
+      "result": "PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-15-v0.1.6/artifacts/agentnet-0.1.6.tar.gz",
+      "sha256": "947d7878a947ea57c47486c57c24b0b578f1ef77fea0f8463154864b23a48612"
+    },
+    {
+      "path": "evidence/local/2026-07-15-v0.1.6/artifacts/agentnet-0.1.6-py3-none-any.whl",
+      "sha256": "e0a37d9fd0c09795c5b260cb7091f8692d5b53725f35d6a1916cbe8b1b7c784b"
+    }
+  ]
+}

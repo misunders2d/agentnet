@@ -1,7 +1,7 @@
 # Release Manifest
 
-Snapshot: 2026-07-14
-Candidate: `agentnet 0.1.5`
+Snapshot: 2026-07-15
+Candidate: `agentnet 0.1.6`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -23,16 +23,19 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `388f92db68bdb9b8fcddaf4647a3982029ed24030dea12efd410d7e54398d547` |
-| `pyproject.toml` | SHA-256 `33a0571813f2696b9c2b70dedf1cc8b214fcd11236b1c5b6952838e9e98afe1d` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `ab316774b2df5c9853390930dbf303e4537c02660e150e8cc6f4e296f7f3a308` |
+| `pyproject.toml` | SHA-256 `5f937c34306c3f1afc93fb13099903b91cc01906cd8a1ff098d6a38b3b70dfd4` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
 the project with `uv sync --frozen --no-build-isolation`. Runtime, test, and
 build direct dependencies are exact-pinned and checked against the complete
 locked name/version resolution.
-`jsonschema==4.26.0` is now a direct runtime pin for validating the immutable,
-self-contained response schema bound to each typed response obligation.
+`jsonschema==4.26.0` remains the direct runtime pin for immutable response
+schemas. `webauthn==3.0.0` is the exact maintained server-side registration and
+assertion verification mechanism for the separately operated approval service;
+AgentNet still owns identity, purpose, transaction, receipt, audit, and
+lifecycle semantics.
 
 ## Protocol pins
 
@@ -93,7 +96,7 @@ These status strings are exact projections of the machine manifest.
 | `matrix_components` | `REJECT_AS_AUTHORITY_COMPONENT` |
 | `mls` | `C3_DISABLED_EXTERNAL_MLS_OWNER_BLOCKED` |
 | `spiffe_spire` | `REGISTERED_WORKLOAD_BOUNDARY_BUILT_EXTERNAL_SPIFFE_OPEN` |
-| `human_auth_approval` | `OIDC_APPROVAL_COMPOSED_EXTERNAL_OWNER_BLOCKED` |
+| `human_auth_approval` | `OIDC_WEBAUTHN_COMPONENT_BUILT_EXTERNAL_OWNER_BLOCKED` |
 | `cedar` | `OPTIONAL_TARGET_RUNTIME_NOT_ENABLED` |
 | `postgresql` | `MULTI_HOST_PRIMARY_RECONNECT_FENCED_LOCAL_HA_EXTERNAL` |
 | `artifact_store` | `PERSISTENT_BYTE_QUOTA_FILESYSTEM_POSTGRES_MANIFEST_RESTORE_EXTERNAL` |

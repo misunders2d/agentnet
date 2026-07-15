@@ -98,6 +98,110 @@ vendor glue. A missing product component is a named blocker, not an operator
 integration assignment or justification to weaken identity, authority,
 durability, artifact, task, room, federation, or non-interruption semantics.
 
+## Independent WebAuthn-UV approval service
+
+AgentNet now includes the separately runnable ceremony component under
+`agentnet approval`. This closes the missing software-component gap; it does not
+prove deployment independence. Put its config, database, AES-GCM record key,
+receipt signer keys, OS account, TLS termination, passkeys, backups, and
+administration outside every enrolling or enrolled harness's readable or
+controllable boundary. Same-user/same-host operation is suitable only for local
+mechanism testing and must report `independent_boundary_proven: false`.
+
+On the independent approval host, create an owner-only approver specification:
+
+```json
+{
+  "approvers": [
+    {
+      "principal_id": "security-owner",
+      "authority_kind": "human",
+      "domain_id": "corp.example",
+      "allowed_purposes": [
+        "authorization.entitlement.bootstrap.approve",
+        "authorization.elevation.approve",
+        "identity.credential.recover.approve",
+        "identity.enrollment.approve",
+        "identity.harness.revoke.approve",
+        "organization.relationship.accept"
+      ]
+    }
+  ]
+}
+```
+
+Use mode `0600` for that file and an owner-only parent. Provisioning is
+non-overwriting, creates separate signer/record keys and an exact-catalog
+SQLite database, registers no passkey, and grants no authority:
+
+```bash
+agentnet approval provision \
+  --config /etc/agentnet-approval/config.json \
+  --data-dir /var/lib/agentnet-approval \
+  --public-origin https://approval.corp.example \
+  --rp-id approval.corp.example \
+  --verifier-id approval.corp.example \
+  --approvers /root/agentnet-approval-approvers.json
+agentnet approval status --config /etc/agentnet-approval/config.json
+```
+
+The provision result prints only core trust material: verifier ID, approver
+identity, public receipt-signing key, allowed purposes, and signer key ID.
+Install that public trust in each core's existing
+`IndependentApprovalVerifier`; never copy approval private keys, record key, DB,
+or browser capability into an agent host.
+
+`serve` deliberately binds only an explicit loopback IP. Place an independently
+administered HTTPS reverse proxy in front without changing the exact configured
+origin/RP ID; keep access logs free of bodies. The one-time capability is in the
+URL fragment and is removed by browser JavaScript before API calls:
+
+```bash
+agentnet approval serve \
+  --config /etc/agentnet-approval/config.json \
+  --host 127.0.0.1 --port 8090
+agentnet approval register-begin \
+  --config /etc/agentnet-approval/config.json \
+  --approver security-owner
+```
+
+Open the registration URL on the independently controlled browser/device and
+register a phishing-resistant authenticator with user verification. Then a
+host administrator creates one request from an owner-only canonical JSON
+transaction file:
+
+```bash
+agentnet approval request-create \
+  --config /etc/agentnet-approval/config.json \
+  --approver security-owner \
+  --purpose identity.enrollment.approve \
+  --transaction /root/exact-enrollment-transaction.json
+```
+
+The browser displays exact canonical JSON, purpose, domain, SHA-256 digest, and
+expiry before the explicit approval button invokes WebAuthn UV. Successful
+approval returns one existing-format signed receipt. Response-loss retry with
+the same capability returns those exact stored bytes while current and while
+the credential remains active; it never re-signs or extends expiry. Transfer
+only that receipt to the matching core operation.
+
+Revoke a lost authenticator from the independent host:
+
+```bash
+agentnet approval credential-revoke \
+  --config /etc/agentnet-approval/config.json \
+  --approver security-owner \
+  --credential-id '<base64url credential id>' \
+  --reason 'lost authenticator'
+```
+
+When the last active credential is revoked, pending requests expire. Missing
+service, TLS, passkey, signer, record key, schema integrity, configured purpose,
+current challenge, or qualifying independence blocks approval. SQLite reports
+`single_host_local_only`; production claims still require real authenticator,
+independent-host/device/TLS, key rotation/recovery, backup/restore, operator,
+and PD-002/004/005/009 evidence.
+
 ## Ordinary server-agent activation
 
 `agentnet network create` provisions the namespace, PostgreSQL schema, and

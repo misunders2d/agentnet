@@ -33,15 +33,15 @@ MANIFEST_PATH = ROOT / "RELEASE_MANIFEST.json"
 EXPECTED_SOURCES = {
     "concept": (
         "docs/specification.md",
-        "c772fdf9653fa66bf3418a631a23568b01128bd4e44d1472d073b3087310c3f4",
+        "73c8415622f3b328159e67ce84dfebe79bdee5df15f9923f4e2b9768eb8d1a8d",
     ),
     "requirements": (
         "docs/requirements.md",
-        "00ec66f0b84f2c55566d777736776393a6092aec3afaa426981af6f106a5ebc4",
+        "7f61f1ad1038997279a767864c444e1f79105bc5e3768bc31b1e7ffa1e72f8e3",
     ),
     "final_verification": (
         "docs/final-verification.md",
-        "c7c67bf41f991f74a66195cb2c077976ae2e15a44cb612d0a97b381230b96f39",
+        "dac5fd9cb17f8e303b0baf9abb9dace93585c6643dadbbb09221816821b04529",
     ),
 }
 
@@ -100,7 +100,7 @@ EXPECTED_COMPONENT_STATUSES = {
     "matrix_components": "REJECT_AS_AUTHORITY_COMPONENT",
     "mls": "C3_DISABLED_EXTERNAL_MLS_OWNER_BLOCKED",
     "spiffe_spire": "REGISTERED_WORKLOAD_BOUNDARY_BUILT_EXTERNAL_SPIFFE_OPEN",
-    "human_auth_approval": "OIDC_APPROVAL_COMPOSED_EXTERNAL_OWNER_BLOCKED",
+    "human_auth_approval": "OIDC_WEBAUTHN_COMPONENT_BUILT_EXTERNAL_OWNER_BLOCKED",
     "cedar": "OPTIONAL_TARGET_RUNTIME_NOT_ENABLED",
     "postgresql": "MULTI_HOST_PRIMARY_RECONNECT_FENCED_LOCAL_HA_EXTERNAL",
     "artifact_store": "PERSISTENT_BYTE_QUOTA_FILESYSTEM_POSTGRES_MANIFEST_RESTORE_EXTERNAL",
@@ -287,7 +287,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
 
 
 def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
-    base = "evidence/local/2026-07-14-v0.1.5/artifacts"
+    base = "evidence/local/2026-07-15-v0.1.6/artifacts"
     ignore_path = root / base / ".gitignore"
     retention_path = root / base / "RETENTION.md"
     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
@@ -301,8 +301,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
     if ignore_path.is_file() and ignore_path.read_text(encoding="utf-8") != expected_ignore:
         failures.append("final package artifact ignore policy does not retain its archives")
     expected_paths = {
-        f"{base}/agentnet-0.1.5.tar.gz",
-        f"{base}/agentnet-0.1.5-py3-none-any.whl",
+        f"{base}/agentnet-0.1.6.tar.gz",
+        f"{base}/agentnet-0.1.6-py3-none-any.whl",
     }
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         failures.append("final package evidence must contain exactly the sdist and wheel")
@@ -355,8 +355,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
             names = set(listed_names)
             if len(names) != len(listed_names):
                 failures.append("wheel contains duplicate archive member names")
-            dist_info = "agentnet-0.1.5.dist-info"
-            shared = "agentnet-0.1.5.data/data/share/agentnet"
+            dist_info = "agentnet-0.1.6.dist-info"
+            shared = "agentnet-0.1.6.data/data/share/agentnet"
             expected_payloads = dict(source_files)
             expected_payloads.update(
                 {
@@ -411,7 +411,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
                 wheel_metadata = archive.read(metadata_name)
                 if (
                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
-                    or b"\nVersion: 0.1.5\n" not in b"\n" + wheel_metadata
+                    or b"\nVersion: 0.1.6\n" not in b"\n" + wheel_metadata
                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
                 ):
                     failures.append("wheel core metadata differs from the release identity/runtime")
@@ -438,7 +438,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
         failures.append(f"final wheel is unreadable or malformed: {exc}")
 
     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
-    prefix = "agentnet-0.1.5/"
+    prefix = "agentnet-0.1.6/"
     try:
         with tarfile.open(sdist_path, mode="r:gz") as archive:
             all_members = archive.getmembers()
@@ -913,12 +913,12 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     ):
         failures.append("final clean-install status does not preserve the local blocked-release boundary")
     package_evidence = _load_json(
-        root / "evidence/local/2026-07-14-v0.1.5/manifest.json",
+        root / "evidence/local/2026-07-15-v0.1.6/manifest.json",
         failures,
-        "0.1.5 package evidence manifest",
+        "0.1.6 package evidence manifest",
     )
     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
-        failures.append("0.1.5 package evidence is not bound to the current source tree")
+        failures.append("0.1.6 package evidence is not bound to the current source tree")
     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
 

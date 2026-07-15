@@ -369,18 +369,29 @@ proxy environment; token/JWKS origin substitution; empty/duplicate/noncanonical
 pins; connection fallback constrained to the validated snapshot; timeout/body
 bounds; JWK rotation/pin mismatch; and public-default compatibility.
 
-**WebAuthn candidate:** exact maintained library and independently deployed
-service pin remain unresolved. The comparator is no approval, not a local fake.
-Candidate tests must cover registration ownership, RP ID and origin, UV and
-fresh challenge, exact canonical transaction display/digest, every mounted
-purpose, wrong domain/harness/purpose/digest, replay, expiry, self-approval
-boundary, signer/key rotation and revocation, recovery, audit intent, and
-service outage. No custom WebAuthn cryptography is permitted.
+**WebAuthn candidate:** accept Duo Labs `webauthn==3.0.0` as the pinned
+server-side ceremony mechanism (BSD-3-Clause; wheel SHA-256
+`b5d0c02b6efa16be683f8a75abd2073f5e59a15f42623cc22c31f27600259e64`;
+sdist SHA-256
+`324e54e1f6eeef486623b5d90df6fcd74ae04ff0c137d2b818a8f709b6ca3ab8`).
+Reject Yubico `fido2==2.2.1` for this server-side MVP: its CTAP/client/device
+surface and added operational/licensing complexity do not improve the required
+verification boundary. AgentNet owns registration ownership, exact purpose and
+canonical transaction, approver policy, receipt/audit semantics, replay,
+expiry, revocation, and recovery. No WebAuthn cryptography is implemented here.
 
-**Current decision:** OIDC transport repair and explicit private policy are
-unblocked product engineering. WebAuthn remains deferred until an immutable
-maintained candidate and independent topology are acquired; enrollment stays
-blocked rather than using a same-boundary substitute.
+**Current decision:** local H-tier component accepted. The standalone
+`agentnet approval` process uses separate config, signer keys, record key, and
+exact-catalog SQLite custody; serves UV-required registration/assertion behind
+an independent HTTPS proxy; transfers capabilities only in URL fragments;
+displays exact transaction bytes and digest; and emits the existing strict
+signed receipt only after maintained-library verification. Hermetic tests cover
+schema/config tamper, body bounds, duplicate JSON keys, RP/origin/UV arguments,
+challenge clearing, one-receipt response-loss retry, expiry audit, rejection,
+and credential revocation. This does not prove an independent topology, real
+passkey, TLS termination, recovery ceremony, or owner policy. Enrollment remains
+blocked whenever the service shares enrolled-agent control or required L/E/O
+evidence is absent.
 
 ## Cross-cutting threat-model suites
 

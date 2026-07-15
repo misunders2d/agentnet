@@ -24,13 +24,58 @@ expiry, effect deadline, retention deletion, and legal hold are separate.
 | `PolicyDecisionPoint` | local reference evaluator; Cedar adapter fail-closed | one positive authority and revision |
 | `MailboxCustodian` | SQLite local; PostgreSQL target; mesh future | actor-owned custody receipts and exact digest |
 | `ArtifactStore` | encrypted filesystem local; provider-neutral production | manifest/quarantine/authorization stays authoritative |
-| `ApprovalVerifier` | signed lab verifier; independent provider required | exact transaction and independent current human/guest-owner consent |
+| `ApprovalVerifier` | strict receipt consumer plus standalone `webauthn==3.0.0` UV ceremony issuer; real independent deployment still required | exact purpose/domain/transaction and current human/guest-owner consent; ceremony mechanism never owns corporate authority |
 | `OIDCHTTPTransport` | direct TLS connection to one provider-validated address snapshot | URL origin, DNS/address policy, TLS hostname/SNI, Host authority, response bounds, and no-proxy/no-redirect behavior remain exact and fail closed |
 | `WorkloadIdentityProvider` | verified SPIFFE/mTLS context seam | workload never becomes a human |
 | `WorkflowEngine` | explicit transactional effects; optional Temporal-style | workflow success never fabricates effect evidence |
 | `MLSProvider` | unavailable until maintained stack passes | room policy/membership and visible key holders remain explicit |
 | MCP/direct IPC | official MCP or private Unix framing | arguments cannot establish caller identity |
 | A2A SDK routes | official SDK 1.1.0 | public identity remains external-low-trust |
+
+## Independent approval configuration, storage, and HTTP contract
+
+`ApprovalServiceConfig` is strict (`extra="forbid"`, schema `1.0`) and binds
+one canonical HTTPS `public_origin`, an exactly matching `rp_id`, `verifier_id`,
+bounded TTL/body sizes, absolute owner-only storage/key paths, and one or more
+unique approvers. Configured purposes must collectively cover all six mandatory
+approval consumers, and every approver must cover enrollment. Signer private
+keys remain file references; load verifies each key's configured thumbprint.
+
+The independent SQLite catalog is version 1 and is checked on every open against
+both exact `sqlite_master` objects and a stored catalog SHA-256. It contains:
+
+- `approval_webauthn_credentials`: exact approver/domain/user handle, public key,
+  sign count, device/back-up metadata, and active/revoked lifecycle;
+- `approval_registration_sessions`: hashed one-time capability, encrypted
+  challenge, bounded attempts, expiry, and consumption;
+- `approval_requests`: approver/domain/purpose, encrypted canonical transaction,
+  exact digest, encrypted challenge, state, active fingerprint, attempts, and
+  expiry;
+- `approval_issued_receipts`: one row per request, exact credential,
+  authentication/issuance/expiry times, encrypted receipt, and receipt digest;
+- `approval_audit`: content-minimized ordered lifecycle outcomes.
+
+SQLite uses WAL, `synchronous=FULL`, foreign keys, bounded busy timeout, and
+`BEGIN IMMEDIATE`; it claims `single_host_local_only`, never HA durability.
+`LocalEnvelopeCipher` protects challenges, transactions, and receipts with
+purpose-specific AAD. Expiry cleanup commits before stale-request denial so
+expiration and audit evidence survive the failed request.
+
+Browser/API routes are isolated from core routes:
+
+| Route | Input/effect |
+|---|---|
+| `GET /approval` / `GET /approval.js` | no-store CSP-constrained UI; capability read from fragment then removed |
+| `POST /v1/approval/registration/options` | one bounded token; rotates encrypted challenge and returns UV-required creation options |
+| `POST /v1/approval/registration/verify` | exact token and WebAuthn credential; stores verified credential or commits generic denial |
+| `POST /v1/approval/requests/options` | exact token; returns exact transaction display plus UV-required assertion options |
+| `POST /v1/approval/requests/verify` | literal `approved=true` plus assertion; commits one existing-format signed receipt before returning it |
+| `POST /v1/approval/requests/reject` | exact token; terminal human rejection, no receipt |
+
+All POST bodies are bounded while streaming regardless of `Content-Length`, use
+duplicate-key/non-finite rejecting JSON and strict schemas, and expose only a
+generic `request_denied` error. The service binds loopback only; TLS exposure
+belongs to the separately administered reverse proxy.
 
 ## OIDC endpoint configuration contract
 

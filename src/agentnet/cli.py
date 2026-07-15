@@ -24,6 +24,7 @@ from google.protobuf.json_format import MessageToDict
 from starlette.applications import Starlette
 
 from agentnet import __version__
+from agentnet.approval.cli_commands import configure_approval_parser
 from agentnet.audit.service import AuditService
 from agentnet.authorization import (
     AUTHORITY_COMMAND_PURPOSE,
@@ -2831,7 +2832,7 @@ def command_a2a_demo(_args: argparse.Namespace) -> int:
         template = AgentCard(
             name="Synthetic public proposal agent",
             description="Local A2A v1 conformance route",
-            version="0.1.5",
+            version="0.1.6",
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text/plain"],
             default_output_modes=["text/plain"],
@@ -2898,6 +2899,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentnet", description="AgentNet")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
+    configure_approval_parser(commands)
 
     network = commands.add_parser("network", help="create and operate one AgentNet namespace")
     network_commands = network.add_subparsers(dest="network_command", required=True)

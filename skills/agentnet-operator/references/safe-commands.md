@@ -145,6 +145,38 @@ schema/keys without inventing identity or authority:
 agentnet bootstrap-server-agent --config agentnet.json
 ```
 
+On a separately administered approval host, use the shipped WebAuthn component;
+do not copy its private config, signer keys, record key, database, or capability
+URLs to enrolled-agent storage:
+
+```bash
+agentnet approval provision \
+  --config /etc/agentnet-approval/config.json \
+  --data-dir /var/lib/agentnet-approval \
+  --public-origin https://approval.corp.example \
+  --rp-id approval.corp.example \
+  --verifier-id approval.corp.example \
+  --approvers /root/agentnet-approval-approvers.json
+agentnet approval status --config /etc/agentnet-approval/config.json
+agentnet approval serve \
+  --config /etc/agentnet-approval/config.json \
+  --host 127.0.0.1 --port 8090
+agentnet approval register-begin \
+  --config /etc/agentnet-approval/config.json \
+  --approver security-owner
+agentnet approval request-create \
+  --config /etc/agentnet-approval/config.json \
+  --approver security-owner \
+  --purpose identity.enrollment.approve \
+  --transaction /root/exact-enrollment-transaction.json
+```
+
+`serve` requires an independently administered HTTPS reverse proxy at the exact
+configured origin/RP ID. Provisioning grants no authority and registers no
+passkey. `status` deliberately reports `independent_boundary_proven: false`;
+real passkey, independent host/device/OS/TLS/admin custody, recovery, and owner
+evidence must be proven separately.
+
 Then complete exact OIDC/key-possession/independent approval enrollment. While
 the server process is offline, bind only that exact identity:
 

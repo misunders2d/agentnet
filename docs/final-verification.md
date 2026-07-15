@@ -39,6 +39,20 @@ On 2026-07-13, implementation/evidence annotations were added for the bilateral 
 
 On 2026-07-15, a later unreleased implementation annotation added the separate recipient-owned protected release path: one exact current `task.process` grant use at authorization, redacted durable local custody, current intent/conflict/epoch/lifetime and immutable payload/provenance checks, audit plus one disclosure receipt before bytes, response-loss retry without another use, and mandatory release-receipt linkage before result upload. Generic reads remain nondisclosing and tool/effect authority remains false. Migration 1 stays byte-identical; contiguous migration 2 adds only the disclosure-receipt relation, with exact SQLite v1→v2 atomic-upgrade/rollback evidence. This work postdates the sealed audit and does not promote any external or owner gate.
 
+The same unreleased branch now includes the smallest separately runnable
+WebAuthn-UV approval component. It reuses pinned Duo Labs `webauthn==3.0.0`
+for ceremony verification while AgentNet retains exact purpose, approver,
+domain, canonical transaction, signed receipt, audit, expiry, replay, and
+credential-lifecycle semantics. Strict owner-only config/key custody, encrypted
+exact-catalog SQLite state, fragment-only one-time capabilities, bounded
+no-store browser/API routes, exact transaction display, committed expiry/denial
+audit, stable one-receipt retry, and credential revocation have local hermetic
+evidence. Existing core consumers remain receipt-only. This closes a software
+component gap, not the independence gate: no real authenticator, independently
+administered host/device/OS/TLS boundary, rotation/recovery drill, or PD-002/004/
+005/009 evidence is claimed. ID-002/009 and AUTH-008/010 retain their
+owner/external status.
+
 ## Mechanical verification
 
 | Check | Result |

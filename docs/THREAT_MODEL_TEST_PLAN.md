@@ -205,14 +205,32 @@ Run one typed operation corpus through supervisor API, MCP bindings, and Pi dire
 **Requirements:** ID-001 through ID-009, AUTH-001, AUTH-002, AUTH-007, SEC-002, SEC-005, SEC-006  
 **Required evidence:** `H`, `L`, real ceremony `E`, and policy `O`
 
-Planned tests:
+Current hermetic tests:
 
-- `tests/unit/test_enrollment_transcript.py`
-- `tests/security/test_oidc_webauthn_dpop_attacks.py`
-- `tests/integration/test_credential_lifecycle.py`
-- `tests/fuzz/test_jose_enrollment_fuzz.py`
+- `tests/identity/test_enrollment.py`
+- `tests/identity/test_oidc_enrollment.py`
+- `tests/approval/test_webauthn_service.py`
+- `tests/approval/test_approval_http.py`
+- `tests/approval/test_approval_cli.py`
+- `tests/identity/test_credential_rotation.py`
+- `tests/identity/test_recovery.py`
+- `tests/identity/test_revocation.py`
 
-Test exact transaction hashing, OIDC issuer/audience/state/nonce/PKCE, WebAuthn origin/RP/user verification, proof of possession, DPoP method/URI/audience/domain/jti, key epochs, refresh rotation, recovery, device loss, and offline revocation. Attack mix-up, code/OOB substitution, reused challenges, copied identifiers, stolen tokens, sibling/cross-domain replay, response loss, and harness automation of approval. Mocks test logic only; real workforce IdP, authenticator, independent channel, platform custody, and owner-approved ceremony are required.
+Remaining fuzz/external plans include JOSE/WebAuthn malformed-object corpora,
+real browser/authenticator ceremonies, independent-host compromise attempts,
+platform key custody, signer/authenticator rotation and recovery, and
+cross-device response-loss drills.
+
+Test exact transaction hashing, OIDC issuer/audience/state/nonce/PKCE, WebAuthn
+origin/RP/user verification, proof of possession, DPoP
+method/URI/audience/domain/jti, key epochs, refresh rotation, recovery, device
+loss, and offline revocation. Attack mix-up, code/OOB substitution, reused
+challenges, duplicate JSON, oversized streaming bodies, copied identifiers,
+stolen capabilities/tokens, sibling/cross-domain replay, response loss,
+schema/key tamper, stale sign count, revoked credentials, and harness automation
+of approval. Hermetic WebAuthn seams prove logic only; real workforce IdP,
+authenticator, independent channel/host/device/OS account/TLS administration,
+platform custody, and owner-approved ceremony remain required.
 
 ### Gate 7 — Local IPC and signing oracle
 
