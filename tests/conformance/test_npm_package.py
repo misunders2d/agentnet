@@ -79,7 +79,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     assert "local_bindings_required=true" in skill
     assert "agentnet-supervisor.json" in skill
     assert "agentnet.json" in skill
-    assert "docs/requirements.md" in skill
+    assert "../../docs/requirements.md" in skill
+    assert "../../docs/specification.md" in skill
     assert "blocked: product component not yet shipped" in skill
     assert "operator must not have to write integration code" in skill
 
@@ -96,7 +97,17 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "agentnet supervisor-run",
         "agentnet network create",
         "agentnet bootstrap-server-agent",
-        "private, loopback, link-local, or otherwise non-global addresses",
+        "agentnet approval provision",
+        "agentnet join begin",
+        "--harness pi",
+        "--name server-agent-1",
+        "--state .agentnet/join-pending.json",
+        "agentnet join complete",
+        "agentnet server-agent activate",
+        "agentnet message acknowledge",
+        "agentnet artifact upload",
+        "OIDC discovery is public-only by default",
+        "exact JWK thumbprints",
         "approval service on the same security boundary",
     ):
         assert required in commands

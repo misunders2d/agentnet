@@ -114,7 +114,7 @@ Only after enrollment and explicit approval may an operator run the supervisor w
 
 This is a fail-closed product preflight—not a manual integration recipe. AgentNet must ship the deployment manifests, ceremony service, and adapters required by the supported profile. If the installed release lacks them, report `blocked: product component not yet shipped`; do not make the operator build glue code or assemble an undocumented vendor stack.
 
-Current OIDC discovery rejects endpoints resolving to private, loopback, link-local, or otherwise non-global addresses. Do not suggest hosts-file tricks, DNS rebinding, proxy mirrors, or weakened SSRF checks. A self-hosted private OIDC provider requires an explicit owner-pinned private-provider product feature with HTTPS/origin/address pinning and adversarial tests.
+OIDC discovery is public-only by default. A private/non-global provider is allowed only when configuration pins its exact HTTPS origin, exact JWK thumbprints, and explicit canonical private CIDRs and/or endpoint addresses; the direct TLS transport may connect only to the validated address tuple. Loopback, link-local, multicast, reserved, documentation, benchmark, transition/softwire, and IPv4-mapped addresses remain forbidden. Do not suggest hosts-file tricks, DNS rebinding, proxy mirrors, or weakened SSRF checks.
 
 Before creating server state, verify that the operator has approved values for:
 
@@ -178,12 +178,17 @@ real passkey, independent host/device/OS/TLS/admin custody, recovery, and owner
 evidence must be proven separately.
 
 Then complete exact OIDC/key-possession/independent approval enrollment. While
-the server process is offline, bind only that exact identity:
+the server process is offline, bind only that exact identity. Replace `pi` and
+`server-agent-1` with the exact supported harness type and approved agent name:
 
 ```bash
-agentnet join begin --server https://agentnet.example
+agentnet join begin \
+  --server https://agentnet.example \
+  --harness pi \
+  --name server-agent-1 \
+  --state .agentnet/join-pending.json
 agentnet join complete \
-  --state .agentnet/join.json \
+  --state .agentnet/join-pending.json \
   --challenge .agentnet/challenge.json \
   --approval .agentnet/approval.json \
   --identity .agentnet/server-agent-identity.json

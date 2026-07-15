@@ -99,6 +99,6 @@ Existing A2A traffic may coordinate rollout, but A2A receipts do not prove Agent
 
 ## Production claims
 
-Package installation never proves production certification. Check the installed release's `docs/GATE_EVIDENCE.md`, `REQUIREMENTS_STATUS.md`, and retained evidence. Do not claim production readiness without the applicable external and owner gates, including identity authority, key custody, PostgreSQL recovery topology, artifact safety, exact harness isolation, audit roots, updates/provenance, and owner policy decisions.
+Package installation never proves production certification. Check the installed release's [`../../../docs/GATE_EVIDENCE.md`](../../../docs/GATE_EVIDENCE.md), [`../../../REQUIREMENTS_STATUS.md`](../../../REQUIREMENTS_STATUS.md), and retained evidence. Do not claim production readiness without the applicable external and owner gates, including identity authority, key custody, PostgreSQL recovery topology, artifact safety, exact harness isolation, audit roots, updates/provenance, and owner policy decisions.
 
 When evidence is missing, say **blocked**. Never downgrade the requirement to make a command succeed.

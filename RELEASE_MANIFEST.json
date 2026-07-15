@@ -227,7 +227,7 @@
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "988388cc855e55cdf7b57f731f517976a589a21a6258d66ed8f12019e81c7267"
+    "sha256": "752e5db1dfaae0adc0cf061ca0867b4c9717d5a29ef6886cdb3a48b5f2767b0a"
   },
   "protocols": {
     "a2a": {

@@ -1,12 +1,12 @@
 {
   "run_id": "2026-07-15-v0.1.6",
-  "evaluated_at": "2026-07-15T15:15:00+00:00",
+  "evaluated_at": "2026-07-15T15:45:00+00:00",
   "scope": "p1_through_p5_local_conformance_candidate",
   "release_certified": false,
-  "release_source_tree_sha256": "988388cc855e55cdf7b57f731f517976a589a21a6258d66ed8f12019e81c7267",
+  "release_source_tree_sha256": "752e5db1dfaae0adc0cf061ca0867b4c9717d5a29ef6886cdb3a48b5f2767b0a",
   "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-14-v0.1.5/manifest.json",
-  "change_boundary": "Validated-address OIDC transport, ordinary server-agent activation, authenticated mailbox custody acknowledgement, bounded artifact client/CLI, protected recipient-owned TaskGrant payload release, and a separately runnable WebAuthn-UV approval component. Existing production, independent-host, real-authenticator, owner, harness, A2A, HA, scanner, and cutover gates remain non-passed.",
+  "change_boundary": "Validated-address OIDC transport, ordinary server-agent activation, authenticated mailbox custody acknowledgement, bounded artifact client/CLI, protected recipient-owned TaskGrant payload release, and a separately runnable WebAuthn-UV approval component. Operator guidance now matches pinned private-OIDC support and exact join CLI requirements. Existing production, independent-host, real-authenticator, owner, harness, A2A, HA, scanner, and cutover gates remain non-passed.",
   "commands": [
     {
       "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv build --offline --no-build-isolation runs",
@@ -32,11 +32,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-07-15-v0.1.6/artifacts/agentnet-0.1.6.tar.gz",
-      "sha256": "947d7878a947ea57c47486c57c24b0b578f1ef77fea0f8463154864b23a48612"
+      "sha256": "d4180ffff400e000f105332548615299f6d76520513d12438eba484a532518b5"
     },
     {
       "path": "evidence/local/2026-07-15-v0.1.6/artifacts/agentnet-0.1.6-py3-none-any.whl",
-      "sha256": "e0a37d9fd0c09795c5b260cb7091f8692d5b53725f35d6a1916cbe8b1b7c784b"
+      "sha256": "d1dc0e8d486b2db0c3775d908c61fb2483a8dd3fcba93dbc7fe14b727d28bab1"
     }
   ]
 }

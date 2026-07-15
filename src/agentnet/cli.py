@@ -1008,8 +1008,17 @@ def command_network_create(args: argparse.Namespace) -> int:
                 "backup_seal_private_key": str(seal_key_path),
                 "backup_seal_key_custody": "local_software_key_not_production_kms",
                 "next": [
-                    "agentnet join begin --server " + config.public_base_url,
-                    "agentnet join complete --identity .agentnet/server-agent-identity.json ...",
+                    (
+                        "run agentnet join begin with --server "
+                        + config.public_base_url
+                        + ", the exact supported --harness, an approved --name, "
+                        "and --state .agentnet/join-pending.json"
+                    ),
+                    (
+                        "after OIDC and approval, run agentnet join complete with "
+                        "--state .agentnet/join-pending.json, exact --challenge and --approval files, "
+                        "and --identity .agentnet/server-agent-identity.json"
+                    ),
                     "agentnet server-agent activate --config "
                     + str(path)
                     + " --identity .agentnet/server-agent-identity.json",

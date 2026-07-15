@@ -1,6 +1,6 @@
 # AgentNet required communication scope
 
-Use this reference to decide whether an installation or readiness claim delivers the product described by AgentNet. The authoritative acceptance criteria remain `docs/requirements.md`; `docs/specification.md` defines the corresponding invariants and state machines. Do not replace those sources with this summary.
+Use this reference to decide whether an installation or readiness claim delivers the product described by AgentNet. The authoritative acceptance criteria remain [`../../../docs/requirements.md`](../../../docs/requirements.md); [`../../../docs/specification.md`](../../../docs/specification.md) defines the corresponding invariants and state machines. Do not replace those sources with this summary.
 
 ## Product boundary
 

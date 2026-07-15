@@ -1,6 +1,6 @@
 ---
 name: agentnet-operator
-description: Safely install, initialize, verify, configure, operate, and troubleshoot AgentNet across Pi, npm, local-conformance, supervisor/local-binding, and always-on server-agent workflows. Use for AgentNet-related setup, enrollment, networking, messaging, package validation, Pi binding, server deployment, PostgreSQL configuration, identity prerequisites, or readiness—even if the user does not explicitly name this skill.
+description: Safely install, initialize, verify, configure, operate, and troubleshoot AgentNet. Use when the user mentions AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, AgentNet enrollment or authority, AgentNet Pi bindings, or an AgentNet server-agent deployment.
 license: Apache-2.0
 compatibility: Bundled AgentNet npm/Pi package on Linux; follow the installed release's exact Node.js, uv, and Python requirements.
 ---
@@ -21,7 +21,7 @@ Use the smallest safe workflow matching the request. AgentNet installation is co
 
 ## Enforce the exact product contract
 
-The authoritative scope is the stable requirement set in `docs/requirements.md`, interpreted by `docs/specification.md` and the current evidence ledgers. Do not invent a smaller communication product, an extra privileged Hub product, or capabilities outside those requirements.
+The authoritative scope is the stable requirement set in [`../../docs/requirements.md`](../../docs/requirements.md), interpreted by [`../../docs/specification.md`](../../docs/specification.md) and the current evidence ledgers. Do not invent a smaller communication product, an extra privileged Hub product, or capabilities outside those requirements.
 
 “Install and use” means AgentNet must ship or explicitly provision the maintained components, adapters, manifests, and preflight checks needed by its supported profile. The operator may supply hosts, secrets, policy decisions, trust roots, and required human ceremonies; the operator must not have to write integration code, build an approval application, design receipt formats, or manually assemble undocumented infrastructure.
 
