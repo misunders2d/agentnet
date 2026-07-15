@@ -99,7 +99,9 @@ Always distinguish:
 - diagnostic harness detection vs external conformance;
 - transport/A2A acknowledgement vs AgentNet-native processing or business effect;
 - local synthetic C0 mechanics vs real cross-host communication;
-- transport/task custody (`accepted_queued`) vs authorized payload release and execution.
+- transport/task custody (`accepted_queued`) vs authorized payload release and execution;
+- artifact promotion into `quarantined` vs independent scanner attestation and policy release;
+- released-artifact download vs task-grant payload/data/effect authority.
 
 ## Troubleshoot without weakening gates
 
@@ -109,6 +111,7 @@ Always distinguish:
 - **Supervisor/Pi binding failure:** run `agentnet supervisor-run --config agentnet-supervisor.json --check`; never fall back to ambient tools or a foreground process.
 - **Identity/enrollment failure:** distinguish OIDC endpoint validation, proof of possession, independent approval, expiry, replay, and revocation. Never substitute synthetic identity or chat approval.
 - **Storage/durability failure:** report the actual backend/readiness evidence and state vocabulary; never promote `accepted_local` to durable acceptance.
+- **Artifact failure:** distinguish reservation, exact byte upload, quarantine promotion, scan, release, capability issuance, and single-use download. Never pass bytes/base64 or arbitrary host paths through model-visible tools, print capabilities/private object keys, or treat quarantine as availability.
 - **Task execution failure:** distinguish `accepted_queued` custody from the currently missing protected TaskGrant payload-release route.
 
 Do not print secrets, private keys, credential-bearing DSNs, reusable approval material, or private report URLs while troubleshooting.

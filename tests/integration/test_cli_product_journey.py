@@ -150,6 +150,34 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
     ).func.__name__ == "command_relationship_accept"
     assert parser.parse_args(
         [
+            "artifact",
+            "upload",
+            "payload.bin",
+            "--idempotency-key",
+            "artifact-upload-key-0001",
+            "--media-type",
+            "application/octet-stream",
+            "--origin",
+            "operator-selected-input",
+        ]
+    ).func.__name__ == "command_artifact_upload"
+    assert parser.parse_args(
+        [
+            "artifact",
+            "download",
+            "artifact-1",
+            "--output",
+            "download.bin",
+        ]
+    ).func.__name__ == "command_artifact_download"
+    assert parser.parse_args(
+        ["artifact", "lifecycle", "artifact-1"]
+    ).func.__name__ == "command_artifact_lifecycle"
+    assert parser.parse_args(
+        ["artifact", "abort", "reservation-1"]
+    ).func.__name__ == "command_artifact_abort"
+    assert parser.parse_args(
+        [
             "message",
             "send",
             "--recipient",

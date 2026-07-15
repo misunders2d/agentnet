@@ -267,6 +267,17 @@ Human-input origins can be registered over HTTP only by that exact authenticated
 human harness; server-origin kinds are available only through composed internal
 services.
 
+The operator binary path is a thin client over this same lifecycle, not another
+artifact authority. One stable caller-owned descriptor supplies at most 16 MiB;
+the exact bytes are signed as the HTTP body and promoted only into quarantine.
+Scanner attestation and release remain separately authorized server roles.
+Downloads mint and consume an exact-harness single-use capability internally,
+then create a new private output without replacement. Normal output contains
+only artifact identity, size, digest, lifecycle/provenance metadata, and the
+operator-selected destination—not private object keys or bearer capabilities.
+Model-visible local tools do not accept bytes/base64 or arbitrary host paths;
+opaque supervisor staging remains a separate future boundary.
+
 ## Conflict custody
 
 Accepted assignments carry a typed resource/operation/access/exclusivity

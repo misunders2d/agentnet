@@ -143,8 +143,8 @@ controls.
 ## Product surfaces
 
 - **CLI** for network creation, enrollment, invitations, founder authority,
-  messaging, obligations, governance, recovery, incident response, backup, and
-  verification.
+  messaging, obligations, bounded artifact quarantine/download, governance,
+  recovery, incident response, backup, and verification.
 - **HTTP API** for authenticated network operations and administration.
 - **MCP tools** for measured local harness integration.
 - **Private Unix IPC** for bindings such as Pi that need a direct local path.

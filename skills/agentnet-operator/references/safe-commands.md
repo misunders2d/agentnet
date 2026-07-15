@@ -183,6 +183,51 @@ presentation, reading, processing, response-obligation acknowledgement, task
 payload release, or an effect. Exact retries converge on the original receipt.
 Do not acknowledge before the recipient's own durable storage and dedup commit.
 
+## Bounded artifact examples
+
+Upload one explicit caller-owned regular file into quarantine. Reuse the same
+idempotency key only for an exact retry:
+
+```bash
+agentnet artifact upload ./report.pdf \
+  --identity .agentnet/sender-identity.json \
+  --idempotency-key ARTIFACT_UPLOAD_KEY \
+  --media-type application/pdf \
+  --origin operator-selected-report \
+  --classification C1
+```
+
+Success does not mean safe or released: first state is `quarantined`, scanner
+state is pending, and no message may claim the bytes are available. Scanner
+attestation and release remain separate authorized service roles. After a
+transport failure, retry with the same idempotency key; do not assume the last
+stage failed. An unpromoted reservation remains resumable and consumes quota
+until expiry. Abort only when it is known to remain unpromoted and is no longer
+needed:
+
+```bash
+agentnet artifact abort RESERVATION_ID \
+  --identity .agentnet/sender-identity.json
+```
+
+After independent scan and policy release, inspect state and download to a new
+private file:
+
+```bash
+agentnet artifact lifecycle ARTIFACT_ID \
+  --identity .agentnet/recipient-identity.json
+agentnet artifact download ARTIFACT_ID \
+  --identity .agentnet/recipient-identity.json \
+  --output ./report.pdf
+```
+
+Upload and download are bounded to 16 MiB. Input must be a caller-owned regular
+non-symlink file. Output must not exist and its containing directory must be
+caller-owned and not group/world writable. The CLI never prints the private
+object key or single-use download capability. Do not put file bytes/base64 or
+arbitrary local paths into MCP/Pi/model tool arguments; safe harness transfer
+requires future supervisor-managed opaque staging handles.
+
 ## Secret injection examples
 
 AgentNet requires secure runtime injection, not a specific secret manager. Supported deployment patterns include an environment-backed DSN and a private password file/Docker secret. Infisical, Vault, systemd credentials, Kubernetes Secrets, and cloud secret managers are operator choices, not mandatory AgentNet dependencies.

@@ -134,6 +134,40 @@ operation as `agentnet.inbox.acknowledge`; MCP and Pi render it as
 `agentnet_inbox_acknowledge`. All argument schemas omit identity and recipient
 fields.
 
+## Binary artifact client and operator contract
+
+The signed HTTP client exposes the existing staged artifact routes without
+changing their authority model:
+
+- `reserve_artifact` binds idempotency key, lowercase plaintext SHA-256, exact
+  size (0..16,777,216), canonical media type, classification, attachment role,
+  and reservation lifetime;
+- `upload_artifact_bytes` signs the exact raw body as
+  `application/octet-stream` and binds one route-safe reservation ID;
+- `promote_artifact` binds the immutable object version and strict provenance;
+- `abort_artifact_reservation` acts only on the current caller's unpromoted
+  reservation;
+- `artifact_lifecycle` reads content-free lifecycle metadata;
+- `download_artifact` internally issues and consumes one current exact-harness,
+  short-lived, single-use capability and returns only the resulting HTTP
+  response. Normal CLI output never contains the capability.
+
+`agentnet artifact upload` composes reserve → raw bytes → promotion and reports
+the exact returned state; first success remains `quarantined`. It reads one
+caller-owned, non-symlink regular file from a stable descriptor and caps bytes
+at 16 MiB. `agentnet artifact download` refuses replacement, pins a
+caller-owned non-shared output directory, requires
+`application/octet-stream`, and creates an exclusive `0600` file. Scanner
+attestation, release, legal hold, and deletion remain separate privileged
+service operations and have no ordinary artifact CLI shortcut.
+
+Canonical MCP/Pi tools deliberately do not accept artifact bytes, base64, or
+arbitrary host paths. Such arguments would cross model-context and filesystem
+trust boundaries. A future local artifact binding needs configured staging
+roots plus supervisor-issued opaque handles; no caller-supplied actor,
+credential, scanner authority, release decision, task grant, object key, or
+download audience is part of this client/CLI contract.
+
 ## Response-obligation wire and storage contract
 
 `PostAction` and `StructuredRequestAction` accept an optional strict

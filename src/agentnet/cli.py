@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -30,7 +31,7 @@ from agentnet.authorization import (
     PolicyEngine,
     SignedAuthorityCommand,
 )
-from agentnet.client import AgentNetClient
+from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked, ValidationError
@@ -285,6 +286,180 @@ def _owner_only_file(path: Path, *, label: str) -> bytes:
         return bytes(content)
     finally:
         os.close(descriptor)
+
+
+def _required_artifact_open_flags(*names: str) -> int:
+    flags = 0
+    for name in names:
+        value = getattr(os, name, None)
+        if not isinstance(value, int) or value == 0:
+            raise SystemExit(
+                f"artifact filesystem safety requires operating-system flag {name}"
+            )
+        flags |= value
+    return flags
+
+
+def _read_artifact_file(path: Path) -> tuple[Path, bytes]:
+    """Read one stable caller-owned regular file through a bounded descriptor."""
+
+    normalized = path.absolute()
+    try:
+        descriptor = os.open(
+            normalized,
+            os.O_RDONLY
+            | _required_artifact_open_flags("O_NOFOLLOW", "O_NONBLOCK"),
+        )
+    except OSError as exc:
+        raise SystemExit("artifact input must be a caller-owned regular file") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_size > MAX_ARTIFACT_BYTES
+        ):
+            raise SystemExit(
+                "artifact input must be a caller-owned regular file within the 16 MiB limit"
+            )
+        content = bytearray()
+        while True:
+            chunk = os.read(descriptor, min(1_048_576, MAX_ARTIFACT_BYTES + 1 - len(content)))
+            if not chunk:
+                break
+            content.extend(chunk)
+            if len(content) > MAX_ARTIFACT_BYTES:
+                raise SystemExit("artifact input exceeds the 16 MiB limit")
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) or len(content) != before.st_size:
+            raise SystemExit("artifact input changed while it was read")
+        return normalized, bytes(content)
+    finally:
+        os.close(descriptor)
+
+
+def _prepare_artifact_output(path: Path) -> tuple[Path, str, int]:
+    """Pin a safe output directory and prove the destination is absent."""
+
+    normalized = path.absolute()
+    if normalized.name in {"", ".", ".."}:
+        raise SystemExit("artifact output must name a new regular file")
+    parent = normalized.parent
+    try:
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise SystemExit("artifact output directory is unavailable") from exc
+    if (
+        not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise SystemExit(
+            "artifact output directory must be caller-owned and not group/world writable"
+        )
+    flags = os.O_RDONLY | _required_artifact_open_flags("O_DIRECTORY", "O_NOFOLLOW")
+    try:
+        directory = os.open(parent, flags)
+    except OSError as exc:
+        raise SystemExit("artifact output directory is unsafe") from exc
+    opened = os.fstat(directory)
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_uid != parent_info.st_uid
+        or (opened.st_dev, opened.st_ino) != (parent_info.st_dev, parent_info.st_ino)
+        or opened.st_mode & 0o022
+    ):
+        os.close(directory)
+        raise SystemExit("artifact output directory changed during validation")
+    try:
+        os.stat(normalized.name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return normalized, normalized.name, directory
+    except OSError as exc:
+        os.close(directory)
+        raise SystemExit("artifact output destination is unsafe") from exc
+    os.close(directory)
+    raise SystemExit("refusing to overwrite an existing artifact output")
+
+
+def _write_artifact_output(
+    *,
+    directory: int,
+    name: str,
+    content: bytes,
+) -> None:
+    """Create one exclusive 0600 output and remove only our inode on failure."""
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _required_artifact_open_flags("O_NOFOLLOW")
+    )
+    try:
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory)
+    except OSError as exc:
+        raise SystemExit("artifact output destination appeared or is unsafe") from exc
+    created = os.fstat(descriptor)
+    completed = False
+    try:
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("artifact output write made no progress")
+            remaining = remaining[written:]
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        final = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or final.st_uid != os.geteuid()
+            or final.st_size != len(content)
+            or final.st_mode & 0o077
+        ):
+            raise OSError("artifact output did not retain its exact private file properties")
+        completed = True
+    except OSError as exc:
+        raise SystemExit("artifact output could not be committed") from exc
+    finally:
+        os.close(descriptor)
+        if not completed:
+            try:
+                current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (created.st_dev, created.st_ino):
+                    raise SystemExit(
+                        "artifact output failed and destination ownership changed; inspect it manually"
+                    )
+                os.unlink(name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise SystemExit(
+                    "artifact output failed and partial-file cleanup is uncertain; inspect it manually"
+                ) from exc
+    try:
+        os.fsync(directory)
+    except OSError as exc:
+        raise SystemExit(
+            "artifact output is complete but directory durability is uncertain; file retained"
+        ) from exc
 
 
 def _local_sqlite_path(config: ExtensionConfig) -> Path:
@@ -1607,6 +1782,183 @@ def command_relationship_accept(args: argparse.Namespace) -> int:
     return 0
 
 
+def _artifact_json_response(
+    response: httpx.Response,
+    *,
+    operation: str,
+    statuses: frozenset[int],
+) -> dict[str, object]:
+    if response.status_code not in statuses:
+        raise SystemExit(
+            f"artifact {operation} was rejected with HTTP {response.status_code}"
+        )
+    try:
+        value = response.json()
+    except ValueError as exc:
+        raise SystemExit(f"artifact {operation} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f"artifact {operation} returned a non-object response")
+    return value
+
+
+def command_artifact_upload(args: argparse.Namespace) -> int:
+    if (
+        not 1 <= len(args.origin) <= 256
+        or any(ord(character) < 32 or ord(character) == 127 for character in args.origin)
+    ):
+        raise SystemExit("artifact origin must be 1-256 printable characters")
+    _path, content = _read_artifact_file(Path(args.path))
+    digest = hashlib.sha256(content).hexdigest()
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        reserved = _artifact_json_response(
+            client.reserve_artifact(
+                idempotency_key=args.idempotency_key,
+                expected_digest=digest,
+                expected_size=len(content),
+                media_type=args.media_type,
+                classification=args.classification,
+                required_attachment=not args.optional_attachment,
+                ttl_seconds=args.ttl_seconds,
+            ),
+            operation="reservation",
+            statuses=frozenset({200, 201}),
+        )
+        reservation_id = reserved.get("reservation_id")
+        if not isinstance(reservation_id, str):
+            raise SystemExit("artifact reservation response lacks an exact reservation_id")
+        uploaded = _artifact_json_response(
+            client.upload_artifact_bytes(
+                reservation_id=reservation_id,
+                content=content,
+            ),
+            operation="byte upload",
+            statuses=frozenset({200}),
+        )
+        object_version = uploaded.get("version")
+        if (
+            not isinstance(object_version, str)
+            or len(object_version) != 64
+            or any(character not in "0123456789abcdef" for character in object_version)
+        ):
+            raise SystemExit("artifact byte upload response lacks an exact object version")
+        promoted = _artifact_json_response(
+            client.promote_artifact(
+                reservation_id=reservation_id,
+                object_version=object_version,
+                provenance={"origin": args.origin},
+            ),
+            operation="manifest promotion",
+            statuses=frozenset({200, 201}),
+        )
+    finally:
+        client.close()
+    artifact_id = promoted.get("artifact_id")
+    state = promoted.get("state")
+    if not isinstance(artifact_id, str) or not isinstance(state, str):
+        raise SystemExit("artifact promotion did not return an exact artifact state")
+    scanner_state = {
+        "quarantined": "pending",
+        "scan_passed": "passed",
+        "released": "passed",
+        "held": "held",
+    }.get(state, "unknown")
+    print(
+        json.dumps(
+            {
+                "artifact_id": artifact_id,
+                "classification": args.classification,
+                "media_type": args.media_type,
+                "plaintext_digest": digest,
+                "provenance": promoted.get("provenance"),
+                "released": state == "released",
+                "required_attachment": not args.optional_attachment,
+                "reservation_id": reservation_id,
+                "scanner_state": scanner_state,
+                "size": len(content),
+                "state": state,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_artifact_abort(args: argparse.Namespace) -> int:
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        result = _artifact_json_response(
+            client.abort_artifact_reservation(reservation_id=args.reservation_id),
+            operation="reservation abort",
+            statuses=frozenset({200}),
+        )
+    finally:
+        client.close()
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_artifact_lifecycle(args: argparse.Namespace) -> int:
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        result = _artifact_json_response(
+            client.artifact_lifecycle(artifact_id=args.artifact_id),
+            operation="lifecycle read",
+            statuses=frozenset({200}),
+        )
+    finally:
+        client.close()
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_artifact_download(args: argparse.Namespace) -> int:
+    output, name, directory = _prepare_artifact_output(Path(args.output))
+    try:
+        client, _actor, _key = _load_identity_client(Path(args.identity))
+        try:
+            try:
+                response = client.download_artifact(
+                    artifact_id=args.artifact_id,
+                    ttl_seconds=args.ttl_seconds,
+                )
+            except ValidationError as exc:
+                raise SystemExit("artifact download response was invalid") from exc
+        finally:
+            client.close()
+        if response.status_code != 200:
+            raise SystemExit(
+                f"artifact download was rejected with HTTP {response.status_code}"
+            )
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+        if content_type != "application/octet-stream":
+            raise SystemExit("artifact download returned an invalid content type")
+        content = response.content
+        if len(content) > MAX_ARTIFACT_BYTES:
+            raise SystemExit("artifact download exceeds the 16 MiB limit")
+        _write_artifact_output(
+            directory=directory,
+            name=name,
+            content=content,
+        )
+    finally:
+        os.close(directory)
+    print(
+        json.dumps(
+            {
+                "artifact_id": args.artifact_id,
+                "output": str(output),
+                "plaintext_digest": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def command_message_send(args: argparse.Namespace) -> int:
     payload = _read_json_object(Path(args.payload), label="message payload")
     idempotency_key = args.idempotency_key or f"agentnet-cli-{uuid4()}"
@@ -2707,6 +3059,52 @@ def build_parser() -> argparse.ArgumentParser:
     relationship_accept.add_argument("--proposal", default=".agentnet/relationship-proposal.json")
     relationship_accept.add_argument("--approval", required=True)
     relationship_accept.set_defaults(func=command_relationship_accept)
+
+    artifact = commands.add_parser(
+        "artifact",
+        help="upload quarantined artifacts and download released bytes",
+    )
+    artifact_commands = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_upload = artifact_commands.add_parser(
+        "upload",
+        help="reserve, upload, and promote one exact file into quarantine",
+    )
+    artifact_upload.add_argument("path")
+    artifact_upload.add_argument("--identity", default=".agentnet/identity.json")
+    artifact_upload.add_argument("--idempotency-key", required=True)
+    artifact_upload.add_argument("--media-type", required=True)
+    artifact_upload.add_argument("--origin", required=True)
+    artifact_upload.add_argument(
+        "--classification",
+        choices=tuple(item.value for item in Classification),
+        default=Classification.C1_INTERNAL.value,
+    )
+    artifact_upload.add_argument("--ttl-seconds", type=int, default=3600)
+    artifact_upload.add_argument("--optional-attachment", action="store_true")
+    artifact_upload.set_defaults(func=command_artifact_upload)
+    artifact_abort = artifact_commands.add_parser(
+        "abort",
+        help="abort one caller-owned unpromoted reservation",
+    )
+    artifact_abort.add_argument("reservation_id")
+    artifact_abort.add_argument("--identity", default=".agentnet/identity.json")
+    artifact_abort.set_defaults(func=command_artifact_abort)
+    artifact_lifecycle = artifact_commands.add_parser(
+        "lifecycle",
+        help="read content-free lifecycle state for one artifact",
+    )
+    artifact_lifecycle.add_argument("artifact_id")
+    artifact_lifecycle.add_argument("--identity", default=".agentnet/identity.json")
+    artifact_lifecycle.set_defaults(func=command_artifact_lifecycle)
+    artifact_download = artifact_commands.add_parser(
+        "download",
+        help="consume a current single-use capability into a new private file",
+    )
+    artifact_download.add_argument("artifact_id")
+    artifact_download.add_argument("--output", required=True)
+    artifact_download.add_argument("--identity", default=".agentnet/identity.json")
+    artifact_download.add_argument("--ttl-seconds", type=int, default=60)
+    artifact_download.set_defaults(func=command_artifact_download)
 
     message = commands.add_parser("message", help="send and receive authenticated messages")
     message_commands = message.add_subparsers(dest="message_command", required=True)

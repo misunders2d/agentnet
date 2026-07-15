@@ -178,6 +178,63 @@ presentation, human reading, model processing, response-obligation progress,
 task payload release, or a business effect. Harness-local tools expose the same
 operation as `agentnet.inbox.acknowledge`.
 
+## Upload and download bounded artifacts
+
+An enrolled operator can place one explicit local file into the existing staged
+artifact lifecycle without granting scanner or release authority:
+
+```bash
+agentnet artifact upload ./report.pdf \
+  --identity .agentnet/sender-identity.json \
+  --idempotency-key ARTIFACT_UPLOAD_KEY \
+  --media-type application/pdf \
+  --origin operator-selected-report \
+  --classification C1
+```
+
+The command reads at most 16 MiB through one non-symlink, caller-owned regular
+file descriptor, hashes those exact bytes, then performs signed reservation,
+raw-byte upload, and manifest promotion. Initial success is `quarantined` with
+`scanner_state: pending` and `released: false`. Exact retries use the same
+idempotency key. If transport fails after reservation, retry first: the command
+does not automatically abort because the server may already have committed a
+later stage. Unpromoted reservations remain resumable until expiry and continue
+to consume their reserved byte quota. The command never records a scanner
+attestation, releases the artifact, returns the private object key, or attaches
+unreleased bytes to a message. Once the operator knows an unpromoted reservation
+is no longer needed, abort it explicitly:
+
+```bash
+agentnet artifact abort RESERVATION_ID \
+  --identity .agentnet/sender-identity.json
+```
+
+After a separately authorized scanner and release service complete their own
+steps, the entitled recipient can inspect content-free state and download:
+
+```bash
+agentnet artifact lifecycle ARTIFACT_ID \
+  --identity .agentnet/recipient-identity.json
+agentnet artifact download ARTIFACT_ID \
+  --identity .agentnet/recipient-identity.json \
+  --output ./report.pdf
+```
+
+Download issuance and consumption stay inside the signed client call. The
+short-lived exact-harness capability is never printed. Output must not already
+exist; AgentNet creates one exclusive `0600` file in a caller-owned directory
+that is not group/world writable, writes at most 16 MiB, and fsyncs file and
+directory. The printed plaintext SHA-256 and size let the recipient compare
+expected integrity through an authorized channel.
+
+These operator commands are not exposed as model-visible MCP/Pi path tools.
+Passing arbitrary host paths would let a compromised model select files, while
+passing bytes/base64 would expose protected content to model context and local
+binding logs. A future harness artifact tool requires an owner-selected staging
+root and opaque supervisor-issued handles; until then, use the explicit CLI or
+signed client API. Task custody still grants no artifact access or TaskGrant
+payload release.
+
 ## Implemented kernel
 
 - exact verified actor union: human+harness, host guest+harness, workload, or
