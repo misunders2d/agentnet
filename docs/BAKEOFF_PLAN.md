@@ -331,6 +331,57 @@ Trigger the bake-off only when measured effect complexity exceeds the comparator
 **Accept at E3/E5 only if:** it materially reduces recovery complexity without becoming a second source of truth or fabricating actor-owned facts.  
 **Current decision:** deferred by trigger and absence; comparator accepted.
 
+### 15. Workforce OIDC transport and independent WebAuthn approval
+
+**OIDC protocol baseline:** authorization code plus PKCE S256, exact issuer and
+origin pins, explicit RS256/ES256 algorithms, optional exact JWK thumbprints,
+and the existing AgentNet principal/transaction binding.  Standard-library TLS
+and maintained cryptographic primitives remain mechanisms; they do not own
+identity or approval meaning.
+
+**Current transport decision:** reject the former hostname-based `urllib` path;
+accept the direct validated-address comparator at local H tier. Resolving and
+validating a hostname, then passing that hostname to a second resolver at
+connect time leaves a DNS-rebinding gap. `PinnedOIDCHTTPTransport` instead
+connects directly to one address from the validated set, preserves the exact URL
+Host authority, verifies the certificate and SNI against the configured
+hostname, ignores environment proxies, rejects redirects, bounds time and
+response bytes, and retries only another address from the same validated
+snapshot. The real `_PinnedHTTPSConnection` socket path is covered by a
+validation-to-connect rebinding negative; a request never re-resolves implicitly.
+Production adoption still requires real IdP/TLS and independent-boundary L/E
+proof rather than promotion from this hermetic result.
+
+**Private-provider policy:** public-only remains the default. Private/non-global
+addresses are eligible only when the exact HTTPS origin is pinned and every
+connected address matches a canonical configured exact-address or CIDR pin.
+Mixed public/private answers fail unless every answer independently satisfies
+the configured policy. Zone-scoped, unspecified, loopback, link-local,
+multicast, reserved, documentation, benchmark, transition/softwire, and
+IPv4-mapped address classes are always rejected, even if supplied as pins.
+Hostname allowlists, hosts-file workarounds, proxy
+exceptions, HTTP downgrade, redirect relaxation, and blanket `allow_private`
+switches are rejected.
+
+**OIDC E2/E4 tests:** validation-to-connect DNS change; mixed answers; address
+family and mapped-address substitution; wrong SNI/certificate/Host; redirect;
+proxy environment; token/JWKS origin substitution; empty/duplicate/noncanonical
+pins; connection fallback constrained to the validated snapshot; timeout/body
+bounds; JWK rotation/pin mismatch; and public-default compatibility.
+
+**WebAuthn candidate:** exact maintained library and independently deployed
+service pin remain unresolved. The comparator is no approval, not a local fake.
+Candidate tests must cover registration ownership, RP ID and origin, UV and
+fresh challenge, exact canonical transaction display/digest, every mounted
+purpose, wrong domain/harness/purpose/digest, replay, expiry, self-approval
+boundary, signer/key rotation and revocation, recovery, audit intent, and
+service outage. No custom WebAuthn cryptography is permitted.
+
+**Current decision:** OIDC transport repair and explicit private policy are
+unblocked product engineering. WebAuthn remains deferred until an immutable
+maintained candidate and independent topology are acquired; enrollment stays
+blocked rather than using a same-boundary substitute.
+
 ## Cross-cutting threat-model suites
 
 Every adopted component also runs the applicable cross-cutting suites:

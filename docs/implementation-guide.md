@@ -351,7 +351,8 @@ test, or interface stub. The following remain real external/owner gates:
 - PD-001 through PD-011 accountable owner decisions and the separate ORG-006
   relationship-governance policy;
 - version-pinned Claude/Codex/Pi/Antigravity isolation and recovery;
-- independent OIDC/WebAuthn/OOB approval and target-platform key custody;
+- real workforce IdP operation over the direct validated-address OIDC transport,
+  plus independent WebAuthn/OOB approval and target-platform key custody;
 - A2A TCK, cross-SDK, certificate, callback, and public-peer evidence;
 - HA PostgreSQL/object-store failover, fencing, PITR, and restore;
 - maintained MLS lifecycle, bilateral partner lab, real scanner/WORM/KMS roots;

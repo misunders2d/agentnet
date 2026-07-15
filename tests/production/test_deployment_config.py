@@ -303,6 +303,8 @@ def test_renderer_supports_oidc_only_first_boot_and_public_scanner_trust(tmp_pat
         {
             "issuer": "https://identity.corp.example",
             "allowed_endpoint_origins": ["https://identity.corp.example"],
+            "allowed_private_endpoint_cidrs": ["10.20.0.0/24"],
+            "pinned_endpoint_addresses": ["10.20.0.8"],
             "client_id": "agentnet-agent-a",
             "redirect_uri": "https://agent-a.corp.example/v1/enrollment/oidc/callback",
             "audience": "agentnet-agent-a",
@@ -350,6 +352,8 @@ def test_renderer_supports_oidc_only_first_boot_and_public_scanner_trust(tmp_pat
     assert config.oidc_enrollment.allowed_endpoint_origins == (
         "https://identity.corp.example",
     )
+    assert config.oidc_enrollment.allowed_private_endpoint_cidrs == ("10.20.0.0/24",)
+    assert config.oidc_enrollment.pinned_endpoint_addresses == ("10.20.0.8",)
     assert config.oidc_enrollment.trusted_approvers[0].signer_key_id == approver.thumbprint
     assert config.scanner_trust is not None
     assert config.scanner_trust.trusted_public_keys == {

@@ -153,6 +153,58 @@ by local tests.
 | PD-010 | No false multiregion/RPO claim; immutable production images; bounded retention | `src/agentnet/operations/policy_defaults.py`; `deploy/compose.production.json`; `tests/production/test_deployment_config.py`; `tests/production/test_postgres_runtime.py` | OS/architecture, topology, RPO/RTO, residency, quota, staffing, backup, and legal ownership signature. |
 | PD-011 | Routine traffic silent; exceptional notices content-free and allowlisted | `src/agentnet/attention/policy.py`; `src/agentnet/operations/policy_defaults.py`; `tests/operations/test_privacy_budgets_attention.py` | Channels, quiet hours, escalation, redaction, and accountable attention-policy signature. |
 
+## Install-and-use dependency reconciliation
+
+Reconciled on 2026-07-15 without promoting any requirement or gate. The 85-row
+status vocabulary measures each stable acceptance criterion at its stated
+scope; it does not imply that the assembled company product is installable or
+that a nearby interface is a finished integration. The remaining product work
+has this fail-closed dependency order:
+
+1. **Outbound OIDC connection binding (`ID-001..004`, `AUTH-002/007`,
+   `SEC-001/005/006`, `OPS-006`).** The direct transport now resolves once per
+   server request, validates the canonical address snapshot, connects only to
+   one of those numeric addresses, and preserves exact hostname TLS/SNI and Host
+   verification while refusing proxies and redirects. A real socket-path
+   rebinding negative provides local H evidence. Production enrollment remains
+   blocked on real IdP/TLS and independent-boundary L/E/O evidence, not this
+   former local implementation gap.
+2. **Explicit self-hosted/private OIDC policy (same IDs).** The public-only
+   default remains. A private provider requires exact HTTPS origins, exact JWK
+   pins, canonical address/CIDR pins, and connection-time enforcement. Unsafe
+   address classes are never admissible, and a hostname, hosts-file, proxy, or
+   blanket private-network switch is insufficient. Local IPv4/IPv6 and
+   deployment-config tests pass; real provider operation remains unproven.
+3. **Independent WebAuthn-UV ceremony production (`ID-002/009`,
+   `AUTH-008..010`, `ORG-006`, `SEC-003/005/006`).** Existing receipt schemas
+   and consumers do not replace a separately administered registration,
+   challenge, UV, origin/RP-ID, display, signing, rotation, revocation, and
+   recovery service covering every mounted purpose.
+4. **Activation and lifecycle productization (`ARC-001`, `ID-006/007/009`,
+   `OPS-001/003/006`).** First server-agent binding, supervisor configuration,
+   install/update/uninstall/rollback, principal offboarding, and all four exact
+   harness activations must be explicit supported commands rather than operator
+   integration work.
+5. **Protected delegated execution (`ORG-002/004/005`, `COM-007/011`,
+   `AUTH-005..007`).** Queued task custody remains correctly redacted and
+   non-executable. A separate exact TaskGrant payload-release route must audit
+   and reauthorize current actor, credential, domain, custody, source, sink,
+   data, tool, effect, expiry, revocation, digest, and provenance before bytes
+   reach a background worker.
+6. **Production mechanisms and evidence (`FILE-*`, `AVL-003/004/007`,
+   `SEC-002/003/006/007`, `OPS-001/004..007`).** PostgreSQL HA/PITR/restore,
+   replicated object custody, scanner attestations, key custody, policy runtime,
+   audit witness, observability, clean workers, A2A conformance, and signed
+   distribution remain component/evidence gates, not tasks for an operator to
+   implement.
+7. **External and owner gates.** Required P/E/O evidence and PD-001..PD-011 plus
+   ORG-006 remain distinct from product engineering. Safe defaults permit
+   reversible implementation and tests but never count as owner consent.
+
+This ordering is not a new requirement baseline. It makes cross-row product
+integration gaps explicit so “0 implementation-gap” cannot be misread as
+“install-and-use complete.”
+
 ## Totals and release boundary
 
 Requirement totals: **33 local-tested, 40 partial-external, 12 owner-blocked,

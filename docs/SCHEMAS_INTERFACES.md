@@ -25,11 +25,33 @@ expiry, effect deadline, retention deletion, and legal hold are separate.
 | `MailboxCustodian` | SQLite local; PostgreSQL target; mesh future | actor-owned custody receipts and exact digest |
 | `ArtifactStore` | encrypted filesystem local; provider-neutral production | manifest/quarantine/authorization stays authoritative |
 | `ApprovalVerifier` | signed lab verifier; independent provider required | exact transaction and independent current human/guest-owner consent |
+| `OIDCHTTPTransport` | direct TLS connection to one provider-validated address snapshot | URL origin, DNS/address policy, TLS hostname/SNI, Host authority, response bounds, and no-proxy/no-redirect behavior remain exact and fail closed |
 | `WorkloadIdentityProvider` | verified SPIFFE/mTLS context seam | workload never becomes a human |
 | `WorkflowEngine` | explicit transactional effects; optional Temporal-style | workflow success never fabricates effect evidence |
 | `MLSProvider` | unavailable until maintained stack passes | room policy/membership and visible key holders remain explicit |
 | MCP/direct IPC | official MCP or private Unix framing | arguments cannot establish caller identity |
 | A2A SDK routes | official SDK 1.1.0 | public identity remains external-low-trust |
+
+## OIDC endpoint configuration contract
+
+`OIDCEnrollmentConfig` and `OIDCProviderConfig` preserve the public-only default.
+`allowed_endpoint_origins` contains canonical HTTPS origins;
+`allowed_private_endpoint_cidrs` contains canonical private networks; and
+`pinned_endpoint_addresses` contains canonical safe unicast IPv4/IPv6
+addresses. Unspecified, loopback, link-local, multicast, reserved,
+documentation, benchmark, transition/softwire, and IPv4-mapped classes are not
+admissible pins. Private/non-global pins require explicitly configured origins
+and non-empty exact `pinned_jwk_thumbprints`. When exact endpoint addresses are
+present, every DNS result must match one. Otherwise a global result is eligible
+by default and a non-global result must match an exact address or configured
+private network. The default resolver is the host system `getaddrinfo` facility;
+its result is untrusted input. The validated canonical address tuple is supplied
+to `OIDCHTTPTransport` and is the only set the direct TLS transport may try for
+that request.
+
+The internal-invitation OIDC verifier digest includes origins, private networks,
+and exact endpoint addresses, so changing endpoint policy changes verifier
+identity rather than silently reusing an old binding.
 
 ## Relationship wire and storage contract
 

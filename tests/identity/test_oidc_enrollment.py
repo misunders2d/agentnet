@@ -4,7 +4,7 @@ import base64
 import hashlib
 import io
 import json
-import urllib.error
+import ssl
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
@@ -21,6 +21,7 @@ from agentnet.approval import (
     create_independent_approval_receipt,
 )
 from agentnet.errors import AuthenticationError, ConflictError, GateBlocked, ReplayError
+from agentnet.identity import oidc as oidc_module
 from agentnet.identity.domains import DomainRegistry
 from agentnet.identity.enrollment import (
     ENROLLMENT_APPROVAL_PURPOSE,
@@ -73,6 +74,7 @@ class FakeOIDCTransport:
         self.forced_id_token: str | None = None
         self.last_id_token: str | None = None
         self.token_posts = 0
+        self.resolved_requests: list[tuple[str, tuple[str, ...]]] = []
 
     def bind_authorization_request(self, authorization_url: str) -> None:
         query = parse_qs(urlsplit(authorization_url).query)
@@ -82,8 +84,9 @@ class FakeOIDCTransport:
         assert query["response_type"] == ["code"]
         assert query["client_id"] == ["client-1"]
 
-    def request(self, *, method, url, headers, body, timeout_seconds):
+    def request(self, *, method, url, resolved_addresses, headers, body, timeout_seconds):
         assert timeout_seconds == 2
+        self.resolved_requests.append((url, resolved_addresses))
         if method == "GET" and url.endswith("/.well-known/openid-configuration"):
             return self._json(
                 {
@@ -349,32 +352,364 @@ def test_oidc_discovery_rejects_unpinned_origins_and_nonpublic_resolution(
         provider.discover()
 
 
-def test_production_oidc_transport_never_follows_redirects() -> None:
-    class RedirectingOpener:
-        def __init__(self) -> None:
-            self.calls = 0
+def test_private_oidc_requires_explicit_origin_network_and_jwk_pins() -> None:
+    common = {
+        "issuer": ISSUER,
+        "client_id": "client-1",
+        "redirect_uri": "https://agent.example/oidc/callback",
+        "allowed_signing_algorithms": ("ES256",),
+    }
+    with pytest.raises(ValueError, match="explicit endpoint origins"):
+        OIDCProviderConfig(
+            **common,
+            allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+            pinned_jwk_thumbprints=(("issuer-key-1", "a" * 64),),
+        )
+    with pytest.raises(ValueError, match="JWK thumbprint"):
+        OIDCProviderConfig(
+            **common,
+            allowed_endpoint_origins=(ISSUER,),
+            allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+        )
+    with pytest.raises(ValueError, match="canonical private networks"):
+        OIDCProviderConfig(
+            **common,
+            allowed_endpoint_origins=(ISSUER,),
+            allowed_private_endpoint_cidrs=("10.20.0.1/24",),
+            pinned_jwk_thumbprints=(("issuer-key-1", "a" * 64),),
+        )
 
-        def open(self, request, *, timeout):
-            self.calls += 1
-            raise urllib.error.HTTPError(
-                request.full_url,
-                302,
-                "redirect",
-                {"location": "https://attacker.example/token"},
-                io.BytesIO(b""),
-            )
 
-    opener = RedirectingOpener()
-    transport = UrllibOIDCHTTPTransport(opener=opener)
+def test_private_oidc_resolves_once_per_request_and_passes_only_validated_snapshot(
+    oidc_stack: OIDCStack,
+) -> None:
+    config = OIDCProviderConfig(
+        issuer=ISSUER,
+        client_id="client-1",
+        redirect_uri="https://agent.example/oidc/callback",
+        allowed_signing_algorithms=("ES256",),
+        allowed_endpoint_origins=(ISSUER,),
+        allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+        pinned_jwk_thumbprints=(("issuer-key-1", "a" * 64),),
+        http_timeout_seconds=2,
+    )
+    provider = OIDCProvider(
+        config,
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: ("10.20.0.8",),
+    )
+
+    provider.discover()
+
+    assert oidc_stack.transport.resolved_requests == [
+        (provider.discovery_url, ("10.20.0.8",))
+    ]
+
+    outside = OIDCProvider(
+        config,
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: ("10.21.0.8",),
+    )
+    with pytest.raises(GateBlocked, match="not explicitly pinned"):
+        outside.discover()
+
+
+def test_exact_oidc_address_pins_reject_dns_address_substitution(oidc_stack: OIDCStack) -> None:
+    config = OIDCProviderConfig(
+        issuer=ISSUER,
+        client_id="client-1",
+        redirect_uri="https://agent.example/oidc/callback",
+        allowed_signing_algorithms=("ES256",),
+        pinned_endpoint_addresses=("8.8.8.8",),
+        http_timeout_seconds=2,
+    )
+    provider = OIDCProvider(
+        config,
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: ("8.8.4.4",),
+    )
+    with pytest.raises(GateBlocked, match="not exactly pinned"):
+        provider.discover()
+
+
+def test_production_oidc_transport_connects_only_to_validated_address_and_rejects_redirects(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, int, str, float]] = []
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+
+    class RedirectResponse:
+        status = 302
+
+        @staticmethod
+        def getheaders():
+            return [("location", "https://attacker.example/token")]
+
+        @staticmethod
+        def read(_limit):
+            raise AssertionError("redirect bodies must not be consumed")
+
+    class RecordingConnection:
+        def __init__(self, host, port, address, *, timeout, context) -> None:
+            del context
+            calls.append((host, port, address, timeout))
+            self.requested: tuple[str, str] | None = None
+            self.closed = False
+
+        def request(self, method, target, *, body, headers) -> None:
+            del body, headers
+            self.requested = (method, target)
+
+        @staticmethod
+        def getresponse():
+            return RedirectResponse()
+
+        def close(self) -> None:
+            self.closed = True
+
+    transport = UrllibOIDCHTTPTransport(connection_factory=RecordingConnection)
     with pytest.raises(GateBlocked, match="redirects are forbidden"):
         transport.request(
             method="GET",
             url="https://issuer.example/.well-known/openid-configuration",
+            resolved_addresses=("8.8.8.8",),
             headers={"accept": "application/json"},
             body=None,
             timeout_seconds=2,
         )
-    assert opener.calls == 1
+    assert calls == [("issuer.example", 443, "8.8.8.8", 2)]
+
+
+def test_pinned_connection_binds_to_snapshot_address_not_re_resolved_hostname(
+    monkeypatch,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    socket_calls: list[tuple[tuple[str, int], float, object]] = []
+    tls_hosts: list[str] = []
+    request_bytes: list[bytes] = []
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+
+    class RebindingResolver:
+        def __call__(self, host: str, port: int) -> tuple[str, ...]:
+            resolver_calls.append((host, port))
+            if len(resolver_calls) == 1:
+                return ("8.8.8.8",)
+            return ("127.0.0.1",)
+
+    discovery_body = json.dumps(
+        {
+            "issuer": ISSUER,
+            "authorization_endpoint": AUTHORIZATION_ENDPOINT,
+            "token_endpoint": TOKEN_ENDPOINT,
+            "jwks_uri": JWKS_URI,
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "id_token_signing_alg_values_supported": ["ES256"],
+        }
+    ).encode()
+    wire_response = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: application/json\r\n"
+        + f"Content-Length: {len(discovery_body)}\r\n".encode("ascii")
+        + b"Connection: close\r\n\r\n"
+        + discovery_body
+    )
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self._response = io.BytesIO(wire_response)
+            self.closed = False
+
+        def sendall(self, value: bytes) -> None:
+            request_bytes.append(value)
+
+        def makefile(self, _mode: str, _buffering: int | None = None):
+            return self._response
+
+        def close(self) -> None:
+            self.closed = True
+
+    def create_connection(address, timeout, source_address):
+        socket_calls.append((address, timeout, source_address))
+        return FakeSocket()
+
+    class VerifiedFakeTLSContext:
+        check_hostname = True
+        verify_mode = ssl.CERT_REQUIRED
+        minimum_version = ssl.TLSVersion.TLSv1_2
+
+        @staticmethod
+        def wrap_socket(raw_socket, *, server_hostname):
+            tls_hosts.append(server_hostname)
+            return raw_socket
+
+    monkeypatch.setattr(oidc_module.socket, "create_connection", create_connection)
+    provider = OIDCProvider(
+        OIDCProviderConfig(
+            issuer=ISSUER,
+            client_id="client-1",
+            redirect_uri="https://agent.example/oidc/callback",
+            allowed_signing_algorithms=("ES256",),
+            http_timeout_seconds=2,
+        ),
+        transport=UrllibOIDCHTTPTransport(ssl_context=VerifiedFakeTLSContext()),
+        resolver=RebindingResolver(),
+    )
+
+    discovery = provider.discover()
+
+    assert discovery.authorization_endpoint == AUTHORIZATION_ENDPOINT
+    assert resolver_calls == [("issuer.example", 443)]
+    assert socket_calls == [(('8.8.8.8', 443), 2, None)]
+    assert tls_hosts == ["issuer.example"]
+    assert b"Host: issuer.example\r\n" in b"".join(request_bytes)
+
+    # A second resolution would now return loopback. The transport never makes
+    # that second lookup; it connected to the first validated snapshot above.
+    assert provider.resolver("issuer.example", 443) == ("127.0.0.1",)
+
+
+def test_pinned_connection_rejects_proxy_tunnel_before_socket_connect(monkeypatch) -> None:
+    socket_called = False
+
+    def create_connection(*_args, **_kwargs):
+        nonlocal socket_called
+        socket_called = True
+        raise AssertionError("proxy tunnel rejection must precede socket creation")
+
+    class VerifiedFakeTLSContext:
+        check_hostname = True
+        verify_mode = ssl.CERT_REQUIRED
+        minimum_version = ssl.TLSVersion.TLSv1_2
+
+    monkeypatch.setattr(oidc_module.socket, "create_connection", create_connection)
+    connection = oidc_module._PinnedHTTPSConnection(
+        "issuer.example",
+        443,
+        "8.8.8.8",
+        timeout=2,
+        context=VerifiedFakeTLSContext(),
+    )
+    connection.set_tunnel("proxy.example", port=443)
+
+    with pytest.raises(GateBlocked, match="proxy tunnels are forbidden"):
+        connection.connect()
+    assert socket_called is False
+
+
+def test_oidc_provider_converts_invalid_resolver_types_to_gate_block(oidc_stack: OIDCStack) -> None:
+    provider = OIDCProvider(
+        oidc_stack.provider.config,
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: (None,),  # type: ignore[return-value]
+    )
+
+    with pytest.raises(GateBlocked, match="resolved to an invalid address"):
+        provider.discover()
+
+
+def test_production_oidc_transport_rejects_oversized_response() -> None:
+    class OversizedResponse:
+        status = 200
+
+        @staticmethod
+        def getheaders():
+            return []
+
+        @staticmethod
+        def read(limit):
+            return b"x" * limit
+
+    class OversizedConnection:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.closed = False
+
+        @staticmethod
+        def request(*_args, **_kwargs) -> None:
+            return None
+
+        @staticmethod
+        def getresponse():
+            return OversizedResponse()
+
+        def close(self) -> None:
+            self.closed = True
+
+    transport = UrllibOIDCHTTPTransport(
+        maximum_response_bytes=1_024,
+        connection_factory=OversizedConnection,
+    )
+    with pytest.raises(GateBlocked, match="response exceeds"):
+        transport.request(
+            method="GET",
+            url=f"{ISSUER}/oversized",
+            resolved_addresses=("8.8.8.8",),
+            headers={"accept": "application/json"},
+            body=None,
+            timeout_seconds=2,
+        )
+
+
+@pytest.mark.parametrize(
+    "forbidden_address",
+    (
+        "127.0.0.1",
+        "169.254.169.254",
+        "::1",
+        "::ffff:127.0.0.1",
+        "2001:db8::1",
+    ),
+)
+def test_oidc_endpoint_pins_reject_unsafe_address_classes(forbidden_address: str) -> None:
+    with pytest.raises(ValueError, match="safe unicast"):
+        OIDCProviderConfig(
+            issuer=ISSUER,
+            client_id="client-1",
+            redirect_uri="https://agent.example/oidc/callback",
+            allowed_signing_algorithms=("ES256",),
+            allowed_endpoint_origins=(ISSUER,),
+            pinned_endpoint_addresses=(forbidden_address,),
+            pinned_jwk_thumbprints=(("issuer-key-1", "a" * 64),),
+        )
+
+
+def test_private_ipv6_oidc_address_requires_and_uses_explicit_pins(
+    oidc_stack: OIDCStack,
+) -> None:
+    provider = OIDCProvider(
+        OIDCProviderConfig(
+            issuer=ISSUER,
+            client_id="client-1",
+            redirect_uri="https://agent.example/oidc/callback",
+            allowed_signing_algorithms=("ES256",),
+            allowed_endpoint_origins=(ISSUER,),
+            allowed_private_endpoint_cidrs=("fd00::/8",),
+            pinned_endpoint_addresses=("fd00::8",),
+            pinned_jwk_thumbprints=(("issuer-key-1", "a" * 64),),
+            http_timeout_seconds=2,
+        ),
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: ("fd00::8",),
+    )
+
+    provider.discover()
+
+    assert oidc_stack.transport.resolved_requests == [
+        (provider.discovery_url, ("fd00::8",))
+    ]
+
+
+def test_production_oidc_transport_rejects_insecure_tls_context() -> None:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with pytest.raises(ValueError, match="certificate and hostname verification"):
+        UrllibOIDCHTTPTransport(ssl_context=context)
 
 
 def test_subject_binding_allows_safe_alias_change_but_rejects_email_collision(oidc_stack: OIDCStack) -> None:

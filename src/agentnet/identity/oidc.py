@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
 import secrets
 import socket
 import sqlite3
+import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -36,6 +36,10 @@ from agentnet.errors import (
     ReplayError,
 )
 from agentnet.identity.credentials import public_key_thumbprint
+from agentnet.identity.endpoint_policy import (
+    canonical_endpoint_address as _canonical_endpoint_address,
+    canonical_private_endpoint_network as _canonical_private_endpoint_network,
+)
 from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentService, VerifiedOIDCIdentity
 from agentnet.operations.config import RuntimeProfile
 
@@ -57,59 +61,138 @@ class OIDCHTTPTransport(Protocol):
         *,
         method: str,
         url: str,
+        resolved_addresses: tuple[str, ...],
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: float,
     ) -> OIDCHTTPResponse: ...
 
 
-class UrllibOIDCHTTPTransport:
-    """Real TLS HTTP transport with bounded response bodies."""
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection whose TCP peer is fixed while TLS verifies the URL host."""
 
-    def __init__(self, *, maximum_response_bytes: int = 1_048_576, opener: Any | None = None) -> None:
+    def __init__(
+        self,
+        server_hostname: str,
+        port: int,
+        connect_address: str,
+        *,
+        timeout: float,
+        context: ssl.SSLContext,
+    ) -> None:
+        super().__init__(server_hostname, port=port, timeout=timeout, context=context)
+        self._connect_address = connect_address
+
+    def connect(self) -> None:
+        if self._tunnel_host is not None:
+            raise GateBlocked("oidc_provider", "OIDC provider proxy tunnels are forbidden")
+        raw_socket = self._create_connection(
+            (self._connect_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        try:
+            self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+        except BaseException:
+            raw_socket.close()
+            raise
+
+
+class PinnedOIDCHTTPTransport:
+    """Direct TLS transport bound to a validated DNS/address snapshot.
+
+    The transport never consults environment proxies and never resolves the URL
+    hostname.  The provider resolves and validates an exact address tuple once;
+    this class connects only to those addresses while certificate verification,
+    SNI, and the HTTP Host header retain the configured URL hostname.
+    """
+
+    def __init__(
+        self,
+        *,
+        maximum_response_bytes: int = 1_048_576,
+        ssl_context: ssl.SSLContext | None = None,
+        connection_factory: Callable[..., http.client.HTTPSConnection] | None = None,
+    ) -> None:
         if maximum_response_bytes < 1_024 or maximum_response_bytes > 8_388_608:
             raise ValueError("OIDC response limit is outside the supported range")
+        context = ssl_context or ssl.create_default_context()
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ValueError("OIDC TLS context must require certificate and hostname verification")
+        if ssl_context is not None and context.minimum_version < ssl.TLSVersion.TLSv1_2:
+            raise ValueError("OIDC TLS context must require TLS 1.2 or newer")
+        if ssl_context is None:
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.set_alpn_protocols(["http/1.1"])
         self.maximum_response_bytes = maximum_response_bytes
-        self._opener = opener or urllib.request.build_opener(_NoOIDCRedirectHandler())
+        self._ssl_context = context
+        self._connection_factory = connection_factory or _PinnedHTTPSConnection
 
     def request(
         self,
         *,
         method: str,
         url: str,
+        resolved_addresses: tuple[str, ...],
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: float,
     ) -> OIDCHTTPResponse:
-        request = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
+        _require_discovered_https_url(url, label="provider endpoint")
+        if method not in {"GET", "POST"}:
+            raise GateBlocked("oidc_provider", "OIDC provider HTTP method is unsupported")
+        if any(key.casefold() == "host" for key in headers):
+            raise GateBlocked("oidc_provider", "OIDC provider Host header is transport-owned")
+        parsed = urlsplit(url)
+        if parsed.hostname is None:
+            raise GateBlocked("oidc_provider", "OIDC provider URL has no hostname")
         try:
-            with self._opener.open(request, timeout=timeout_seconds) as response:  # noqa: S310 - URLs are validated/pinned.
+            addresses = tuple(str(ipaddress.ip_address(value)) for value in resolved_addresses)
+        except ValueError as exc:
+            raise GateBlocked("oidc_provider", "OIDC provider validated address is invalid") from exc
+        if not addresses or len(addresses) > 32 or len(set(addresses)) != len(addresses):
+            raise GateBlocked(
+                "oidc_provider",
+                "OIDC provider validated addresses are empty, excessive, or ambiguous",
+            )
+        target = parsed.path or "/"
+        last_error: OSError | None = None
+        for address in addresses:
+            connection = self._connection_factory(
+                parsed.hostname,
+                parsed.port or 443,
+                address,
+                timeout=timeout_seconds,
+                context=self._ssl_context,
+            )
+            try:
+                connection.request(method, target, body=body, headers=dict(headers))
+                response = connection.getresponse()
+                if 300 <= int(response.status) < 400:
+                    raise GateBlocked("oidc_provider", "OIDC provider redirects are forbidden")
                 payload = response.read(self.maximum_response_bytes + 1)
                 if len(payload) > self.maximum_response_bytes:
                     raise GateBlocked("oidc_provider", "OIDC provider response exceeds the configured bound")
                 return OIDCHTTPResponse(
                     status=int(response.status),
-                    headers={key.casefold(): value for key, value in response.headers.items()},
+                    headers={key.casefold(): value for key, value in response.getheaders()},
                     body=payload,
                 )
-        except urllib.error.HTTPError as exc:
-            if 300 <= int(exc.code) < 400:
-                raise GateBlocked("oidc_provider", "OIDC provider redirects are forbidden") from exc
-            payload = exc.read(self.maximum_response_bytes + 1)
-            return OIDCHTTPResponse(
-                status=int(exc.code),
-                headers={key.casefold(): value for key, value in exc.headers.items()},
-                body=payload[: self.maximum_response_bytes],
-            )
-        except (OSError, urllib.error.URLError) as exc:
-            raise GateBlocked("oidc_provider", "OIDC provider is unavailable") from exc
+            except ssl.SSLCertVerificationError as exc:
+                raise GateBlocked("oidc_provider", "OIDC provider TLS identity verification failed") from exc
+            except ssl.SSLError as exc:
+                raise GateBlocked("oidc_provider", "OIDC provider TLS negotiation failed") from exc
+            except http.client.HTTPException as exc:
+                raise GateBlocked("oidc_provider", "OIDC provider returned an invalid HTTP response") from exc
+            except OSError as exc:
+                last_error = exc
+            finally:
+                connection.close()
+        raise GateBlocked("oidc_provider", "OIDC provider is unavailable") from last_error
 
 
-class _NoOIDCRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Return redirect responses to the caller; never follow a new target."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
+class UrllibOIDCHTTPTransport(PinnedOIDCHTTPTransport):
+    """Compatibility name for the direct pinned transport; urllib is no longer used."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +205,8 @@ class OIDCProviderConfig:
     allowed_signing_algorithms: tuple[str, ...] = ("RS256",)
     pinned_jwk_thumbprints: tuple[tuple[str, str], ...] = ()
     allowed_endpoint_origins: tuple[str, ...] = ()
+    allowed_private_endpoint_cidrs: tuple[str, ...] = ()
+    pinned_endpoint_addresses: tuple[str, ...] = ()
     authorization_ttl_seconds: int = 300
     maximum_id_token_age_seconds: int = 300
     allowed_clock_skew_seconds: int = 30
@@ -157,11 +242,32 @@ class OIDCProviderConfig:
             not key_id or not _is_sha256(value) for key_id, value in pins.items()
         ):
             raise ValueError("OIDC JWK thumbprint pins are invalid")
-        origins = self.allowed_endpoint_origins or (_canonical_https_origin(self.issuer),)
+        explicit_origins = self.allowed_endpoint_origins
+        origins = explicit_origins or (_canonical_https_origin(self.issuer),)
         canonical_origins = tuple(_canonical_https_origin(value, require_origin=True) for value in origins)
         if len(set(canonical_origins)) != len(canonical_origins):
             raise ValueError("OIDC endpoint origins must be unique")
+        private_networks = tuple(
+            _canonical_private_endpoint_network(value) for value in self.allowed_private_endpoint_cidrs
+        )
+        endpoint_addresses = tuple(
+            _canonical_endpoint_address(value) for value in self.pinned_endpoint_addresses
+        )
+        if len(set(private_networks)) != len(private_networks):
+            raise ValueError("OIDC private endpoint CIDR pins must be unique")
+        if len(set(endpoint_addresses)) != len(endpoint_addresses):
+            raise ValueError("OIDC endpoint address pins must be unique")
+        private_addresses = tuple(
+            value for value in endpoint_addresses if not ipaddress.ip_address(value).is_global
+        )
+        if private_networks or private_addresses:
+            if not explicit_origins:
+                raise ValueError("private OIDC endpoints require explicit endpoint origins")
+            if not pins:
+                raise ValueError("private OIDC endpoints require exact JWK thumbprint pins")
         object.__setattr__(self, "allowed_endpoint_origins", canonical_origins)
+        object.__setattr__(self, "allowed_private_endpoint_cidrs", private_networks)
+        object.__setattr__(self, "pinned_endpoint_addresses", endpoint_addresses)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +304,7 @@ class OIDCProvider:
         resolver: Callable[[str, int], tuple[str, ...]] | None = None,
     ) -> None:
         self.config = config
-        self.transport = transport or UrllibOIDCHTTPTransport()
+        self.transport = transport or PinnedOIDCHTTPTransport()
         self.clock = clock or (lambda: int(time.time()))
         self.resolver = resolver or _system_address_resolver
 
@@ -218,7 +324,10 @@ class OIDCProvider:
             ("token endpoint", token_endpoint),
             ("JWKS endpoint", jwks_uri),
         ):
-            self._require_pinned_public_endpoint(value, label=label)
+            # Discovery authenticates endpoint origins. Address resolution is
+            # performed exactly when the server connects to each endpoint so a
+            # validated snapshot is never discarded and later re-resolved.
+            self._require_pinned_endpoint_origin(value, label=label)
         response_types = document.get("response_types_supported")
         if not isinstance(response_types, list) or "code" not in response_types:
             raise AuthenticationError("OIDC provider does not advertise authorization code support")
@@ -271,13 +380,14 @@ class OIDCProvider:
             credentials = base64.b64encode(f"{client}:{secret}".encode("utf-8")).decode("ascii")
             headers["authorization"] = f"Basic {credentials}"
             fields.pop("client_id")
-        self._require_pinned_public_endpoint(
+        token_addresses = self._resolve_and_validate_endpoint_addresses(
             discovery.token_endpoint,
             label="token endpoint",
         )
         response = self.transport.request(
             method="POST",
             url=discovery.token_endpoint,
+            resolved_addresses=token_addresses,
             headers=headers,
             body=urllib.parse.urlencode(fields).encode("ascii"),
             timeout_seconds=self.config.http_timeout_seconds,
@@ -303,7 +413,6 @@ class OIDCProvider:
     ) -> OIDCVerificationResult:
         if len(id_token) < 32 or len(id_token) > 131_072:
             raise AuthenticationError("OIDC ID token is outside the supported size bound")
-        self._require_pinned_public_endpoint(jwks_uri, label="JWKS endpoint")
         parts = id_token.split(".")
         if len(parts) != 3 or any(not part or not _B64URL.fullmatch(part) for part in parts):
             raise AuthenticationError("OIDC ID token is malformed")
@@ -385,17 +494,22 @@ class OIDCProvider:
             subject=subject,
             verified_email=email,
         )
+        try:
+            token_bytes = id_token.encode("ascii")
+        except UnicodeEncodeError as exc:  # defensive; base64url validation should reject this first.
+            raise AuthenticationError("OIDC ID token is malformed") from exc
         return OIDCVerificationResult(
             identity=identity,
-            id_token_hash=hashlib.sha256(id_token.encode("ascii")).hexdigest(),
+            id_token_hash=hashlib.sha256(token_bytes).hexdigest(),
             expires_at=expires_at,
         )
 
     def _get_json(self, url: str, *, label: str) -> dict[str, Any]:
-        self._require_pinned_public_endpoint(url, label=label)
+        addresses = self._resolve_and_validate_endpoint_addresses(url, label=label)
         response = self.transport.request(
             method="GET",
             url=url,
+            resolved_addresses=addresses,
             headers={"accept": "application/json"},
             body=None,
             timeout_seconds=self.config.http_timeout_seconds,
@@ -406,13 +520,22 @@ class OIDCProvider:
             raise GateBlocked("oidc_provider", f"{label} exceeds the supported response bound")
         return _load_json_object(response.body, label=label)
 
-    def _require_pinned_public_endpoint(self, value: str, *, label: str) -> None:
+    def _require_pinned_endpoint_origin(self, value: str, *, label: str) -> None:
         _require_discovered_https_url(value, label=label)
         origin = _canonical_https_origin(value)
         if origin not in self.config.allowed_endpoint_origins:
             raise AuthenticationError(f"OIDC {label} origin is not pinned")
+
+    def _resolve_and_validate_endpoint_addresses(
+        self,
+        value: str,
+        *,
+        label: str,
+    ) -> tuple[str, ...]:
+        self._require_pinned_endpoint_origin(value, label=label)
         parsed = urlsplit(value)
-        assert parsed.hostname is not None  # established by URL validation above
+        if parsed.hostname is None:
+            raise GateBlocked("oidc_provider", f"OIDC {label} URL has no hostname")
         try:
             addresses = self.resolver(parsed.hostname, parsed.port or 443)
         except Exception as exc:
@@ -421,10 +544,28 @@ class OIDCProvider:
             raise GateBlocked("oidc_provider", f"OIDC {label} address resolution was empty")
         try:
             parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise GateBlocked("oidc_provider", f"OIDC {label} resolved to an invalid address") from exc
-        if any(not address.is_global for address in parsed_addresses):
-            raise GateBlocked("oidc_provider", f"OIDC {label} resolved to a non-public address")
+        canonical_addresses = tuple(str(address) for address in parsed_addresses)
+        if len(canonical_addresses) > 32 or len(set(canonical_addresses)) != len(canonical_addresses):
+            raise GateBlocked("oidc_provider", f"OIDC {label} address resolution was excessive or ambiguous")
+        exact_pins = frozenset(self.config.pinned_endpoint_addresses)
+        private_networks = tuple(
+            ipaddress.ip_network(value, strict=True)
+            for value in self.config.allowed_private_endpoint_cidrs
+        )
+        for address, canonical in zip(parsed_addresses, canonical_addresses, strict=True):
+            if exact_pins and canonical not in exact_pins:
+                raise GateBlocked("oidc_provider", f"OIDC {label} address is not exactly pinned")
+            if address.is_global:
+                continue
+            if canonical in exact_pins or any(address in network for network in private_networks):
+                continue
+            raise GateBlocked(
+                "oidc_provider",
+                f"OIDC {label} resolved to a non-public address that is not explicitly pinned",
+            )
+        return canonical_addresses
 
 
 class OIDCEnrollmentCoordinator:
@@ -611,6 +752,10 @@ class OIDCEnrollmentCoordinator:
                 if current is None or current["status"] != "exchanging" or current["claimed_at"] != now:
                     raise ReplayError("OIDC authorization transaction is no longer current")
                 self._require_provider_binding(current)
+                # This transaction must keep the current-state check, replay
+                # claims, challenge creation, and terminal update atomic. Both
+                # supported stores provide that transaction boundary; unique
+                # constraints convert a concurrent loser into ReplayError.
                 connection.execute(
                     "INSERT INTO replay_nonces(actor_id,nonce_hash,expires_at) VALUES(?,?,?)",
                     (self._code_replay_actor, code_hash, replay_expires_at),
@@ -757,7 +902,8 @@ def _canonical_https_origin(value: str, *, require_origin: bool = False) -> str:
         raise ValueError("OIDC endpoint origin is invalid") from exc
     if require_origin and (parsed.path not in {"", "/"} or parsed.query):
         raise ValueError("OIDC endpoint origin must not contain a path or query")
-    assert parsed.hostname is not None
+    if parsed.hostname is None:
+        raise ValueError("OIDC endpoint origin is invalid")
     hostname = parsed.hostname.lower()
     rendered_host = f"[{hostname}]" if ":" in hostname else hostname
     origin = f"https://{rendered_host}"
@@ -769,6 +915,8 @@ def _canonical_https_origin(value: str, *, require_origin: bool = False) -> str:
 
 
 def _system_address_resolver(host: str, port: int) -> tuple[str, ...]:
+    # This is host NSS/hosts/DNS policy, not a trust source. Its complete result
+    # is validated once and handed to the direct-address transport unchanged.
     records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     return tuple(sorted({str(record[4][0]) for record in records}))
 
@@ -856,5 +1004,6 @@ __all__ = [
     "OIDCProvider",
     "OIDCProviderConfig",
     "OIDCVerificationResult",
+    "PinnedOIDCHTTPTransport",
     "UrllibOIDCHTTPTransport",
 ]

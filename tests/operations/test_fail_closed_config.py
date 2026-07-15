@@ -256,3 +256,58 @@ def test_same_ordinary_server_can_bootstrap_only_through_exact_oidc_and_independ
         )
     with pytest.raises(ValidationError, match="only on the always-on"):
         ExtensionConfig(oidc_enrollment=enrollment)
+
+
+def test_private_oidc_config_requires_explicit_canonical_network_origin_and_jwk_pins() -> None:
+    approver_key = P256KeyPair.generate()
+    base = {
+        "issuer": "https://idp.corp.example",
+        "client_id": "agentnet-ordinary-extension",
+        "redirect_uri": "https://agent.example/v1/enrollment/oidc/callback",
+        "verifier_id": "independent-webauthn-service",
+        "trusted_approvers": (
+            IndependentApproverConfig(
+                principal_id="security-owner",
+                signer_key_id=approver_key.thumbprint,
+                public_key_pem=approver_key.public_pem,
+                allowed_purposes=frozenset(
+                    {
+                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.elevation.approve",
+                        "identity.credential.recover.approve",
+                        "identity.enrollment.approve",
+                        "identity.harness.revoke.approve",
+                        "organization.relationship.accept",
+                    }
+                ),
+            ),
+        ),
+    }
+    with pytest.raises(ValidationError, match="explicit endpoint origins"):
+        OIDCEnrollmentConfig(
+            **base,
+            allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+            pinned_jwk_thumbprints={"idp-key-1": "a" * 64},
+        )
+    with pytest.raises(ValidationError, match="JWK thumbprint"):
+        OIDCEnrollmentConfig(
+            **base,
+            allowed_endpoint_origins=("https://idp.corp.example",),
+            allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+        )
+    with pytest.raises(ValidationError, match="canonical private networks"):
+        OIDCEnrollmentConfig(
+            **base,
+            allowed_endpoint_origins=("https://idp.corp.example",),
+            allowed_private_endpoint_cidrs=("10.20.0.1/24",),
+            pinned_jwk_thumbprints={"idp-key-1": "a" * 64},
+        )
+    configured = OIDCEnrollmentConfig(
+        **base,
+        allowed_endpoint_origins=("https://idp.corp.example",),
+        allowed_private_endpoint_cidrs=("10.20.0.0/24",),
+        pinned_endpoint_addresses=("10.20.0.8",),
+        pinned_jwk_thumbprints={"idp-key-1": "a" * 64},
+    )
+    assert configured.allowed_private_endpoint_cidrs == ("10.20.0.0/24",)
+    assert configured.pinned_endpoint_addresses == ("10.20.0.8",)

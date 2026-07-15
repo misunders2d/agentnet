@@ -260,6 +260,29 @@ authenticated operator inspection and out-of-band removal. Post-commit close or
 durability uncertainty is reported as an unknown publication outcome, never as
 successful rollback.
 
+## Workforce OIDC endpoint transport
+
+Production OIDC requests use one resolver snapshot per HTTP request. The default
+resolver is the host system facility (`getaddrinfo`, including its NSS/hosts/DNS
+policy), not an AgentNet trust source. AgentNet validates every returned address
+against the configured public-only default or explicit private address/CIDR
+pins, then the transport connects directly to an address from that exact
+snapshot. Production operators should use exact address pins when DNS alone is
+not an acceptable routing dependency. TLS certificate verification and SNI, plus
+the HTTP Host authority, continue to use the exact configured URL hostname.
+The transport does not consult environment proxies, does not follow redirects,
+and does not resolve the hostname a second time.
+
+Private/non-global provider addresses require explicit canonical HTTPS origins
+and exact JWK thumbprint pins in addition to canonical address or private-CIDR
+pins. Exact address pins, when present, constrain every resolved address.
+Unspecified, loopback, link-local, multicast, reserved, documentation,
+benchmark, transition/softwire, and IPv4-mapped addresses remain forbidden even
+when configured as pins. Hostname allowlists, hosts-file or proxy workarounds, HTTP downgrade, and a
+blanket private-network switch are not supported. These mechanics close the
+local DNS-rebinding/SSRF connection gap; they do not satisfy the real workforce
+IdP, independent WebAuthn/OOB, target-device custody, or owner-decision tiers.
+
 ## Component seams
 
 Owned semantics sit in strict models and protocols. Implementations are

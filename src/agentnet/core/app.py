@@ -360,6 +360,8 @@ class CommunicationCore:
                     allowed_signing_algorithms=oidc.allowed_signing_algorithms,
                     pinned_jwk_thumbprints=tuple(sorted(oidc.pinned_jwk_thumbprints.items())),
                     allowed_endpoint_origins=oidc.allowed_endpoint_origins,
+                    allowed_private_endpoint_cidrs=oidc.allowed_private_endpoint_cidrs,
+                    pinned_endpoint_addresses=oidc.pinned_endpoint_addresses,
                 )
             )
             self.oidc_enrollment = OIDCEnrollmentCoordinator(store, provider, enrollment)

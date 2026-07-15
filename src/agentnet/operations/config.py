@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
 from agentnet.identity.credentials import public_key_thumbprint
+from agentnet.identity.endpoint_policy import (
+    canonical_endpoint_address,
+    canonical_private_endpoint_network,
+)
 from agentnet.operations.policy_defaults import SecurePolicyDefaults
 
 
@@ -353,7 +357,9 @@ class OIDCEnrollmentConfig(BaseModel):
     client_id: str = Field(min_length=1, max_length=512)
     redirect_uri: str = Field(min_length=8, max_length=2_048)
     audience: str | None = Field(default=None, min_length=1, max_length=512)
-    allowed_endpoint_origins: tuple[str, ...] = ()
+    allowed_endpoint_origins: tuple[str, ...] = Field(default=(), max_length=32)
+    allowed_private_endpoint_cidrs: tuple[str, ...] = Field(default=(), max_length=64)
+    pinned_endpoint_addresses: tuple[str, ...] = Field(default=(), max_length=128)
     allowed_signing_algorithms: tuple[Literal["RS256", "ES256"], ...] = ("RS256",)
     pinned_jwk_thumbprints: dict[str, str] = Field(default_factory=dict)
     binding_assurance: Literal["os_bound", "hardware_bound"] = "hardware_bound"
@@ -404,6 +410,24 @@ class OIDCEnrollmentConfig(BaseModel):
             origins.append(canonical)
         if len(set(origins)) != len(origins):
             raise ValueError("OIDC endpoint origins must be unique")
+        private_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for value in self.allowed_private_endpoint_cidrs:
+            canonical = canonical_private_endpoint_network(value)
+            private_networks.append(ipaddress.ip_network(canonical, strict=True))
+        if len(set(private_networks)) != len(private_networks):
+            raise ValueError("OIDC private endpoint CIDR pins must be unique")
+        endpoint_addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for value in self.pinned_endpoint_addresses:
+            canonical = canonical_endpoint_address(value)
+            endpoint_addresses.append(ipaddress.ip_address(canonical))
+        if len(set(endpoint_addresses)) != len(endpoint_addresses):
+            raise ValueError("OIDC endpoint address pins must be unique")
+        private_addresses = [address for address in endpoint_addresses if not address.is_global]
+        if private_networks or private_addresses:
+            if not self.allowed_endpoint_origins:
+                raise ValueError("private OIDC endpoints require explicit endpoint origins")
+            if not self.pinned_jwk_thumbprints:
+                raise ValueError("private OIDC endpoints require exact JWK thumbprint pins")
         return self
 
 

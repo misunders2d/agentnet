@@ -100,6 +100,8 @@ class InternalInvitationOIDCCoordinator:
             "allowed_signing_algorithms": list(provider.config.allowed_signing_algorithms),
             "pinned_jwk_thumbprints": [list(item) for item in provider.config.pinned_jwk_thumbprints],
             "allowed_endpoint_origins": list(provider.config.allowed_endpoint_origins),
+            "allowed_private_endpoint_cidrs": list(provider.config.allowed_private_endpoint_cidrs),
+            "pinned_endpoint_addresses": list(provider.config.pinned_endpoint_addresses),
         }
         binding_digest = hashlib.sha256(canonical_json(provider_binding)).hexdigest()
         self.verifier_id = f"agentnet-internal-invitation-oidc-v1:{binding_digest}"
