@@ -1,0 +1,46 @@
+{
+  "run_id": "2026-07-15-v0.1.7",
+  "evaluated_at": "2026-07-15T17:36:58+00:00",
+  "scope": "v0_1_7_published_package_verification_hotfix_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "c7a1be7ec52a7cc239ec75044c33112c8b77a02f410c0c7f1e409484848bd735",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-15-v0.1.6/manifest.json",
+  "change_boundary": "Test-only verification correction: fresh PostgreSQL schemas are checked against the complete current migration catalog, and federation security-revocation HTTP testing uses the same live clock as policy decision recording. Runtime identity, authorization, migration, delivery, package activation, production, owner, and cutover semantics are unchanged.",
+  "commands": [
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv build --offline --no-build-isolation runs",
+      "result": "byte-identical 0.1.7 sdist and wheel archives"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q 'tests/federation/test_http_composition.py::test_http_domain_security_revocation_is_exact_authenticated_and_deny_only[asyncio]' tests/federation/test_bilateral_guest.py",
+      "result": "14 passed; 0 failed"
+    },
+    {
+      "command": "30 repeated isolated federation security-revocation HTTP test runs",
+      "result": "30 passed; 0 failed after live-clock alignment"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1049 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "npm run check",
+      "result": "source package gate 999 passed; 7 expected PostgreSQL skips; release manifest verification PASS; clean packed npm tarball 999 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-15-v0.1.7/artifacts/agentnet-0.1.7.tar.gz",
+      "sha256": "8e5b837b08cb4c7f7a9b22f76e19a444a0cc1824d542878f6bf12e6ae7d15fa8"
+    },
+    {
+      "path": "evidence/local/2026-07-15-v0.1.7/artifacts/agentnet-0.1.7-py3-none-any.whl",
+      "sha256": "6ca6fbd6471cdd2f4b9c22f852491af9089a8d234b815e021fdbb2f10e865b9f"
+    }
+  ]
+}

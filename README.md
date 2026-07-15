@@ -237,8 +237,8 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation; latest published package remains
-`0.1.5`. This branch prepares reviewed candidate `0.1.6`; it is not published
+AgentNet is an early public implementation; latest published package is
+`0.1.6`. This branch prepares verification hotfix candidate `0.1.7`; it is not published
 until Sergey performs the separate npm publication step. The
 repository contains a broad executable local kernel and adversarial test suite,
 but it does **not** claim production certification.

@@ -1244,11 +1244,11 @@ def test_real_postgres_pre_release_schema_fails_closed_without_catalog_mutation(
     ),
     reason="requires an explicitly mutation-authorized dedicated PostgreSQL test database",
 )
-def test_real_postgres_fresh_schema_installs_exact_first_release_catalog() -> None:
-    """Install the one clean-start migration in an isolated PostgreSQL schema."""
+def test_real_postgres_fresh_schema_installs_current_migration_catalog() -> None:
+    """Install the complete current migration catalog in an isolated PostgreSQL schema."""
 
     database_url = os.environ["AGENTNET_TEST_POSTGRES_URL"]
-    schema = f"agentnet_first_release_{uuid4().hex}"
+    schema = f"agentnet_current_catalog_{uuid4().hex}"
     administrator = psycopg.connect(database_url, autocommit=True)
     administrator.execute(
         psycopg.sql.SQL("CREATE SCHEMA {}").format(psycopg.sql.Identifier(schema))
@@ -1264,21 +1264,22 @@ def test_real_postgres_fresh_schema_installs_exact_first_release_catalog() -> No
         store = PostgreSQLStore(
             isolated_url,
             LocalEnvelopeCipher(b"v" * 32),
-            instance_id=f"first-release-{uuid4().hex}",
+            instance_id=f"current-catalog-{uuid4().hex}",
             start_lease_keeper=False,
         )
         assert store.fetch_all(
             "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
         ) == [
             {
-                "version": 1,
-                "name": MIGRATIONS[0].name,
-                "checksum": MIGRATIONS[0].checksum,
+                "version": migration.version,
+                "name": migration.name,
+                "checksum": migration.checksum,
             }
+            for migration in MIGRATIONS
         ]
         assert store.fetch_one(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "1"
+        )["value"] == str(CURRENT_SCHEMA_VERSION)
         require_relationship_governance_schema(store)
         require_post_audit_schema(store)
         for relation in (
@@ -1308,17 +1309,18 @@ def test_real_postgres_fresh_schema_installs_exact_first_release_catalog() -> No
         reopened = PostgreSQLStore(
             isolated_url,
             LocalEnvelopeCipher(b"v" * 32),
-            instance_id=f"first-release-reopen-{uuid4().hex}",
+            instance_id=f"current-catalog-reopen-{uuid4().hex}",
             start_lease_keeper=False,
         )
         assert reopened.fetch_all(
             "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
         ) == [
             {
-                "version": 1,
-                "name": MIGRATIONS[0].name,
-                "checksum": MIGRATIONS[0].checksum,
+                "version": migration.version,
+                "name": migration.name,
+                "checksum": migration.checksum,
             }
+            for migration in MIGRATIONS
         ]
     finally:
         if store is not None:

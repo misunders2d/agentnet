@@ -480,7 +480,10 @@ async def test_http_domain_security_revocation_is_exact_authenticated_and_deny_o
         assurance_policy=core.config.policies.federation,
         attenuation_policy=core.config.policies.attenuation,
         outage_gate=core.outage,
-        clock=lambda: now,
+        # Keep mutation-time revalidation on the same live clock used by
+        # CommunicationCore's policy decision. A frozen earlier second makes
+        # a fresh decision appear to come from the future under slow runs.
+        clock=time.time,
     )
     home = HomeFederationAssertion(
         host_domain_id="corp.example",

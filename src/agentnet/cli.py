@@ -2841,7 +2841,7 @@ def command_a2a_demo(_args: argparse.Namespace) -> int:
         template = AgentCard(
             name="Synthetic public proposal agent",
             description="Local A2A v1 conformance route",
-            version="0.1.6",
+            version="0.1.7",
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text/plain"],
             default_output_modes=["text/plain"],
