@@ -105,10 +105,45 @@ digests, then withhold payload for a marked event, any typed
 also protects records with no marker. The returned projection contains
 `payload: null`, `payload_available: false`, the access reason, and an
 `agentnet.custody-payload-reference.v1` object binding event, payload, and
-envelope digests. Supervisor/background consumers receive that same projection
-and cannot promote it to work. The current build defines no protected TaskGrant
-payload-release route, so task execution remains unavailable. Ordinary
-non-task message projections retain their existing authorized payload shape.
+envelope digests. Supervisor/background consumers receive that same projection and cannot
+promote it through any generic read. Protected execution uses strict supervisor
+operations in this order: `authorize` (one exact current `task.process` grant
+use), durable `custody`, then `payload-release`. The release request binds the
+existing authorization, cursor, and server-recorded local queue ID; it accepts
+no caller-selected actor, recipient, credential, domain, role, or idempotency
+key. The response binds event/envelope/payload/intent/provenance/grant/decision
+and release receipt, sets payload/semantic authority true, and keeps tool/effect
+authority false. The `task_payload_releases` row and audit append commit before
+plaintext leaves the transaction. Exact retries fresh-check current authority
+and return the same receipt without another grant use. `result` requires that
+exact committed release row. Ordinary non-task message projections retain
+their existing authorized payload shape.
+
+## Protected TaskGrant payload-release wire and storage contract
+
+`POST /v1/supervisor/executions/payload-release` accepts strict
+`agentnet.supervisor.task-payload-release.request.v1` content: the existing
+background authorization, immutable mailbox cursor, and exact local queue ID
+already committed by supervisor custody. Signed transport supplies the current
+recipient harness. The service revalidates current policy, credential, domain,
+grant, task intent, conflict, lifetime, payload, envelope, and provenance state
+inside one transaction.
+
+Schema migration 2 adds `task_payload_releases`, one row per
+`(event_id, recipient_harness_id)`, with a composite foreign key to
+`supervisor_executions`. It binds release request and authorization digests,
+local queue, TaskGrant and policy-decision IDs, intent/payload/envelope digests,
+policy/credential/domain epochs, authorization expiry, release time, and one
+unique receipt ID. SQLite upgrades only an exact checksum/catalog-verified v1
+store to v2 in one transaction; PostgreSQL applies the contiguous checksum-bound
+migration. Unknown, future, prototype, altered, partial, or noncontiguous state
+fails closed. Immutable migration 1 remains unchanged.
+
+A successful nonduplicate response is HTTP 201; exact retry is HTTP 200.
+Successful responses are `Cache-Control: no-store` and `Pragma: no-cache`.
+Result upload requires the same release row and incorporates its receipt into
+result provenance. Neither transport success nor result upload proves any
+business effect.
 
 ## Mailbox acknowledgement wire and storage contract
 

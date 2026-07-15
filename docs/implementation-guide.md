@@ -232,8 +232,9 @@ Passing arbitrary host paths would let a compromised model select files, while
 passing bytes/base64 would expose protected content to model context and local
 binding logs. A future harness artifact tool requires an owner-selected staging
 root and opaque supervisor-issued handles; until then, use the explicit CLI or
-signed client API. Task custody still grants no artifact access or TaskGrant
-payload release.
+signed client API. Task custody alone still grants neither artifact access nor
+protected payload release; the exact recipient-owned supervisor flow below is
+required.
 
 ## Implemented kernel
 
@@ -389,13 +390,29 @@ also withheld; a removed or substituted marker fails immutable-envelope
 validation rather than revealing bytes. Ordinary non-task messages continue to
 return their authorized payloads.
 
-This build has **no protected TaskGrant payload-release route**. A task grant
-object therefore cannot make these stored payload bytes visible or executable
-through a generic read, supervisor, or worker path. This closes the custody
-non-grant boundary at the cost of leaving task execution unavailable. Adding a
-release path is separate security work requiring an exact current TaskGrant,
-source/sink/data/tool/effect authorization, audit-before-release ordering, and
-new adversarial review; an `include_payload` flag is not an acceptable design.
+Protected task processing uses a separate signed supervisor lifecycle; generic
+reads never gain an unlock option:
+
+1. `/v1/supervisor/executions/authorize` binds the exact recipient, event,
+   cursor, envelope/payload, action `task.process`, event resource, mailbox
+   source, receipt sink, classification, policy decision, and current TaskGrant.
+   This step consumes the grant's one execution use.
+2. The supervisor persists the redacted item in its encrypted local queue and
+   records `/custody` with the exact server-known queue ID.
+3. `/payload-release` fresh-checks actor, grant dimensions/revocation/expiry,
+   policy/credential/domain epochs, delivery/effect/retention boundaries,
+   active conflict-free execution intent, immutable bytes, and provenance. It
+   commits one disclosure receipt plus audit record before returning plaintext.
+4. Exact response-loss retry repeats current-state checks and returns the same
+   receipt without another grant use. Revocation or drift denies the retry.
+5. `/result` requires that exact release receipt; custody-only or migrated
+   `result_uploaded` state cannot obtain payload retroactively.
+
+The release response grants payload access and semantic processing for that
+exact task only. `tool_authorized` and `effect_authorized` remain false. Current
+TaskGrant has no implicit tool, network-origin, budget, credential, artifact, or
+business-effect authority; those require separately modeled grants and effect
+reservations. No `include_payload` or caller-selected idempotency field exists.
 
 Both activation-intent variants are local database provenance. They do not
 prove independent publication or witnessing, and a coherently compromised
@@ -403,21 +420,24 @@ database can alter local edge and intent rows together. Production operation
 still requires the independent audit exporter/checkpoint/witness and
 reconciliation evidence tracked by the release gates.
 
-### Clean-start schema v1 and recovery
+### Versioned schema and recovery
 
-AgentNet has no supported predecessor database format. SQLite creates the full
-storage schema at version 1; PostgreSQL applies the single contiguous,
-checksum-bound `agentnet_first_release_schema` migration. Service startup
-verifies exact metadata, migration records/checksums, objects, indexes,
-triggers, and constraints and fails closed on any missing, altered, older, or
-newer state.
+AgentNet has no supported prototype/pre-release database format. Immutable
+migration 1 is the complete first-release schema and retains checksum
+`c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f`.
+Current unreleased source adds contiguous migration 2 only for durable protected
+payload-release receipts. Fresh SQLite creates schema v2. An existing SQLite
+store upgrades only when metadata, every migration record/checksum, and the
+entire v1 object catalog match exactly; the v1→v2 change commits atomically or
+rolls back without partial objects. PostgreSQL applies the same contiguous
+checksum-bound catalog. Unknown, missing, altered, prototype, noncontiguous,
+future, or unsupported older state fails closed before use.
 
-Do not point AgentNet at a pre-release or differently named database, edit its
-version metadata, or infer relationship authority from unilateral records. A
-transition from exploratory data requires a reviewed export of non-authority
-content into a freshly initialized v1 store and fresh exact bilateral consent.
-Restore only an exact signed and verified AgentNet v1 backup; rollback cannot
-synthesize or reactivate authority.
+Do not edit version metadata or infer authority from unilateral/prototype
+records. Transition from exploratory data requires reviewed export of
+non-authority content into a fresh current store and fresh exact bilateral
+consent. Restore only an exact signed and verified compatible AgentNet backup;
+rollback cannot synthesize/reactivate authority or downgrade metadata.
 
 Backup manifest, trust, seal, and archive publication is fail-closed and bound
 to the exact source database, schema, domain, key epoch, and bytes. If rollback

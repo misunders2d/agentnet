@@ -287,18 +287,21 @@ Every connection performs an authenticated profile handshake carrying protocol r
 
 The core supports a declared N/N-1 read/write window and an expand → migrate/backfill → verify → contract database sequence. Rollback is allowed only within the declared compatibility window and never rolls back revocation/security state. Deprecation, cache invalidation, mixed-version receipt behavior, and partially capable adapters are versioned policy.
 
-AgentNet's first release starts at storage schema version 1. SQLite initializes
-the complete v1 authority model atomically, and PostgreSQL applies one
-contiguous checksum-bound first-release migration. Exact metadata, migration
-records, objects, indexes, constraints, and security triggers are startup
-requirements; an altered, older, or newer unsupported store fails closed.
+AgentNet's immutable first release starts at storage schema version 1 with one
+complete checksum-bound authority migration. Current unreleased source adds
+contiguous migration 2 only for the protected task-payload disclosure receipt.
+Fresh SQLite initializes v2 atomically; an existing SQLite store upgrades only
+from an exact metadata/catalog/checksum/object-verified v1 state and commits the
+v1→v2 migration atomically or not at all. PostgreSQL applies the same contiguous
+migration catalog. Altered, prototype, noncontiguous, future, or unsupported
+older state fails closed.
 
-No pre-release or differently named database is an authority source, and there
-is no in-place conversion that infers bilateral consent from a unilateral edge.
-An operator moving exploratory data must export only reviewed non-authority
-content, initialize a fresh v1 store, and obtain fresh exact consent. Rollback
-may restore only an exact verified AgentNet v1 backup and cannot synthesize or
-reactivate relationship authority.
+No pre-release or differently named database is an authority source, and no
+conversion infers bilateral consent from a unilateral edge. Operator moving
+exploratory data exports only reviewed non-authority content, initializes a
+fresh current store, and obtains fresh exact consent. Rollback may restore only
+an exact signed, verified compatible backup and cannot downgrade metadata,
+synthesize, or reactivate relationship authority.
 
 Configuration uses a portable versioned schema split into:
 
@@ -497,11 +500,20 @@ or task-linked control event. They return only immutable event metadata,
 digests, and a custody reference with `payload_access=task_grant_required`.
 This denial uses the typed task/control shape as a fail-closed fallback, so a
 record with no marker is still withheld and deleting or changing the
-marker cannot promote it to ordinary content. There is no protected TaskGrant
-payload-release route in this implementation patch; consequently such custody
-cannot enter semantic execution through AgentNet yet, even if another grant
-object exists. Ordinary non-task messages retain their normal authorized
-mailbox and conversation payload behavior.
+marker cannot promote it to ordinary content. Protected release exists only on
+the recipient-owned supervisor execution path. Authorization consumes one
+exact current `task.process` TaskGrant use bound to the event, action, resource,
+mailbox source, receipt sink, classification, principal, and harness. The
+recipient then durably records exact local queue custody before the release
+transaction rechecks the immutable cursor/envelope/payload, current policy,
+credential and domain epochs, grant dimensions/revocation/expiry, delivery,
+effect and retention boundaries, active execution intent, and unresolved
+conflicts. It validates plaintext and provenance inside the transaction,
+commits one disclosure receipt and audit record, and returns bytes only after
+commit. Exact retries repeat current-state checks and reuse the receipt without
+another grant use. Generic reads remain permanently redacted, and release
+explicitly grants neither tool nor effect authority. Ordinary non-task messages
+retain their normal authorized mailbox and conversation payload behavior.
 
 The reverse and lateral directions are fail-closed. A subordinate/manager agent assigning a task to one of its administrators, or one manager agent assigning a task to a peer manager, creates a non-executable proposal in `pending_human` and requires explicit confirmation by the recipient's human owner. It may bypass that confirmation only when a separate current relationship independently grants the sender `may_assign` over that recipient for the exact task scope. An agent can therefore be an administrator relative to some agents and a subordinate relative to others; authorization is evaluated for the exact directed edge, never from a global title or payload claim.
 
@@ -539,10 +551,12 @@ against the predecessor's prior lifecycle revision is stale and fails; a fresh
 exact command is required to revoke the new active edge. At most one exact
 directed pair is active.
 
-The clean-start storage schema v1 contains these governance transactions and
-exception receipts as first-release authority objects. Relationship and
-assignment services verify the exact schema at startup. No unsupported store
-or unilateral record is converted into consent.
+Immutable storage schema v1 contains these governance transactions and
+exception receipts as first-release authority objects. Current unreleased
+source adds contiguous schema migration 2 for the protected payload-release
+receipt only. Exact catalog/checksum verification precedes the one-transaction
+SQLite v1→v2 upgrade and PostgreSQL migration application. No unsupported,
+tampered, prototype, or unilateral record is converted into consent.
 
 The implemented conflict lifecycle binds every automatically accepted task to
 a strict typed resource/operation/access/exclusivity intent. Incompatible live
@@ -562,13 +576,19 @@ A delegated task carries the delegator’s verified identity, requested outcome,
 
 Assignment processing has two distinct security decisions. First, the relationship policy decides whether the recipient mailbox may automatically record `accepted_queued` or must record a non-executable `pending_human` proposal. Second, before semantic processing, any protected read, or any effect, the PEP performs the full recipient-side authorization and intent checks below. Automatic downward acceptance never means automatic privilege inheritance or unrestricted execution.
 
-In the current implementation, the second decision has no task-payload release
-endpoint to reach: every generic mailbox, conversation, supervisor, and
-background-worker path receives only the task custody reference. This
-deliberately enforces the non-grant invariant but also means accepted task
-payloads are not executable. A future release route would need a separately
-reviewed exact TaskGrant ceremony and current source/sink/data/tool/effect
-checks; no caller flag or generic read may unlock the stored bytes.
+The second decision is implemented as a separate recipient-owned supervisor
+flow, never as a generic read flag. `authorize` consumes one exact current
+`task.process` TaskGrant use; durable local custody binds the queue; protected
+payload release then rechecks current actor, grant, policy, credential, domain,
+intent, conflict, digest, provenance, and lifetime state and commits its audit
+and disclosure receipt before returning plaintext. A result upload requires
+that exact committed release receipt, so local custody alone cannot fabricate
+semantic processing and an old `result_uploaded` row cannot retroactively
+obtain payload bytes. Response-loss retries reuse the release receipt without
+another grant use. Current TaskGrant dimensions establish payload access and
+semantic-processing authority only; the release response keeps tool and effect
+authority false. Separate grants/reservations remain mandatory for any tool,
+network, budget, protected sink, or business effect.
 
 Autonomous semantic processing also requires an **exact task grant** issued through a locally authenticated human action or preapproved deterministic workflow. It binds allowed input sources, output sinks and recipients, actions, resources, data classes, tools, network origins, budget, expiry, and whether further confirmation is required. The PEP intersects human entitlement ∩ harness eligibility ∩ exact task grant ∩ resource/data-class policy ∩ current revocation state.
 
@@ -696,9 +716,10 @@ Each recipient/fanout branch has its own projection. partially_delivered is comp
   non-actionable. Generic mailbox/conversation/supervisor projections never
   release task-assignment or task-linked-control payload bytes: they expose
   only immutable metadata/digests and the custody reference, including for
-  records without the marker. The current build supplies no protected TaskGrant
-  payload-release route, so those bytes remain non-executable. Ordinary
-  non-task content remains fetchable under its normal authorization and
+  records without the marker. Protected bytes are available only through the
+  separately signed, recipient-owned supervisor authorization → local-custody →
+  payload-release flow described in §8.3; generic projections remain
+  nondisclosing. Ordinary non-task content remains fetchable under its normal authorization and
   retention policy. Classification suppresses model wake or notification,
   never durable visibility. After lawful expiry/deletion, preserve only the
   minimized access-controlled tombstone, receipt chain, deletion authority,

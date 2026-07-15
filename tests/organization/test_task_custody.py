@@ -591,8 +591,11 @@ def test_missing_deadline_is_server_derived_bound_persisted_and_retry_stable(
     assert item["payload_available"] is False
     assert item["payload_withheld_reason"] == "exact_task_grant_required"
     assert "c2 relationship custody canary" not in json.dumps(item, sort_keys=True)
-    with pytest.raises(AuthorizationError, match="payload is unavailable"):
-        BackgroundHarnessIntegration._mailbox_item(item)
+    assert BackgroundHarnessIntegration._mailbox_item(item) == (
+        event.event_id,
+        item["cursor"],
+        item["envelope_digest"],
+    )
 
 
 def test_missing_deadline_uses_scope_duration_when_relationship_outlives_scope(

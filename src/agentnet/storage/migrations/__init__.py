@@ -22,6 +22,7 @@ from agentnet.storage.response_obligation_schema import RESPONSE_OBLIGATION_SCHE
 from agentnet.storage.supervisor_schema import SUPERVISOR_SCHEMA
 from agentnet.storage.sqlite import BASE_SCHEMA as SQLITE_BASE_SCHEMA
 from agentnet.storage.task_custody_schema import TASK_CUSTODY_SCHEMA
+from agentnet.storage.task_payload_release_schema import TASK_PAYLOAD_RELEASE_SCHEMA
 from agentnet.storage.versioning_schema import VERSIONING_SCHEMA
 from agentnet.storage.workload_schema import WORKLOAD_SCHEMA
 
@@ -112,6 +113,11 @@ def _postgres_first_release_schema() -> str:
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "agentnet_first_release_schema", _postgres_first_release_schema()),
+    Migration(
+        2,
+        "protected_task_payload_release",
+        TASK_PAYLOAD_RELEASE_SCHEMA.replace(" INTEGER", " BIGINT"),
+    ),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

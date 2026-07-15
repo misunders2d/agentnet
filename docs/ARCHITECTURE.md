@@ -148,9 +148,18 @@ ordinary downstream delivery expose only immutable metadata/digests plus an
 task-linked controls. Typed task/control classification is the fallback for
 records without `payload_access`, and envelope/payload digests are
 validated before projection, so marker removal or substitution fails closed.
-There is no protected TaskGrant payload-release route in the current build; therefore
-task execution is unavailable through AgentNet while the custody-only
-non-grant invariant is enforced. Ordinary non-task messages are unchanged.
+Protected release is intentionally separate from every generic projection.
+The signed recipient supervisor first authorizes the exact task with one current
+`task.process` grant use, durably records the exact local queue custody, then
+calls `/v1/supervisor/executions/payload-release`. The release transaction
+rechecks current actor/grant/policy/credential/domain state, immutable
+cursor/envelope/payload bindings, deadlines/retention, active conflict-free
+intent, and provenance. It commits one `task_payload_releases` receipt and audit
+record before returning validated plaintext. Exact retries recheck current
+state and reuse the receipt without another grant use. Result upload requires
+that committed receipt. Generic mailbox, conversation, relay, and supervisor
+reconciliation remain redacted; release grants no tool or effect authority.
+Ordinary non-task messages are unchanged.
 
 ## Authenticated mailbox acknowledgement
 
@@ -228,22 +237,24 @@ fallback interval. It stores the content-free counter snapshot encrypted in the
 local WAL queue, so attention survives a supervisor restart without injecting
 message content into the foreground. Wake events still carry no authority.
 
-## First-release storage authority boundary
+## Versioned storage authority boundary
 
-AgentNet starts at storage schema version 1, which includes the
-response-obligation tables. SQLite and PostgreSQL initialize that same complete
-clean-start authority model atomically from the single checksum-bound baseline.
-Relationship authority exists only in the
-bilateral governance transaction and exact policy-exception records. Startup
-requires the exact current metadata, migration catalog, tables, indexes, constraints,
-and security triggers and fails closed on missing, altered, older, or newer
-state.
+Immutable schema migration 1 is the complete first-release authority model,
+including response obligations and bilateral governance. Current unreleased
+source adds contiguous migration 2 only for protected task-payload disclosure
+receipts. Fresh SQLite creates v2; an exact catalog/checksum-verified v1 store
+may upgrade to v2 in one transaction. PostgreSQL applies the same contiguous
+checksum-bound catalog. Relationship authority still exists only in bilateral
+governance transactions and exact policy-exception records. Startup requires
+exact current metadata, migration rows/checksums, tables, indexes, constraints,
+and security triggers and fails closed on missing, altered, prototype,
+noncontiguous, future, or unsupported older state.
 
-There is no supported in-place conversion from a pre-release or differently
-named database and no rule that infers consent from a unilateral edge. An
-operator must export non-authority data through a reviewed tool, initialize a
-fresh AgentNet v1 store, and obtain fresh exact bilateral consent. Rollback may
-restore only an exact verified v1 backup and may never synthesize or reactivate
+There is no conversion from a pre-release/differently named database and no
+rule inferring consent from a unilateral edge. Operator exports only reviewed
+non-authority data, initializes a fresh current store, and obtains fresh exact
+bilateral consent. Rollback may restore only an exact signed, verified,
+compatible backup and may never downgrade metadata or synthesize/reactivate
 relationship authority.
 
 ## Causal and artifact provenance

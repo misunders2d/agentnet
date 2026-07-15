@@ -128,8 +128,10 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "PostgreSQL 18.4",
         "accepted_local",
         "measured supervisor-launched child",
-        "no protected TaskGrant payload-release route",
+        "Protected source builds use one exact recipient-owned supervisor sequence",
+        "result upload requires the committed release receipt",
         "include_payload",
+        "tool and effect authority false",
     ):
         assert required in boundaries
 

@@ -80,9 +80,18 @@ The supervisor delivers the capability after launch through a private channel. I
 
 ## Task custody versus execution
 
-An in-scope downward assignment may enter `accepted_queued` custody, but generic mailbox, conversation, supervisor, and worker reads withhold task payload bytes. The current build has no protected TaskGrant payload-release route, so task execution remains unavailable even when a TaskGrant object exists.
+An in-scope downward assignment may enter `accepted_queued` custody, but generic mailbox, conversation, relay, supervisor-reconciliation, and worker-input reads always withhold task payload bytes. Custody alone is never executable.
 
-Do not suggest an `include_payload` flag or generic-read bypass. A future release route must require the exact current TaskGrant, source/sink/data/tool/effect authorization, audit-before-release ordering, and adversarial tests. Until shipped, report **blocked: protected TaskGrant payload-release component not yet shipped**.
+Protected source builds use one exact recipient-owned supervisor sequence:
+
+1. `authorize` consumes one current event-scoped `task.process` TaskGrant use;
+2. the redacted item is durably queued and exact local custody is acknowledged;
+3. `payload-release` fresh-checks actor, grant dimensions/revocation/expiry, policy/credential/domain epochs, deadlines/retention, active conflict-free intent, immutable payload/envelope, and provenance;
+4. one disclosure receipt and audit record commit before plaintext returns;
+5. exact retry rechecks current state and reuses that receipt without another use;
+6. result upload requires the committed release receipt.
+
+Do not suggest an `include_payload` flag, caller-selected idempotency key, generic-read bypass, retroactive release after result, or a second grant consumption. Payload release authorizes only exact payload access and semantic processing. It keeps tool and effect authority false; network, budget, credentials, artifacts, protected outputs, and business effects require separately modeled authority. If an installed release predates schema migration 2 or lacks this route, report **blocked: installed AgentNet release lacks protected TaskGrant payload release** rather than weakening the boundary.
 
 ## A2A boundary
 

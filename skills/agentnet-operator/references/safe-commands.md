@@ -183,6 +183,28 @@ presentation, reading, processing, response-obligation acknowledgement, task
 payload release, or an effect. Exact retries converge on the original receipt.
 Do not acknowledge before the recipient's own durable storage and dedup commit.
 
+## Protected delegated task execution
+
+There is no operator command or generic mailbox flag that prints a protected
+task payload. In source builds with schema migration 2, the enrolled background
+supervisor performs the exact sequence internally:
+
+```text
+authorize task.process → enqueue redacted custody → acknowledge exact local queue
+→ payload-release with durable receipt/audit → isolated worker → result upload
+```
+
+Authorization consumes one current event/resource/mailbox/receipt/classification-
+bound TaskGrant use. Release consumes no second use and fails after actor,
+credential, domain, policy, grant, intent, conflict, lifetime, digest, or
+provenance drift. Result upload fails until release commits. Generic inbox,
+conversation, relay, and supervisor reconciliation remain redacted.
+`tool_authorized=false` and `effect_authorized=false`; never infer host paths,
+network, budget, credentials, artifact access, protected output sinks, or
+business effects from payload visibility. If the installed release lacks
+migration 2 or `/v1/supervisor/executions/payload-release`, upgrade through the
+owner-reviewed release path; do not bypass the gate.
+
 ## Bounded artifact examples
 
 Upload one explicit caller-owned regular file into quarantine. Reuse the same

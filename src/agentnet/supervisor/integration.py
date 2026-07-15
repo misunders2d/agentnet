@@ -39,6 +39,14 @@ class SupervisorCoreClient(Protocol):
         local_queue_id: str,
     ) -> None: ...
 
+    def release_task_payload(
+        self,
+        item: Mapping[str, Any],
+        authorization: BackgroundTurnAuthorization,
+        *,
+        local_queue_id: str,
+    ) -> dict[str, Any]: ...
+
     def upload_result(self, result: Mapping[str, Any]) -> None: ...
 
 
@@ -188,10 +196,41 @@ class BackgroundHarnessIntegration:
             or len(envelope_digest) != 64
         ):
             raise AuthorizationError("corporate mailbox item binding is invalid")
-        if item.get("payload_available") is not True or not isinstance(item.get("payload"), dict):
-            raise AuthorizationError("corporate mailbox item payload is unavailable")
-        if item.get("fact") in {"pending_human", "authorization_hold", "rejected_before_accept"}:
+        if item.get("fact") in {
+            "pending_human",
+            "authorization_hold",
+            "rejected_before_accept",
+            "conflict_pending",
+        }:
             raise AuthorizationError("non-executable custody cannot enter a background worker")
+        if event.get("event_type") == "task_assignment":
+            reference = item.get("custody_reference")
+            if (
+                item.get("payload") is not None
+                or item.get("payload_available") is not False
+                or item.get("payload_access") != "task_grant_required"
+                or item.get("payload_withheld_reason") != "exact_task_grant_required"
+                or not isinstance(reference, dict)
+                or set(reference)
+                != {
+                    "schema",
+                    "event_id",
+                    "payload_digest",
+                    "envelope_digest",
+                    "payload_access",
+                }
+                or reference.get("schema") != "agentnet.custody-payload-reference.v1"
+                or reference.get("event_id") != event["event_id"]
+                or reference.get("envelope_digest") != envelope_digest
+                or reference.get("payload_access") != "task_grant_required"
+                or not isinstance(reference.get("payload_digest"), str)
+                or len(reference["payload_digest"]) != 64
+            ):
+                raise AuthorizationError("protected task custody reference is invalid")
+        elif item.get("payload_available") is not True or not isinstance(
+            item.get("payload"), dict
+        ):
+            raise AuthorizationError("corporate mailbox item payload is unavailable")
         return event["event_id"], cursor, envelope_digest
 
     def receive_from_core(self, *, harness_id: str, event: dict[str, Any], cursor: int) -> dict[str, Any]:
@@ -273,11 +312,29 @@ class BackgroundHarnessIntegration:
                         authorization,
                         local_queue_id=queued["queue_id"],
                     )
+                    released = self.core_client.release_task_payload(
+                        item,
+                        authorization,
+                        local_queue_id=queued["queue_id"],
+                    )
                     response = runtime.submit_background(
                         json.dumps(
                             {
+                                "authority": {
+                                    "effect_authorized": released["effect_authorized"],
+                                    "payload_access_authorized": released[
+                                        "payload_access_authorized"
+                                    ],
+                                    "release_receipt_id": released["release_receipt_id"],
+                                    "semantic_processing_authorized": released[
+                                        "semantic_processing_authorized"
+                                    ],
+                                    "tool_authorized": released["tool_authorized"],
+                                },
                                 "event": item["event"],
-                                "payload": item["payload"],
+                                "intent": released["intent"],
+                                "payload": released["payload"],
+                                "provenance": released["provenance"],
                                 "task_grant_id": authorization.task_grant_id,
                             },
                             allow_nan=False,

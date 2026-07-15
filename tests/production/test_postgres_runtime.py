@@ -39,6 +39,7 @@ from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, vali
 from agentnet.storage.relationship_governance_schema import (
     RELATIONSHIP_GOVERNANCE_REQUIRED_INDEXES,
     RELATIONSHIP_GOVERNANCE_SCHEMA_VERSION,
+    RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA,
     require_relationship_governance_schema,
 )
 from agentnet.storage.post_audit_schema import (
@@ -72,14 +73,19 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_first_release_migration_catalog_is_single_complete_postgres_schema(
+def test_numbered_migration_catalog_preserves_v1_and_adds_protected_release(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 1
+    assert CURRENT_SCHEMA_VERSION == 2
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
+        (2, "protected_task_payload_release"),
     ]
+    assert (
+        MIGRATIONS[0].checksum
+        == "c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f"
+    )
     schema = "\n".join(migration.sql for migration in MIGRATIONS)
     assert "AUTOINCREMENT" not in schema
     assert " INTEGER" not in schema
@@ -118,6 +124,8 @@ def test_first_release_migration_catalog_is_single_complete_postgres_schema(
         "CREATE TABLE IF NOT EXISTS artifact_byte_accounts",
         "CREATE TABLE IF NOT EXISTS artifact_byte_charges",
         "CREATE INDEX IF NOT EXISTS idx_artifact_reservations_expiry_state",
+        "CREATE TABLE IF NOT EXISTS task_payload_releases",
+        "CREATE INDEX IF NOT EXISTS idx_task_payload_releases_recipient",
     ):
         assert required in schema
     assert "ON CONFLICT(reservation_id) DO NOTHING" in schema
@@ -200,6 +208,92 @@ def test_sqlite_fresh_database_records_exact_first_release_catalog(tmp_path: Pat
         ) is None
     finally:
         store.close()
+
+
+def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
+    store = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('preserved-sentinel','exact-v1-data')"
+            )
+    finally:
+        store.close()
+
+    v1 = sqlite3.connect(path)
+    try:
+        v1.execute("DROP INDEX idx_task_payload_releases_recipient")
+        v1.execute("DROP TABLE task_payload_releases")
+        v1.execute("DELETE FROM installed_migration_catalog WHERE version=2")
+        v1.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
+        v1.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
+        v1.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+        v1.executescript(RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA)
+        v1.commit()
+    finally:
+        v1.close()
+
+
+def test_sqlite_exact_v1_database_upgrades_to_v2_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v1-upgrade.sqlite3"
+    key = b"u" * 32
+    _make_exact_v1_sqlite(path, key=key)
+
+    upgraded = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        assert upgraded.fetch_one(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        )["value"] == "2"
+        assert upgraded.fetch_one(
+            "SELECT value FROM metadata WHERE key='preserved-sentinel'"
+        )["value"] == "exact-v1-data"
+        assert [tuple(row) for row in upgraded.fetch_all(
+            "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
+        )] == [
+            (migration.version, migration.name, migration.checksum)
+            for migration in MIGRATIONS
+        ]
+        assert upgraded.fetch_one(
+            "SELECT COUNT(*) AS count FROM task_payload_releases"
+        )["count"] == 0
+    finally:
+        upgraded.close()
+
+
+def test_sqlite_v1_to_v2_migration_failure_rolls_back_without_partial_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "v1-upgrade-rollback.sqlite3"
+    key = b"v" * 32
+    _make_exact_v1_sqlite(path, key=key)
+    before = _sqlite_logical_snapshot(path)
+    monkeypatch.setitem(
+        __import__("agentnet.storage.sqlite", fromlist=["_SQLITE_MIGRATION_SQL"])
+        ._SQLITE_MIGRATION_SQL,
+        2,
+        "CREATE TABLE migration_partial(value TEXT); SELECT missing_function();",
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="missing_function"):
+        SQLiteStore(path, LocalEnvelopeCipher(key))
+
+    assert _sqlite_logical_snapshot(path) == before
+    raw = sqlite3.connect(path)
+    try:
+        assert raw.execute(
+            "SELECT name FROM sqlite_master WHERE name='migration_partial'"
+        ).fetchone() is None
+        assert raw.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0] == "1"
+        assert raw.execute(
+            "SELECT COUNT(*) FROM installed_migration_catalog"
+        ).fetchone()[0] == 1
+    finally:
+        raw.close()
 
 
 def test_sqlite_nonempty_unversioned_prototype_fails_closed_without_mutation(

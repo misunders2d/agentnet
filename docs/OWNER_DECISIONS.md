@@ -23,9 +23,11 @@ The bilateral implementation is a safe mechanism, not an owner decision.
 Proposals have zero authority; normal activation verifies exact current
 subordinate human/guest-owner consent; policy exceptions and administrative
 revocation require distinct exact signed actions; renewal, expiry, subject
-exit, and races are revision-fenced. AgentNet's clean-start storage schema v1
-contains the current bilateral authority model; unsupported pre-release stores
-are rejected and no unilateral edge is converted into consent.
+exit, and races are revision-fenced. Immutable first-release storage schema v1
+contains the bilateral authority model; current unreleased migration 2 adds only
+protected payload-release receipts and does not alter relationship authority.
+Unsupported pre-release stores are rejected and no unilateral edge is converted
+into consent.
 
 An accountable owner must still record:
 

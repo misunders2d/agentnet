@@ -11,6 +11,8 @@ import httpx
 from agentnet.client import AgentNetClient
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.bindings.ipc import linux_process_probe
+from agentnet.organization.conflicts import TaskExecutionIntent
+from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.supervisor.runtime import BackgroundTurnAuthorization
 
 
@@ -213,6 +215,96 @@ class AgentNetSupervisorCoreClient:
             or value["state"] not in {"local_custody", "result_uploaded"}
         ):
             raise ValidationError("corporate custody receipt schema is invalid")
+
+    def release_task_payload(
+        self,
+        item: Mapping[str, Any],
+        authorization: BackgroundTurnAuthorization,
+        *,
+        local_queue_id: str,
+    ) -> dict[str, Any]:
+        event_id, cursor, envelope_digest = self._item_binding(item)
+        if (
+            event_id != authorization.event_id
+            or envelope_digest != authorization.envelope_digest
+            or not local_queue_id
+        ):
+            raise AuthorizationError("task payload release crossed its exact local custody")
+        response = self.client.request(
+            "POST",
+            "/v1/supervisor/executions/payload-release",
+            json_body={
+                "authorization": asdict(authorization),
+                "cursor": cursor,
+                "local_queue_id": local_queue_id,
+            },
+        )
+        if (
+            response.headers.get("cache-control") != "no-store"
+            or response.headers.get("pragma") != "no-cache"
+        ):
+            response.close()
+            raise ValidationError("task payload release response is cacheable")
+        value = self._value(response)
+        required = {
+            "classification",
+            "duplicate",
+            "effect_authorized",
+            "envelope_digest",
+            "event_id",
+            "input_source",
+            "intent",
+            "intent_digest",
+            "output_sink",
+            "payload",
+            "payload_access_authorized",
+            "payload_digest",
+            "policy_decision_id",
+            "provenance",
+            "recipient_harness_id",
+            "release_expires_at",
+            "release_receipt_id",
+            "schema",
+            "semantic_processing_authorized",
+            "task_grant_id",
+            "tool_authorized",
+        }
+        try:
+            intent = TaskExecutionIntent.model_validate_json(
+                canonical_json(value["intent"]),
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError("task payload release intent is invalid") from exc
+        if (
+            not isinstance(value, dict)
+            or set(value) != required
+            or value["schema"] != "agentnet.supervisor.task-payload-release.v1"
+            or value["event_id"] != event_id
+            or value["recipient_harness_id"] != authorization.harness_id
+            or value["envelope_digest"] != envelope_digest
+            or value["classification"] != authorization.classification
+            or value["task_grant_id"] != authorization.task_grant_id
+            or value["policy_decision_id"] != authorization.decision_id
+            or value["release_expires_at"] != authorization.expires_at
+            or value["input_source"] != "mailbox"
+            or value["output_sink"] != "receipt"
+            or value["payload_access_authorized"] is not True
+            or value["semantic_processing_authorized"] is not True
+            or value["tool_authorized"] is not False
+            or value["effect_authorized"] is not False
+            or not isinstance(value["duplicate"], bool)
+            or not isinstance(value["release_receipt_id"], str)
+            or not value["release_receipt_id"]
+            or not isinstance(value["payload"], dict)
+            or canonical_digest(value["payload"]) != value["payload_digest"]
+            or canonical_digest(intent.model_dump(mode="json")) != value["intent_digest"]
+            or not isinstance(value["provenance"], dict)
+            or value["provenance"].get("content_digest") != value["payload_digest"]
+            or value["provenance"].get("authority_effect") != "none"
+        ):
+            raise ValidationError("task payload release response schema is invalid")
+        return value
 
     def upload_result(self, result: Mapping[str, Any]) -> None:
         if not isinstance(result, dict) or set(result) != {

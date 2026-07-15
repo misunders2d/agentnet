@@ -131,7 +131,7 @@ payload as potentially hostile.
 | Harness attribution | Every enrolled harness has an independent identity and can be revoked without revoking its siblings |
 | Enrollment | Binds corporate identity, harness key possession, and independent human confirmation |
 | Authorization | Rechecks current scope, policy, credential epochs, expiry, revocation, and exact request intent |
-| Delegation | Management can authorize scoped task custody; it never transfers another person's data authority |
+| Delegation | Management can authorize scoped task custody only; protected payload release separately requires the recipient's exact current TaskGrant, local custody, intent, audit, and immutable binding and grants no tool/effect authority |
 | Delivery | Separates submission, custody, presentation, processing, completion, failure, and unknown outcomes |
 | Federation | Host-controlled, least-privilege, non-transitive, expiring, and explicitly domain-bound |
 | Failure behavior | Missing or stale identity, policy, evidence, or authority fails closed |
@@ -151,6 +151,7 @@ controls.
 - **Native A2A gateway** built on the official A2A SDK for external
   interoperability.
 - **Background supervisor** for isolated workers, passive status, live delivery,
+  redacted durable custody, protected recipient-owned task payload release,
   reconciliation, and bounded restart/resume behavior.
 
 ## Install
@@ -218,7 +219,9 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation, currently version `0.1.5`. The
+AgentNet is an early public implementation; latest published package remains
+`0.1.5`. This branch contains unreleased source changes that are not present in
+that immutable package/tag until a separately reviewed future release. The
 repository contains a broad executable local kernel and adversarial test suite,
 but it does **not** claim production certification.
 

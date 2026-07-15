@@ -28,6 +28,7 @@ from agentnet.authorization.policy import (
 )
 from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.identity.actors import VerifiedActor
+from agentnet.organization.conflicts import TaskExecutionIntent
 from agentnet.protocol.models import Classification, DeliveryFact, EventType, TaskGrant
 from agentnet.provenance import (
     ProvenanceObjectType,
@@ -36,6 +37,9 @@ from agentnet.provenance import (
     TransformationStep,
 )
 from agentnet.security.signatures import canonical_digest, canonical_json
+from agentnet.storage.task_payload_release_schema import (
+    require_task_payload_release_schema,
+)
 
 if TYPE_CHECKING:
     from agentnet.bindings.composition import LocalBindingService
@@ -74,6 +78,14 @@ class CustodyBody(BaseModel):
     local_queue_id: str = Field(min_length=1, max_length=256)
 
 
+class PayloadReleaseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorization: BackgroundAuthorizationBody
+    cursor: int = Field(ge=1)
+    local_queue_id: str = Field(min_length=1, max_length=256)
+
+
 class ResultBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +116,7 @@ class SupervisorExecutionService:
     def __init__(self, core: "CommunicationCore") -> None:
         self.core = core
         self.store = core.store
+        require_task_payload_release_schema(self.store)
 
     @staticmethod
     def _authorization(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -631,6 +644,241 @@ class SupervisorExecutionService:
                 "state": "local_custody",
             }
 
+    def release_task_payload(
+        self,
+        *,
+        actor: VerifiedActor,
+        body: PayloadReleaseBody,
+        phase_hook: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Release one exact task payload after authorized local custody.
+
+        The task grant was consumed by :meth:`authorize`.  This method never
+        consumes another use.  It revalidates that same decision, writes one
+        durable disclosure receipt and audit record, then returns the already
+        validated plaintext only after the transaction commits.
+        """
+
+        now = int(time.time())
+        authorization = body.authorization
+        self.core.outage.require_privileged()
+        if actor.harness_id is None:
+            raise AuthorizationError("task payload release requires exact recipient attribution")
+        assertion = {
+            "schema": "agentnet.supervisor.task-payload-release.request.v1",
+            "authorization": authorization.model_dump(mode="json"),
+            "cursor": body.cursor,
+            "local_queue_id": body.local_queue_id,
+        }
+        request_digest = canonical_digest(assertion)
+        response: dict[str, Any]
+        with self.store.transaction() as connection:
+            execution = self._execution_row(
+                connection,
+                event_id=authorization.event_id,
+                recipient_id=actor.harness_id,
+            )
+            if execution is None:
+                raise AuthorizationError("supervisor execution is not visible")
+            self._require_current_execution(
+                connection,
+                actor=actor,
+                row=execution,
+                now=now,
+                require_unexpired_authorization=True,
+            )
+            self._require_authorization_binding(execution, authorization)
+            if execution["state"] not in {"local_custody", "result_uploaded"}:
+                raise AuthorizationError("task payload release requires acknowledged local custody")
+            if execution["local_queue_id"] != body.local_queue_id:
+                raise AuthorizationError("task payload release does not bind local custody")
+            release = connection.execute(
+                """
+                SELECT * FROM task_payload_releases
+                 WHERE event_id=? AND recipient_harness_id=?
+                """,
+                (authorization.event_id, actor.harness_id),
+            ).fetchone()
+            if execution["state"] == "result_uploaded" and release is None:
+                raise AuthorizationError(
+                    "completed supervisor results cannot retroactively disclose task payloads"
+                )
+
+            event_row = connection.execute(
+                """
+                SELECT e.*,r.cursor,r.current_fact
+                  FROM events AS e JOIN recipients AS r ON r.event_id=e.event_id
+                 WHERE e.event_id=? AND r.recipient_id=?
+                """,
+                (authorization.event_id, actor.harness_id),
+            ).fetchone()
+            if event_row is None:
+                raise AuthorizationError("task payload release is not visible")
+            if (
+                int(event_row["cursor"]) != body.cursor
+                or event_row["event_type"] != EventType.TASK_ASSIGNMENT.value
+                or event_row["current_fact"] != DeliveryFact.RECIPIENT_COMMITTED.value
+                or event_row["envelope_digest"] != execution["envelope_digest"]
+                or event_row["payload_digest"] != execution["payload_digest"]
+                or int(event_row["policy_revision"]) != int(execution["policy_revision"])
+            ):
+                raise AuthorizationError("task payload release custody binding is no longer current")
+            for boundary in (
+                event_row["delivery_expires_at"],
+                event_row["effect_deadline"],
+                event_row["retention_delete_at"],
+            ):
+                if boundary is not None and int(boundary) <= now:
+                    raise AuthorizationError("task payload release boundary has expired")
+
+            intent_row = connection.execute(
+                "SELECT * FROM task_execution_intents WHERE event_id=?",
+                (authorization.event_id,),
+            ).fetchone()
+            if (
+                intent_row is None
+                or intent_row["domain_id"] != actor.domain_id
+                or intent_row["recipient_harness_id"] != actor.harness_id
+                or intent_row["recipient_authority_id"] != actor.positive_authority_id
+                or intent_row["state"] not in {"active", "released"}
+                or int(intent_row["deadline"]) <= now
+            ):
+                raise AuthorizationError("task execution intent is not eligible for payload release")
+            pending_conflict = connection.execute(
+                """
+                SELECT 1 FROM task_conflict_memberships AS membership
+                  JOIN task_conflicts AS conflict
+                    ON conflict.conflict_id=membership.conflict_id
+                 WHERE membership.event_id=? AND membership.member_state='pending'
+                   AND conflict.state='pending' LIMIT 1
+                """,
+                (authorization.event_id,),
+            ).fetchone()
+            if pending_conflict is not None:
+                raise AuthorizationError("task payload release is held by an unresolved conflict")
+            try:
+                raw_intent = str(intent_row["intent_json"])
+                intent = TaskExecutionIntent.model_validate_json(raw_intent, strict=True)
+                if (
+                    canonical_json(intent.model_dump(mode="json")).decode("utf-8")
+                    != raw_intent
+                    or canonical_digest(intent.model_dump(mode="json"))
+                    != intent_row["intent_digest"]
+                ):
+                    raise ValueError("task intent digest changed")
+            except Exception as exc:
+                raise ConflictError("task execution intent failed immutable validation") from exc
+
+            event, payload = self.core.mailboxes._validated_event_and_payload(
+                event_row,
+                connection=connection,
+            )
+            if not self.core.mailboxes._task_payload_requires_grant(event):
+                raise AuthorizationError("event is not a protected task payload")
+            parent = self._parent_event_provenance(
+                connection,
+                actor=actor,
+                row=execution,
+            )
+            provenance = parent.reference()
+            if phase_hook is not None:
+                phase_hook("after_payload_validated")
+
+            duplicate = release is not None
+            if release is not None:
+                immutable = {
+                    "release_request_digest": request_digest,
+                    "authorization_digest": execution["authorization_digest"],
+                    "local_queue_id": body.local_queue_id,
+                    "task_grant_id": execution["task_grant_id"],
+                    "policy_decision_id": execution["policy_decision_id"],
+                    "intent_digest": intent_row["intent_digest"],
+                    "payload_digest": execution["payload_digest"],
+                    "envelope_digest": execution["envelope_digest"],
+                    "policy_revision": int(execution["policy_revision"]),
+                    "recipient_credential_epoch": int(
+                        execution["recipient_credential_epoch"]
+                    ),
+                    "domain_revocation_epoch": int(execution["domain_revocation_epoch"]),
+                    "release_expires_at": int(execution["authorization_expires_at"]),
+                }
+                if any(release[key] != value for key, value in immutable.items()):
+                    raise ConflictError("task payload was already released with different bytes")
+                release_receipt_id = str(release["release_receipt_id"])
+            else:
+                release_receipt_id = str(uuid4())
+                connection.execute(
+                    """
+                    INSERT INTO task_payload_releases(
+                        event_id,recipient_harness_id,release_receipt_id,
+                        release_request_digest,authorization_digest,local_queue_id,
+                        task_grant_id,policy_decision_id,intent_digest,payload_digest,
+                        envelope_digest,policy_revision,recipient_credential_epoch,
+                        domain_revocation_epoch,release_expires_at,released_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        authorization.event_id,
+                        actor.harness_id,
+                        release_receipt_id,
+                        request_digest,
+                        execution["authorization_digest"],
+                        body.local_queue_id,
+                        execution["task_grant_id"],
+                        execution["policy_decision_id"],
+                        intent_row["intent_digest"],
+                        execution["payload_digest"],
+                        execution["envelope_digest"],
+                        int(execution["policy_revision"]),
+                        int(execution["recipient_credential_epoch"]),
+                        int(execution["domain_revocation_epoch"]),
+                        int(execution["authorization_expires_at"]),
+                        now,
+                    ),
+                )
+                self.store.append_audit(
+                    connection,
+                    {
+                        "action": "supervisor.task_payload.released",
+                        "actor": actor.audit_view(),
+                        "authorization_digest": execution["authorization_digest"],
+                        "envelope_digest": execution["envelope_digest"],
+                        "event_id": authorization.event_id,
+                        "intent_digest": intent_row["intent_digest"],
+                        "payload_digest": execution["payload_digest"],
+                        "policy_decision_id": execution["policy_decision_id"],
+                        "release_receipt_id": release_receipt_id,
+                        "task_grant_id": execution["task_grant_id"],
+                    },
+                )
+                if phase_hook is not None:
+                    phase_hook("after_release_audit")
+
+            response = {
+                "classification": str(execution["classification"]),
+                "duplicate": duplicate,
+                "effect_authorized": False,
+                "envelope_digest": str(execution["envelope_digest"]),
+                "event_id": authorization.event_id,
+                "input_source": self.INPUT_SOURCE,
+                "intent": intent.model_dump(mode="json"),
+                "intent_digest": str(intent_row["intent_digest"]),
+                "output_sink": self.OUTPUT_SINK,
+                "payload": payload,
+                "payload_access_authorized": True,
+                "payload_digest": str(execution["payload_digest"]),
+                "policy_decision_id": str(execution["policy_decision_id"]),
+                "provenance": provenance.model_dump(mode="json"),
+                "recipient_harness_id": actor.harness_id,
+                "release_expires_at": int(execution["authorization_expires_at"]),
+                "release_receipt_id": release_receipt_id,
+                "schema": "agentnet.supervisor.task-payload-release.v1",
+                "semantic_processing_authorized": True,
+                "task_grant_id": str(execution["task_grant_id"]),
+                "tool_authorized": False,
+            }
+        return response
+
     def upload_result(self, *, actor: VerifiedActor, body: ResultBody) -> dict[str, Any]:
         now = int(time.time())
         authorization = body.authorization
@@ -656,6 +904,31 @@ class SupervisorExecutionService:
             self._require_authorization_binding(row, authorization)
             if row["local_queue_id"] != body.source_queue_id:
                 raise AuthorizationError("result does not bind the acknowledged local custody")
+            release = connection.execute(
+                """
+                SELECT * FROM task_payload_releases
+                 WHERE event_id=? AND recipient_harness_id=?
+                """,
+                (authorization.event_id, actor.harness_id),
+            ).fetchone()
+            if release is None or any(
+                release[key] != value
+                for key, value in {
+                    "authorization_digest": row["authorization_digest"],
+                    "local_queue_id": body.source_queue_id,
+                    "task_grant_id": row["task_grant_id"],
+                    "policy_decision_id": row["policy_decision_id"],
+                    "payload_digest": row["payload_digest"],
+                    "envelope_digest": row["envelope_digest"],
+                    "policy_revision": int(row["policy_revision"]),
+                    "recipient_credential_epoch": int(row["recipient_credential_epoch"]),
+                    "domain_revocation_epoch": int(row["domain_revocation_epoch"]),
+                    "release_expires_at": int(row["authorization_expires_at"]),
+                }.items()
+            ):
+                raise AuthorizationError(
+                    "result upload requires the exact committed task payload release"
+                )
             if row["state"] == "result_uploaded":
                 if row["result_digest"] != result_digest:
                     raise ConflictError("supervisor result was already uploaded with different bytes")
@@ -685,6 +958,7 @@ class SupervisorExecutionService:
                 {
                     "event_id": authorization.event_id,
                     "recipient_harness_id": actor.harness_id,
+                    "release_receipt_id": release["release_receipt_id"],
                     "source_queue_id": body.source_queue_id,
                 }
             )
@@ -747,6 +1021,7 @@ class SupervisorExecutionService:
                     "action": "supervisor.result.uploaded",
                     "actor": actor.audit_view(),
                     "event_id": authorization.event_id,
+                    "release_receipt_id": release["release_receipt_id"],
                     "result_digest": result_digest,
                     "result_provenance_digest": result_provenance.provenance_digest,
                     "result_receipt_id": result_receipt_id,
@@ -817,6 +1092,16 @@ def create_supervisor_routes(
         result = service.acknowledge_custody(actor=actor, body=parsed)
         return JSONResponse(result, status_code=200 if result["duplicate"] else 201)
 
+    async def payload_release(request: Request) -> Response:
+        body, actor = await body_and_actor(request, core)
+        parsed = PayloadReleaseBody.model_validate_json(body)
+        value = service.release_task_payload(actor=actor, body=parsed)
+        return JSONResponse(
+            value,
+            status_code=200 if value["duplicate"] else 201,
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
     async def result(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
         parsed = ResultBody.model_validate_json(body)
@@ -852,6 +1137,11 @@ def create_supervisor_routes(
     return [
         Route("/v1/supervisor/executions/authorize", authorize, methods=["POST"]),
         Route("/v1/supervisor/executions/custody", custody, methods=["POST"]),
+        Route(
+            "/v1/supervisor/executions/payload-release",
+            payload_release,
+            methods=["POST"],
+        ),
         Route("/v1/supervisor/executions/result", result, methods=["POST"]),
         Route("/v1/supervisor/executions/{event_id}/status", status, methods=["GET"]),
         Route("/v1/supervisor/local-binding/children", bind_child, methods=["POST"]),
@@ -863,6 +1153,7 @@ __all__ = [
     "CustodyBody",
     "EligibilityBody",
     "LocalBindingChildBody",
+    "PayloadReleaseBody",
     "ResultBody",
     "SupervisorExecutionService",
     "create_supervisor_routes",

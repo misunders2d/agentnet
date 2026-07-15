@@ -112,7 +112,7 @@ Always distinguish:
 - **Identity/enrollment failure:** distinguish OIDC endpoint validation, proof of possession, independent approval, expiry, replay, and revocation. Never substitute synthetic identity or chat approval.
 - **Storage/durability failure:** report the actual backend/readiness evidence and state vocabulary; never promote `accepted_local` to durable acceptance.
 - **Artifact failure:** distinguish reservation, exact byte upload, quarantine promotion, scan, release, capability issuance, and single-use download. Never pass bytes/base64 or arbitrary host paths through model-visible tools, print capabilities/private object keys, or treat quarantine as availability.
-- **Task execution failure:** distinguish `accepted_queued` custody from the currently missing protected TaskGrant payload-release route.
+- **Task execution failure:** distinguish `accepted_queued` custody from exact recipient-owned `task.process` authorization, durable local queue custody, protected payload release, and separately authorized result/effect handling. Generic reads stay redacted. If installed release predates schema migration 2, report a version/component gap; never add an `include_payload` workaround.
 
 Do not print secrets, private keys, credential-bearing DSNs, reusable approval material, or private report URLs while troubleshooting.
 

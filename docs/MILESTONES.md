@@ -60,8 +60,8 @@ did not test the complete ordinary-conversation outcome: “a request requiring
 an answer arrived; was its answer durably recognized, or was it escalated when
 unanswered?”
 
-Status: a local implementation now exists (`messaging/obligation.py`, clean
-storage schema version 1, `/v1/response-obligations` routes, `agentnet obligation`
+Status: a local implementation now exists (`messaging/obligation.py`, immutable
+first-release migration 1 and current schema v2, `/v1/response-obligations` routes, `agentnet obligation`
 CLI, shared-supervisor automatic reconciliation, complete MCP/Pi tool parity,
 and hermetic tests) with the lifecycle spelled `created`,
 `recipient_committed`, `acknowledged`, `in_progress`, `pending_human`,

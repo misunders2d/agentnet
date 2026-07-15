@@ -15,7 +15,7 @@ from agentnet.adapters.auth import (
 from agentnet.adapters.specs import build_launch_spec
 from agentnet.errors import AuthorizationError
 from agentnet.security.envelope import LocalEnvelopeCipher
-from agentnet.security.signatures import P256KeyPair
+from agentnet.security.signatures import P256KeyPair, canonical_digest
 from agentnet.supervisor.daemon import SupervisorDaemonConfig
 from agentnet.supervisor.integration import BackgroundHarnessIntegration
 from agentnet.supervisor.queue import LocalQueue
@@ -37,6 +37,7 @@ class FakeCorporateClient:
     ) -> None:
         self.harness_id = harness_id
         self.acknowledged: list[str] = []
+        self.released: list[str] = []
         self.uploaded: list[dict[str, object]] = []
         self.watch_calls = 0
         self.reconcile_calls = 0
@@ -51,13 +52,24 @@ class FakeCorporateClient:
         }
         self.available = not deliver_on_watch
         self.watch_failures_before_wake = watch_failures_before_wake
+        self.payload = {"task": "run autonomously"}
+        payload_digest = canonical_digest(self.payload)
         self.item = {
             "cursor": 11,
             "envelope_digest": "a" * 64,
             "event": {"event_id": "corporate-task-event", "event_type": "task_assignment"},
             "fact": "accepted_queued",
-            "payload": {"task": "run autonomously"},
-            "payload_available": True,
+            "payload": None,
+            "payload_available": False,
+            "payload_access": "task_grant_required",
+            "payload_withheld_reason": "exact_task_grant_required",
+            "custody_reference": {
+                "schema": "agentnet.custody-payload-reference.v1",
+                "event_id": "corporate-task-event",
+                "payload_digest": payload_digest,
+                "envelope_digest": "a" * 64,
+                "payload_access": "task_grant_required",
+            },
         }
 
     def watch(self, *, after_cursor: int, wait_seconds: float) -> bool:
@@ -101,6 +113,35 @@ class FakeCorporateClient:
         assert item == self.item
         assert local_queue_id
         self.acknowledged.append(authorization.event_id)
+
+    def release_task_payload(self, item, authorization, *, local_queue_id: str):
+        assert item == self.item
+        assert local_queue_id
+        self.released.append(authorization.event_id)
+        intent = {
+            "schema_version": "1.0",
+            "resources": [
+                {
+                    "resource": "synthetic:test",
+                    "operation": "process",
+                    "access": "read",
+                    "exclusivity": "shared",
+                }
+            ],
+        }
+        return {
+            "effect_authorized": False,
+            "intent": intent,
+            "payload": dict(self.payload),
+            "payload_access_authorized": True,
+            "provenance": {
+                "authority_effect": "none",
+                "content_digest": canonical_digest(self.payload),
+            },
+            "release_receipt_id": "synthetic-release-receipt",
+            "semantic_processing_authorized": True,
+            "tool_authorized": False,
+        }
 
     def upload_result(self, result) -> None:
         self.uploaded.append(dict(result))

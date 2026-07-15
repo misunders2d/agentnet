@@ -29,7 +29,7 @@ Do not call a deployment complete merely because two agents exchanged one direct
 - **ORG-001..006:** directed many-to-many administration does not transfer the administrator's data permissions.
 - In-scope downward assignment may enter `accepted_queued` custody; custody is not payload access, execution authority, or business-effect completion.
 - Upward, lateral, cross-domain, or out-of-scope assignment requires the exact separately authorized relationship or human confirmation.
-- The current build has no protected TaskGrant payload-release route. Never present queued custody as executable delegated work.
+- Queued custody is never executable delegated work. Protected source builds release payload only after exact recipient-owned `task.process` authorization, durable local custody, current intent/conflict/epoch/lifetime checks, and audit/receipt commit. Generic reads remain redacted; tool/effect authority remains false and requires separate authority.
 
 ## Files and artifacts
 

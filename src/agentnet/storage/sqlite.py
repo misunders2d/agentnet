@@ -58,6 +58,10 @@ from agentnet.storage.task_custody_schema import (
     TASK_CUSTODY_SCHEMA,
     TASK_CUSTODY_SCHEMA_VERSION,
 )
+from agentnet.storage.task_payload_release_schema import (
+    TASK_PAYLOAD_RELEASE_SCHEMA,
+    TASK_PAYLOAD_RELEASE_SCHEMA_VERSION,
+)
 from agentnet.storage.versioning_schema import VERSIONING_SCHEMA, VERSIONING_SCHEMA_VERSION
 from agentnet.storage.workload_schema import WORKLOAD_SCHEMA, WORKLOAD_SCHEMA_VERSION
 
@@ -506,7 +510,7 @@ CREATE TABLE IF NOT EXISTS conversation_tasks (
     PRIMARY KEY(conversation_id,task_id)
 );
 """
-SCHEMA = (
+SCHEMA_V1 = (
     BASE_SCHEMA
     + A2A_SCHEMA
     + VERSIONING_SCHEMA
@@ -525,6 +529,10 @@ SCHEMA = (
     + POST_AUDIT_SCHEMA
     + RESPONSE_OBLIGATION_SCHEMA
 )
+SCHEMA = SCHEMA_V1 + TASK_PAYLOAD_RELEASE_SCHEMA
+_SQLITE_MIGRATION_SQL = {
+    TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: TASK_PAYLOAD_RELEASE_SCHEMA,
+}
 
 _SCHEMA_CATALOG_QUERY = (
     "SELECT type,name,tbl_name,sql FROM sqlite_master "
@@ -540,11 +548,20 @@ def _schema_catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str
     )
 
 
-@lru_cache(maxsize=1)
-def _expected_schema_catalog() -> tuple[tuple[str, str, str, str], ...]:
+@lru_cache(maxsize=4)
+def _expected_schema_catalog(
+    schema_version: int = TASK_PAYLOAD_RELEASE_SCHEMA_VERSION,
+) -> tuple[tuple[str, str, str, str], ...]:
+    schemas = {
+        1: SCHEMA_V1,
+        TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: SCHEMA,
+    }
+    schema = schemas.get(schema_version)
+    if schema is None:
+        raise GateBlocked("schema_version", "SQLite schema version is unsupported")
     reference = sqlite3.connect(":memory:", isolation_level=None)
     try:
-        reference.executescript(SCHEMA)
+        reference.executescript(schema)
         return _schema_catalog(reference)
     finally:
         reference.close()
@@ -720,13 +737,16 @@ class SQLiteStore:
                             "pre-release SQLite databases require explicit export and clean reinitialization",
                         )
                     initialize = True
-                elif existing_version != CURRENT_SCHEMA_VERSION:
+                elif existing_version not in {
+                    CURRENT_SCHEMA_VERSION,
+                    CURRENT_SCHEMA_VERSION - 1,
+                }:
                     raise GateBlocked(
                         "schema_legacy",
-                        "pre-release SQLite databases are not accepted by the first release",
+                        "SQLite database is outside the exact supported N/N-1 migration window",
                     )
                 if not initialize:
-                    if len(catalog_rows) != len(MIGRATIONS):
+                    if len(catalog_rows) != existing_version:
                         raise GateBlocked(
                             "schema_migration_history",
                             "SQLite metadata and migration history are inconsistent",
@@ -746,10 +766,10 @@ class SQLiteStore:
                                 "schema_migration_history",
                                 "SQLite migration history checksum is invalid",
                             )
-                    if _schema_catalog(preflight) != _expected_schema_catalog():
+                    if _schema_catalog(preflight) != _expected_schema_catalog(existing_version):
                         raise GateBlocked(
                             "schema_preflight",
-                            "SQLite schema objects differ from the immutable first-release catalog",
+                            "SQLite schema objects differ from the immutable versioned catalog",
                         )
             except GateBlocked:
                 raise
@@ -819,6 +839,40 @@ class SQLiteStore:
                         for migration in MIGRATIONS
                     ),
                 )
+                connection.execute("COMMIT")
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            elif existing_version < CURRENT_SCHEMA_VERSION:
+                pending = MIGRATIONS[existing_version:]
+                try:
+                    migration_sql = "\n".join(
+                        _SQLITE_MIGRATION_SQL[migration.version]
+                        for migration in pending
+                    )
+                except KeyError as exc:
+                    raise GateBlocked(
+                        "schema_migration",
+                        "SQLite migration SQL is unavailable for the exact supported upgrade",
+                    ) from exc
+                connection.executescript("BEGIN IMMEDIATE;\n" + migration_sql)
+                connection.execute(
+                    "UPDATE metadata SET value=? WHERE key='schema_version'",
+                    (str(CURRENT_SCHEMA_VERSION),),
+                )
+                connection.executemany(
+                    """INSERT INTO installed_migration_catalog(version,name,checksum)
+                       VALUES(?,?,?)""",
+                    tuple(
+                        (migration.version, migration.name, migration.checksum)
+                        for migration in pending
+                    ),
+                )
+                if _schema_catalog(connection) != _expected_schema_catalog(
+                    CURRENT_SCHEMA_VERSION
+                ):
+                    raise GateBlocked(
+                        "schema_migration",
+                        "SQLite migration did not produce the exact current catalog",
+                    )
                 connection.execute("COMMIT")
                 connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self.path = path

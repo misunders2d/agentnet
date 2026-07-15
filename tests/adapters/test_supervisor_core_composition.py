@@ -7,6 +7,8 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,7 @@ from agentnet.adapters.specs import build_launch_spec
 from agentnet.client import AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
-from agentnet.errors import AuthorizationError
+from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.http_api import create_app
 from agentnet.messaging.events import new_event
 from agentnet.operations.config import (
@@ -27,7 +29,13 @@ from agentnet.operations.config import (
     FeatureFlags,
     LocalBindingConfig,
 )
-from agentnet.protocol.models import Classification, EventType
+from agentnet.organization.conflicts import (
+    TaskAccessMode,
+    TaskExecutionIntent,
+    TaskExclusivity,
+    TaskResourceIntent,
+)
+from agentnet.protocol.models import Classification, DeliveryFact, EventType
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.supervisor.client import AgentNetSupervisorCoreClient
 from agentnet.supervisor.integration import BackgroundHarnessIntegration
@@ -37,6 +45,7 @@ from agentnet.supervisor.runtime import (
     BackgroundTurnAuthorization,
 )
 from agentnet.supervisor.service import DeviceSupervisor
+from agentnet.supervisor_http import PayloadReleaseBody, SupervisorExecutionService
 
 
 class SyncASGITransport(httpx.BaseTransport):
@@ -103,6 +112,13 @@ class FailFirstResultUpload:
 
     def acknowledge_custody(self, item, authorization, *, local_queue_id: str) -> None:
         self.inner.acknowledge_custody(
+            item,
+            authorization,
+            local_queue_id=local_queue_id,
+        )
+
+    def release_task_payload(self, item, authorization, *, local_queue_id: str):
+        return self.inner.release_task_payload(
             item,
             authorization,
             local_queue_id=local_queue_id,
@@ -188,13 +204,443 @@ def test_signed_supervisor_generic_mailbox_refuses_task_payload_before_authorize
         assert item["payload_access"] == "task_grant_required"
         assert item["payload_withheld_reason"] == "exact_task_grant_required"
         assert "autonomous-e2e-secret" not in json.dumps(item, sort_keys=True)
-        with pytest.raises(AuthorizationError, match="payload is unavailable"):
-            BackgroundHarnessIntegration._mailbox_item(item)
+        assert BackgroundHarnessIntegration._mailbox_item(item) == (
+            event.event_id,
+            item["cursor"],
+            item["envelope_digest"],
+        )
         assert store.fetch_one(
             "SELECT 1 FROM supervisor_executions WHERE event_id=?",
             (event.event_id,),
         ) is None
         assert core.grants.uses_for_local_conformance(grant.grant_id) == 0
+    finally:
+        signed.close()
+
+
+def test_signed_supervisor_releases_exact_task_payload_once_after_local_custody(
+    tmp_path: Path,
+    store,
+    identity_factory,
+    execution_grant_factory,
+) -> None:
+    sender, _sender_key = identity_factory(binding_assurance="os_bound")
+    recipient, recipient_key = identity_factory(kind="codex", binding_assurance="os_bound")
+    outsider, outsider_key = identity_factory(kind="pi", binding_assurance="os_bound")
+    core = CommunicationCore(
+        ExtensionConfig(
+            domain_id=recipient.domain_id,
+            data_dir=tmp_path / "core-data",
+            database_url=f"sqlite:///{tmp_path / 'unused.sqlite3'}",
+            artifact_dir=tmp_path / "artifacts",
+            public_base_url="http://127.0.0.1",
+        ),
+        store,
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    deadline = now + timedelta(minutes=15)
+    secret_payload = {"task": "recipient-owned-payload-release", "value": 7}
+    event = new_event(
+        domain_id=sender.domain_id,
+        actor=sender,
+        event_type=EventType.TASK_ASSIGNMENT,
+        classification=Classification.C2_RESTRICTED,
+        payload=secret_payload,
+        idempotency_key="supervisor-payload-release-0001",
+        recipients=(recipient.harness_id,),
+        task_id="supervisor-payload-release-task",
+        delivery_expires_at=deadline,
+        effect_deadline=deadline,
+        retention_delete_at=deadline,
+        policy_revision=1,
+    ).model_copy(update={"payload_access": "task_grant_required"})
+    core.mailboxes.accept(event)
+    intent = TaskExecutionIntent(
+        resources=(
+            TaskResourceIntent(
+                resource="dataset:recipient-owned",
+                operation="summarize",
+                access=TaskAccessMode.READ,
+                exclusivity=TaskExclusivity.SHARED,
+            ),
+        )
+    )
+    with store.transaction() as connection:
+        admission = core.assignments.conflicts.record_accepted_in_transaction(
+            connection,
+            event_id=event.event_id,
+            domain_id=recipient.domain_id,
+            recipient_harness_id=recipient.harness_id,
+            sender_harness_id=sender.harness_id,
+            sender_authority_id=sender.positive_authority_id,
+            authority_basis="recipient_owner_approval",
+            relationship_id=None,
+            relationship_revision=0,
+            intent=intent,
+            continuation={},
+            deadline=deadline,
+            when=now,
+        )
+        assert admission.fact is DeliveryFact.ACCEPTED_QUEUED
+        connection.execute(
+            "UPDATE recipients SET current_fact=?,updated_at=? WHERE event_id=? AND recipient_id=?",
+            (
+                DeliveryFact.ACCEPTED_QUEUED.value,
+                int(now.timestamp()),
+                event.event_id,
+                recipient.harness_id,
+            ),
+        )
+    grant = execution_grant_factory(
+        recipient=recipient,
+        event_id=event.event_id,
+        actions=frozenset({"task.process"}),
+        max_uses=1,
+    )
+    core.grant_local_entitlement(
+        recipient,
+        action="mailbox.read",
+        resource=recipient.harness_id,
+    )
+    core.grant_local_entitlement(
+        recipient,
+        action="task.process",
+        resource=f"event:{event.event_id}",
+    )
+    app = create_app(core)
+    signed = AgentNetClient(
+        base_url="http://127.0.0.1",
+        key=recipient_key,
+        domain_id=recipient.domain_id,
+        harness_id=recipient.harness_id,
+        credential_id=recipient.credential_id,
+        audience=f"urn:agentnet:{recipient.domain_id}:corporate-api",
+        transport=SyncASGITransport(app),
+    )
+    concrete = AgentNetSupervisorCoreClient(signed)
+    try:
+        item = concrete.reconcile(after_cursor=0, limit=10)[0]
+        assert item["payload"] is None
+        authorization = BackgroundTurnAuthorization.from_mapping(
+            concrete.authorize_background(item)
+        )
+        assert core.grants.uses_for_local_conformance(grant.grant_id) == 1
+        queue_id = "local-payload-release-queue-0001"
+        with pytest.raises(AuthorizationError):
+            concrete.release_task_payload(
+                item,
+                authorization,
+                local_queue_id=queue_id,
+            )
+        assert store.fetch_one(
+            "SELECT 1 FROM task_payload_releases WHERE event_id=?",
+            (event.event_id,),
+        ) is None
+        concrete.acknowledge_custody(
+            item,
+            authorization,
+            local_queue_id=queue_id,
+        )
+        release_body = PayloadReleaseBody(
+            authorization=asdict(authorization),
+            cursor=item["cursor"],
+            local_queue_id=queue_id,
+        )
+        injected_idempotency = signed.request(
+            "POST",
+            "/v1/supervisor/executions/payload-release",
+            json_body=release_body.model_dump(mode="json")
+            | {"idempotency_key": "caller-selected-release-key"},
+        )
+        assert injected_idempotency.status_code == 422
+        coerced_cursor = release_body.model_dump(mode="json")
+        coerced_cursor["cursor"] = str(item["cursor"])
+        rejected_coercion = signed.request(
+            "POST",
+            "/v1/supervisor/executions/payload-release",
+            json_body=coerced_cursor,
+        )
+        assert rejected_coercion.status_code == 422
+        outsider_signed = AgentNetClient(
+            base_url="http://127.0.0.1",
+            key=outsider_key,
+            domain_id=outsider.domain_id,
+            harness_id=outsider.harness_id,
+            credential_id=outsider.credential_id,
+            audience=f"urn:agentnet:{outsider.domain_id}:corporate-api",
+            transport=SyncASGITransport(app),
+        )
+        try:
+            wrong_recipient = outsider_signed.request(
+                "POST",
+                "/v1/supervisor/executions/payload-release",
+                json_body=release_body.model_dump(mode="json"),
+            )
+            assert wrong_recipient.status_code == 404
+        finally:
+            outsider_signed.close()
+
+        def fail_after_release_audit(phase: str) -> None:
+            if phase == "after_release_audit":
+                raise RuntimeError("synthetic release commit failure")
+
+        with pytest.raises(RuntimeError, match="synthetic release commit failure"):
+            SupervisorExecutionService(core).release_task_payload(
+                actor=recipient,
+                body=release_body,
+                phase_hook=fail_after_release_audit,
+            )
+        assert store.fetch_one(
+            "SELECT 1 FROM task_payload_releases WHERE event_id=?",
+            (event.event_id,),
+        ) is None
+        assert core.grants.uses_for_local_conformance(grant.grant_id) == 1
+        assert sum(
+            '"action":"supervisor.task_payload.released"' in row["record_json"]
+            for row in store.fetch_all("SELECT record_json FROM audit_log")
+        ) == 0
+
+        released = concrete.release_task_payload(
+            item,
+            authorization,
+            local_queue_id=queue_id,
+        )
+        assert released["duplicate"] is False
+        assert released["payload"] == secret_payload
+        assert released["intent"] == intent.model_dump(mode="json")
+        assert released["tool_authorized"] is False
+        assert released["effect_authorized"] is False
+        assert core.grants.uses_for_local_conformance(grant.grant_id) == 1
+        persisted = store.fetch_one(
+            "SELECT * FROM task_payload_releases WHERE event_id=? AND recipient_harness_id=?",
+            (event.event_id, recipient.harness_id),
+        )
+        assert persisted["release_receipt_id"] == released["release_receipt_id"]
+
+        duplicate = concrete.release_task_payload(
+            item,
+            authorization,
+            local_queue_id=queue_id,
+        )
+        assert duplicate["duplicate"] is True
+        assert duplicate["release_receipt_id"] == released["release_receipt_id"]
+        assert duplicate["payload"] == secret_payload
+        assert core.grants.uses_for_local_conformance(grant.grant_id) == 1
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            retries = list(
+                pool.map(
+                    lambda _index: SupervisorExecutionService(core).release_task_payload(
+                        actor=recipient,
+                        body=release_body,
+                    ),
+                    range(2),
+                )
+            )
+        assert [value["duplicate"] for value in retries] == [True, True]
+        assert {
+            value["release_receipt_id"] for value in retries
+        } == {released["release_receipt_id"]}
+        assert core.grants.uses_for_local_conformance(grant.grant_id) == 1
+
+        def assert_release_denied() -> None:
+            with pytest.raises(AuthorizationError):
+                concrete.release_task_payload(
+                    item,
+                    authorization,
+                    local_queue_id=queue_id,
+                )
+
+        with pytest.raises(AuthorizationError):
+            concrete.release_task_payload(
+                item,
+                authorization,
+                local_queue_id="different-local-queue-0001",
+            )
+
+        domain_state = store.fetch_one(
+            "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+            (recipient.domain_id,),
+        )
+        harness_epoch = int(
+            store.fetch_one(
+                "SELECT credential_epoch FROM harnesses WHERE harness_id=?",
+                (recipient.harness_id,),
+            )["credential_epoch"]
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE domains SET policy_revision=? WHERE domain_id=?",
+                (int(domain_state["policy_revision"]) + 1, recipient.domain_id),
+            )
+        assert_release_denied()
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE domains SET policy_revision=? WHERE domain_id=?",
+                (int(domain_state["policy_revision"]), recipient.domain_id),
+            )
+            connection.execute(
+                "UPDATE harnesses SET credential_epoch=? WHERE harness_id=?",
+                (harness_epoch + 1, recipient.harness_id),
+            )
+        assert_release_denied()
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE harnesses SET credential_epoch=? WHERE harness_id=?",
+                (harness_epoch, recipient.harness_id),
+            )
+            connection.execute(
+                "UPDATE domains SET revocation_epoch=? WHERE domain_id=?",
+                (int(domain_state["revocation_epoch"]) + 1, recipient.domain_id),
+            )
+        assert_release_denied()
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE domains SET revocation_epoch=? WHERE domain_id=?",
+                (int(domain_state["revocation_epoch"]), recipient.domain_id),
+            )
+            connection.execute(
+                "UPDATE supervisor_executions SET authorization_expires_at=? WHERE event_id=?",
+                (int(time.time()), event.event_id),
+            )
+        assert_release_denied()
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE supervisor_executions SET authorization_expires_at=? WHERE event_id=?",
+                (authorization.expires_at, event.event_id),
+            )
+
+        original_grant_json = str(
+            store.fetch_one(
+                "SELECT grant_json FROM task_grants WHERE grant_id=?",
+                (grant.grant_id,),
+            )["grant_json"]
+        )
+        grant_value = json.loads(original_grant_json)
+        for field, wrong_value in (
+            ("actions", ["message.process"]),
+            ("resources", ["event:not-this-task"]),
+            ("input_sources", ["artifact"]),
+            ("output_sinks", ["external-effect"]),
+            ("data_classes", [Classification.C1_INTERNAL.value]),
+        ):
+            mutated_grant = dict(grant_value)
+            mutated_grant[field] = wrong_value
+            with store.transaction() as connection:
+                connection.execute(
+                    "UPDATE task_grants SET grant_json=? WHERE grant_id=?",
+                    (
+                        json.dumps(
+                            mutated_grant,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        grant.grant_id,
+                    ),
+                )
+            try:
+                assert_release_denied()
+            finally:
+                with store.transaction() as connection:
+                    connection.execute(
+                        "UPDATE task_grants SET grant_json=? WHERE grant_id=?",
+                        (original_grant_json, grant.grant_id),
+                    )
+
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE task_execution_intents SET state='conflict_pending' WHERE event_id=?",
+                (event.event_id,),
+            )
+            connection.execute(
+                "UPDATE recipients SET current_fact=? WHERE event_id=? AND recipient_id=?",
+                (
+                    DeliveryFact.CONFLICT_PENDING.value,
+                    event.event_id,
+                    recipient.harness_id,
+                ),
+            )
+        with pytest.raises(AuthorizationError):
+            concrete.release_task_payload(
+                item,
+                authorization,
+                local_queue_id=queue_id,
+            )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE task_execution_intents SET state='active' WHERE event_id=?",
+                (event.event_id,),
+            )
+            connection.execute(
+                "UPDATE recipients SET current_fact=? WHERE event_id=? AND recipient_id=?",
+                (
+                    DeliveryFact.RECIPIENT_COMMITTED.value,
+                    event.event_id,
+                    recipient.harness_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE events SET retention_delete_at=? WHERE event_id=?",
+                (int(time.time()), event.event_id),
+            )
+        with pytest.raises(AuthorizationError):
+            concrete.release_task_payload(
+                item,
+                authorization,
+                local_queue_id=queue_id,
+            )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE events SET retention_delete_at=? WHERE event_id=?",
+                (int(deadline.timestamp()), event.event_id),
+            )
+            encrypted_payload = connection.execute(
+                "SELECT payload_encrypted FROM events WHERE event_id=?",
+                (event.event_id,),
+            ).fetchone()["payload_encrypted"]
+            connection.execute(
+                "UPDATE events SET payload_encrypted='corrupt' WHERE event_id=?",
+                (event.event_id,),
+            )
+        with pytest.raises(ConflictError):
+            concrete.release_task_payload(
+                item,
+                authorization,
+                local_queue_id=queue_id,
+            )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE events SET payload_encrypted=? WHERE event_id=?",
+                (encrypted_payload, event.event_id),
+            )
+
+        still_redacted = concrete.reconcile(after_cursor=0, limit=10)[0]
+        assert still_redacted["payload"] is None
+        assert "recipient-owned-payload-release" not in json.dumps(still_redacted)
+        audit = store.fetch_all(
+            "SELECT record_json FROM audit_log ORDER BY sequence"
+        )
+        assert sum(
+            '"action":"supervisor.task_payload.released"' in row["record_json"]
+            for row in audit
+        ) == 1
+
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE task_grants SET revoked_at=? WHERE grant_id=?",
+                (int(time.time()), grant.grant_id),
+            )
+        assert_release_denied()
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE task_grants SET revoked_at=NULL WHERE grant_id=?",
+                (grant.grant_id,),
+            )
+            connection.execute(
+                "DELETE FROM task_execution_intents WHERE event_id=?",
+                (event.event_id,),
+            )
+        assert_release_denied()
     finally:
         signed.close()
 
@@ -319,6 +765,8 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
     concrete = AgentNetSupervisorCoreClient(signed)
 
     def prepare(sequence: int) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+        accepted_at = datetime.now(UTC).replace(microsecond=0)
+        deadline = accepted_at + timedelta(hours=1)
         event = new_event(
             domain_id=sender.domain_id,
             actor=sender,
@@ -328,10 +776,45 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
             idempotency_key=f"supervisor-result-provenance-{sequence:04d}",
             recipients=(recipient.harness_id,),
             task_id=f"supervisor-result-provenance-{sequence}",
-            retention_delete_at=datetime.now(UTC) + timedelta(hours=1),
+            retention_delete_at=deadline,
             policy_revision=1,
-        )
+        ).model_copy(update={"payload_access": "task_grant_required"})
         core.mailboxes.accept(event)
+        with store.transaction() as connection:
+            admission = core.assignments.conflicts.record_accepted_in_transaction(
+                connection,
+                event_id=event.event_id,
+                domain_id=recipient.domain_id,
+                recipient_harness_id=recipient.harness_id,
+                sender_harness_id=sender.harness_id,
+                sender_authority_id=sender.positive_authority_id,
+                authority_basis="recipient_owner_approval",
+                relationship_id=None,
+                relationship_revision=0,
+                intent=TaskExecutionIntent(
+                    resources=(
+                        TaskResourceIntent(
+                            resource=f"dataset:provenance-result-{sequence}",
+                            operation="summarize",
+                            access=TaskAccessMode.READ,
+                            exclusivity=TaskExclusivity.SHARED,
+                        ),
+                    )
+                ),
+                continuation={},
+                deadline=deadline,
+                when=accepted_at,
+            )
+            assert admission.fact is DeliveryFact.ACCEPTED_QUEUED
+            connection.execute(
+                "UPDATE recipients SET current_fact=?,updated_at=? WHERE event_id=? AND recipient_id=?",
+                (
+                    DeliveryFact.ACCEPTED_QUEUED.value,
+                    int(accepted_at.timestamp()),
+                    event.event_id,
+                    recipient.harness_id,
+                ),
+            )
         execution_grant_factory(recipient=recipient, event_id=event.event_id)
         core.grant_local_entitlement(
             recipient,
@@ -370,7 +853,7 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
                WHERE event_id=? AND recipient_id=? AND fact='recipient_committed'""",
             (event.event_id, recipient.harness_id),
         )["count"] == delivery_receipt_count + (0 if sequence == 1 else 1)
-        return event, authorization, {
+        result_body = {
             "authorization": authorization,
             "native_result": {
                 "output": f"native-result-{sequence}",
@@ -378,6 +861,20 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
             },
             "source_queue_id": queue_id,
         }
+        if sequence == 1:
+            premature = signed.request(
+                "POST",
+                "/v1/supervisor/executions/result",
+                json_body=result_body,
+            )
+            assert premature.status_code == 404
+        released = concrete.release_task_payload(
+            item,
+            BackgroundTurnAuthorization.from_mapping(authorization),
+            local_queue_id=queue_id,
+        )
+        assert released["payload_access_authorized"] is True
+        return event, authorization, result_body
 
     try:
         event, _authorization, result_body = prepare(1)
@@ -440,5 +937,27 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
             json_body=result_body,
         )
         assert corrupt_replay.status_code == 409
+
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM task_payload_releases WHERE event_id=? AND recipient_harness_id=?",
+                (event.event_id, recipient.harness_id),
+            )
+            cursor = int(
+                connection.execute(
+                    "SELECT cursor FROM recipients WHERE event_id=? AND recipient_id=?",
+                    (event.event_id, recipient.harness_id),
+                ).fetchone()["cursor"]
+            )
+        retroactive_release = signed.request(
+            "POST",
+            "/v1/supervisor/executions/payload-release",
+            json_body={
+                "authorization": result_body["authorization"],
+                "cursor": cursor,
+                "local_queue_id": result_body["source_queue_id"],
+            },
+        )
+        assert retroactive_release.status_code == 404
     finally:
         signed.close()
