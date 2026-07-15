@@ -152,6 +152,29 @@ There is no protected TaskGrant payload-release route in the current build; ther
 task execution is unavailable through AgentNet while the custody-only
 non-grant invariant is enforced. Ordinary non-task messages are unchanged.
 
+## Authenticated mailbox acknowledgement
+
+Signed HTTP, CLI, MCP, direct IPC, and Pi adapter paths share one canonical
+mailbox acknowledgement operation. The request names only an event and its
+immutable envelope digest. The verified transport/binding supplies the exact
+current recipient harness; caller-provided actor, recipient, credential,
+domain, or fact fields are rejected.
+
+The operation writes `recipient_committed`, the specification's baseline
+delivery acknowledgement proving recipient custody and dedup evidence. It does
+not write a new delivery `acknowledged` fact: that name belongs to the separate
+response-obligation lifecycle. It also cannot assert `presented`, `processing`,
+completion, or any business effect. Recipient state, one recipient-owned
+receipt, and one transition audit record commit atomically. Exact retries return
+the original receipt without another transition write or state downgrade, even
+when the current fact has advanced. Existing protected semantic-supervisor
+custody converges on that same delivery receipt instead of minting a second
+`recipient_committed` fact. Current credential/revocation/policy checks still
+run on every retry. A revoked credential cannot retrieve even its previously
+recorded receipt; the receipt remains in the protected audit history and a
+current authorized actor must inspect it. Event IDs on this path are bounded to
+a single canonical ASCII route segment.
+
 ## Durable response obligations
 
 Ordinary conversations and structured requests may opt in to a first-class

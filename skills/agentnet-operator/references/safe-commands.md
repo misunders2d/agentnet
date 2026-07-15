@@ -168,6 +168,21 @@ or capability and does not restart anything. These commands do not themselves
 prove HA, PITR, KMS custody, independent enrollment approval, or production
 certification.
 
+After the exact recipient has durably stored inbox bytes and dedup state, record
+recipient custody with the event ID and envelope digest returned by `inbox`:
+
+```bash
+agentnet message inbox --identity .agentnet/recipient-identity.json
+agentnet message acknowledge EVENT_ID \
+  --envelope-digest ENVELOPE_DIGEST \
+  --identity .agentnet/recipient-identity.json
+```
+
+This signed operation writes only `recipient_committed`. It does not prove
+presentation, reading, processing, response-obligation acknowledgement, task
+payload release, or an effect. Exact retries converge on the original receipt.
+Do not acknowledge before the recipient's own durable storage and dedup commit.
+
 ## Secret injection examples
 
 AgentNet requires secure runtime injection, not a specific secret manager. Supported deployment patterns include an environment-backed DSN and a private password file/Docker secret. Infisical, Vault, systemd credentials, Kubernetes Secrets, and cloud secret managers are operator choices, not mandatory AgentNet dependencies.

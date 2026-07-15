@@ -160,7 +160,7 @@ def build_launch_spec(
                 "-c",
                 "mcp_servers.agentnet.required=true",
                 "-c",
-                'mcp_servers.agentnet.enabled_tools=["agentnet_inbox","agentnet_send"]',
+                'mcp_servers.agentnet.enabled_tools=["agentnet_inbox","agentnet_inbox_acknowledge","agentnet_send"]',
             )
             if local_bindings
             else ()
@@ -190,7 +190,7 @@ def build_launch_spec(
             str(extension),
             "--no-builtin-tools",
             "--tools",
-            "agentnet_inbox,agentnet_send",
+            "agentnet_inbox,agentnet_inbox_acknowledge,agentnet_send",
         ) if local_bindings else ("--no-tools",)
         arguments = (
             "--mode",

@@ -192,6 +192,29 @@ def test_obligation_binds_request_and_idempotent_retry_creates_one(stack) -> Non
     assert len(rows) == 1
 
 
+def test_mailbox_acknowledgement_does_not_claim_obligation_progress(stack) -> None:
+    result = post_request(stack)
+    obligation_id = result["response_obligation"]["obligation_id"]
+
+    acknowledgement = stack["mailbox"].acknowledge(
+        event_id=result["event_id"],
+        recipient_id=stack["responder"].harness_id,
+        envelope_digest_value=result["envelope_digest"],
+        owner_actor=stack["responder"],
+    )
+
+    assert acknowledgement["fact"] == "recipient_committed"
+    assert stack["obligations"].get(
+        actor=stack["responder"], obligation_id=obligation_id
+    )["state"] == "created"
+    assert stack["obligations"].reconcile(actor=stack["responder"])[
+        "recipient_committed"
+    ] == [obligation_id]
+    assert stack["obligations"].get(
+        actor=stack["responder"], obligation_id=obligation_id
+    )["state"] == "recipient_committed"
+
+
 def test_multi_recipient_requires_exact_responsible_recipient(stack) -> None:
     recipients = (stack["responder"].harness_id, stack["observer"].harness_id)
     with pytest.raises(ValidationError, match="one exact responsible recipient"):

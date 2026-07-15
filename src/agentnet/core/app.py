@@ -1180,6 +1180,50 @@ class CommunicationCore:
         )
         return self.mailboxes.reconcile(actor.harness_id, after_cursor=after_cursor, limit=limit)
 
+    def acknowledge_mailbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        event_id: str,
+        envelope_digest: str,
+    ) -> dict[str, Any]:
+        """Assert recipient custody only; never presentation, processing, or effect."""
+
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        if actor.harness_id is None:
+            raise AuthorizationError("mailbox acknowledgement requires exact harness attribution")
+        if (
+            not 1 <= len(event_id) <= 256
+            or event_id != event_id.strip()
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+                for character in event_id
+            )
+        ):
+            raise ValidationError("mailbox acknowledgement event_id is invalid")
+        if len(envelope_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in envelope_digest
+        ):
+            raise ValidationError("mailbox acknowledgement envelope digest is invalid")
+        mailbox_classification = (
+            Classification.C0_PUBLIC
+            if self.config.profile is RuntimeProfile.LOCAL_CONFORMANCE
+            and actor.binding_assurance == "lab"
+            else Classification.C1_INTERNAL
+        )
+        self._require(
+            actor=actor,
+            action="mailbox.acknowledge",
+            resource=actor.harness_id,
+            classification=mailbox_classification,
+        )
+        return self.mailboxes.acknowledge(
+            event_id=event_id,
+            recipient_id=actor.harness_id,
+            envelope_digest_value=envelope_digest,
+            owner_actor=actor,
+        )
+
     def assign_task(
         self,
         request: AssignmentRequest,

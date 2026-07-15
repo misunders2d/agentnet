@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -111,6 +111,32 @@ class AgentNetClient:
             content=body,
             headers={"Content-Type": "application/json", **proof_headers(proof)},
             timeout=self._client.timeout if timeout_seconds is None else timeout_seconds,
+        )
+
+    def acknowledge_mailbox(
+        self,
+        *,
+        event_id: str,
+        envelope_digest: str,
+    ) -> httpx.Response:
+        if (
+            not 1 <= len(event_id) <= 256
+            or event_id != event_id.strip()
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+                for character in event_id
+            )
+        ):
+            raise ValidationError("mailbox acknowledgement event_id is invalid")
+        if len(envelope_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in envelope_digest
+        ):
+            raise ValidationError("mailbox acknowledgement envelope digest is invalid")
+        encoded_event_id = quote(event_id, safe="")
+        return self.request(
+            "POST",
+            f"/v1/mailbox/{encoded_event_id}/acknowledge",
+            json_body={"envelope_digest": envelope_digest},
         )
 
     def close(self) -> None:

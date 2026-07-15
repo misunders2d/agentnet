@@ -38,6 +38,16 @@ def create_mcp_binding(dispatcher: CanonicalToolDispatcher) -> FastMCP:
             {"after_cursor": after_cursor, "limit": limit},
         )
 
+    @server.tool(description="Record durable custody for one exact mailbox event")
+    def agentnet_inbox_acknowledge(
+        event_id: str,
+        envelope_digest: str,
+    ) -> dict[str, Any]:
+        return dispatcher.call(
+            "agentnet.inbox.acknowledge",
+            {"envelope_digest": envelope_digest, "event_id": event_id},
+        )
+
     @server.tool(description="Create an authorized corporate conversation for this harness")
     def agentnet_conversation_create(
         conversation_id: str,

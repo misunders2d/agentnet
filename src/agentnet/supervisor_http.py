@@ -565,19 +565,34 @@ class SupervisorExecutionService:
                     "state": row["state"],
                 }
             custody_receipt_id = str(uuid4())
-            delivery_receipt = self.core.mailboxes._transition_in_transaction(
-                connection,
-                event_id=authorization.event_id,
-                recipient_id=actor.harness_id,
-                proposed=DeliveryFact.RECIPIENT_COMMITTED,
-                owner_actor=actor,
-                detail={
-                    "authorization_digest": row["authorization_digest"],
-                    "cursor": body.cursor,
-                    "local_queue_id": body.local_queue_id,
-                    "schema": "agentnet.supervisor.local-custody.v1",
-                },
-                now=now,
+            existing_delivery_receipt = connection.execute(
+                """SELECT receipt_id FROM receipts
+                   WHERE event_id=? AND recipient_id=? AND fact=? AND event_digest=?
+                   ORDER BY created_at,receipt_id LIMIT 1""",
+                (
+                    authorization.event_id,
+                    actor.harness_id,
+                    DeliveryFact.RECIPIENT_COMMITTED.value,
+                    row["envelope_digest"],
+                ),
+            ).fetchone()
+            delivery_receipt = (
+                {"receipt_id": str(existing_delivery_receipt["receipt_id"])}
+                if existing_delivery_receipt is not None
+                else self.core.mailboxes._transition_in_transaction(
+                    connection,
+                    event_id=authorization.event_id,
+                    recipient_id=actor.harness_id,
+                    proposed=DeliveryFact.RECIPIENT_COMMITTED,
+                    owner_actor=actor,
+                    detail={
+                        "authorization_digest": row["authorization_digest"],
+                        "cursor": body.cursor,
+                        "local_queue_id": body.local_queue_id,
+                        "schema": "agentnet.supervisor.local-custody.v1",
+                    },
+                    now=now,
+                )
             )
             cursor = connection.execute(
                 """

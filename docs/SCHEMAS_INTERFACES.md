@@ -110,6 +110,30 @@ and cannot promote it to work. The current build defines no protected TaskGrant
 payload-release route, so task execution remains unavailable. Ordinary
 non-task message projections retain their existing authorized payload shape.
 
+## Mailbox acknowledgement wire and storage contract
+
+`POST /v1/mailbox/{event_id}/acknowledge` accepts only the exact stored
+`envelope_digest`. Caller identity and recipient harness come exclusively from
+the signed transport context; request bodies cannot select an actor, recipient,
+domain, credential, fact, presentation state, processor, obligation, or effect.
+The current exact recipient must hold `mailbox.acknowledge` authority.
+
+The operation records the existing canonical delivery fact
+`recipient_committed`, which means durable recipient custody and dedup evidence.
+It does **not** mean `presented`, `processing`, response-obligation
+`acknowledged`, or business-effect completion. The recipient row update,
+recipient-owned receipt, and `mailbox.acknowledge` audit record commit in one
+transaction. A fresh signed retry after response loss returns the original
+receipt with `duplicate=true` and the current later delivery fact without
+rewriting or downgrading state. Wrong recipient/digest, stale or revoked actor,
+late expiry, and illegal predecessor state fail closed.
+
+The operator CLI exposes this as `agentnet message acknowledge EVENT_ID
+--envelope-digest DIGEST`. Credential-free local bindings expose the same
+operation as `agentnet.inbox.acknowledge`; MCP and Pi render it as
+`agentnet_inbox_acknowledge`. All argument schemas omit identity and recipient
+fields.
+
 ## Response-obligation wire and storage contract
 
 `PostAction` and `StructuredRequestAction` accept an optional strict

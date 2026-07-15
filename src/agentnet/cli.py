@@ -1724,6 +1724,23 @@ def command_message_inbox(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_message_acknowledge(args: argparse.Namespace) -> int:
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.acknowledge_mailbox(
+            event_id=args.event_id,
+            envelope_digest=args.envelope_digest,
+        )
+    finally:
+        client.close()
+    if response.status_code != 200:
+        raise SystemExit(
+            f"mailbox acknowledgement was rejected with HTTP {response.status_code}"
+        )
+    print(json.dumps(response.json(), indent=2, sort_keys=True))
+    return 0
+
+
 def _authority_command(
     *,
     actor: VerifiedActor,
@@ -2709,6 +2726,14 @@ def build_parser() -> argparse.ArgumentParser:
     message_inbox.add_argument("--after", type=int, default=0)
     message_inbox.add_argument("--limit", type=int, default=100)
     message_inbox.set_defaults(func=command_message_inbox)
+    message_acknowledge = message_commands.add_parser(
+        "acknowledge",
+        help="record durable custody for one exact mailbox event",
+    )
+    message_acknowledge.add_argument("event_id")
+    message_acknowledge.add_argument("--envelope-digest", required=True)
+    message_acknowledge.add_argument("--identity", default=".agentnet/identity.json")
+    message_acknowledge.set_defaults(func=command_message_acknowledge)
 
     obligation = commands.add_parser(
         "obligation",

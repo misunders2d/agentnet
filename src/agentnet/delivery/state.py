@@ -147,6 +147,22 @@ def require_transition(current: DeliveryFact, proposed: DeliveryFact) -> None:
         raise ConflictError(f"illegal delivery transition {current.value} -> {proposed.value}")
 
 
+def transition_reachable(start: DeliveryFact, target: DeliveryFact) -> bool:
+    """Return whether canonical transitions can preserve ``start`` before ``target``."""
+
+    pending = [start]
+    visited: set[DeliveryFact] = set()
+    while pending:
+        current = pending.pop()
+        if current == target:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        pending.extend(ALLOWED_TRANSITIONS.get(current, frozenset()) - visited)
+    return False
+
+
 def partial_delivery(facts: list[DeliveryFact]) -> bool:
     if not facts:
         return False

@@ -18,6 +18,9 @@ class RecordingCore:
         self.calls.append((name, arguments))
         return {"operation": name}
 
+    def acknowledge_mailbox(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("inbox.acknowledge", **arguments)
+
     def create_conversation(self, **arguments: Any) -> dict[str, Any]:
         return self._record("conversation.create", **arguments)
 
@@ -119,6 +122,7 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
 
     assert CANONICAL_TOOL_NAMES == (
         "agentnet.inbox",
+        "agentnet.inbox.acknowledge",
         "agentnet.send",
         "agentnet.conversation.create",
         "agentnet.conversation.action",
@@ -134,6 +138,7 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     assert [tool.name for tool in mcp._tool_manager.list_tools()] == [
         "agentnet_send",
         "agentnet_inbox",
+        "agentnet_inbox_acknowledge",
         "agentnet_conversation_create",
         "agentnet_conversation_action",
         "agentnet_conversation_thread",
@@ -155,6 +160,42 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     assert request["actor"] is actor
     assert request["action"]["response_obligation"]["response_required"] is True
     assert core.calls[-1][1]["action"]["kind"] == "obligation_response"
+
+
+def test_canonical_inbox_acknowledgement_has_no_identity_or_recipient_arguments() -> None:
+    actor = object()
+    core = RecordingCore()
+    dispatcher = CanonicalToolDispatcher(core, lambda: actor)  # type: ignore[arg-type]
+
+    result = dispatcher.call(
+        "agentnet.inbox.acknowledge",
+        {"event_id": "event-1", "envelope_digest": "a" * 64},
+    )
+    assert result == {"operation": "inbox.acknowledge"}
+    assert core.calls == [
+        (
+            "inbox.acknowledge",
+            {
+                "actor": actor,
+                "event_id": "event-1",
+                "envelope_digest": "a" * 64,
+            },
+        )
+    ]
+    for injected in (
+        {"recipient_id": "attacker"},
+        {"actor": {"harness_id": "attacker"}},
+        {"credential_id": "attacker"},
+    ):
+        with pytest.raises(PydanticValidationError):
+            dispatcher.call(
+                "agentnet.inbox.acknowledge",
+                {
+                    "event_id": "event-1",
+                    "envelope_digest": "a" * 64,
+                    **injected,
+                },
+            )
 
 
 def test_pi_extension_exposes_the_same_canonical_journey_as_mcp() -> None:

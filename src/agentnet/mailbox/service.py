@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from hmac import compare_digest
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from agentnet.authorization.policy import validate_actor_state
-from agentnet.delivery.state import require_transition
+from agentnet.delivery.state import require_transition, transition_reachable
 from agentnet.errors import AuthorizationError, ConflictError, IdempotencyConflict
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.recipients import RecipientResolver
@@ -871,6 +872,140 @@ class MailboxService:
             },
         )
         return {"receipt_id": receipt_id, "fact": proposed.value, "audit_hash": audit_hash}
+
+    def acknowledge(
+        self,
+        *,
+        event_id: str,
+        recipient_id: str,
+        envelope_digest_value: str,
+        owner_actor: VerifiedActor,
+    ) -> dict[str, Any]:
+        """Record exact recipient custody once without implying later facts.
+
+        ``recipient_committed`` is the delivery acknowledgement defined by the
+        protocol.  A fresh current recipient may retry after losing the first
+        response; the existing receipt is returned without another write or
+        audit record.  Presentation, processing, obligation progress, and
+        effects remain separate operations owned by their exact authorities.
+        """
+
+        detail = {"acknowledgement": "durable_recipient_custody"}
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                """SELECT r.current_fact,e.envelope_digest,e.delivery_expires_at,
+                          e.domain_id,e.policy_revision
+                   FROM recipients r JOIN events e ON e.event_id=r.event_id
+                   WHERE r.event_id=? AND r.recipient_id=?""",
+                (event_id, recipient_id),
+            ).fetchone()
+            if row is None or not compare_digest(
+                str(row["envelope_digest"]), envelope_digest_value
+            ):
+                raise AuthorizationError("mailbox entry is not visible")
+
+            now = int(time.time())
+            self._require_current_recipient(
+                connection,
+                actor=owner_actor,
+                recipient_id=recipient_id,
+                event_domain_id=str(row["domain_id"]),
+                policy_revision=int(row["policy_revision"]),
+                now=now,
+            )
+            existing = connection.execute(
+                """SELECT receipt_id FROM receipts
+                   WHERE event_id=? AND recipient_id=? AND fact=? AND event_digest=?
+                   ORDER BY created_at,receipt_id LIMIT 1""",
+                (
+                    event_id,
+                    recipient_id,
+                    DeliveryFact.RECIPIENT_COMMITTED.value,
+                    envelope_digest_value,
+                ),
+            ).fetchone()
+            current = DeliveryFact(row["current_fact"])
+            if existing is not None:
+                if not transition_reachable(DeliveryFact.RECIPIENT_COMMITTED, current):
+                    raise ConflictError("mailbox acknowledgement history is inconsistent")
+                return {
+                    "schema": "agentnet.mailbox-acknowledgement.v1",
+                    "event_id": event_id,
+                    "recipient_id": recipient_id,
+                    "fact": DeliveryFact.RECIPIENT_COMMITTED.value,
+                    "current_fact": current.value,
+                    "duplicate": True,
+                    "receipt_id": str(existing["receipt_id"]),
+                    "envelope_digest": envelope_digest_value,
+                }
+
+            if row["delivery_expires_at"] is not None and now >= int(row["delivery_expires_at"]):
+                raise ConflictError("mailbox acknowledgement is no longer legal")
+            require_transition(current, DeliveryFact.RECIPIENT_COMMITTED)
+            self._require_fact_owner(
+                connection,
+                actor=owner_actor,
+                fact=DeliveryFact.RECIPIENT_COMMITTED,
+                recipient_id=recipient_id,
+                event_domain_id=str(row["domain_id"]),
+                policy_revision=int(row["policy_revision"]),
+                now=now,
+                event_id=event_id,
+                detail=detail,
+                workload_proof=None,
+            )
+            updated = connection.execute(
+                """UPDATE recipients SET current_fact=?,updated_at=?
+                   WHERE event_id=? AND recipient_id=? AND current_fact=?""",
+                (
+                    DeliveryFact.RECIPIENT_COMMITTED.value,
+                    now,
+                    event_id,
+                    recipient_id,
+                    current.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ConflictError("mailbox acknowledgement raced with another transition")
+            receipt_id = str(uuid4())
+            connection.execute(
+                """INSERT INTO receipts(
+                       receipt_id,event_id,recipient_id,fact,owner_actor_json,
+                       event_digest,detail_json,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    receipt_id,
+                    event_id,
+                    recipient_id,
+                    DeliveryFact.RECIPIENT_COMMITTED.value,
+                    canonical_json(owner_actor.audit_view()).decode("utf-8"),
+                    envelope_digest_value,
+                    canonical_json(detail).decode("utf-8"),
+                    now,
+                ),
+            )
+            audit_hash = self.store.append_audit(
+                connection,
+                {
+                    "action": "mailbox.acknowledge",
+                    "event_id": event_id,
+                    "from": current.value,
+                    "owner": owner_actor.audit_view(),
+                    "recipient_id": recipient_id,
+                    "to": DeliveryFact.RECIPIENT_COMMITTED.value,
+                },
+            )
+            return {
+                "schema": "agentnet.mailbox-acknowledgement.v1",
+                "event_id": event_id,
+                "recipient_id": recipient_id,
+                "fact": DeliveryFact.RECIPIENT_COMMITTED.value,
+                "current_fact": DeliveryFact.RECIPIENT_COMMITTED.value,
+                "duplicate": False,
+                "receipt_id": receipt_id,
+                "envelope_digest": envelope_digest_value,
+                "audit_hash": audit_hash,
+            }
 
     def transition(
         self,

@@ -64,6 +64,7 @@ _LOCAL_CONFORMANCE_C0_ACTIONS = frozenset(
         "conversation.task.complete",
         "conversation.task.handoff",
         "conversation.task.request",
+        "mailbox.acknowledge",
         "mailbox.read",
         "message.send",
         "server_agent.relay.send",

@@ -20,6 +20,7 @@ from agentnet.protocol.models import Classification
 
 CanonicalToolName = Literal[
     "agentnet.inbox",
+    "agentnet.inbox.acknowledge",
     "agentnet.send",
     "agentnet.conversation.create",
     "agentnet.conversation.action",
@@ -33,6 +34,7 @@ CanonicalToolName = Literal[
 ]
 CANONICAL_TOOL_NAMES: tuple[CanonicalToolName, ...] = (
     "agentnet.inbox",
+    "agentnet.inbox.acknowledge",
     "agentnet.send",
     "agentnet.conversation.create",
     "agentnet.conversation.action",
@@ -64,6 +66,14 @@ class BoundCore(Protocol):
         after_cursor: int,
         limit: int,
     ) -> list[dict[str, Any]]: ...
+
+    def acknowledge_mailbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        event_id: str,
+        envelope_digest: str,
+    ) -> dict[str, Any]: ...
 
     def create_conversation(
         self,
@@ -165,6 +175,17 @@ class InboxArguments(BaseModel):
     limit: int = Field(default=25, ge=1, le=100)
 
 
+class InboxAcknowledgeArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    event_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+    )
+    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class EmptyArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -254,6 +275,13 @@ class CanonicalToolDispatcher:
                 after_cursor=parsed.after_cursor,
                 limit=parsed.limit,
             )
+        if request.method == "agentnet.inbox.acknowledge":
+            parsed = InboxAcknowledgeArguments.model_validate(request.arguments)
+            return self.core.acknowledge_mailbox(
+                actor=actor,
+                event_id=parsed.event_id,
+                envelope_digest=parsed.envelope_digest,
+            )
         if request.method == "agentnet.conversation.create":
             parsed = ConversationCreateArguments.model_validate(request.arguments)
             return self.core.create_conversation(
@@ -325,6 +353,7 @@ __all__ = [
     "CanonicalToolDispatcher",
     "CanonicalToolName",
     "CanonicalToolRequest",
+    "InboxAcknowledgeArguments",
     "InboxArguments",
     "ConversationActionArguments",
     "ConversationCreateArguments",

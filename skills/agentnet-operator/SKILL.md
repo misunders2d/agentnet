@@ -93,6 +93,8 @@ Always distinguish:
 - installed vs initialized;
 - initialized vs enrolled;
 - submitted vs accepted into custody;
+- accepted custody vs recipient `recipient_committed` acknowledgement;
+- `recipient_committed` vs presentation, processing, obligation progress, or effect;
 - `accepted_local` vs production durability;
 - diagnostic harness detection vs external conformance;
 - transport/A2A acknowledgement vs AgentNet-native processing or business effect;

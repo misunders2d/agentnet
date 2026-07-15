@@ -66,6 +66,7 @@ function binding(): Binding {
 
 type CanonicalMethod =
 	| "agentnet.inbox"
+	| "agentnet.inbox.acknowledge"
 	| "agentnet.send"
 	| "agentnet.conversation.create"
 	| "agentnet.conversation.action"
@@ -133,6 +134,23 @@ export default function (pi: ExtensionAPI) {
 				after_cursor: params.after_cursor ?? 0,
 				limit: params.limit ?? 25,
 			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_inbox_acknowledge",
+		label: "AgentNet acknowledge inbox event",
+		description: "Record durable custody for one exact mailbox event.",
+		parameters: Type.Object({
+			event_id: Type.String({
+				minLength: 1,
+				maxLength: 256,
+				pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+			}),
+			envelope_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.inbox.acknowledge", params);
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},
 	});

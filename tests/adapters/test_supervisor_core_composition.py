@@ -301,6 +301,11 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
         action="mailbox.read",
         resource=recipient.harness_id,
     )
+    core.grant_local_entitlement(
+        recipient,
+        action="mailbox.acknowledge",
+        resource=recipient.harness_id,
+    )
     app = create_app(core)
     signed = AgentNetClient(
         base_url="http://127.0.0.1",
@@ -336,6 +341,19 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
         items = concrete.reconcile(after_cursor=0, limit=10)
         item = next(value for value in items if value["event"]["event_id"] == event.event_id)
         authorization = concrete.authorize_background(item)
+        delivery_receipt_count = store.fetch_one(
+            """SELECT COUNT(*) AS count FROM receipts
+               WHERE event_id=? AND recipient_id=? AND fact='recipient_committed'""",
+            (event.event_id, recipient.harness_id),
+        )["count"]
+        if sequence == 1:
+            acknowledged = signed.acknowledge_mailbox(
+                event_id=event.event_id,
+                envelope_digest=item["envelope_digest"],
+            )
+            assert acknowledged.status_code == 200
+            assert acknowledged.json()["duplicate"] is False
+            delivery_receipt_count += 1
         queue_id = f"local-result-provenance-queue-{sequence:04d}"
         custody = signed.request(
             "POST",
@@ -347,6 +365,11 @@ def test_signed_supervisor_result_provenance_is_atomic_replay_safe_and_fail_clos
             },
         )
         assert custody.status_code == 201
+        assert store.fetch_one(
+            """SELECT COUNT(*) AS count FROM receipts
+               WHERE event_id=? AND recipient_id=? AND fact='recipient_committed'""",
+            (event.event_id, recipient.harness_id),
+        )["count"] == delivery_receipt_count + (0 if sequence == 1 else 1)
         return event, authorization, {
             "authorization": authorization,
             "native_result": {

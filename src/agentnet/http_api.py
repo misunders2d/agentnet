@@ -91,6 +91,12 @@ class MessageBody(BaseModel):
     expected_room_control_sequence: int | None = Field(default=None, ge=1)
 
 
+class MailboxAcknowledgeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class AssignmentBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -235,6 +241,17 @@ def create_app(core: CommunicationCore) -> Starlette:
         except ValueError as exc:
             raise ValidationError("mailbox cursor/limit must be integers") from exc
         return JSONResponse({"items": core.mailbox(actor=actor, after_cursor=after, limit=limit)})
+
+    async def mailbox_acknowledge(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = MailboxAcknowledgeBody.model_validate_json(body)
+        return JSONResponse(
+            core.acknowledge_mailbox(
+                actor=actor,
+                event_id=request.path_params["event_id"],
+                envelope_digest=parsed.envelope_digest,
+            )
+        )
 
     async def mailbox_watch(request: Request) -> Response:
         """Authenticated resumable watch that emits authority-free wake hints.
@@ -514,6 +531,11 @@ def create_app(core: CommunicationCore) -> Starlette:
         Route("/v1/messages", send_message, methods=["POST"]),
         Route("/v1/mailbox", mailbox, methods=["GET"]),
         Route("/v1/mailbox/watch", mailbox_watch, methods=["GET"]),
+        Route(
+            "/v1/mailbox/{event_id}/acknowledge",
+            mailbox_acknowledge,
+            methods=["POST"],
+        ),
         Route("/v1/tasks/assign", assign_task, methods=["POST"]),
         Route("/v1/task-proposals", task_proposals, methods=["GET"]),
         Route("/v1/task-proposals/{proposal_id}/approve", approve_task_proposal, methods=["POST"]),

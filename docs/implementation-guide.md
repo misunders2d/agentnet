@@ -157,6 +157,27 @@ a Pi capability only after the child is running and measured, so the opaque
 value must be delivered over the supervisor's private post-launch channel; it
 is never a command-line, MCP, A2A, or caller-supplied bearer.
 
+## Receive and acknowledge mailbox custody
+
+After an enrolled recipient has durably persisted the exact inbox bytes and
+dedup state, it can record the protocol's baseline delivery acknowledgement:
+
+```bash
+agentnet message inbox --identity .agentnet/recipient-identity.json
+agentnet message acknowledge EVENT_ID \
+  --envelope-digest ENVELOPE_DIGEST \
+  --identity .agentnet/recipient-identity.json
+```
+
+The acknowledgement request is signed over its exact path and body. Recipient
+identity is derived from the current credential, not a command argument. The
+server checks the immutable envelope digest and writes `recipient_committed`
+with one recipient-owned receipt and audit record. Exact response-loss retries
+return that receipt without another transition. This operation does not claim
+presentation, human reading, model processing, response-obligation progress,
+task payload release, or a business effect. Harness-local tools expose the same
+operation as `agentnet.inbox.acknowledge`.
+
 ## Implemented kernel
 
 - exact verified actor union: human+harness, host guest+harness, workload, or
@@ -174,7 +195,9 @@ is never a command-line, MCP, A2A, or caller-supplied bearer.
   obligation-counter reconciliation, content-free status, and no foreground
   message API;
 - transactional per-recipient mailbox, at-least-once/idempotent submission,
-  actor-owned receipts, expiry, cancellation, and `effect_unknown` controls;
+  exact recipient-harness custody acknowledgement (`recipient_committed`) with
+  one-write retry convergence, actor-owned receipts, expiry, cancellation, and
+  `effect_unknown` controls;
 - staged artifact reservation, immutable encrypted quarantine, exact manifest,
   scanner attestation, policy-gated release, and single-use download capability;
 - rooms, from-join membership, temporary meetings, explicit frozen ownership
@@ -186,9 +209,9 @@ is never a command-line, MCP, A2A, or caller-supplied bearer.
   per-child capabilities, persistent replay rejection, and no caller
   bearer/identity arguments; the ordinary supervisor launches owner-only,
   parent-measured MCP endpoints and directly delivers sealed Pi capabilities;
-  the exact local tool set includes direct send/inbox, conversation
-  create/action/thread, and response-obligation inbox/list/get/progress/cancel/
-  reconcile operations;
+  the exact local tool set includes direct send/inbox/inbox-acknowledge,
+  conversation create/action/thread, and response-obligation
+  inbox/list/get/progress/cancel/reconcile operations;
 - provider-neutral interfaces for PostgreSQL, artifact storage, Cedar,
   SPIFFE/SPIRE, maintained MLS, workflow engines, and future mailbox relays;
 - audit hash chain/checkpoints, quotas, privacy classes, redacted attention,

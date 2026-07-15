@@ -160,6 +160,15 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
     ).func.__name__ == "command_message_send"
     assert parser.parse_args(
         [
+            "message",
+            "acknowledge",
+            "event-1",
+            "--envelope-digest",
+            "a" * 64,
+        ]
+    ).func.__name__ == "command_message_acknowledge"
+    assert parser.parse_args(
+        [
             "backup",
             "sqlite",
             "--archive",
