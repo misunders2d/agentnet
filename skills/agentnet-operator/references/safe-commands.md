@@ -123,7 +123,7 @@ Before creating server state, verify that the operator has approved values for:
 - PostgreSQL endpoint and environment variable containing the runtime DSN;
 - OIDC enrollment configuration file;
 - retention and recovery policy;
-- exact enrolled harness and credential identifiers when bootstrap requires them.
+- an exact independently approved identity profile produced by enrollment.
 
 The CLI shape is:
 
@@ -138,13 +138,35 @@ agentnet network create \
   --database-url-env AGENTNET_DATABASE_URL
 ```
 
-Then, only after reviewing the generated configuration and prerequisites:
+For an existing config that was not created by `network create`, provision its
+schema/keys without inventing identity or authority:
 
 ```bash
 agentnet bootstrap-server-agent --config agentnet.json
 ```
 
-These commands do not themselves prove HA, PITR, KMS custody, independent enrollment approval, or production certification.
+Then complete exact OIDC/key-possession/independent approval enrollment. While
+the server process is offline, bind only that exact identity:
+
+```bash
+agentnet join begin --server https://agentnet.example
+agentnet join complete \
+  --state .agentnet/join.json \
+  --challenge .agentnet/challenge.json \
+  --approval .agentnet/approval.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet server-agent activate \
+  --config agentnet.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet serve --config agentnet.json
+```
+
+Activation uses the exact runtime lease to reject a live server, runs no
+migrations, verifies the current PostgreSQL credential and owner-only private
+key, and writes only enrolled harness/credential labels. It grants no authority
+or capability and does not restart anything. These commands do not themselves
+prove HA, PITR, KMS custody, independent enrollment approval, or production
+certification.
 
 ## Secret injection examples
 

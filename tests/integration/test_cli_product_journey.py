@@ -38,6 +38,16 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
     ).func.__name__ == "command_network_create"
     assert parser.parse_args(
         [
+            "server-agent",
+            "activate",
+            "--config",
+            "agentnet.json",
+            "--identity",
+            "server-agent-identity.json",
+        ]
+    ).func.__name__ == "command_server_agent_activate"
+    assert parser.parse_args(
+        [
             "join",
             "begin",
             "--server",

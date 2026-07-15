@@ -242,6 +242,7 @@ class PostgreSQLStore:
         cipher: LocalEnvelopeCipher,
         *,
         instance_id: str,
+        lease_owner_id: str | None = None,
         connect_timeout: int = 5,
         statement_timeout_ms: int = 15_000,
         lock_timeout_ms: int = 5_000,
@@ -257,6 +258,8 @@ class PostgreSQLStore:
             raise ValidationError("PostgreSQL store requires a PostgreSQL DSN")
         if not instance_id or len(instance_id) > 128:
             raise ValidationError("PostgreSQL runtime instance_id is invalid")
+        if lease_owner_id is not None and (not lease_owner_id or len(lease_owner_id) > 128):
+            raise ValidationError("PostgreSQL runtime lease_owner_id is invalid")
         if not 10 <= lease_ttl_seconds <= 300:
             raise ValidationError("PostgreSQL lease TTL outside profile")
         if require_recovery_topology:
@@ -264,6 +267,7 @@ class PostgreSQLStore:
         self.database_url = database_url
         self.cipher = cipher
         self.instance_id = instance_id
+        self.lease_owner_id = lease_owner_id or instance_id
         self._clock = clock or (lambda: int(time.time()))
         self._lease_ttl = lease_ttl_seconds
         self._connector = connector
@@ -321,11 +325,16 @@ class PostgreSQLStore:
         if connector is psycopg.connect and verify_schema:
             self._postgresql_seal = _VERIFIED_POSTGRESQL_SEAL
         self._adapter = PostgreSQLConnectionAdapter(self._connection)
-        self._lease = self.acquire_lease(
-            f"server-agent.instance:{instance_id}",
-            owner_id=instance_id,
-            ttl_seconds=lease_ttl_seconds,
-        )
+        try:
+            self._lease = self.acquire_lease(
+                f"server-agent.instance:{instance_id}",
+                owner_id=self.lease_owner_id,
+                ttl_seconds=lease_ttl_seconds,
+            )
+        except Exception:
+            self._closed = True
+            self._connection.close()
+            raise
         if start_lease_keeper:
             self._keeper = threading.Thread(
                 target=self._keep_lease,
@@ -399,7 +408,7 @@ class PostgreSQLStore:
                 WHERE runtime_leases.expires_at<=excluded.acquired_at OR runtime_leases.owner_id=excluded.owner_id
                 RETURNING lease_name,owner_id,fence,expires_at
                 """,
-                (lease_name, self.instance_id, now, now, expires_at),
+                (lease_name, self.lease_owner_id, now, now, expires_at),
             ).fetchone()
         if row is None:
             raise GateBlocked("lease_contended", "PostgreSQL runtime lease is held by another owner")

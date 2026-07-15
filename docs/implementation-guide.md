@@ -98,6 +98,42 @@ vendor glue. A missing product component is a named blocker, not an operator
 integration assignment or justification to weaken identity, authority,
 durability, artifact, task, room, federation, or non-interruption semantics.
 
+## Ordinary server-agent activation
+
+`agentnet network create` provisions the namespace, PostgreSQL schema, and
+owner-only software-key files, but it does not invent an enrolled identity or
+start a protected service. Complete exact OIDC/key-possession/independent
+approval enrollment first, then bind the offline configuration explicitly:
+
+```bash
+agentnet join begin --server https://agents.corp.example
+agentnet join complete \
+  --state .agentnet/join.json \
+  --challenge .agentnet/challenge.json \
+  --approval .agentnet/approval.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet server-agent activate \
+  --config agentnet.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet serve --config agentnet.json
+```
+
+Activation acquires the exact configured runtime lease with a distinct
+activation owner. A running process therefore blocks the command; activation
+never fences or restarts a live server. It runs no migrations or artifact
+recovery. While holding that lease, it verifies the same PostgreSQL store has
+the exact active domain, human principal, harness, credential ID/epoch,
+non-lab assurance, and public key named by the owner-only identity profile. It
+also requires exact service origin and audience equality.
+
+The config replacement is owner-only and race-checked. Only
+`enrolled_harness_id` and `enrolled_credential_id` change. No entitlement,
+grant, relationship, capability, feature, A2A route, relay route, tool, data
+access, service start, or business authority is created. An exact repeat is
+idempotent. A different, retired, revoked, expired, stale, or mismatched
+binding fails closed; credential rotation requires a future explicit binding
+update rather than implicit startup rebinding.
+
 Local harness bindings are an explicit ordinary-extension feature. Package
 installation alone does not activate them. `agentnet supervisor-run` expects a
 separate owner-only `agentnet-supervisor.json`; do not pass the core

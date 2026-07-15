@@ -44,7 +44,7 @@ from agentnet.gateways.a2a import (
     generate_opaque_route,
 )
 from agentnet.identity.actors import ActorKind, VerifiedActor
-from agentnet.identity.credentials import public_key_thumbprint
+from agentnet.identity.credentials import load_credential_binding, public_key_thumbprint
 from agentnet.identity.invitations import (
     INTERNAL_INVITATION_POP_PURPOSE,
     INTERNAL_INVITATION_REVOKE_ACTION,
@@ -86,10 +86,11 @@ from agentnet.operations.backup import (
 )
 from agentnet.organization.relationships import RelationshipGovernanceRecord
 from agentnet.protocol.models import Classification, Relationship
-from agentnet.storage.postgres import PostgreSQLReadiness
+from agentnet.storage.postgres import PostgreSQLReadiness, PostgreSQLStore
 from agentnet.storage.sqlite import SQLiteStore
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION
 from agentnet.security.envelope import LocalEnvelopeCipher
+from agentnet.security.dpop import canonical_service_audience
 from agentnet.security.signatures import P256KeyPair, canonical_digest, canonical_json
 from agentnet.supervisor.demos import (
     content_free_demo_summary,
@@ -388,7 +389,7 @@ def _public_json_request(
     return value
 
 
-def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P256KeyPair]:
+def _load_identity_profile(path: Path) -> tuple[dict[str, object], VerifiedActor, P256KeyPair]:
     value = _read_json_object(path, label="AgentNet identity profile")
     if set(value) != {
         "schema",
@@ -405,14 +406,14 @@ def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P2
     if actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS:
         raise SystemExit("AgentNet owner commands require a verified human identity profile")
     key_path = Path(str(value["private_key_path"]))
-    if (
-        not key_path.is_absolute()
-        or key_path.is_symlink()
-        or not key_path.is_file()
-        or key_path.stat().st_mode & 0o077
-    ):
-        raise SystemExit("AgentNet identity private key path is not an owner-only absolute file")
-    key = P256KeyPair.from_private_pem(key_path.read_bytes())
+    key = P256KeyPair.from_private_pem(
+        _owner_only_file(key_path, label="AgentNet identity private key")
+    )
+    return value, actor, key
+
+
+def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P256KeyPair]:
+    value, actor, key = _load_identity_profile(path)
     client = AgentNetClient(
         base_url=_canonical_server_origin(str(value["server_base_url"])),
         key=key,
@@ -422,6 +423,60 @@ def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P2
         audience=str(value["audience"]),
     )
     return client, actor, key
+
+
+def _open_server_agent_activation_store(config: ExtensionConfig) -> PostgreSQLStore:
+    """Open the exact runtime lease without migrations or background work.
+
+    Reusing the configured runtime instance lease proves the ordinary server
+    agent is offline and keeps it fenced until the config replacement finishes.
+    """
+
+    if config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+        raise SystemExit("server-agent activation requires always_on_server_agent profile")
+    cipher = LocalEnvelopeCipher.from_key_file(
+        config.data_dir / "secrets" / "records.key",
+        create=False,
+    )
+    return PostgreSQLStore(
+        config.resolved_database_url(),
+        cipher,
+        instance_id=config.runtime_instance_id,
+        lease_owner_id=f"activation-{uuid4().hex}",
+        connect_timeout=config.postgres_connect_timeout_seconds,
+        statement_timeout_ms=config.postgres_statement_timeout_ms,
+        lock_timeout_ms=config.postgres_lock_timeout_ms,
+        lease_ttl_seconds=config.postgres_lease_ttl_seconds,
+        run_migrations=False,
+        start_lease_keeper=False,
+        require_recovery_topology=config.postgres_recovery_topology,
+    )
+
+
+def _require_server_agent_activation_binding(
+    store: PostgreSQLStore,
+    *,
+    config: ExtensionConfig,
+    actor: VerifiedActor,
+    key: P256KeyPair,
+) -> None:
+    if actor.principal_id is None or actor.harness_id is None or actor.credential_id is None:
+        raise SystemExit("server-agent activation requires an exact human-owned harness identity")
+    binding = load_credential_binding(store, actor.credential_id)
+    binding.require_active(now=int(datetime.now(UTC).timestamp()))
+    if (
+        binding.credential_id != actor.credential_id
+        or binding.domain_id != config.domain_id
+        or binding.domain_id != actor.domain_id
+        or binding.harness_id != actor.harness_id
+        or binding.principal_id != actor.principal_id
+        or binding.credential_epoch != actor.credential_epoch
+        or binding.binding_assurance != actor.binding_assurance
+        or binding.binding_assurance == "lab"
+        or binding.public_key_pem != key.public_pem
+        or binding.key_id != public_key_thumbprint(key.public_pem)
+    ):
+        raise SystemExit("server-agent identity does not match its current stored credential binding")
 
 
 def command_backup_sqlite(args: argparse.Namespace) -> int:
@@ -777,8 +832,12 @@ def command_network_create(args: argparse.Namespace) -> int:
                 "backup_seal_private_key": str(seal_key_path),
                 "backup_seal_key_custody": "local_software_key_not_production_kms",
                 "next": [
-                    "agentnet serve --config " + str(path),
                     "agentnet join begin --server " + config.public_base_url,
+                    "agentnet join complete --identity .agentnet/server-agent-identity.json ...",
+                    "agentnet server-agent activate --config "
+                    + str(path)
+                    + " --identity .agentnet/server-agent-identity.json",
+                    "agentnet serve --config " + str(path),
                     "agentnet founder begin --identity <founder-identity.json>",
                     "enroll at least two independent recovery administrators before the initial root expires",
                 ],
@@ -788,6 +847,93 @@ def command_network_create(args: argparse.Namespace) -> int:
         )
     )
     return 0 if bool(local_readiness.get("ready")) else 1
+
+
+def command_server_agent_activate(args: argparse.Namespace) -> int:
+    """Bind an offline server config to one exact enrolled harness credential.
+
+    Activation narrows deployment identity only. It grants no entitlement,
+    relationship, data, tool, effect, or additional server capability.
+    """
+
+    config_path = Path(args.config)
+    config = _load_config(config_path)
+    if config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+        raise SystemExit("server-agent activation requires always_on_server_agent profile")
+
+    identity_path = Path(args.identity)
+    identity, actor, key = _load_identity_profile(identity_path)
+    if (
+        actor.principal_id is None
+        or actor.harness_id is None
+        or actor.credential_id is None
+        or actor.binding_assurance == "lab"
+    ):
+        raise SystemExit("server-agent activation requires an exact non-lab human harness identity")
+    if actor.domain_id != config.domain_id:
+        raise SystemExit("server-agent identity belongs to a different AgentNet domain")
+    if _canonical_server_origin(str(identity["server_base_url"])) != config.public_base_url:
+        raise SystemExit("server-agent identity names a different AgentNet service origin")
+    try:
+        identity_audience = canonical_service_audience(str(identity["audience"]))
+    except ValidationError as exc:
+        raise SystemExit("server-agent identity audience is not canonical") from exc
+    if identity_audience != config.effective_service_audience:
+        raise SystemExit("server-agent identity names a different AgentNet service audience")
+
+    existing = (config.enrolled_harness_id, config.enrolled_credential_id)
+    requested = (actor.harness_id, actor.credential_id)
+    if any(existing) and existing != requested:
+        raise SystemExit(
+            "server-agent configuration is already bound to a different identity; "
+            "use the explicit credential rotation/recovery flow"
+        )
+
+    candidate = ExtensionConfig.model_validate(
+        {
+            **config.model_dump(mode="python"),
+            "enrolled_harness_id": actor.harness_id,
+            "enrolled_credential_id": actor.credential_id,
+        }
+    )
+    duplicate = existing == requested
+    store = _open_server_agent_activation_store(candidate)
+    try:
+        _require_server_agent_activation_binding(
+            store,
+            config=candidate,
+            actor=actor,
+            key=key,
+        )
+        if not duplicate:
+            _write_private_config(config_path, candidate.redacted_export(), force=True)
+    finally:
+        store.close()
+
+    print(
+        json.dumps(
+            {
+                "activated": not duplicate,
+                "idempotent_repeat": duplicate,
+                "config": str(config_path),
+                "domain_id": actor.domain_id,
+                "harness_id": actor.harness_id,
+                "credential_id": actor.credential_id,
+                "authority_granted": False,
+                "service_restart": "not_performed",
+                "server_agent_capabilities": sorted(
+                    capability.value for capability in candidate.server_agent_capabilities
+                ),
+                "next": [
+                    "agentnet serve --config " + str(config_path),
+                    "agentnet status --config " + str(config_path) + " --live",
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def command_join_begin(args: argparse.Namespace) -> int:
@@ -865,9 +1011,9 @@ def command_join_complete(args: argparse.Namespace) -> int:
     if not isinstance(decoded, dict) or canonical_json(decoded) != transaction:
         raise SystemExit("OIDC callback transaction is not exact canonical JSON")
     key_path = Path(str(state["private_key_path"]))
-    if key_path.is_symlink() or not key_path.is_file() or key_path.stat().st_mode & 0o077:
-        raise SystemExit("join private key is not an owner-only real file")
-    key = P256KeyPair.from_private_pem(key_path.read_bytes())
+    key = P256KeyPair.from_private_pem(
+        _owner_only_file(key_path, label="join private key")
+    )
     if key.public_pem != state["public_key_pem"]:
         raise SystemExit("join private key no longer matches the pending candidate")
     result = _public_json_request(
@@ -907,7 +1053,12 @@ def command_join_complete(args: argparse.Namespace) -> int:
                 "principal_id": actor.principal_id,
                 "harness_id": actor.harness_id,
                 "credential_id": actor.credential_id,
-                "next": "founders run agentnet founder begin; invited devices are now ready to reconnect",
+                "next": [
+                    "ordinary client devices may now reconnect with this exact identity",
+                    "for an always-on config, run agentnet server-agent activate --config agentnet.json --identity "
+                    + str(identity_path),
+                    "after server-agent activation, start the service and run agentnet founder begin if applicable",
+                ],
             },
             indent=2,
             sort_keys=True,
@@ -2400,6 +2551,22 @@ def build_parser() -> argparse.ArgumentParser:
     network_create.add_argument("--postgres-recovery-topology", action="store_true")
     network_create.add_argument("--force", action="store_true")
     network_create.set_defaults(func=command_network_create)
+
+    server_agent = commands.add_parser(
+        "server-agent",
+        help="activate and operate one ordinary enrolled always-on AgentNet process",
+    )
+    server_agent_commands = server_agent.add_subparsers(
+        dest="server_agent_command",
+        required=True,
+    )
+    server_agent_activate = server_agent_commands.add_parser(
+        "activate",
+        help="bind an offline server config to one exact enrolled identity without granting authority",
+    )
+    server_agent_activate.add_argument("--config", default="agentnet.json")
+    server_agent_activate.add_argument("--identity", default=".agentnet/identity.json")
+    server_agent_activate.set_defaults(func=command_server_agent_activate)
 
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")
     join_commands = join.add_subparsers(dest="join_command", required=True)

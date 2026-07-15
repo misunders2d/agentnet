@@ -36,6 +36,15 @@ The local executable composes logical roles in one process but preserves
 separate interfaces and actor types. Production requires distinct credentials
 and the physical/administrative topology selected under PD-010.
 
+An always-on process has a separate deployment-identity binding step. After
+real enrollment, `server-agent activate` holds the exact runtime lease under a
+distinct activation owner, verifies the current credential and private key
+against the same PostgreSQL authority, and atomically adds only the exact
+harness/credential labels to the offline config. Startup does not follow a
+retired label to a successor credential. These labels and server capability
+limits can only narrow process eligibility; protected operations still derive
+and authorize their exact caller independently.
+
 ## Canonical state and evidence
 
 - Canonical implementation state: this repository.

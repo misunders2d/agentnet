@@ -517,27 +517,17 @@ class CommunicationCore:
         if credential_id is None or harness_id is None:
             raise GateBlocked("server_agent_enrollment", "server-agent enrollment configuration is absent")
         try:
-            configured_binding = load_credential_binding(self.store, credential_id)
+            binding = load_credential_binding(self.store, credential_id)
             if (
-                configured_binding.domain_id != self.config.domain_id
-                or configured_binding.harness_id != harness_id
-                or configured_binding.credential_id != credential_id
-                or configured_binding.binding_assurance == "lab"
-                or configured_binding.credential_status in {"compromised", "revoked"}
+                binding.domain_id != self.config.domain_id
+                or binding.harness_id != harness_id
+                or binding.credential_id != credential_id
+                or binding.binding_assurance == "lab"
             ):
                 raise AuthenticationError("configured server-agent enrollment lineage mismatches")
-            binding = configured_binding
-            if configured_binding.credential_status == "retired":
-                current = self.store.fetch_one(
-                    """SELECT c.credential_id
-                         FROM credentials c JOIN harnesses h ON h.harness_id=c.harness_id
-                        WHERE h.harness_id=? AND h.domain_id=?
-                          AND c.status='active' AND c.epoch=h.credential_epoch""",
-                    (harness_id, self.config.domain_id),
-                )
-                if current is None:
-                    raise AuthenticationError("rotated server-agent credential is unavailable")
-                binding = load_credential_binding(self.store, current["credential_id"])
+            # Credential rotation must update the exact deployment binding through
+            # an explicit, separately authorized flow. Startup never follows a
+            # retired credential label to a different active credential.
             binding.require_active(now=int(time.time()))
         except Exception as exc:
             raise GateBlocked("server_agent_enrollment", "configured server-agent enrollment is not current") from exc

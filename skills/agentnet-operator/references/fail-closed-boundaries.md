@@ -42,13 +42,20 @@ AgentNet requires credentials to be injected securely at runtime. It does not re
 
 ## Core versus supervisor configuration
 
-Use the core config with core/server commands:
+Use the core config with core/server commands. After exact enrollment and
+before service start, activate the ordinary server-agent binding explicitly:
 
 ```bash
+agentnet server-agent activate --config agentnet.json --identity .agentnet/server-agent-identity.json
 agentnet status --config agentnet.json
 agentnet serve --config agentnet.json --host 127.0.0.1 --port 8080
 agentnet bootstrap-server-agent --config agentnet.json
 ```
+
+Activation must run while the service is offline. It holds the exact runtime
+lease under a distinct activation owner, runs no migrations, checks the current
+credential and private key against PostgreSQL, and changes only enrollment
+labels. It never creates entitlement, capability, route, or service authority.
 
 Use the separate supervisor config with:
 

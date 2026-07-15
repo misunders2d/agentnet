@@ -16,7 +16,7 @@ import psycopg
 
 from agentnet.artifacts.service import ArtifactService, FilesystemArtifactStore
 from agentnet.core.app import CommunicationCore
-from agentnet.errors import AuthorizationError, ConflictError, GateBlocked, ValidationError
+from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, GateBlocked, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.http_api import create_app
 from agentnet.messaging.events import new_event
@@ -587,13 +587,16 @@ class _LeaseDatabase:
         self.leases: dict[str, dict[str, object]] = {}
         self.fsync = fsync
         self.connect_count = 0
+        self.connections: list[_LeaseConnection] = []
         self.fail_next_probe = False
         self.probe_attempts = 0
         self.recovery_generations: set[int] = set()
 
     def connect(self, *_args, **_kwargs):
         self.connect_count += 1
-        return _LeaseConnection(self, generation=self.connect_count)
+        connection = _LeaseConnection(self, generation=self.connect_count)
+        self.connections.append(connection)
+        return connection
 
 
 class _LeaseConnection:
@@ -739,6 +742,43 @@ def test_runtime_fence_invalidates_an_older_same_instance_process() -> None:
     finally:
         first.close()
         second.close()
+
+
+def test_distinct_lease_owner_cannot_take_over_live_same_instance_runtime() -> None:
+    database = _LeaseDatabase()
+    first = _lease_store(database, _Clock(100), "server-agent-a")
+    try:
+        with pytest.raises(GateBlocked, match="held by another owner"):
+            PostgreSQLStore(
+                "postgresql://agentnet@postgres/agentnet",
+                LocalEnvelopeCipher(b"v" * 32),
+                instance_id="server-agent-a",
+                lease_owner_id="activation-attempt",
+                run_migrations=False,
+                verify_schema=False,
+                connector=database.connect,
+                clock=_Clock(101),
+                start_lease_keeper=False,
+            )
+        assert database.connections[-1].closed is True
+    finally:
+        first.close()
+
+    activation = PostgreSQLStore(
+        "postgresql://agentnet@postgres/agentnet",
+        LocalEnvelopeCipher(b"v" * 32),
+        instance_id="server-agent-a",
+        lease_owner_id="activation-attempt",
+        run_migrations=False,
+        verify_schema=False,
+        connector=database.connect,
+        clock=_Clock(102),
+        start_lease_keeper=False,
+    )
+    try:
+        assert activation._lease.owner_id == "activation-attempt"
+    finally:
+        activation.close()
 
 
 def test_postgres_backend_rejects_fsync_disabled_even_with_synchronous_commit() -> None:
@@ -1008,6 +1048,35 @@ async def test_liveness_is_dependency_independent_while_readiness_and_recovery_f
         assert (await client.get("/healthz")).status_code == 200
         assert (await client.get("/readyz")).status_code == 503
         assert (await client.get("/recoveryz")).status_code == 503
+
+
+def test_server_agent_startup_rejects_retired_exact_configured_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = server_config(tmp_path, instance_id="retired-binding")
+    core = object.__new__(CommunicationCore)
+    core.config = config
+    core.store = object()
+
+    class RetiredBinding:
+        credential_id = config.enrolled_credential_id
+        domain_id = config.domain_id
+        harness_id = config.enrolled_harness_id
+        binding_assurance = "os_bound"
+
+        @staticmethod
+        def require_active(*, now: int) -> None:
+            assert now > 0
+            raise AuthenticationError("credential is unavailable")
+
+    monkeypatch.setattr(
+        "agentnet.core.app.load_credential_binding",
+        lambda _store, _credential_id: RetiredBinding(),
+    )
+
+    with pytest.raises(GateBlocked, match="configured server-agent enrollment is not current"):
+        core._require_enrolled_server_agent_binding()
 
 
 def test_server_agent_probe_status_does_not_enumerate_enrollment_identifiers(

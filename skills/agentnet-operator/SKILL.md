@@ -73,6 +73,19 @@ The approval ceremony service, deployment manifests, and required adapters are A
 
 If any prerequisite is missing, report **blocked** and name it. Never replace real identity with payload fields, chat claims, A2A receipts, Slack messages, synthetic actors, or model output.
 
+After exact enrollment, an ordinary always-on process still needs explicit
+offline deployment binding:
+
+```bash
+agentnet server-agent activate --config agentnet.json --identity .agentnet/server-agent-identity.json
+```
+
+This command must acquire the configured runtime lease under a distinct owner,
+verify the same PostgreSQL credential and owner-only private key, and change
+only the enrolled harness/credential labels. It never grants authority or
+restarts the service. A live process, stale/retired credential, key mismatch,
+or different prior binding blocks activation.
+
 ## Preserve evidence boundaries
 
 Always distinguish:
