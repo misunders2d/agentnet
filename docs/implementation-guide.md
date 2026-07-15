@@ -81,6 +81,23 @@ Credentials are injected only into their bound private worker and are never
 accepted as command-line arguments or printed. Missing evidence, binary, or
 credential fails the requested gate; it is never reported as a skip.
 
+The npm/Pi package bundles a documentation-only `agentnet-operator` skill under
+`skills/agentnet-operator/`. It routes install, local-conformance, server-agent,
+identity, supervisor, Pi-binding, and troubleshooting requests to safe examples
+and fail-closed references. Loading the skill does not initialize or activate
+AgentNet and never grants identity or authority.
+
+The real-network install-and-use contract is exactly the stable requirement set:
+no reduced communication product, synthetic C0 substitute, or extra privileged
+Hub product. AgentNet must ship or explicitly provision the maintained
+mechanisms, adapters, manifests, and deterministic preflight checks required by
+the selected supported profile. Operators supply approved hosts, secret values,
+owner policy decisions, trust roots, and required human ceremonies; they do not
+write missing approval services, scanners, storage adapters, receipt logic, or
+vendor glue. A missing product component is a named blocker, not an operator
+integration assignment or justification to weaken identity, authority,
+durability, artifact, task, room, federation, or non-interruption semantics.
+
 Local harness bindings are an explicit ordinary-extension feature. Package
 installation alone does not activate them. `agentnet supervisor-run` expects a
 separate owner-only `agentnet-supervisor.json`; do not pass the core

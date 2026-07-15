@@ -28,7 +28,9 @@ pi install git:github.com/misunders2d/agentnet
 
 The launcher uses the committed `uv.lock` and selects the release-certified CPython `3.13.13` runtime. The Python package remains compatible with `>=3.13,<3.15`, but the npm launcher is deliberately stricter so different hosts cannot silently verify the same release with different interpreter minors. It keeps an environment keyed by package version and install identity under the current user's state directory. Global npm and Pi-managed copies therefore do not rebind each other's Python environment. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
 
-Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension, not Pi skills. Its tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
+Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension plus a documentation-only `agentnet-operator` skill with safe setup examples and fail-closed references. The skill provides guidance only; it grants no authority and performs no automatic initialization. Extension tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
+
+The supported real-network experience must deliver exactly the capability set in `docs/requirements.md`. AgentNet is responsible for shipping or explicitly provisioning the required maintained mechanisms, adapters, manifests, and preflight checks. The operator supplies approved infrastructure, secrets, owner decisions, trust roots, and human ceremonies—not custom integration code. Missing product components block the real-network path; local synthetic C0 is test evidence, not a smaller product substitute.
 
 ## PATH checks
 

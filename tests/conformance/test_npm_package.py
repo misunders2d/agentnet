@@ -25,6 +25,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     assert "pi-package" in package["keywords"]
     assert package["pi"] == {
         "extensions": ["./src/agentnet/bindings/pi_extension.ts"],
+        "skills": ["./skills"],
         "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png",
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
@@ -36,6 +37,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
         "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+        "skills/**/*.md",
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
     assert package["scripts"]["check"].endswith("&& npm run check:packed")
@@ -54,6 +56,10 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
         "uv.lock",
         "npm/bin/agentnet.mjs",
         "npm/scripts/check-packed-package.mjs",
+        "skills/agentnet-operator/SKILL.md",
+        "skills/agentnet-operator/references/safe-commands.md",
+        "skills/agentnet-operator/references/fail-closed-boundaries.md",
+        "skills/agentnet-operator/references/required-communication-scope.md",
         "src/agentnet/bindings/pi_extension.ts",
         "src/agentnet/adapters/claude.py",
         "src/agentnet/adapters/codex.py",
@@ -62,6 +68,70 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
     )
     assert all((ROOT / path).is_file() for path in required)
     assert os.access(ROOT / "npm/bin/agentnet.mjs", os.X_OK)
+
+
+def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> None:
+    skill = (ROOT / "skills/agentnet-operator/SKILL.md").read_text(encoding="utf-8")
+    assert skill.startswith("---\n")
+    assert re.search(r"^name: agentnet-operator$", skill, re.MULTILINE)
+    assert re.search(r"^description: \S.*$", skill, re.MULTILINE)
+    assert "installation is code installation only" in skill.lower()
+    assert "local_bindings_required=true" in skill
+    assert "agentnet-supervisor.json" in skill
+    assert "agentnet.json" in skill
+    assert "docs/requirements.md" in skill
+    assert "blocked: product component not yet shipped" in skill
+    assert "operator must not have to write integration code" in skill
+
+    commands = (
+        ROOT / "skills/agentnet-operator/references/safe-commands.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "agentnet demo",
+        "agentnet a2a-demo",
+        "agentnet init",
+        "agentnet status",
+        "agentnet serve",
+        "agentnet harness-probe",
+        "agentnet supervisor-run",
+        "agentnet network create",
+        "agentnet bootstrap-server-agent",
+        "private, loopback, link-local, or otherwise non-global addresses",
+        "approval service on the same security boundary",
+    ):
+        assert required in commands
+
+    scope = (
+        ROOT / "skills/agentnet-operator/references/required-communication-scope.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "ARC-001..006",
+        "COM-001",
+        "COM-011",
+        "ORG-001..006",
+        "FILE-001..006",
+        "AVL-001..008",
+        "UX-001..006",
+        "FED-001..009",
+        "There is no separate privileged Hub product",
+        "operator must not be required to write missing adapters",
+    ):
+        assert required in scope
+
+    boundaries = (
+        ROOT / "skills/agentnet-operator/references/fail-closed-boundaries.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "workforce OIDC",
+        "independently controlled WebAuthn",
+        "Infisical",
+        "PostgreSQL 18.4",
+        "accepted_local",
+        "measured supervisor-launched child",
+        "no protected TaskGrant payload-release route",
+        "include_payload",
+    ):
+        assert required in boundaries
 
 
 def test_pi_binding_failure_explains_supervisor_activation() -> None:
@@ -161,6 +231,10 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
         "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+        "skills/agentnet-operator/SKILL.md",
+        "skills/agentnet-operator/references/safe-commands.md",
+        "skills/agentnet-operator/references/fail-closed-boundaries.md",
+        "skills/agentnet-operator/references/required-communication-scope.md",
     } <= filenames
     if (ROOT / ".gitignore").is_file():
         assert ".gitignore" in filenames

@@ -18,6 +18,9 @@ if (metadata.pi?.extensions?.length !== 1) fail("exact Pi extension manifest mis
 if (metadata.pi?.extensions?.[0] !== "./src/agentnet/bindings/pi_extension.ts") {
   fail("Pi extension path changed");
 }
+if (metadata.pi?.skills?.length !== 1 || metadata.pi.skills[0] !== "./skills") {
+  fail("exact Pi skill manifest missing or changed");
+}
 if (metadata.pi?.image !== "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png") {
   fail("Pi package preview image missing or changed");
 }
@@ -29,6 +32,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
   "evidence/local/2026-07-14-v0.1.5/artifacts/RETENTION.md",
+  "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {
   if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
@@ -55,6 +59,10 @@ for (const relative of [
   "pyproject.toml",
   "npm/bin/agentnet.mjs",
   "npm/scripts/check-packed-package.mjs",
+  "skills/agentnet-operator/SKILL.md",
+  "skills/agentnet-operator/references/safe-commands.md",
+  "skills/agentnet-operator/references/fail-closed-boundaries.md",
+  "skills/agentnet-operator/references/required-communication-scope.md",
   "src/agentnet/bindings/pi_extension.ts",
   "src/agentnet/adapters/claude.py",
   "src/agentnet/adapters/codex.py",
@@ -66,6 +74,17 @@ for (const relative of [
   } catch {
     fail(`required package file missing: ${relative}`);
   }
+}
+
+const skillText = readFileSync(path.join(root, "skills/agentnet-operator/SKILL.md"), "utf8");
+for (const required of [
+  "name: agentnet-operator",
+  "description:",
+  "docs/requirements.md",
+  "blocked: product component not yet shipped",
+  "local_bindings_required=true",
+]) {
+  if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
 }
 
 const launcher = path.join(root, "npm/bin/agentnet.mjs");

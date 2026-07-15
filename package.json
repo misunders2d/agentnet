@@ -67,6 +67,9 @@
     "extensions": [
       "./src/agentnet/bindings/pi_extension.ts"
     ],
+    "skills": [
+      "./skills"
+    ],
     "image": "https://raw.githubusercontent.com/misunders2d/agentnet/main/docs/assets/agentnet-overview.png"
   },
   "files": [
@@ -96,6 +99,7 @@
     "schemas/**/*.json",
     "schemas/**/*.md",
     "scripts/**/*.py",
+    "skills/**/*.md",
     "src/**/*.py",
     "src/**/*.ts",
     "tests/**/*.py",

@@ -182,6 +182,21 @@ Installation adds code only. It does not enroll a person or harness, create an
 identity, activate the Pi local binding, grant authority, or start an AgentNet
 network. Those operations use explicit enrollment and supervisor workflows.
 
+The Pi package also bundles the `agentnet-operator` skill. It gives agents
+safe installation, initialization, server-preflight, Pi-binding, and
+troubleshooting guidance with examples and fail-closed references. The skill is
+documentation, not an identity or authority source. You can also load it
+explicitly with `/skill:agentnet-operator`.
+
+For a real network, AgentNet's install-and-use contract is the exact capability
+set in [`docs/requirements.md`](docs/requirements.md)—no reduced messaging
+product and no extra privileged Hub product. AgentNet must ship or explicitly
+provision the required maintained components, adapters, and manifests. Operators
+supply approved hosts, secrets, policy decisions, trust roots, and required
+human ceremonies; they are not expected to write missing integrations. Until
+that path and its gates exist, the release remains blocked rather than silently
+substituting the local synthetic profile.
+
 ## Try the local conformance profile
 
 From a source checkout:
