@@ -97,6 +97,7 @@ class InternalInvitationOIDCCoordinator:
             "client_id": provider.config.client_id,
             "audience": provider.config.audience,
             "redirect_uri": provider.config.redirect_uri,
+            "token_endpoint_auth_method": provider.config.token_endpoint_auth_method.value,
             "allowed_signing_algorithms": list(provider.config.allowed_signing_algorithms),
             "pinned_jwk_thumbprints": [list(item) for item in provider.config.pinned_jwk_thumbprints],
             "allowed_endpoint_origins": list(provider.config.allowed_endpoint_origins),

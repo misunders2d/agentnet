@@ -380,7 +380,7 @@ class CodexAppServerDriver(NativeHarnessDriver):
                 "clientInfo": {
                     "name": "agentnet",
                     "title": "Dedicated background adapter",
-                    "version": "0.1.7",
+                    "version": "0.1.8",
                 },
                 "capabilities": {"experimentalApi": False},
             },

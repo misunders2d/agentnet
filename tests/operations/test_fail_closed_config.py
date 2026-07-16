@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,8 +17,10 @@ from agentnet.operations.config import (
     FeatureFlags,
     IndependentApproverConfig,
     OIDCEnrollmentConfig,
+    OIDCTokenEndpointAuthMethod,
     RuntimeProfile,
 )
+from agentnet.operations.config_migration import load_config_json
 from agentnet.security.signatures import P256KeyPair
 
 
@@ -155,6 +159,112 @@ def test_server_agent_capabilities_use_one_enum_and_are_attenuating_prerequisite
         ExtensionConfig(**base, features=FeatureFlags(public_a2a=True))
     with pytest.raises(ValidationError):
         ExtensionConfig(**base, owner_decisions={"PD-001": "legacy-placeholder"})
+
+
+def _confidential_oidc_config(
+    *,
+    method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+    client_secret_env: str | None = "AGENTNET_TEST_OIDC_CLIENT_SECRET",
+) -> OIDCEnrollmentConfig:
+    approver_key = P256KeyPair.generate()
+    return OIDCEnrollmentConfig(
+        issuer="https://idp.example",
+        client_id="agentnet-ordinary-extension",
+        redirect_uri="https://agent.example/v1/enrollment/oidc/callback",
+        token_endpoint_auth_method=method,
+        client_secret_env=client_secret_env,
+        verifier_id="independent-webauthn-service",
+        trusted_approvers=(
+            IndependentApproverConfig(
+                principal_id="security-owner",
+                signer_key_id=approver_key.thumbprint,
+                public_key_pem=approver_key.public_pem,
+                allowed_purposes=frozenset(
+                    {
+                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.elevation.approve",
+                        "identity.credential.recover.approve",
+                        "identity.enrollment.approve",
+                        "identity.harness.revoke.approve",
+                        "organization.relationship.accept",
+                    }
+                ),
+            ),
+        ),
+    )
+
+
+def test_oidc_public_config_requires_exact_auth_method_secret_reference_pair() -> None:
+    public = _confidential_oidc_config(
+        method=OIDCTokenEndpointAuthMethod.NONE,
+        client_secret_env=None,
+    )
+    assert public.token_endpoint_auth_method is OIDCTokenEndpointAuthMethod.NONE
+    assert public.client_secret_env is None
+
+    with pytest.raises(ValidationError, match="requires client_secret_env"):
+        _confidential_oidc_config(client_secret_env=None)
+    with pytest.raises(ValidationError, match="cannot configure client_secret_env"):
+        _confidential_oidc_config(
+            method=OIDCTokenEndpointAuthMethod.NONE,
+            client_secret_env="AGENTNET_TEST_OIDC_CLIENT_SECRET",
+        )
+    with pytest.raises(ValidationError):
+        _confidential_oidc_config(client_secret_env="not-an-env-name")
+
+
+def test_oidc_secret_reference_is_exported_but_runtime_value_is_not(
+    store,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    enrollment = _confidential_oidc_config()
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        public_base_url="https://agent.example",
+        data_dir=tmp_path / "data",
+        artifact_dir=tmp_path / "artifacts",
+        oidc_enrollment=enrollment,
+    )
+    exported = config.redacted_export()
+    assert exported["oidc_enrollment"]["client_secret_env"] == "AGENTNET_TEST_OIDC_CLIENT_SECRET"
+    assert exported["oidc_enrollment"]["token_endpoint_auth_method"] == "client_secret_post"
+
+    monkeypatch.setattr("agentnet.core.app.is_verified_postgresql_store", lambda _store: True)
+    with pytest.raises(GateBlocked, match="client secret environment variable"):
+        CommunicationCore(config, store)
+
+    monkeypatch.setenv("AGENTNET_TEST_OIDC_CLIENT_SECRET", "runtime-secret-sentinel-one")
+    first = CommunicationCore(config, store)
+    assert first.oidc_enrollment is not None
+    first_provider = first.oidc_enrollment.provider
+    assert "runtime-secret-sentinel-one" not in repr(first_provider.config)
+    assert "runtime-secret-sentinel-one" not in json.dumps(config.redacted_export(), sort_keys=True)
+
+    monkeypatch.setenv("AGENTNET_TEST_OIDC_CLIENT_SECRET", "runtime-secret-sentinel-two")
+    second = CommunicationCore(config, store)
+    assert second.oidc_enrollment is not None
+    assert second.oidc_enrollment.provider.config.client_secret == "runtime-secret-sentinel-two"
+    assert first_provider.config.client_secret == "runtime-secret-sentinel-one"
+
+
+def test_config_migration_rejects_embedded_client_secret_but_accepts_env_reference() -> None:
+    with pytest.raises(Exception, match="embedded secret material"):
+        load_config_json(json.dumps({"schema_version": "1.0", "client_secret": "forbidden"}))
+
+    enrollment = _confidential_oidc_config()
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        public_base_url="https://agent.example",
+        oidc_enrollment=enrollment,
+    )
+    loaded = load_config_json(config.model_dump_json())
+    assert loaded.oidc_enrollment is not None
+    assert loaded.oidc_enrollment.client_secret_env == "AGENTNET_TEST_OIDC_CLIENT_SECRET"
 
 
 def test_same_ordinary_server_can_bootstrap_only_through_exact_oidc_and_independent_approval(

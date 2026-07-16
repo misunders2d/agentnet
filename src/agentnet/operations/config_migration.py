@@ -12,7 +12,13 @@ from agentnet.security.signatures import canonical_digest
 
 
 CURRENT_CONFIG_SCHEMA = "1.0"
-SENSITIVE_KEY_FRAGMENTS = ("password", "private_key", "access_token", "refresh_token")
+SENSITIVE_KEY_FRAGMENTS = (
+    "password",
+    "private_key",
+    "access_token",
+    "refresh_token",
+    "secret",
+)
 SECRET_REFERENCE_SUFFIXES = ("_path", "_file", "_env", "_ref")
 REBIND_FIELDS = (
     "domain_id",

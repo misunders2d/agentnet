@@ -238,10 +238,12 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.6`. This branch prepares verification hotfix candidate `0.1.7`; it is not published
-until Sergey performs the separate npm publication step. The
-repository contains a broad executable local kernel and adversarial test suite,
-but it does **not** claim production certification.
+`0.1.7`. This branch prepares confidential-OIDC correction candidate `0.1.8`;
+it is not published until Sergey performs the separate npm publication step.
+The candidate adds explicit public, `client_secret_post`, and
+`client_secret_basic` token-endpoint profiles with runtime-only secret
+resolution. The repository contains a broad executable local kernel and
+adversarial test suite, but it does **not** claim production certification.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

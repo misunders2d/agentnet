@@ -80,6 +80,13 @@ belongs to the separately administered reverse proxy.
 ## OIDC endpoint configuration contract
 
 `OIDCEnrollmentConfig` and `OIDCProviderConfig` preserve the public-only default.
+`token_endpoint_auth_method` is exactly `none`, `client_secret_post`, or
+`client_secret_basic`; `none` is the backward-compatible default.
+`client_secret_env` is an environment-variable name, never a secret value.
+Confidential methods require that reference and explicit discovery
+advertisement; `none` rejects it. Runtime composition resolves a bounded secret,
+keeps it out of `redacted_export()`, repr, logs, audit, and evidence, and uses
+only the explicitly configured POST-body or Basic authentication form.
 `allowed_endpoint_origins` contains canonical HTTPS origins;
 `allowed_private_endpoint_cidrs` contains canonical private networks; and
 `pinned_endpoint_addresses` contains canonical safe unicast IPv4/IPv6
@@ -95,8 +102,10 @@ to `OIDCHTTPTransport` and is the only set the direct TLS transport may try for
 that request.
 
 The internal-invitation OIDC verifier digest includes origins, private networks,
-and exact endpoint addresses, so changing endpoint policy changes verifier
-identity rather than silently reusing an old binding.
+exact endpoint addresses, and the token-endpoint authentication method, so
+changing endpoint or client-authentication policy changes verifier identity
+rather than silently reusing an old binding. It excludes the runtime secret and
+the environment-variable reference.
 
 ## Relationship wire and storage contract
 

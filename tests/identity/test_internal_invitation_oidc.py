@@ -20,6 +20,7 @@ from agentnet.identity.oidc import (
     OIDCProviderConfig,
     OIDCVerificationResult,
 )
+from agentnet.operations.config import OIDCTokenEndpointAuthMethod
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import (
     P256KeyPair,
@@ -44,12 +45,21 @@ class MutableClock:
 class DeterministicOIDCProvider(OIDCProvider):
     """OIDCProvider test double retaining the coordinator's production type boundary."""
 
-    def __init__(self, clock: MutableClock, *, client_id: str = "invitation-client") -> None:
+    def __init__(
+        self,
+        clock: MutableClock,
+        *,
+        client_id: str = "invitation-client",
+        token_endpoint_auth_method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.NONE,
+        client_secret: str | None = None,
+    ) -> None:
         super().__init__(
             OIDCProviderConfig(
                 issuer=ISSUER,
                 client_id=client_id,
                 redirect_uri="https://agentnet.corp.example/oidc/internal-invitation/callback",
+                token_endpoint_auth_method=token_endpoint_auth_method,
+                client_secret=client_secret,
                 allowed_signing_algorithms=("ES256",),
                 authorization_ttl_seconds=60,
             ),
@@ -430,6 +440,33 @@ def test_revocation_expiry_and_provider_drift_fail_closed(invitation_oidc) -> No
     )
     with pytest.raises(AuthenticationError, match="provider binding"):
         _complete(drifted, canonical, current, code="authorization-code-drift")
+
+
+def test_token_endpoint_auth_method_is_bound_without_secret_material(invitation_oidc) -> None:
+    store, clock, transaction, canonical, _candidate, _provider, coordinator = invitation_oidc
+    authorization = coordinator.begin_authorization(transaction.invitation_id, canonical)
+    confidential = InternalInvitationOIDCCoordinator(
+        store,
+        DeterministicOIDCProvider(
+            clock,
+            token_endpoint_auth_method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+            client_secret="synthetic-runtime-secret",
+        ),
+    )
+
+    assert confidential.verifier_id != coordinator.verifier_id
+    assert "synthetic-runtime-secret" not in confidential.verifier_id
+    with pytest.raises(AuthenticationError, match="provider binding"):
+        _complete(
+            confidential,
+            canonical,
+            authorization,
+            code="authorization-code-auth-method-drift",
+        )
+    assert store.fetch_one(
+        "SELECT status FROM internal_invitation_oidc_transactions WHERE transaction_id=?",
+        (authorization.transaction_id,),
+    )["status"] == "pending"
 
 
 def test_code_token_and_concurrent_acceptance_replays_are_fenced(invitation_oidc) -> None:

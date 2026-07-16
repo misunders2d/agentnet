@@ -27,6 +27,12 @@ class RuntimeProfile(StrEnum):
     ALWAYS_ON_SERVER_AGENT = "always_on_server_agent"
 
 
+class OIDCTokenEndpointAuthMethod(StrEnum):
+    NONE = "none"
+    CLIENT_SECRET_POST = "client_secret_post"
+    CLIENT_SECRET_BASIC = "client_secret_basic"
+
+
 class FeatureFlags(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -357,6 +363,11 @@ class OIDCEnrollmentConfig(BaseModel):
     client_id: str = Field(min_length=1, max_length=512)
     redirect_uri: str = Field(min_length=8, max_length=2_048)
     audience: str | None = Field(default=None, min_length=1, max_length=512)
+    token_endpoint_auth_method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.NONE
+    client_secret_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Z][A-Z0-9_]{2,127}$",
+    )
     allowed_endpoint_origins: tuple[str, ...] = Field(default=(), max_length=32)
     allowed_private_endpoint_cidrs: tuple[str, ...] = Field(default=(), max_length=64)
     pinned_endpoint_addresses: tuple[str, ...] = Field(default=(), max_length=128)
@@ -368,6 +379,11 @@ class OIDCEnrollmentConfig(BaseModel):
 
     @model_validator(mode="after")
     def exact_provider_profile(self) -> "OIDCEnrollmentConfig":
+        confidential = self.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE
+        if confidential and self.client_secret_env is None:
+            raise ValueError("confidential OIDC authentication requires client_secret_env")
+        if not confidential and self.client_secret_env is not None:
+            raise ValueError("public OIDC authentication cannot configure client_secret_env")
         if not self.allowed_signing_algorithms or len(set(self.allowed_signing_algorithms)) != len(
             self.allowed_signing_algorithms
         ):

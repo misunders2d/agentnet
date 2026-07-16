@@ -202,6 +202,53 @@ current challenge, or qualifying independence blocks approval. SQLite reports
 independent-host/device/TLS, key rotation/recovery, backup/restore, operator,
 and PD-002/004/005/009 evidence.
 
+## Confidential workforce OIDC
+
+Public OIDC configuration never contains a client secret. Select one explicit
+token-endpoint method:
+
+- `none` — public Authorization Code + PKCE client; default for existing config;
+- `client_secret_post` — confidential secret in the token form body;
+- `client_secret_basic` — confidential HTTP Basic authentication.
+
+Confidential methods require `client_secret_env`, which names a runtime
+environment variable. Missing, empty, control-character-containing, or oversized
+runtime values block composition before enrollment. Provider discovery must
+advertise the selected confidential method. AgentNet does not infer a method
+from secret presence or discovery ordering.
+
+Google Workspace Web application profile:
+
+```json
+{
+  "issuer": "https://accounts.google.com",
+  "allowed_endpoint_origins": [
+    "https://accounts.google.com",
+    "https://oauth2.googleapis.com",
+    "https://www.googleapis.com"
+  ],
+  "client_id": "<google-web-client-id>",
+  "audience": "<google-web-client-id>",
+  "redirect_uri": "https://agentnet.bezosapp.uk/v1/enrollment/oidc/callback",
+  "allowed_signing_algorithms": ["RS256"],
+  "token_endpoint_auth_method": "client_secret_post",
+  "client_secret_env": "AGENTNET_OIDC_CLIENT_SECRET"
+}
+```
+
+Merge this fragment into the complete OIDC enrollment profile containing the
+independent approval trust anchors. In Google Cloud, use OAuth client type
+**Web application** and authorize exactly
+`https://agentnet.bezosapp.uk/v1/enrollment/oidc/callback`. Supply the secret
+only through the private runtime environment named above; do not place it in
+the JSON file, command line, logs, evidence, or support messages. Rotation takes
+effect only after fresh runtime composition. A method change changes the
+internal-invitation verifier identity, so finish or restart in-flight invitation
+OIDC authorizations during upgrade.
+
+These mechanics are locally tested. They do not prove a live Google ceremony,
+independent approval deployment, production key custody, or owner-policy gates.
+
 ## Ordinary server-agent activation
 
 `agentnet network create` provisions the namespace, PostgreSQL schema, and

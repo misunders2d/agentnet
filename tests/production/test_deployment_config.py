@@ -28,6 +28,7 @@ _AGENT_OWNED_ENVIRONMENT = {
         "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE",
         "AGENTNET_SCANNER_TRUST_CONFIG_FILE",
     ),
+    "secret": ("AGENTNET_OIDC_CLIENT_SECRET",),
     "capability": ("AGENTNET_SERVER_AGENT_CAPABILITIES",),
     "feature": ("AGENTNET_FEATURES",),
     "component": ("AGENTNET_COMPONENT_EVIDENCE",),
@@ -361,6 +362,7 @@ def test_renderer_supports_oidc_only_first_boot_and_public_scanner_trust(tmp_pat
     }
     report = renderer.dry_run_report(config)
     assert report["enrollment_mode"] == "oidc_first_boot"
+    assert report["oidc_token_endpoint_auth_method"] == "none"
     assert report["scanner_trust_configured"] is True
     config_path = tmp_path / "rendered.json"
     renderer.write_config(config, config_path)
@@ -368,6 +370,69 @@ def test_renderer_supports_oidc_only_first_boot_and_public_scanner_trust(tmp_pat
     assert "PRIVATE KEY" not in rendered
     exported = json.loads(rendered)
     assert exported["oidc_enrollment"]["trusted_approvers"][0]["public_key_pem"] == approver.public_pem
+
+
+def test_renderer_google_confidential_oidc_keeps_runtime_secret_out_of_outputs(
+    tmp_path: Path,
+) -> None:
+    renderer = _renderer()
+    environ = _deployment_environment()
+    approver = P256KeyPair.generate()
+    oidc_path = tmp_path / "google-oidc-enrollment.json"
+    _write_public_json(
+        oidc_path,
+        {
+            "issuer": "https://accounts.google.com",
+            "allowed_endpoint_origins": [
+                "https://accounts.google.com",
+                "https://oauth2.googleapis.com",
+                "https://www.googleapis.com",
+            ],
+            "client_id": "google-web-client-id.example",
+            "redirect_uri": "https://agentnet.bezosapp.uk/v1/enrollment/oidc/callback",
+            "audience": "google-web-client-id.example",
+            "token_endpoint_auth_method": "client_secret_post",
+            "client_secret_env": "AGENTNET_OIDC_CLIENT_SECRET",
+            "allowed_signing_algorithms": ["RS256"],
+            "binding_assurance": "hardware_bound",
+            "verifier_id": "independent-webauthn-service",
+            "trusted_approvers": [
+                {
+                    "principal_id": "security-approver",
+                    "signer_key_id": approver.thumbprint,
+                    "public_key_pem": approver.public_pem,
+                    "allowed_purposes": [
+                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.elevation.approve",
+                        "identity.credential.recover.approve",
+                        "identity.enrollment.approve",
+                        "identity.harness.revoke.approve",
+                        "organization.relationship.accept",
+                    ],
+                }
+            ],
+        },
+    )
+    environ["AGENTNET_PUBLIC_BASE_URL"] = "https://agentnet.bezosapp.uk"
+    environ["AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE"] = str(oidc_path)
+    environ["AGENTNET_OIDC_CLIENT_SECRET"] = "deployment-secret-sentinel"
+
+    config = renderer.build_config(environ)
+    report = renderer.dry_run_report(config)
+    config_path = tmp_path / "rendered.json"
+    renderer.write_config(config, config_path)
+    rendered = config_path.read_text(encoding="utf-8")
+
+    assert config.oidc_enrollment is not None
+    assert config.oidc_enrollment.redirect_uri == (
+        "https://agentnet.bezosapp.uk/v1/enrollment/oidc/callback"
+    )
+    assert report["oidc_token_endpoint_auth_method"] == "client_secret_post"
+    assert "deployment-secret-sentinel" not in json.dumps(report, sort_keys=True)
+    assert "deployment-secret-sentinel" not in rendered
+    exported = json.loads(rendered)["oidc_enrollment"]
+    assert exported["client_secret_env"] == "AGENTNET_OIDC_CLIENT_SECRET"
+    assert exported["token_endpoint_auth_method"] == "client_secret_post"
 
 
 def test_renderer_first_boot_fails_closed_without_oidc_or_complete_binding(tmp_path: Path) -> None:

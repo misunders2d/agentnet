@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-16-v0.1.8",
+  "evaluated_at": "2026-07-16T11:12:57+00:00",
+  "scope": "v0_1_8_confidential_oidc_correction_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "c61921291d29d0d07a2917e690f928ae454777d7c71fa9d3e5e03a2a7629e10c",
+  "prior_runtime_evidence": "evidence/local/2026-07-13-final/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-15-v0.1.7/manifest.json",
+  "change_boundary": "Explicit fail-closed token-endpoint authentication for public, client_secret_post, and client_secret_basic OIDC clients; runtime-only secret resolution; confidential discovery validation; Google multi-origin operator profile; public-client compatibility. Live Google, independent approval, production, owner, and cutover evidence remain absent.",
+  "commands": [
+    {
+      "command": "focused confidential OIDC/config/deployment/invitation/enrollment HTTP suite",
+      "result": "71 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1060 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "npm run check",
+      "result": "source 1010 passed with 7 expected PostgreSQL skips; release verifier PASS; packed 1010 passed with 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: PostgreSQL CLI and local server socket unavailable; no database changed; independent Hub rerun required"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1087 passed; 2 environmental G01 installed-harness failures; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "30x token-auth repeat attempt",
+      "result": "not executed: host secret-safety guard blocked the loop command twice; no repeat evidence claimed"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 offline uv builds",
+      "result": "byte-identical 0.1.8 sdist and wheel archives"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8.tar.gz",
+      "sha256": "a1db1515588f99530315794305d3666a95f5739d5ff8dee3214644ce211708b3"
+    },
+    {
+      "path": "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8-py3-none-any.whl",
+      "sha256": "09f7fa2c4adc810aa5135a301200641c3440c80ab971c399533c6b9357766708"
+    }
+  ]
+}

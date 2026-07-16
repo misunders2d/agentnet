@@ -19,7 +19,7 @@ import ssl
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -41,7 +41,7 @@ from agentnet.identity.endpoint_policy import (
     canonical_private_endpoint_network as _canonical_private_endpoint_network,
 )
 from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentService, VerifiedOIDCIdentity
-from agentnet.operations.config import RuntimeProfile
+from agentnet.operations.config import OIDCTokenEndpointAuthMethod, RuntimeProfile
 
 
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -201,7 +201,9 @@ class OIDCProviderConfig:
     client_id: str
     redirect_uri: str
     audience: str | None = None
-    client_secret: str | None = None
+    token_endpoint_auth_method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.NONE
+    # Runtime-only value. Never serialize this dataclass with asdict()/astuple().
+    client_secret: str | None = field(default=None, repr=False)
     allowed_signing_algorithms: tuple[str, ...] = ("RS256",)
     pinned_jwk_thumbprints: tuple[tuple[str, str], ...] = ()
     allowed_endpoint_origins: tuple[str, ...] = ()
@@ -227,7 +229,20 @@ class OIDCProviderConfig:
         if not algorithms or not set(algorithms) <= _OIDC_ALGORITHMS:
             raise ValueError("OIDC signing algorithms must be an explicit RS256/ES256 subset")
         object.__setattr__(self, "allowed_signing_algorithms", algorithms)
-        if self.client_secret is not None and (not self.client_secret or len(self.client_secret) > 4_096):
+        try:
+            auth_method = OIDCTokenEndpointAuthMethod(self.token_endpoint_auth_method)
+        except ValueError as exc:
+            raise ValueError("OIDC token endpoint authentication method is invalid") from exc
+        object.__setattr__(self, "token_endpoint_auth_method", auth_method)
+        confidential = auth_method is not OIDCTokenEndpointAuthMethod.NONE
+        if not confidential and self.client_secret is not None:
+            raise ValueError("public OIDC authentication cannot configure a client secret")
+        if confidential and (
+            self.client_secret is None
+            or not self.client_secret
+            or len(self.client_secret) > 4_096
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in self.client_secret)
+        ):
             raise ValueError("OIDC client secret is invalid")
         if self.authorization_ttl_seconds < 60 or self.authorization_ttl_seconds > 600:
             raise ValueError("OIDC authorization lifetime must be between 60 and 600 seconds")
@@ -339,6 +354,15 @@ class OIDCProvider:
             advertised_algorithms
         ):
             raise AuthenticationError("OIDC provider does not advertise the pinned signing algorithms")
+        if self.config.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE:
+            advertised_auth_methods = document.get("token_endpoint_auth_methods_supported")
+            if (
+                not isinstance(advertised_auth_methods, list)
+                or self.config.token_endpoint_auth_method.value not in advertised_auth_methods
+            ):
+                raise AuthenticationError(
+                    "OIDC provider does not advertise the configured token endpoint authentication method"
+                )
         return OIDCDiscoveryDocument(authorization_endpoint, token_endpoint, jwks_uri)
 
     def authorization_url(self, *, state: str, nonce: str, code_challenge: str) -> str:
@@ -374,7 +398,13 @@ class OIDCProvider:
             "redirect_uri": self.config.redirect_uri,
         }
         headers = {"accept": "application/json", "content-type": "application/x-www-form-urlencoded"}
-        if self.config.client_secret is not None:
+        if self.config.token_endpoint_auth_method is OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST:
+            if self.config.client_secret is None:  # pragma: no cover - dataclass invariant
+                raise AuthenticationError("OIDC client authentication is unavailable")
+            fields["client_secret"] = self.config.client_secret
+        elif self.config.token_endpoint_auth_method is OIDCTokenEndpointAuthMethod.CLIENT_SECRET_BASIC:
+            if self.config.client_secret is None:  # pragma: no cover - dataclass invariant
+                raise AuthenticationError("OIDC client authentication is unavailable")
             client = urllib.parse.quote_plus(self.config.client_id)
             secret = urllib.parse.quote_plus(self.config.client_secret)
             credentials = base64.b64encode(f"{client}:{secret}".encode("utf-8")).decode("ascii")

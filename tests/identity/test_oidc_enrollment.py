@@ -35,7 +35,7 @@ from agentnet.identity.oidc import (
     OIDCProviderConfig,
     UrllibOIDCHTTPTransport,
 )
-from agentnet.operations.config import RuntimeProfile
+from agentnet.operations.config import OIDCTokenEndpointAuthMethod, RuntimeProfile
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
 
@@ -71,8 +71,16 @@ class FakeOIDCTransport:
         self.nonce: str | None = None
         self.claim_overrides: dict[str, object] = {}
         self.header_algorithm = "ES256"
+        self.id_token_signing_alg_values_supported: object = ["ES256"]
         self.forced_id_token: str | None = None
         self.last_id_token: str | None = None
+        self.token_endpoint_auth_methods_supported: object = [
+            "none",
+            "client_secret_post",
+            "client_secret_basic",
+        ]
+        self.last_token_headers: dict[str, str] | None = None
+        self.last_token_fields: dict[str, list[str]] | None = None
         self.token_posts = 0
         self.resolved_requests: list[tuple[str, tuple[str, ...]]] = []
 
@@ -96,7 +104,8 @@ class FakeOIDCTransport:
                     "jwks_uri": self.jwks_uri,
                     "response_types_supported": ["code"],
                     "code_challenge_methods_supported": ["S256"],
-                    "id_token_signing_alg_values_supported": ["ES256"],
+                    "id_token_signing_alg_values_supported": self.id_token_signing_alg_values_supported,
+                    "token_endpoint_auth_methods_supported": self.token_endpoint_auth_methods_supported,
                 }
             )
         if method == "GET" and url == self.jwks_uri:
@@ -119,6 +128,8 @@ class FakeOIDCTransport:
         if method == "POST" and url == self.token_endpoint:
             self.token_posts += 1
             fields = parse_qs(body.decode("ascii"), strict_parsing=True)
+            self.last_token_headers = dict(headers)
+            self.last_token_fields = fields
             verifier = fields["code_verifier"][0]
             actual_challenge = b64(hashlib.sha256(verifier.encode("ascii")).digest())
             assert actual_challenge == self.expected_code_challenge
@@ -247,6 +258,126 @@ def oidc_stack(store) -> OIDCStack:
     )
 
 
+def _exchange_with_client_auth(
+    oidc_stack: OIDCStack,
+    *,
+    method: OIDCTokenEndpointAuthMethod,
+    client_secret: str | None,
+):
+    nonce = "n" * 48
+    verifier = "v" * 64
+    oidc_stack.transport.nonce = nonce
+    oidc_stack.transport.expected_code_challenge = b64(
+        hashlib.sha256(verifier.encode("ascii")).digest()
+    )
+    provider = OIDCProvider(
+        OIDCProviderConfig(
+            issuer=ISSUER,
+            client_id="client-1",
+            redirect_uri="https://agent.example/oidc/callback",
+            token_endpoint_auth_method=method,
+            client_secret=client_secret,
+            allowed_signing_algorithms=("ES256",),
+            http_timeout_seconds=2,
+        ),
+        transport=oidc_stack.transport,
+        clock=oidc_stack.clock,
+        resolver=lambda _host, _port: ("8.8.8.8",),
+    )
+    return provider.exchange_and_verify(
+        code="authorization-code-1",
+        code_verifier=verifier,
+        expected_nonce_hash=hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "client_secret"),
+    (
+        (OIDCTokenEndpointAuthMethod.NONE, None),
+        (OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST, "post-secret-value"),
+        (OIDCTokenEndpointAuthMethod.CLIENT_SECRET_BASIC, "basic secret/value"),
+    ),
+)
+def test_explicit_token_endpoint_client_authentication_preserves_pkce(
+    oidc_stack: OIDCStack,
+    method: OIDCTokenEndpointAuthMethod,
+    client_secret: str | None,
+) -> None:
+    result = _exchange_with_client_auth(
+        oidc_stack,
+        method=method,
+        client_secret=client_secret,
+    )
+
+    assert result.identity.verified_email == "person@corp.example"
+    assert oidc_stack.transport.last_token_fields is not None
+    assert oidc_stack.transport.last_token_headers is not None
+    fields = oidc_stack.transport.last_token_fields
+    headers = oidc_stack.transport.last_token_headers
+    assert fields["code_verifier"] == ["v" * 64]
+    if method is OIDCTokenEndpointAuthMethod.NONE:
+        assert fields["client_id"] == ["client-1"]
+        assert "client_secret" not in fields
+        assert "authorization" not in headers
+    elif method is OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST:
+        assert fields["client_id"] == ["client-1"]
+        assert fields["client_secret"] == [client_secret]
+        assert "authorization" not in headers
+    else:
+        assert "client_id" not in fields
+        assert "client_secret" not in fields
+        expected = base64.b64encode(b"client-1:basic+secret%2Fvalue").decode("ascii")
+        assert headers["authorization"] == f"Basic {expected}"
+
+
+def test_confidential_client_requires_discovery_advertisement(oidc_stack: OIDCStack) -> None:
+    oidc_stack.transport.token_endpoint_auth_methods_supported = ["client_secret_basic"]
+    with pytest.raises(AuthenticationError, match="token endpoint authentication method"):
+        _exchange_with_client_auth(
+            oidc_stack,
+            method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            client_secret="post-secret-value",
+        )
+    assert oidc_stack.transport.token_posts == 0
+
+    oidc_stack.transport.token_endpoint_auth_methods_supported = "client_secret_post"
+    with pytest.raises(AuthenticationError, match="token endpoint authentication method"):
+        _exchange_with_client_auth(
+            oidc_stack,
+            method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            client_secret="post-secret-value",
+        )
+    assert oidc_stack.transport.token_posts == 0
+
+
+def test_provider_config_rejects_auth_method_secret_mismatch_and_hides_secret() -> None:
+    common = {
+        "issuer": ISSUER,
+        "client_id": "client-1",
+        "redirect_uri": "https://agent.example/oidc/callback",
+    }
+    with pytest.raises(ValueError, match="cannot configure a client secret"):
+        OIDCProviderConfig(**common, client_secret="unexpected")
+    with pytest.raises(ValueError, match="client secret is invalid"):
+        OIDCProviderConfig(
+            **common,
+            token_endpoint_auth_method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+        )
+    with pytest.raises(ValueError, match="client secret is invalid"):
+        OIDCProviderConfig(
+            **common,
+            token_endpoint_auth_method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+            client_secret="bad\nsecret",
+        )
+    config = OIDCProviderConfig(
+        **common,
+        token_endpoint_auth_method=OIDCTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+        client_secret="runtime-secret-sentinel",
+    )
+    assert "runtime-secret-sentinel" not in repr(config)
+
+
 def test_authorization_code_pkce_to_independently_approved_binding(oidc_stack: OIDCStack) -> None:
     key = P256KeyPair.generate()
     authorization = oidc_stack.begin(key)
@@ -333,6 +464,52 @@ def test_discovery_jwks_and_claim_attacks_fail_closed(oidc_stack: OIDCStack, att
     assert oidc_stack.store.fetch_one(
         "SELECT status FROM oidc_enrollment_transactions WHERE transaction_id=?", (authorization.transaction_id,)
     )["status"] == "failed"
+
+
+def test_google_discovery_requires_all_three_exact_endpoint_origins(
+    oidc_stack: OIDCStack,
+) -> None:
+    oidc_stack.transport.discovery_issuer = "https://accounts.google.com"
+    oidc_stack.transport.authorization_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
+    oidc_stack.transport.token_endpoint = "https://oauth2.googleapis.com/token"
+    oidc_stack.transport.jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
+    oidc_stack.transport.id_token_signing_alg_values_supported = ["RS256"]
+    common = {
+        "issuer": "https://accounts.google.com",
+        "client_id": "google-web-client-id.example",
+        "redirect_uri": "https://agentnet.bezosapp.uk/v1/enrollment/oidc/callback",
+        "allowed_signing_algorithms": ("RS256",),
+        "http_timeout_seconds": 2,
+    }
+    provider = OIDCProvider(
+        OIDCProviderConfig(
+            **common,
+            allowed_endpoint_origins=(
+                "https://accounts.google.com",
+                "https://oauth2.googleapis.com",
+                "https://www.googleapis.com",
+            ),
+        ),
+        transport=oidc_stack.transport,
+        resolver=lambda _host, _port: ("8.8.8.8",),
+    )
+    discovery = provider.discover()
+    assert discovery.token_endpoint == "https://oauth2.googleapis.com/token"
+    assert discovery.jwks_uri == "https://www.googleapis.com/oauth2/v3/certs"
+
+    missing_jwks_origin = OIDCProvider(
+        OIDCProviderConfig(
+            **common,
+            allowed_endpoint_origins=(
+                "https://accounts.google.com",
+                "https://oauth2.googleapis.com",
+            ),
+        ),
+        transport=oidc_stack.transport,
+        resolver=lambda _host, _port: ("8.8.8.8",),
+    )
+    with pytest.raises(AuthenticationError, match="origin is not pinned"):
+        missing_jwks_origin.discover()
 
 
 def test_oidc_discovery_rejects_unpinned_origins_and_nonpublic_resolution(

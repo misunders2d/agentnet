@@ -155,7 +155,7 @@ by local tests.
 
 ## Install-and-use dependency reconciliation
 
-Reconciled on 2026-07-15 without promoting any requirement or gate. The 85-row
+Reconciled on 2026-07-16 without promoting any requirement or gate. The 85-row
 status vocabulary measures each stable acceptance criterion at its stated
 scope; it does not imply that the assembled company product is installable or
 that a nearby interface is a finished integration. The remaining product work
@@ -169,12 +169,15 @@ has this fail-closed dependency order:
    rebinding negative provides local H evidence. Production enrollment remains
    blocked on real IdP/TLS and independent-boundary L/E/O evidence, not this
    former local implementation gap.
-2. **Explicit self-hosted/private OIDC policy (same IDs).** The public-only
-   default remains. A private provider requires exact HTTPS origins, exact JWK
-   pins, canonical address/CIDR pins, and connection-time enforcement. Unsafe
-   address classes are never admissible, and a hostname, hosts-file, proxy, or
-   blanket private-network switch is insufficient. Local IPv4/IPv6 and
-   deployment-config tests pass; real provider operation remains unproven.
+2. **Explicit self-hosted/private/confidential OIDC policy (same IDs).** The
+   public `none` default remains. Confidential clients select exactly
+   `client_secret_post` or `client_secret_basic`, reference only a runtime
+   environment name, require discovery advertisement, and never infer a method
+   from secret presence. A private provider additionally requires exact HTTPS
+   origins, exact JWK pins, canonical address/CIDR pins, and connection-time
+   enforcement. Local Google multi-origin, PKCE, redaction, rotation, migration,
+   IPv4/IPv6, and deployment-config tests pass; real provider operation remains
+   unproven.
 3. **Independent WebAuthn-UV ceremony production (`ID-002/009`,
    `AUTH-008..010`, `ORG-006`, `SEC-003/005/006`).** Current source includes a
    separately runnable registration/UV/origin/RP-ID/display/signing/expiry/

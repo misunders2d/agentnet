@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -70,7 +71,11 @@ from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.conversation import ConversationService
 from agentnet.messaging.events import new_event
 from agentnet.messaging.obligation import ResponseObligationService
-from agentnet.operations.config import ExtensionConfig, RuntimeProfile
+from agentnet.operations.config import (
+    ExtensionConfig,
+    OIDCTokenEndpointAuthMethod,
+    RuntimeProfile,
+)
 from agentnet.operations.authority_inspection import AuthorityInspectionService
 from agentnet.operations.incident import DomainIncidentService
 from agentnet.operations.outage import HealthProvider, OutageGate
@@ -351,12 +356,29 @@ class CommunicationCore:
                 self.approval_verifier,
                 binding_assurance=oidc.binding_assurance,
             )
+            client_secret: str | None = None
+            if oidc.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE:
+                client_secret = os.environ.get(oidc.client_secret_env or "", "")
+                if (
+                    not client_secret
+                    or len(client_secret) > 4_096
+                    or any(
+                        ord(character) < 0x20 or ord(character) == 0x7F
+                        for character in client_secret
+                    )
+                ):
+                    raise GateBlocked(
+                        "oidc_client_secret",
+                        "configured OIDC client secret environment variable is absent or invalid",
+                    )
             provider = OIDCProvider(
                 OIDCProviderConfig(
                     issuer=oidc.issuer,
                     client_id=oidc.client_id,
                     redirect_uri=oidc.redirect_uri,
                     audience=oidc.audience,
+                    token_endpoint_auth_method=oidc.token_endpoint_auth_method,
+                    client_secret=client_secret,
                     allowed_signing_algorithms=oidc.allowed_signing_algorithms,
                     pinned_jwk_thumbprints=tuple(sorted(oidc.pinned_jwk_thumbprints.items())),
                     allowed_endpoint_origins=oidc.allowed_endpoint_origins,

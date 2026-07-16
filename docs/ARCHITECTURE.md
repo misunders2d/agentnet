@@ -327,6 +327,17 @@ the HTTP Host authority, continue to use the exact configured URL hostname.
 The transport does not consult environment proxies, does not follow redirects,
 and does not resolve the hostname a second time.
 
+Token-endpoint client authentication is explicit. Public configuration carries
+only `token_endpoint_auth_method` (`none`, `client_secret_post`, or
+`client_secret_basic`) and, for confidential clients, the name of a runtime
+environment variable in `client_secret_env`. Runtime composition resolves the
+bounded value without adding it to serialized configuration, repr output,
+audit, or evidence. Confidential methods must be advertised by discovery and
+are never inferred from secret presence or provider ordering. Public clients
+remain `none` by default. The selected method, but no secret or secret
+reference, is included in the internal-invitation verifier identity so a method
+change fails closed for in-flight authorizations.
+
 Private/non-global provider addresses require explicit canonical HTTPS origins
 and exact JWK thumbprint pins in addition to canonical address or private-CIDR
 pins. Exact address pins, when present, constrain every resolved address.

@@ -476,6 +476,11 @@ def dry_run_report(config: ExtensionConfig) -> dict[str, object]:
         "enrollment_mode": (
             "pre_enrolled" if config.enrolled_harness_id else "oidc_first_boot"
         ),
+        "oidc_token_endpoint_auth_method": (
+            config.oidc_enrollment.token_endpoint_auth_method.value
+            if config.oidc_enrollment is not None
+            else None
+        ),
         "scanner_trust_configured": config.scanner_trust is not None,
         "implicit_peer_trust": False,
     }

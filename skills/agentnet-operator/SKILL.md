@@ -64,12 +64,21 @@ Do not initialize or enroll until all required inputs exist:
 - supported PostgreSQL with verified durability settings and recovery plan;
 - securely injected database credentials;
 - dedicated HTTPS/TLS endpoint and exact service audience;
-- workforce OIDC provider;
+- workforce OIDC provider with exact issuer, callback, endpoint origins, signing algorithms, and token-endpoint authentication method;
+- for confidential OIDC, a public `client_secret_env` reference plus a private runtime value; never a secret in config, commands, logs, evidence, or chat;
 - independently controlled WebAuthn user-verification approval authority;
 - per-harness keys, proof of possession, revocation and recovery procedures;
 - explicit capabilities, policies, retention, and evidence appropriate to enabled features.
 
 The WebAuthn-UV ceremony service is an AgentNet product component operated through `agentnet approval`; it uses pinned maintained verification and the existing receipt contract. It must run under config, keys, database, TLS, OS identity, browser/passkey, and administration that enrolling/enrolled harnesses cannot read or control. Same-user or same-host testing never proves independence. Other deployment manifests and required adapters must likewise ship from pinned mechanisms; operators supply approved infrastructure, secrets, and human decisions—not custom integration code. Until each selected profile passes its gates, do not normalize manual IdP/PostgreSQL/object-store assembly as the supported production experience.
+
+OIDC token-endpoint authentication must be explicit: `none`,
+`client_secret_post`, or `client_secret_basic`. Existing public clients default
+to `none`. Confidential methods require provider discovery support and a
+non-empty runtime secret resolved through `client_secret_env`; method inference
+and embedded secret values are forbidden. Google Web applications use the exact
+registered HTTPS callback and `client_secret_post` profile documented in the
+implementation guide.
 
 If any prerequisite is missing, report **blocked** and name it. Never replace real identity with payload fields, chat claims, A2A receipts, Slack messages, synthetic actors, or model output.
 
