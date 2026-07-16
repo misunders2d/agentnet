@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-16-v0.1.10",
+  "evaluated_at": "2026-07-16T17:15:00+00:00",
+  "scope": "v0_1_10_recursive_packaging_repair_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "f653ab99d11b6a97b4ca6fada53f30b379bc599e088186576e8cee19f0ccce38",
+  "prior_runtime_evidence": "evidence/local/2026-07-16-v0.1.9/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-16-v0.1.9/manifest.json",
+  "change_boundary": "Release-only repair: root ignore files are source-only, npm verification covers two package generations, and versioned relay tests use the exact recorded authority timestamp. No production identity, authorization, relay freshness, storage, enrollment, network, or cutover semantics changed.",
+  "commands": [
+    {
+      "command": "pre-edit edge inventory plus model-diverse writer/critic review",
+      "result": "recursive npm lifecycle and clock-edge failure model completed before repair edits; no production freshness weakening approved"
+    },
+    {
+      "command": "focused npm package and relay suites",
+      "result": "35 passed; relay key-rotation target also passed 25/25 repeated runs"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1079 passed; 7 expected mutation-authorized PostgreSQL skips"
+    },
+    {
+      "command": "npm run check:packed",
+      "result": "generation 1: 1030 passed, 7 expected PostgreSQL skips; generation 2: 1030 passed, 7 expected PostgreSQL skips; bounded two-generation check PASS"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1107 passed; 2 preserved G01 installed-harness-pin failures; 7 expected mutation-authorized PostgreSQL skips; not a passing unfiltered run"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.10 sdist and wheel archives"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed; independent Hub rerun required after publication"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-16-v0.1.10/artifacts/agentnet-0.1.10.tar.gz",
+      "sha256": "03feb6d39420dd9567d955892c57498c50fd7f78cd1574bc400d0b536c141b76"
+    },
+    {
+      "path": "evidence/local/2026-07-16-v0.1.10/artifacts/agentnet-0.1.10-py3-none-any.whl",
+      "sha256": "e071c518cd6a554bfcc821383be6fef5620a5c7c5dbd66a2ab807e5332e35064"
+    }
+  ]
+}

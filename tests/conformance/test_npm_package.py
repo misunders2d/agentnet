@@ -30,13 +30,12 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     }
     assert package["bin"] == {"agentnet": "npm/bin/agentnet.mjs"}
     assert {
-        ".gitignore",
         "docs/assets/agentnet-overview.png",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-16-v0.1.9/artifacts/RETENTION.md",
+        "evidence/local/2026-07-16-v0.1.10/artifacts/RETENTION.md",
         "skills/**/*.md",
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
@@ -274,17 +273,15 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-16-v0.1.9/artifacts/RETENTION.md",
+        "evidence/local/2026-07-16-v0.1.10/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
         "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
     } <= filenames
-    if (ROOT / ".gitignore").is_file():
-        assert ".gitignore" in filenames
-    else:
-        assert (ROOT / ".npmignore").is_file()
+    assert ".gitignore" not in filenames
+    assert ".npmignore" not in filenames
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")

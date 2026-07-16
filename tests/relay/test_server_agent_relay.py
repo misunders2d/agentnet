@@ -327,6 +327,15 @@ def staged(pair):
     )
 
 
+def authority_decision_time(pair) -> int:
+    row = pair["source_store"].fetch_one(
+        "SELECT occurred_at FROM policy_decisions WHERE decision_id=?",
+        (pair["authority"].policy_decision_id,),
+    )
+    assert row is not None
+    return int(row["occurred_at"])
+
+
 def versioned_services(pair, *, now_state: dict[str, int], new_key: bytes):
     old = RelayPeerKey(
         key_id=relay_peer_key_id(pair["bilateral_key"]),
@@ -1289,7 +1298,7 @@ def test_versioned_peer_key_rotation_preserves_bounded_old_queue_and_uses_new_ke
 ) -> None:
     pair = build_pair(tmp_path, grant_max_uses=3)
     try:
-        now_state = {"value": int(time.time())}
+        now_state = {"value": authority_decision_time(pair)}
         source, target, old, new = versioned_services(
             pair,
             now_state=now_state,
@@ -1491,7 +1500,7 @@ def test_compromise_revocation_quarantines_queued_packets_without_killing_replac
 ) -> None:
     pair = build_pair(tmp_path, grant_max_uses=3)
     try:
-        now_state = {"value": int(time.time())}
+        now_state = {"value": authority_decision_time(pair)}
         source, target, old, new = versioned_services(
             pair,
             now_state=now_state,
@@ -1645,7 +1654,7 @@ def test_compromise_revocation_quarantines_queued_packets_without_killing_replac
 async def test_relay_key_rotation_http_is_dual_signed_strict_and_replay_safe(tmp_path: Path) -> None:
     pair = build_pair(tmp_path)
     try:
-        now_state = {"value": int(time.time())}
+        now_state = {"value": authority_decision_time(pair)}
         _source, target, old, new = versioned_services(
             pair,
             now_state=now_state,
@@ -1760,7 +1769,7 @@ async def test_relay_key_rotation_http_is_dual_signed_strict_and_replay_safe(tmp
 def test_rotation_and_compromise_revocation_race_never_resurrects_old_key(tmp_path: Path) -> None:
     pair = build_pair(tmp_path)
     try:
-        now_state = {"value": int(time.time())}
+        now_state = {"value": authority_decision_time(pair)}
         source, _target, old, new = versioned_services(
             pair,
             now_state=now_state,

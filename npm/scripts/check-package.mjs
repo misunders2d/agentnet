@@ -25,13 +25,12 @@ if (metadata.pi?.image !== "https://raw.githubusercontent.com/misunders2d/agentn
   fail("Pi package preview image missing or changed");
 }
 const requiredPublishedFiles = [
-  ".gitignore",
   "docs/assets/agentnet-overview.png",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-16-v0.1.9/artifacts/RETENTION.md",
+  "evidence/local/2026-07-16-v0.1.10/artifacts/RETENTION.md",
   "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {

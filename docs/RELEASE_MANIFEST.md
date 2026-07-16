@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-16
-Candidate: `agentnet 0.1.9`
+Candidate: `agentnet 0.1.10`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -23,8 +23,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `b3b0b1cf4a8dd3e44fa6af80f87bf96420fb74ddd16ff2dd212993d2aa5e004e` |
-| `pyproject.toml` | SHA-256 `5c69f3fbffa9f395b55480c84ebaffd781e08cfe1c4d0ecf78e70ba4a199e5dd` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `626d3f966d61037de2280f5b00c1c8354094dae7a1f9b42e61a76ab8fc8458db` |
+| `pyproject.toml` | SHA-256 `4724c9f1d63241c5cdc1fd3387fa6b126fa38d5adfa4db456895c2585c8371ac` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
