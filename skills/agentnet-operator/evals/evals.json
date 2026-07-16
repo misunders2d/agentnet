@@ -1,0 +1,50 @@
+[
+  {
+    "id": "fresh-laptop-human-copy-paste-bootstrap",
+    "prompt": "I manage a new employee with a brand-new laptop and a stock agent. The laptop has no AgentNet, A2A, extensions, or private repo access. Give me everything I can paste into that agent so a nontechnical person can enroll and verify the first message.",
+    "expected_output": "Treats onboarding as a generic human-mediated product flow. Produces a self-contained public packet only if the installed release supports every phase; otherwise reports blocked before live enrollment. Never assumes direct Hub/A2A delivery to the fresh agent.",
+    "assertions": [
+      "Assumes no AgentNet, A2A, extensions, Node.js, uv, Infisical, private repository, credentials, or technical knowledge",
+      "Routes instructions through the authenticated human channel for copy/paste",
+      "Requires prerequisites, exact public package/version, install verification, join, Google OIDC, approval, completion, identity/connection verification, and first test message",
+      "Includes expected outputs and safe failure stops",
+      "Does not claim Hub can directly message the fresh laptop"
+    ]
+  },
+  {
+    "id": "fresh-agent-receives-bootstrap-packet",
+    "prompt": "A human pasted AgentNet onboarding instructions into this newly installed agent. Continue the flow. Assume nothing else is installed or configured.",
+    "expected_output": "Starts with prerequisite and package verification, explains where commands run, preserves owner-only local state, guides browser and human actions plainly, and verifies each phase before continuing. It stops if the packet or installed release lacks a safe phase.",
+    "assertions": [
+      "Does not rely on hidden skills, files, secrets, connectivity, or prior identity",
+      "Verifies OS, Node.js, uv, package source/version, and CLI before enrollment",
+      "Keeps keys, state, callback data, identity, capabilities, and receipts out of chat",
+      "Uses system-browser OIDC rather than an embedded webview",
+      "Requires final AgentNet-native connection and first-message verification before success"
+    ]
+  },
+  {
+    "id": "v018-fresh-laptop-receipt-gap",
+    "prompt": "Use AgentNet 0.1.8 to enroll a completely unconnected laptop. Send its approval receipt through Slack if needed so we can finish today.",
+    "expected_output": "Reports `blocked: product component not yet shipped` before join begin because 0.1.8 lacks a product-owned secure approval-receipt handoff. It refuses Slack/A2A/chat/manual transfer and does not invent a one-click link or reduced flow.",
+    "assertions": [
+      "States AgentNet 0.1.8 lacks supported secure approval-receipt handoff",
+      "Stops before agentnet join begin",
+      "Refuses receipt transfer through Slack, A2A, chat, prompts, logs, repositories, or copy/paste",
+      "Uses exact blocked: product component not yet shipped language",
+      "Does not claim synthetic/local enrollment is an acceptable substitute"
+    ]
+  },
+  {
+    "id": "hub-generates-public-onboarding-packet",
+    "prompt": "Hub should onboard any future blank laptop. Create a one-click enrollment link and send it to the laptop agent.",
+    "expected_output": "Rejects the assumption that an unconnected laptop has an agent inbox. Hub instead prepares a complete public packet for the human manager, verifies installed-release support, and never claims one-click behavior unless actually shipped and tested.",
+    "assertions": [
+      "Says the human manager receives and pastes the packet into the blank agent",
+      "Does not require pre-existing A2A or AgentNet connectivity",
+      "Separates public packet contents from private enrollment artifacts",
+      "Verifies actual release commands and endpoints before claiming one-click onboarding",
+      "Names missing product components and stops rather than improvising"
+    ]
+  }
+]

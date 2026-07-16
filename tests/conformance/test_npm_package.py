@@ -60,6 +60,8 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
+        "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+        "skills/agentnet-operator/evals/evals.json",
         "src/agentnet/bindings/pi_extension.ts",
         "src/agentnet/adapters/claude.py",
         "src/agentnet/adapters/codex.py",
@@ -83,6 +85,34 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     assert "../../docs/specification.md" in skill
     assert "blocked: product component not yet shipped" in skill
     assert "operator must not have to write integration code" in skill
+    assert "Fresh-laptop onboarding is human-mediated" in skill
+    assert "references/fresh-laptop-onboarding.md" in skill
+
+    onboarding = (
+        ROOT / "skills/agentnet-operator/references/fresh-laptop-onboarding.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "The unconnected laptop has no agent inbox",
+        "Required bootstrap packet",
+        "Public package installation",
+        "System-browser Google OIDC",
+        "Independent approval",
+        "Connection and first-message verification",
+        "AgentNet `0.1.8` fails this gate",
+        "blocked: product component not yet shipped",
+    ):
+        assert required in onboarding
+
+    evals = json.loads(
+        (ROOT / "skills/agentnet-operator/evals/evals.json").read_text(encoding="utf-8")
+    )
+    assert {item["id"] for item in evals} == {
+        "fresh-laptop-human-copy-paste-bootstrap",
+        "fresh-agent-receives-bootstrap-packet",
+        "v018-fresh-laptop-receipt-gap",
+        "hub-generates-public-onboarding-packet",
+    }
+    assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
     commands = (
         ROOT / "skills/agentnet-operator/references/safe-commands.md"
@@ -248,6 +278,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
+        "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
     } <= filenames
     if (ROOT / ".gitignore").is_file():
         assert ".gitignore" in filenames

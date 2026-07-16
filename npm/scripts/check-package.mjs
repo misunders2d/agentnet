@@ -63,6 +63,8 @@ for (const relative of [
   "skills/agentnet-operator/references/safe-commands.md",
   "skills/agentnet-operator/references/fail-closed-boundaries.md",
   "skills/agentnet-operator/references/required-communication-scope.md",
+  "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+  "skills/agentnet-operator/evals/evals.json",
   "src/agentnet/bindings/pi_extension.ts",
   "src/agentnet/adapters/claude.py",
   "src/agentnet/adapters/codex.py",
@@ -83,8 +85,37 @@ for (const required of [
   "docs/requirements.md",
   "blocked: product component not yet shipped",
   "local_bindings_required=true",
+  "Fresh-laptop onboarding is human-mediated",
+  "references/fresh-laptop-onboarding.md",
 ]) {
   if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
+}
+const onboardingText = readFileSync(
+  path.join(root, "skills/agentnet-operator/references/fresh-laptop-onboarding.md"),
+  "utf8",
+);
+for (const required of [
+  "The unconnected laptop has no agent inbox",
+  "Required bootstrap packet",
+  "first-message verification",
+  "AgentNet `0.1.8` fails this gate",
+]) {
+  if (!onboardingText.includes(required)) fail(`fresh-laptop onboarding reference is missing: ${required}`);
+}
+const onboardingEvals = JSON.parse(
+  readFileSync(path.join(root, "skills/agentnet-operator/evals/evals.json"), "utf8"),
+);
+const expectedOnboardingEvalIds = [
+  "fresh-agent-receives-bootstrap-packet",
+  "fresh-laptop-human-copy-paste-bootstrap",
+  "hub-generates-public-onboarding-packet",
+  "v018-fresh-laptop-receipt-gap",
+];
+const actualOnboardingEvalIds = Array.isArray(onboardingEvals)
+  ? onboardingEvals.map((item) => item?.id).sort()
+  : [];
+if (JSON.stringify(actualOnboardingEvalIds) !== JSON.stringify(expectedOnboardingEvalIds)) {
+  fail("fresh-laptop onboarding regression evals are missing or changed");
 }
 
 const launcher = path.join(root, "npm/bin/agentnet.mjs");

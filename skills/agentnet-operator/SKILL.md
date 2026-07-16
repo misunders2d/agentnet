@@ -1,6 +1,6 @@
 ---
 name: agentnet-operator
-description: Safely install, initialize, verify, configure, operate, and troubleshoot AgentNet. Use when the user mentions AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, AgentNet enrollment or authority, AgentNet Pi bindings, or an AgentNet server-agent deployment.
+description: Safely install, initialize, enroll, verify, configure, operate, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, enrollment or authority, Pi bindings, or server-agent deployment.
 license: Apache-2.0
 compatibility: Bundled AgentNet npm/Pi package on Linux; follow the installed release's exact Node.js, uv, and Python requirements.
 ---
@@ -17,7 +17,8 @@ Use the smallest safe workflow matching the request. AgentNet installation is co
 4. **Supervisor or Pi binding** — separate supervisor config, measured child, private Unix IPC.
 5. **Always-on server agent** — PostgreSQL, HTTPS, secret injection, identity and recovery prerequisites.
 6. **Enrollment or authority** — workforce OIDC, proof of possession, independent WebAuthn/OOB approval, explicit grants.
-7. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
+7. **Fresh-laptop bootstrap** — one complete public instruction packet for a human to paste into a newly installed generic agent with no prior AgentNet/A2A knowledge.
+8. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
 
 ## Enforce the exact product contract
 
@@ -26,6 +27,21 @@ The authoritative scope is the stable requirement set in [`../../docs/requiremen
 “Install and use” means AgentNet must ship or explicitly provision the maintained components, adapters, manifests, and preflight checks needed by its supported profile. The operator may supply hosts, secrets, policy decisions, trust roots, and required human ceremonies; the operator must not have to write integration code, build an approval application, design receipt formats, or manually assemble undocumented infrastructure.
 
 Until a required product component is shipped and its applicable gate passes, report **blocked: product component not yet shipped**. Never offer local synthetic C0, same-boundary approval, or a reduced communication subset as the product substitute.
+
+## Fresh-laptop onboarding is human-mediated
+
+Treat this as one reusable product flow for any fresh laptop—not a device-specific workaround. A fresh laptop may have only a newly installed generic agent and a human manager. Never assume it already has AgentNet, A2A, Pi extensions, Node.js, `uv`, Infisical, private-repository access, credentials, or technical operator knowledge.
+
+The same shared skill serves two roles:
+
+- **Sender/Hub/current manager:** give the human one self-contained, public, copyable bootstrap packet through an authenticated human channel. Do not try to contact the unconnected laptop as an agent.
+- **Fresh-laptop agent:** when the human pastes that packet, guide them step by step from prerequisites and exact public package installation through enrollment and the first verified AgentNet-native message. Explain where each command runs, expected safe output, and exact stop conditions.
+
+Before producing or following a live packet, read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and verify the installed release actually ships every required step. The packet must cover the exact public installation source/version, OS/Node/`uv` prerequisites, install verification, join start, system-browser Google OIDC, independent approval, join completion, identity/connection verification, first test message, expected outputs, and safe failure guidance.
+
+Keep public instructions separate from local/private material. Private keys, join state, callback codes or challenges, identity profiles, approval capabilities, signed approval receipts, tokens, and secret values never belong in Slack, A2A, chat, prompts, logs, repositories, or the copied bootstrap packet.
+
+If the installed release lacks a product-owned secure handoff for any private enrollment artifact—especially the signed approval receipt—report **blocked: product component not yet shipped** and stop before `join begin`. Do not invent Slack/A2A transfer, copy/paste, USB/QR choreography, custom glue, or a one-click link. AgentNet `0.1.8` has `join begin`/`join complete` but no supported possession-bound approval-receipt handoff, so fresh cross-host enrollment is blocked on that release.
 
 ## Start with read-only checks
 
@@ -127,6 +143,7 @@ Do not print secrets, private keys, credential-bearing DSNs, reusable approval m
 
 ## Use references
 
+- Read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) before creating or following human-copyable bootstrap instructions.
 - Read [required communication scope](references/required-communication-scope.md) before judging installation or network readiness; one direct-message round trip is not full requirement coverage.
 - Read [safe commands](references/safe-commands.md) for installation, local examples, package checks, supervisor validation, and server preflight.
 - Read [fail-closed boundaries](references/fail-closed-boundaries.md) before identity, authority, server, Pi binding, secrets, or production-readiness work.
