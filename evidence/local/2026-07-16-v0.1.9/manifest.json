@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-16-v0.1.9",
+  "evaluated_at": "2026-07-16T17:15:00+00:00",
+  "scope": "v0_1_9_guided_fresh_laptop_enrollment_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "b44223c7de857b9bae5485562b2b4cf3a888a8b348e0c61145025ae4dd9a7239",
+  "prior_runtime_evidence": "evidence/local/2026-07-16-v0.1.8/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-16-v0.1.8/manifest.json",
+  "change_boundary": "Versioned independent-approval broker state, hash-only Core OIDC continuation, Core-only signed-receipt retrieval, candidate PoP, response-loss recovery, and one resumable identity-only guided join command. Live Google, real independent-host approval, local PostgreSQL, production, owner, first-message, and cutover evidence remain absent.",
+  "commands": [
+    {
+      "command": "approval/OIDC/CLI/config focused suites",
+      "result": "80 passed; 1 expected mutation-authorized PostgreSQL skip; later targeted hardening subsets 3 passed and 1 passed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1079 passed; 7 expected PostgreSQL skips"
+    },
+    {
+      "command": "source npm run check lane and clean npm run check:packed lane",
+      "result": "package checks PASS; source and packed suites each 1029 passed with 7 expected mutation-authorized PostgreSQL skips"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL test database configured; no database changed; independent Hub rerun required"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.9 sdist and wheel archives"
+    },
+    {
+      "command": "DeepSeek security critic and constitution watcher",
+      "result": "security converge with no blockers; constitution PASS"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1106 passed; 2 preserved G01 installed-harness-pin failures; 7 expected mutation-authorized PostgreSQL skips; not a passing unfiltered run"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9.tar.gz",
+      "sha256": "826f4d33004cfb1f6278199ee35796c1b7cef8ba0e85a82ac00fc85bb67d17b7"
+    },
+    {
+      "path": "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9-py3-none-any.whl",
+      "sha256": "796498c868dbb4744aaa95a020cedfc05ae7d0b9c6433e0656266d627f70ef85"
+    }
+  ]
+}

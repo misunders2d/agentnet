@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import secrets
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
@@ -13,7 +16,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
-from agentnet.errors import ValidationError
+from agentnet.errors import AuthenticationError, ValidationError
+from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_json
 
 
 SECURITY_HEADERS = {
@@ -61,6 +65,38 @@ class _ApproveBody(_CredentialBody):
 
 class _RejectBody(_TokenBody):
     pass
+
+
+class _InternalCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_id: Literal["agentnet.approval.internal-request-create.v1"] = Field(alias="schema")
+    idempotency_key: str = Field(min_length=16, max_length=256)
+    approver_principal_id: str = Field(min_length=1, max_length=256)
+    domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
+    approval_purpose: str = Field(min_length=1, max_length=256)
+    canonical_transaction_b64: str = Field(min_length=2, max_length=1_400_000)
+    transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _InternalStatusBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_id: Literal["agentnet.approval.internal-request-status.v1"] = Field(alias="schema")
+    request_id: str = Field(min_length=1, max_length=128)
+    transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _InternalRetrieveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_id: Literal["agentnet.approval.internal-receipt-retrieve.v1"] = Field(alias="schema")
+    request_id: str = Field(min_length=1, max_length=128)
+    claim_code: str = Field(pattern=r"^[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){7}$")
+    domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
+    approval_purpose: str = Field(min_length=1, max_length=256)
+    transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    idempotency_key: str = Field(min_length=16, max_length=256)
 
 
 def _reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -112,6 +148,22 @@ def _json(value: Any, *, status_code: int = 200) -> JSONResponse:
 
 def _denied() -> JSONResponse:
     return _json({"error": "request_denied"}, status_code=400)
+
+
+def _require_internal_auth(request: Request, service: WebAuthnApprovalService) -> None:
+    reference = getattr(service.config, "internal_core_credential_env", None)
+    expected = os.environ.get(reference, "") if reference else ""
+    supplied = request.headers.get("authorization", "")
+    candidate = supplied.removeprefix("Bearer ") if supplied.startswith("Bearer ") else ""
+    valid = (
+        bool(reference)
+        and 43 <= len(expected) <= 512
+        and all(0x21 <= ord(character) <= 0x7E for character in expected)
+        and 43 <= len(candidate) <= 512
+        and secrets.compare_digest(candidate, expected)
+    )
+    if not valid:
+        raise AuthenticationError("approval request denied")
 
 
 _APPROVAL_HTML = """<!doctype html>
@@ -227,10 +279,15 @@ async function start() {
     approveButton.disabled = true;
     rejectButton.disabled = true;
     const credential = await navigator.credentials.get({publicKey: requestOptions(options.publicKey)});
-    const receipt = await post('/v1/approval/requests/verify', {token, approved: true, credential: authenticationJSON(credential)});
-    statusNode.textContent = 'Approved. Copy receipt to the existing AgentNet operation.';
+    const result = await post('/v1/approval/requests/verify', {token, approved: true, credential: authenticationJSON(credential)});
     transactionNode.textContent = '';
-    resultNode.textContent = JSON.stringify(receipt, null, 2);
+    if (options.delivery_mode === 'core_claim_code') {
+      statusNode.textContent = 'Approved. Send this one-time code through the authenticated human channel.';
+      resultNode.textContent = `One-time AgentNet approval code (expires ${result.expires_at}):\n${result.claim_code}`;
+    } else {
+      statusNode.textContent = 'Approved. Copy receipt to the existing AgentNet operation.';
+      resultNode.textContent = JSON.stringify(result, null, 2);
+    }
   };
   rejectButton.onclick = async () => {
     approveButton.disabled = true;
@@ -300,18 +357,117 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
         except Exception:
             return _denied()
 
+    async def internal_create(request: Request) -> Response:
+        try:
+            _require_internal_auth(request, service)
+            body = _InternalCreateBody.model_validate(await _bounded_json(request, service))
+            canonical = b64url_decode(body.canonical_transaction_b64)
+            if (
+                b64url_encode(canonical) != body.canonical_transaction_b64
+                or not secrets.compare_digest(
+                    hashlib.sha256(canonical).hexdigest(),
+                    body.transaction_digest,
+                )
+            ):
+                raise ValidationError("request body is invalid")
+            created = service.create_request(
+                principal_id=body.approver_principal_id,
+                domain_id=body.domain_id,
+                approval_purpose=body.approval_purpose,
+                canonical_transaction=canonical,
+                delivery_mode="core_claim_code",
+                idempotency_key=body.idempotency_key,
+            )
+            return _json(
+                {
+                    "schema": "agentnet.approval.internal-request-created.v1",
+                    "request_id": created.identifier,
+                    "state": created.state,
+                    "transaction_digest": created.transaction_digest,
+                    "expires_at": created.expires_at,
+                    "duplicate": created.duplicate,
+                },
+                status_code=200 if created.duplicate else 201,
+            )
+        except Exception:
+            return _denied()
+
+    async def internal_status(request: Request) -> Response:
+        try:
+            _require_internal_auth(request, service)
+            body = _InternalStatusBody.model_validate(await _bounded_json(request, service))
+            return _json(
+                service.request_status(
+                    request_id=body.request_id,
+                    transaction_digest=body.transaction_digest,
+                )
+            )
+        except Exception:
+            return _denied()
+
+    async def internal_retrieve(request: Request) -> Response:
+        try:
+            _require_internal_auth(request, service)
+            body = _InternalRetrieveBody.model_validate(await _bounded_json(request, service))
+            retrieval_digest = hashlib.sha256(
+                canonical_json(
+                    {
+                        "schema": body.schema_id,
+                        "request_id": body.request_id,
+                        "claim_code_sha256": hashlib.sha256(
+                            body.claim_code.upper().encode("ascii")
+                        ).hexdigest(),
+                        "domain_id": body.domain_id,
+                        "approval_purpose": body.approval_purpose,
+                        "transaction_digest": body.transaction_digest,
+                        "idempotency_key": body.idempotency_key,
+                    }
+                )
+            ).hexdigest()
+            receipt = service.retrieve_core_receipt(
+                request_id=body.request_id,
+                claim_code=body.claim_code,
+                domain_id=body.domain_id,
+                approval_purpose=body.approval_purpose,
+                transaction_digest=body.transaction_digest,
+                retrieval_digest=retrieval_digest,
+            )
+            return _json(
+                {
+                    "schema": "agentnet.approval.internal-receipt-retrieve-result.v1",
+                    "request_id": body.request_id,
+                    "receipt": receipt,
+                    "receipt_digest": hashlib.sha256(canonical_json(receipt)).hexdigest(),
+                }
+            )
+        except Exception:
+            return _denied()
+
+    routes = [
+        Route("/healthz", health, methods=["GET"]),
+        Route("/approval", page, methods=["GET"]),
+        Route("/approval.js", javascript, methods=["GET"]),
+        Route("/v1/approval/registration/options", registration_options, methods=["POST"]),
+        Route("/v1/approval/registration/verify", registration_verify, methods=["POST"]),
+        Route("/v1/approval/requests/options", request_options, methods=["POST"]),
+        Route("/v1/approval/requests/verify", request_verify, methods=["POST"]),
+        Route("/v1/approval/requests/reject", request_reject, methods=["POST"]),
+    ]
+    if getattr(service.config, "internal_core_credential_env", None) is not None:
+        routes.extend(
+            [
+                Route("/v1/approval/internal/requests", internal_create, methods=["POST"]),
+                Route("/v1/approval/internal/requests/status", internal_status, methods=["POST"]),
+                Route(
+                    "/v1/approval/internal/receipts/retrieve",
+                    internal_retrieve,
+                    methods=["POST"],
+                ),
+            ]
+        )
     app = Starlette(
         debug=False,
-        routes=[
-            Route("/healthz", health, methods=["GET"]),
-            Route("/approval", page, methods=["GET"]),
-            Route("/approval.js", javascript, methods=["GET"]),
-            Route("/v1/approval/registration/options", registration_options, methods=["POST"]),
-            Route("/v1/approval/registration/verify", registration_verify, methods=["POST"]),
-            Route("/v1/approval/requests/options", request_options, methods=["POST"]),
-            Route("/v1/approval/requests/verify", request_verify, methods=["POST"]),
-            Route("/v1/approval/requests/reject", request_reject, methods=["POST"]),
-        ],
+        routes=routes,
     )
     app.state.approval_service = service
     return _SecurityHeadersMiddleware(app)  # type: ignore[return-value]

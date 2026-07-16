@@ -87,6 +87,10 @@ class ApprovalServiceConfig(BaseModel):
     registration_ttl_seconds: int = Field(default=600, ge=60, le=900)
     max_transaction_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
     max_http_body_bytes: int = Field(default=131_072, ge=4096, le=1_048_576)
+    internal_core_credential_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Z_][A-Z0-9_]{0,127}$",
+    )
     approvers: tuple[ApprovalServiceApproverConfig, ...] = Field(min_length=1, max_length=32)
 
     @model_validator(mode="after")

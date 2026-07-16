@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.core.app import CommunicationCore
@@ -29,6 +29,22 @@ class OIDCBeginBody(BaseModel):
     harness_kind: str = Field(min_length=1, max_length=64)
     harness_name: str = Field(min_length=1, max_length=128)
     public_key_pem: str = Field(min_length=128, max_length=16_384)
+
+
+class OIDCPollBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str = Field(min_length=16, max_length=128)
+    continuation_token: str = Field(min_length=32, max_length=128)
+
+
+class OIDCGuidedCompleteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str = Field(min_length=16, max_length=128)
+    continuation_token: str = Field(min_length=32, max_length=128)
+    claim_code: str = Field(pattern=r"^[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){7}$")
+    possession_signature: str = Field(min_length=16, max_length=2_048)
 
 
 class EnrollmentCompleteBody(BaseModel):
@@ -57,13 +73,19 @@ async def _bounded_body(request: Request, core: CommunicationCore) -> bytes:
     return body
 
 
-def _rate_limit(core: CommunicationCore, request: Request) -> None:
+def _rate_limit(
+    core: CommunicationCore,
+    request: Request,
+    *,
+    metric: str = "enrollment_attempts",
+    limit: int = 20,
+) -> None:
     peer = "unavailable" if request.client is None else request.client.host
     core.quotas.consume(
         scope=f"public-enrollment:{peer}",
-        metric="enrollment_attempts",
+        metric=metric,
         amount=1,
-        limit=20,
+        limit=limit,
     )
 
 
@@ -111,17 +133,47 @@ def create_enrollment_routes(
                 headers=_public_headers(),
             )
         challenge = coordinator.complete_authorization(state=state_values[0], code=code_values[0])
-        return JSONResponse(
-            {
-                "challenge_id": challenge.challenge_id,
-                "nonce": challenge.nonce,
-                "expires_at": challenge.expires_at,
-                "canonical_transaction_b64": base64.b64encode(
-                    challenge.canonical_transaction
-                ).decode("ascii"),
-            },
+        if "application/json" in request.headers.get("accept", "").lower():
+            return JSONResponse(
+                {
+                    "challenge_id": challenge.challenge_id,
+                    "nonce": challenge.nonce,
+                    "expires_at": challenge.expires_at,
+                    "canonical_transaction_b64": base64.b64encode(
+                        challenge.canonical_transaction
+                    ).decode("ascii"),
+                },
+                headers=_public_headers(),
+            )
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>AgentNet enrollment</title>"
+            "<p>Google sign-in received. Return to the AgentNet onboarding command.</p>",
             headers=_public_headers(),
         )
+
+    async def poll(request: Request) -> Response:
+        _rate_limit(core, request, metric="enrollment_polls", limit=120)
+        parsed = OIDCPollBody.model_validate_json(await _bounded_body(request, core))
+        result = coordinator.poll_continuation(
+            transaction_id=parsed.transaction_id,
+            continuation_token=parsed.continuation_token,
+        )
+        return JSONResponse(asdict(result), headers=_public_headers())
+
+    async def complete_guided(request: Request) -> Response:
+        _rate_limit(core, request)
+        parsed = OIDCGuidedCompleteBody.model_validate_json(
+            await _bounded_body(request, core)
+        )
+        result = coordinator.complete_guided_enrollment(
+            transaction_id=parsed.transaction_id,
+            continuation_token=parsed.continuation_token,
+            claim_code=parsed.claim_code,
+            possession_signature=parsed.possession_signature,
+        )
+        value = asdict(result)
+        value["actor"] = result.actor.model_dump(mode="json")
+        return JSONResponse(value, status_code=201, headers=_public_headers())
 
     async def complete(request: Request) -> Response:
         _rate_limit(core, request)
@@ -149,6 +201,8 @@ def create_enrollment_routes(
     return [
         Route("/v1/enrollment/oidc/begin", begin, methods=["POST"]),
         Route("/v1/enrollment/oidc/callback", callback, methods=["GET"]),
+        Route("/v1/enrollment/oidc/poll", poll, methods=["POST"]),
+        Route("/v1/enrollment/oidc/complete", complete_guided, methods=["POST"]),
         Route("/v1/enrollment/complete", complete, methods=["POST"]),
     ]
 

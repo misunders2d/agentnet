@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import sqlite3
@@ -14,6 +15,7 @@ import pytest
 
 from agentnet.cli import _authority_command, _write_private_config, build_parser
 from agentnet.identity.actors import ActorKind, VerifiedActor
+from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION
 
@@ -46,6 +48,20 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "server-agent-identity.json",
         ]
     ).func.__name__ == "command_server_agent_activate"
+    assert parser.parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "codex",
+            "--name",
+            "Laptop",
+        ]
+    ).func.__name__ == "command_join_guided"
     assert parser.parse_args(
         [
             "join",
@@ -231,6 +247,134 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "--application-offline",
         ]
     ).func.__name__ == "command_restore_sqlite"
+
+
+def test_guided_join_is_resumable_private_and_identity_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id="corp.example",
+        principal_id="person-1",
+        harness_id="harness-1",
+        credential_id="credential-1",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    transaction = json.dumps(
+        {
+            "challenge_id": "challenge-guided-cli-0001",
+            "nonce": "n" * 43,
+            "schema": "agentnet.enrollment.challenge.v1",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    key_id: str | None = None
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_request(*, server, method, path, body, timeout=10.0):
+        nonlocal key_id
+        assert server == "https://agents.example"
+        assert method == "POST"
+        calls.append((path, body))
+        if path.endswith("/begin"):
+            key_id = public_key_thumbprint(str(body["public_key_pem"]))
+            return {
+                "transaction_id": "oidc-transaction-guided-cli-0001",
+                "authorization_url": "https://accounts.example/authorize?state=private",
+                "state": "s" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "c" * 43,
+            }
+        if path.endswith("/poll"):
+            return {
+                "status": "approval_pending",
+                "interval_seconds": 2,
+                "expires_at": int(time.time()) + 300,
+                "challenge_id": "challenge-guided-cli-0001",
+                "nonce": "n" * 43,
+                "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+            }
+        assert path.endswith("/complete")
+        assert body["claim_code"] == "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
+        assert "independent_approval" not in body
+        return {
+            "principal_id": actor.principal_id,
+            "harness_id": actor.harness_id,
+            "credential_id": actor.credential_id,
+            "key_id": key_id,
+            "credential_epoch": 1,
+            "harness_status": "active",
+            "actor": actor.model_dump(mode="json"),
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", fake_request)
+    monkeypatch.setattr("agentnet.cli.webbrowser.open", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "agentnet.cli.getpass.getpass",
+        lambda _prompt: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+    )
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "codex",
+            "--name",
+            "Fresh laptop",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+        ]
+    )
+    assert args.func(args) == 0
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert result["status"] == "enrolled_identity_only"
+    assert result["authority_granted"] is False
+    assert result["first_message_status"] == (
+        "first_message_blocked_explicit_authority_required"
+    )
+    private_values = (
+        "https://accounts.example/authorize",
+        "c" * 43,
+        "s" * 43,
+        "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+    )
+    assert all(value not in output.out + output.err for value in private_values)
+    assert state.stat().st_mode & 0o777 == 0o600
+    assert identity.stat().st_mode & 0o777 == 0o600
+    completed_state = json.loads(state.read_text())
+    assert completed_state["schema"] == "agentnet.guided-join-complete.v1"
+    assert "authorization" not in completed_state
+    assert "challenge" not in completed_state
+    assert [path for path, _body in calls] == [
+        "/v1/enrollment/oidc/begin",
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/complete",
+    ]
+
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("completed guided retry must not use network"),
+    )
+    assert args.func(args) == 0
+    repeated = json.loads(capsys.readouterr().out)
+    assert repeated["idempotent_repeat"] is True
+
+    identity.unlink()
+    with pytest.raises(SystemExit, match="owner-only|identity file"):
+        args.func(args)
 
 
 def test_cli_authority_command_signs_every_revision_and_mutation_field() -> None:

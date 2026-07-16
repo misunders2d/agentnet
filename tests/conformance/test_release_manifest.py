@@ -65,7 +65,7 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
         "evidence/local/2026-07-13-final/manifest.json",
         "evidence/local/2026-07-15-v0.1.6/manifest.json",
         "evidence/local/2026-07-15-v0.1.7/manifest.json",
-        "evidence/local/2026-07-16-v0.1.8/manifest.json",
+        "evidence/local/2026-07-16-v0.1.9/manifest.json",
         "scripts/verify_release.py",
     ):
         target = root / relative_path
@@ -78,14 +78,14 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
         root / "evidence/local/2026-07-13-final/artifacts",
     )
     shutil.copytree(
-        ROOT / "evidence/local/2026-07-16-v0.1.8/artifacts",
-        root / "evidence/local/2026-07-16-v0.1.8/artifacts",
+        ROOT / "evidence/local/2026-07-16-v0.1.9/artifacts",
+        root / "evidence/local/2026-07-16-v0.1.9/artifacts",
     )
     return root
 
 
 def _refresh_artifact_hash(root: Path, artifact_path: Path) -> None:
-    evidence_path = root / "evidence/local/2026-07-16-v0.1.8/manifest.json"
+    evidence_path = root / "evidence/local/2026-07-16-v0.1.9/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     relative = artifact_path.relative_to(root).as_posix()
     record = next(item for item in evidence["artifacts"] if item["path"] == relative)
@@ -251,7 +251,7 @@ def test_build_backend_must_be_in_exact_locked_build_group(tmp_path: Path) -> No
 
 def test_artifact_self_hash_cannot_replace_archive_content_validation(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9-py3-none-any.whl"
     wheel.write_bytes(b"not a wheel")
     evidence_path = root / "evidence/local/2026-07-13-final/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -329,7 +329,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
     mutation: str,
 ) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9-py3-none-any.whl"
 
     def mutate(payloads: dict[str, bytes]) -> None:
         if mutation == "extra":
@@ -349,7 +349,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
 
 def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9-py3-none-any.whl"
     with pytest.warns(UserWarning, match="Duplicate name"):
         with zipfile.ZipFile(wheel, mode="a", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("agentnet/__init__.py", b"duplicate\n")
@@ -363,7 +363,7 @@ def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mutation", ["state", "nested_archive", "traversal", "symlink"])
 def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str) -> None:
     root = _copy_release_inputs(tmp_path)
-    sdist = root / "evidence/local/2026-07-16-v0.1.8/artifacts/agentnet-0.1.8.tar.gz"
+    sdist = root / "evidence/local/2026-07-16-v0.1.9/artifacts/agentnet-0.1.9.tar.gz"
 
     def mutate(entries: list[tuple[tarfile.TarInfo, bytes]]) -> None:
         if mutation == "symlink":
@@ -385,7 +385,7 @@ def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str)
             "nested_archive": "dist/nested.tar.gz",
             "traversal": "../outside",
         }[mutation]
-        member = tarfile.TarInfo(f"agentnet-0.1.8/{suffix}")
+        member = tarfile.TarInfo(f"agentnet-0.1.9/{suffix}")
         member.size = 2
         member.mode = 0o644
         member.uid = member.gid = 0

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import getpass
 import hashlib
 import ipaddress
 import json
@@ -12,6 +13,8 @@ import os
 import stat
 import subprocess
 import sys
+import time
+import webbrowser
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -1114,6 +1117,359 @@ def command_server_agent_activate(args: argparse.Namespace) -> int:
                     "agentnet status --config " + str(config_path) + " --live",
                 ],
             },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _guided_join_state(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(_owner_only_file(path, label="guided join state"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("guided join state is not readable JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("guided join state must be one JSON object")
+    return value
+
+
+def _validate_guided_authorization(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "transaction_id",
+        "authorization_url",
+        "state",
+        "expires_at",
+        "continuation_token",
+    }:
+        raise SystemExit("guided enrollment authorization response is invalid")
+    transaction_id = value.get("transaction_id")
+    state = value.get("state")
+    continuation = value.get("continuation_token")
+    expires_at = value.get("expires_at")
+    authorization_url = value.get("authorization_url")
+    if (
+        not isinstance(transaction_id, str)
+        or not 16 <= len(transaction_id) <= 128
+        or not isinstance(state, str)
+        or not 32 <= len(state) <= 256
+        or not isinstance(continuation, str)
+        or not 32 <= len(continuation) <= 128
+        or type(expires_at) is not int
+        or not isinstance(authorization_url, str)
+    ):
+        raise SystemExit("guided enrollment authorization response is invalid")
+    try:
+        parsed = urlsplit(authorization_url)
+    except ValueError as exc:
+        raise SystemExit("guided enrollment authorization URL is invalid") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise SystemExit("guided enrollment authorization URL is invalid")
+    return value
+
+
+def _validate_guided_challenge(value: object) -> tuple[dict[str, object], dict[str, object]]:
+    if not isinstance(value, dict) or set(value) != {
+        "challenge_id",
+        "nonce",
+        "canonical_transaction_b64",
+    }:
+        raise SystemExit("guided enrollment challenge is invalid")
+    try:
+        transaction = base64.b64decode(
+            str(value["canonical_transaction_b64"]).encode("ascii"),
+            validate=True,
+        )
+        decoded = json.loads(transaction)
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise SystemExit("guided enrollment challenge is invalid") from exc
+    if (
+        not isinstance(decoded, dict)
+        or canonical_json(decoded) != transaction
+        or not isinstance(value["challenge_id"], str)
+        or not isinstance(value["nonce"], str)
+    ):
+        raise SystemExit("guided enrollment challenge is invalid")
+    return value, decoded
+
+
+def _guided_identity_result(
+    *,
+    result: dict[str, object],
+    expected_domain_id: str,
+    key: P256KeyPair,
+) -> VerifiedActor:
+    try:
+        actor = VerifiedActor.model_validate(result["actor"])
+    except Exception as exc:
+        raise SystemExit("enrollment response lacks an exact verified actor") from exc
+    if (
+        actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+        or actor.domain_id != expected_domain_id
+        or result.get("key_id") != key.thumbprint
+    ):
+        raise SystemExit("enrollment response does not match the requested human/device binding")
+    return actor
+
+
+def _guided_success_output(
+    *,
+    identity_path: Path,
+    actor: VerifiedActor,
+    idempotent_repeat: bool,
+) -> dict[str, object]:
+    return {
+        "status": "enrolled_identity_only",
+        "idempotent_repeat": idempotent_repeat,
+        "identity": str(identity_path),
+        "domain_id": actor.domain_id,
+        "principal_id": actor.principal_id,
+        "harness_id": actor.harness_id,
+        "credential_id": actor.credential_id,
+        "binding_assurance": actor.binding_assurance,
+        "authority_granted": False,
+        "first_message_status": "first_message_blocked_explicit_authority_required",
+        "next": (
+            "an authorized administrator must explicitly grant exact message.send "
+            "and required recipient/read entitlement before the first test message"
+        ),
+    }
+
+
+def command_join_guided(args: argparse.Namespace) -> int:
+    """Run resumable browser OIDC and Core-brokered independent approval."""
+
+    state_path = Path(os.path.abspath(args.state))
+    identity_path = Path(os.path.abspath(args.identity))
+    server = _canonical_server_origin(args.server)
+    browser_opened = False
+    if os.path.lexists(state_path):
+        pending = _guided_join_state(state_path)
+        if pending.get("schema") == "agentnet.guided-join-complete.v1":
+            expected = {
+                "schema",
+                "server_base_url",
+                "domain_id",
+                "harness_kind",
+                "harness_name",
+                "private_key_path",
+                "public_key_pem",
+                "identity_path",
+                "actor",
+            }
+            if set(pending) != expected:
+                raise SystemExit("completed guided join state does not match the exact schema")
+            if (
+                pending["server_base_url"] != server
+                or pending["domain_id"] != args.domain
+                or pending["harness_kind"] != args.harness
+                or pending["harness_name"] != args.name
+                or pending["identity_path"] != str(identity_path)
+            ):
+                raise SystemExit("guided join resume arguments do not match completed state")
+            try:
+                actor = VerifiedActor.model_validate(pending["actor"])
+            except Exception as exc:
+                raise SystemExit("completed guided join actor is invalid") from exc
+            key_path = Path(str(pending["private_key_path"]))
+            key = P256KeyPair.from_private_pem(
+                _owner_only_file(key_path, label="guided join private key")
+            )
+            if key.public_pem != pending["public_key_pem"]:
+                raise SystemExit("completed guided join key does not match state")
+            expected_identity = {
+                "schema": "agentnet.identity-profile.v1",
+                "server_base_url": server,
+                "audience": f"urn:agentnet:{actor.domain_id}:corporate-api",
+                "actor": actor.model_dump(mode="json"),
+                "private_key_path": str(key_path),
+            }
+            if _guided_join_state(identity_path) != expected_identity:
+                raise SystemExit("completed guided join identity file does not match state")
+            print(
+                json.dumps(
+                    _guided_success_output(
+                        identity_path=identity_path,
+                        actor=actor,
+                        idempotent_repeat=True,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        expected = {
+            "schema",
+            "server_base_url",
+            "domain_id",
+            "harness_kind",
+            "harness_name",
+            "private_key_path",
+            "public_key_pem",
+            "authorization",
+            "challenge",
+        }
+        if set(pending) != expected or pending.get("schema") != "agentnet.guided-join.v1":
+            raise SystemExit("guided join state does not match the exact schema")
+        if (
+            pending["server_base_url"] != server
+            or pending["domain_id"] != args.domain
+            or pending["harness_kind"] != args.harness
+            or pending["harness_name"] != args.name
+        ):
+            raise SystemExit("guided join resume arguments do not match pending state")
+        authorization = _validate_guided_authorization(pending["authorization"])
+        key_path = Path(str(pending["private_key_path"]))
+        key = P256KeyPair.from_private_pem(
+            _owner_only_file(key_path, label="guided join private key")
+        )
+        if key.public_pem != pending["public_key_pem"]:
+            raise SystemExit("guided join private key no longer matches pending state")
+    else:
+        key_path = (
+            Path(os.path.abspath(args.private_key))
+            if args.private_key
+            else state_path.with_suffix(".key.pem")
+        )
+        if os.path.lexists(key_path):
+            key = P256KeyPair.from_private_pem(
+                _owner_only_file(key_path, label="guided join private key")
+            )
+        else:
+            key = P256KeyPair.generate()
+            _write_owner_only(key_path, key.private_pem)
+        authorization = _validate_guided_authorization(
+            _public_json_request(
+                server=server,
+                method="POST",
+                path="/v1/enrollment/oidc/begin",
+                body={
+                    "harness_kind": args.harness,
+                    "harness_name": args.name,
+                    "public_key_pem": key.public_pem,
+                },
+            )
+        )
+        pending = {
+            "schema": "agentnet.guided-join.v1",
+            "server_base_url": server,
+            "domain_id": args.domain,
+            "harness_kind": args.harness,
+            "harness_name": args.name,
+            "private_key_path": str(key_path),
+            "public_key_pem": key.public_pem,
+            "authorization": authorization,
+            "challenge": None,
+        }
+        _write_owner_json(state_path, pending)
+        if not webbrowser.open(str(authorization["authorization_url"]), new=1):
+            raise SystemExit("system browser could not be opened; guided join state is retained")
+        browser_opened = True
+
+    challenge_value = pending.get("challenge")
+    if challenge_value is None:
+        deadline = time.monotonic() + float(args.timeout)
+        while True:
+            if time.monotonic() >= deadline:
+                raise SystemExit("guided enrollment timed out; pending state is retained")
+            polled = _public_json_request(
+                server=server,
+                method="POST",
+                path="/v1/enrollment/oidc/poll",
+                body={
+                    "transaction_id": authorization["transaction_id"],
+                    "continuation_token": authorization["continuation_token"],
+                },
+            )
+            status = polled.get("status")
+            interval = polled.get("interval_seconds")
+            if type(interval) is not int or not 2 <= interval <= 10:
+                raise SystemExit("guided enrollment poll response is invalid")
+            if status == "approval_pending":
+                challenge_value = {
+                    "challenge_id": polled.get("challenge_id"),
+                    "nonce": polled.get("nonce"),
+                    "canonical_transaction_b64": polled.get(
+                        "canonical_transaction_b64"
+                    ),
+                }
+                _validate_guided_challenge(challenge_value)
+                pending["challenge"] = challenge_value
+                _write_private_config(state_path, pending, force=True)
+                break
+            if status not in {"authorization_pending", "slow_down"}:
+                raise SystemExit(f"guided enrollment stopped in terminal state: {status}")
+            if status == "authorization_pending" and not browser_opened:
+                if not webbrowser.open(str(authorization["authorization_url"]), new=1):
+                    raise SystemExit(
+                        "system browser could not be opened; guided join state is retained"
+                    )
+                browser_opened = True
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+    challenge, decoded = _validate_guided_challenge(challenge_value)
+    print(
+        "Google sign-in received. Complete independent WebAuthn approval, then enter "
+        "the displayed one-time code.",
+        file=sys.stderr,
+    )
+    claim_code = getpass.getpass("One-time approval code: ").strip().upper()
+    result = _public_json_request(
+        server=server,
+        method="POST",
+        path="/v1/enrollment/oidc/complete",
+        body={
+            "transaction_id": authorization["transaction_id"],
+            "continuation_token": authorization["continuation_token"],
+            "claim_code": claim_code,
+            "possession_signature": key.sign("agentnet.enrollment.pop.v1", decoded),
+        },
+    )
+    actor = _guided_identity_result(
+        result=result,
+        expected_domain_id=args.domain,
+        key=key,
+    )
+    identity = {
+        "schema": "agentnet.identity-profile.v1",
+        "server_base_url": server,
+        "audience": f"urn:agentnet:{actor.domain_id}:corporate-api",
+        "actor": actor.model_dump(mode="json"),
+        "private_key_path": str(key_path),
+    }
+    identity_repeat = False
+    if os.path.lexists(identity_path):
+        existing = _guided_join_state(identity_path)
+        if existing != identity:
+            raise SystemExit("existing identity file conflicts with completed enrollment")
+        identity_repeat = True
+    else:
+        _write_owner_json(identity_path, identity)
+    completed_state = {
+        "schema": "agentnet.guided-join-complete.v1",
+        "server_base_url": server,
+        "domain_id": args.domain,
+        "harness_kind": args.harness,
+        "harness_name": args.name,
+        "private_key_path": str(key_path),
+        "public_key_pem": key.public_pem,
+        "identity_path": str(identity_path),
+        "actor": actor.model_dump(mode="json"),
+    }
+    _write_private_config(state_path, completed_state, force=True)
+    print(
+        json.dumps(
+            _guided_success_output(
+                identity_path=identity_path,
+                actor=actor,
+                idempotent_repeat=identity_repeat,
+            ),
             indent=2,
             sort_keys=True,
         )
@@ -2950,6 +3306,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")
     join_commands = join.add_subparsers(dest="join_command", required=True)
+    join_guided = join_commands.add_parser(
+        "guided",
+        help="run resumable browser OIDC and Core-brokered independent approval",
+    )
+    join_guided.add_argument("--server", required=True)
+    join_guided.add_argument("--domain", required=True)
+    join_guided.add_argument("--harness", required=True)
+    join_guided.add_argument("--name", required=True)
+    join_guided.add_argument("--state", default=".agentnet/guided-join.json")
+    join_guided.add_argument("--private-key")
+    join_guided.add_argument("--identity", default=".agentnet/identity.json")
+    join_guided.add_argument("--timeout", type=int, choices=range(30, 601), default=300)
+    join_guided.set_defaults(func=command_join_guided)
     join_begin = join_commands.add_parser("begin", help="start exact OIDC/device enrollment")
     join_begin.add_argument("--server", required=True)
     join_begin.add_argument("--harness", required=True)

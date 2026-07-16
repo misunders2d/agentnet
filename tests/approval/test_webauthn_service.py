@@ -110,6 +110,12 @@ def test_config_requires_exact_https_rp_and_mandatory_purpose_coverage(tmp_path:
         approvers=(approver,),
     )
     assert ApprovalServiceConfig(**base).rp_id == "approval.corp.example"
+    assert ApprovalServiceConfig(
+        **base,
+        internal_core_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
+    ).internal_core_credential_env == "AGENTNET_APPROVAL_CORE_TOKEN"
+    with pytest.raises(ValueError, match="String should match pattern"):
+        ApprovalServiceConfig(**base, internal_core_credential_env="secret-value")
     with pytest.raises(ValueError, match="RP ID"):
         ApprovalServiceConfig(**{**base, "rp_id": "other.example"})
     with pytest.raises(ValueError, match="HTTPS"):
@@ -209,6 +215,169 @@ def test_registration_approval_receipt_and_response_loss_are_exact_and_single(
             "SELECT sign_count FROM approval_webauthn_credentials WHERE credential_id_b64=?",
             (credential_id,),
         )["sign_count"] == 1
+    finally:
+        stack.store.close()
+
+
+def test_core_request_capability_stays_encrypted_and_opens_only_on_approval_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        _register(stack, monkeypatch)
+        transaction = canonical_json(
+            {"schema": "agentnet.test-core-approval.v1", "domain_id": "corp.example"}
+        )
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+        )
+        token = _token(created.url)
+        row = stack.store.fetch_one(
+            "SELECT capability_hash,capability_encrypted,delivery_mode FROM approval_requests "
+            "WHERE request_id=?",
+            (created.identifier,),
+        )
+        assert row is not None
+        assert row["delivery_mode"] == "core_claim_code"
+        assert row["capability_encrypted"] is not None
+        assert token not in str(row["capability_encrypted"])
+
+        pending = stack.service.pending_requests()
+        assert pending == [
+            {
+                "request_id": created.identifier,
+                "approver_principal_id": "security-owner",
+                "domain_id": "corp.example",
+                "approval_purpose": PURPOSE,
+                "transaction_digest": created.transaction_digest,
+                "delivery_mode": "core_claim_code",
+                "openable_locally": True,
+                "created_at": NOW,
+                "expires_at": NOW + stack.config.request_ttl_seconds,
+            }
+        ]
+        assert stack.service.local_approval_url(created.identifier) == created.url
+        assert stack.store.fetch_one(
+            "SELECT COUNT(*) AS n FROM approval_audit "
+            "WHERE request_id=? AND action='approval.opened_local'",
+            (created.identifier,),
+        )["n"] == 1
+
+        direct = stack.service.create_request(
+            principal_id="security-owner",
+            approval_purpose=PURPOSE,
+            canonical_transaction=canonical_json(
+                {"schema": "agentnet.test-direct-approval.v1", "domain_id": "corp.example"}
+            ),
+        )
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.local_approval_url(direct.identifier)
+    finally:
+        stack.store.close()
+
+
+def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        credential_id = _register(stack, monkeypatch)
+        transaction = canonical_json(
+            {"schema": "agentnet.test-core-retrieval.v1", "domain_id": "corp.example"}
+        )
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:test-request-1",
+        )
+        duplicate = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:test-request-1",
+        )
+        assert duplicate.identifier == created.identifier
+        assert duplicate.duplicate is True
+        with pytest.raises(ConflictError, match="idempotency conflict"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=canonical_json(
+                    {"schema": "agentnet.changed.v1", "domain_id": "corp.example"}
+                ),
+                delivery_mode="core_claim_code",
+                idempotency_key="core:enrollment:test-request-1",
+            )
+
+        token = _token(created.url)
+        stack.service.request_options(token)
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+        result = stack.service.approve_request(
+            token,
+            {"id": credential_id},
+            approved=True,
+        )
+        assert result["schema"] == "agentnet.approval.claim-code.v1"
+        claim_code = result["claim_code"]
+        assert claim_code not in str(
+            stack.store.fetch_one(
+                "SELECT claim_code_hash FROM approval_claim_codes WHERE request_id=?",
+                (created.identifier,),
+            )["claim_code_hash"]
+        )
+
+        retrieval_digest = "d" * 64
+        first = stack.service.retrieve_core_receipt(
+            request_id=created.identifier,
+            claim_code=claim_code,
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            transaction_digest=created.transaction_digest or "",
+            retrieval_digest=retrieval_digest,
+        )
+        second = stack.service.retrieve_core_receipt(
+            request_id=created.identifier,
+            claim_code=claim_code,
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            transaction_digest=created.transaction_digest or "",
+            retrieval_digest=retrieval_digest,
+        )
+        assert second == first
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.retrieve_core_receipt(
+                request_id=created.identifier,
+                claim_code=claim_code,
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                transaction_digest=created.transaction_digest or "",
+                retrieval_digest="e" * 64,
+            )
+        assert stack.store.fetch_one(
+            "SELECT COUNT(*) AS n FROM approval_audit "
+            "WHERE request_id=? AND action='approval.receipt_retrieved'",
+            (created.identifier,),
+        )["n"] == 2
     finally:
         stack.store.close()
 

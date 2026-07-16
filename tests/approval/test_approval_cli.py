@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agentnet import cli
+from agentnet.approval import cli_commands as approval_cli
 from agentnet.approval.config import MANDATORY_APPROVAL_PURPOSES, load_approval_service_config
 from agentnet.errors import ValidationError
 
@@ -91,6 +93,92 @@ def test_approval_provision_outputs_only_public_trust_and_refuses_overwrite(
     assert status["independent_boundary_proven"] is False
     for forbidden in ("PRIVATE KEY", "PUBLIC KEY", "receipt", "transaction", "credential_id"):
         assert forbidden not in status_text
+
+
+def test_pending_open_and_watch_keep_approval_capability_local(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pending = {
+        "request_id": "request-1",
+        "approver_principal_id": "security-owner",
+        "domain_id": "corp.example",
+        "approval_purpose": "identity.enrollment.approve",
+        "transaction_digest": "a" * 64,
+        "delivery_mode": "core_claim_code",
+        "openable_locally": True,
+        "created_at": 1_800_000_000,
+        "expires_at": 1_800_000_300,
+    }
+    secret_url = "https://approval.corp.example/approval#token=agcap1.SECRET&kind=approval"
+    opened: list[str] = []
+
+    class FakeStore:
+        def close(self) -> None:
+            return None
+
+    class FakeService:
+        def pending_requests(self) -> list[dict[str, object]]:
+            return [pending]
+
+        def local_approval_url(self, request_id: str) -> str:
+            assert request_id == "request-1"
+            return secret_url
+
+    monkeypatch.setattr(
+        approval_cli,
+        "_open_service",
+        lambda _path: (SimpleNamespace(), FakeStore(), FakeService()),
+    )
+    monkeypatch.setattr(
+        approval_cli.webbrowser,
+        "open",
+        lambda url, new=0: opened.append(url) or True,
+    )
+
+    assert cli.main(["approval", "pending", "--config", "/private/config.json"]) == 0
+    pending_output = capsys.readouterr().out
+    assert json.loads(pending_output)["requests"] == [pending]
+    assert "agcap1." not in pending_output
+
+    assert (
+        cli.main(
+            [
+                "approval",
+                "open",
+                "--config",
+                "/private/config.json",
+                "--request-id",
+                "request-1",
+            ]
+        )
+        == 0
+    )
+    open_output = capsys.readouterr().out
+    assert json.loads(open_output) == {
+        "schema": "agentnet.approval.local-open.v1",
+        "request_id": "request-1",
+        "opened": True,
+    }
+    assert "agcap1." not in open_output
+
+    assert (
+        cli.main(
+            [
+                "approval",
+                "watch",
+                "--config",
+                "/private/config.json",
+                "--open",
+                "--once",
+            ]
+        )
+        == 0
+    )
+    watch_output = capsys.readouterr().out
+    assert json.loads(watch_output)["opened"] is True
+    assert "agcap1." not in watch_output
+    assert opened == [secret_url, secret_url]
 
 
 def test_approval_config_rejects_duplicate_json_keys_before_parsing(tmp_path: Path) -> None:

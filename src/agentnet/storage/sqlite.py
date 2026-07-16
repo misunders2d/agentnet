@@ -41,6 +41,10 @@ from agentnet.storage.effect_lifecycle_schema import (
     EFFECT_LIFECYCLE_SCHEMA,
     EFFECT_LIFECYCLE_SCHEMA_VERSION,
 )
+from agentnet.storage.guided_enrollment_schema import (
+    GUIDED_ENROLLMENT_SCHEMA,
+    GUIDED_ENROLLMENT_SCHEMA_VERSION,
+)
 from agentnet.storage.identity_schema import IDENTITY_SCHEMA, IDENTITY_SCHEMA_VERSION
 from agentnet.storage.ipc_schema import IPC_SCHEMA, IPC_SCHEMA_VERSION
 from agentnet.storage.operational_control_schema import (
@@ -529,9 +533,11 @@ SCHEMA_V1 = (
     + POST_AUDIT_SCHEMA
     + RESPONSE_OBLIGATION_SCHEMA
 )
-SCHEMA = SCHEMA_V1 + TASK_PAYLOAD_RELEASE_SCHEMA
+SCHEMA_V2 = SCHEMA_V1 + TASK_PAYLOAD_RELEASE_SCHEMA
+SCHEMA = SCHEMA_V2 + GUIDED_ENROLLMENT_SCHEMA
 _SQLITE_MIGRATION_SQL = {
     TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: TASK_PAYLOAD_RELEASE_SCHEMA,
+    GUIDED_ENROLLMENT_SCHEMA_VERSION: GUIDED_ENROLLMENT_SCHEMA,
 }
 
 _SCHEMA_CATALOG_QUERY = (
@@ -554,7 +560,8 @@ def _expected_schema_catalog(
 ) -> tuple[tuple[str, str, str, str], ...]:
     schemas = {
         1: SCHEMA_V1,
-        TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: SCHEMA,
+        TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: SCHEMA_V2,
+        GUIDED_ENROLLMENT_SCHEMA_VERSION: SCHEMA,
     }
     schema = schemas.get(schema_version)
     if schema is None:

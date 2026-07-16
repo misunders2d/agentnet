@@ -204,11 +204,24 @@ substituting the local synthetic profile.
 
 Unreleased source includes `agentnet approval`: a separately runnable,
 loopback-bound WebAuthn-UV ceremony service using pinned `webauthn==3.0.0`.
-It has strict owner-only config/key custody, encrypted exact-catalog SQLite
-state, one-time fragment capabilities, bounded no-store browser/API routes,
-exact transaction display, stable signed-receipt retry, expiry/audit, and
-credential revocation. It grants no authority during provisioning and does not
-change core receipt consumers.
+It has strict owner-only config/key custody, encrypted versioned SQLite state,
+one-time fragment capabilities, bounded no-store browser/API routes, exact
+transaction display, stable signed-receipt retry, expiry/audit, and credential
+revocation. Optional disabled-by-default broker routes let an authenticated
+Core create/status requests and retrieve only already-issued receipts after a
+WebAuthn-approved human claim code. Approval URLs stay encrypted on approval
+host and open only through `agentnet approval pending|watch|open`. This grants
+no authority during provisioning and does not let Core approve or sign.
+
+Unreleased source also adds `agentnet join guided`: one resumable command opens
+the system browser without printing its authorization URL, polls Core with an
+owner-only opaque continuation, prompts only for the short-lived human claim
+code, proves the locally retained candidate key, and writes an owner-only
+identity profile. Core retrieves the signed receipt directly from the approval
+service; the candidate never receives it. Completion retries converge after
+response loss. Enrollment remains identity-only and reports
+`first_message_blocked_explicit_authority_required` until an administrator
+issues exact messaging entitlements.
 
 This software component is not proof of independence. Production enrollment,
 recovery, elevation, revocation, or relationship consent still requires a real
@@ -238,12 +251,13 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.7`. This branch prepares confidential-OIDC correction candidate `0.1.8`;
-it is not published until Sergey performs the separate npm publication step.
-The candidate adds explicit public, `client_secret_post`, and
-`client_secret_basic` token-endpoint profiles with runtime-only secret
-resolution. The repository contains a broad executable local kernel and
-adversarial test suite, but it does **not** claim production certification.
+`0.1.8`. This branch prepares the next guided-enrollment candidate; it is not
+published until Sergey performs the separate npm publication step. The
+candidate preserves `0.1.8` confidential OIDC and adds versioned approval-host
+broker state, Core continuation polling, direct receipt retrieval, response-loss
+recovery, and the resumable `join guided` CLI. The repository contains a broad
+executable local kernel and adversarial test suite, but it does **not** claim
+production certification or a completed live cross-host ceremony.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

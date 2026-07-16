@@ -43,6 +43,15 @@ Keep public instructions separate from local/private material. Private keys, joi
 
 If the installed release lacks a product-owned secure handoff for any private enrollment artifact—especially the signed approval receipt—report **blocked: product component not yet shipped** and stop before `join begin`. Do not invent Slack/A2A transfer, copy/paste, USB/QR choreography, custom glue, or a one-click link. AgentNet `0.1.8` has `join begin`/`join complete` but no supported possession-bound approval-receipt handoff, so fresh cross-host enrollment is blocked on that release.
 
+For a later installed release whose actual `agentnet join --help` exposes
+`join guided`, use only that product flow for a nontechnical fresh laptop. It
+opens the system browser without printing the authorization URL, keeps
+continuation/challenge/key state owner-only, and prompts only for the short-lived
+human claim code. Success means `enrolled_identity_only`, not messaging
+readiness. Stop at `first_message_blocked_explicit_authority_required` until an
+authorized administrator issues exact `message.send` plus required
+recipient/read entitlements; never turn enrollment into implicit authority.
+
 ## Start with read-only checks
 
 Before changing state, identify the installed version, requested profile, existing configuration, and whether the request is only a demo or a real network. Prefer:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from webauthn import (
@@ -40,6 +41,9 @@ from agentnet.security.signatures import (
 _CAPABILITY_PREFIX = "agcap1."
 _CAPABILITY_BYTES = 32
 _MAX_FAILED_ATTEMPTS = 10
+_MAX_CLAIM_CODE_ATTEMPTS = 5
+_MAX_CLAIM_CODE_TTL_SECONDS = 300
+_APPROVAL_DELIVERY_MODES = frozenset({"direct_receipt", "core_claim_code"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +52,8 @@ class ApprovalURL:
     expires_at: int
     identifier: str
     transaction_digest: str | None = None
+    state: str = "pending"
+    duplicate: bool = False
 
 
 def _capability() -> str:
@@ -65,6 +71,49 @@ def _capability_hash(token: str) -> str:
     if len(decoded) != _CAPABILITY_BYTES or b64url_encode(decoded) != encoded:
         raise AuthenticationError("approval request denied")
     return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+def _claim_code() -> str:
+    value = secrets.token_hex(16).upper()
+    return "-".join(value[index : index + 4] for index in range(0, len(value), 4))
+
+
+def _normalized_claim_code(value: str) -> str:
+    normalized = value.strip().upper()
+    groups = normalized.split("-")
+    if len(groups) != 8 or any(
+        len(group) != 4 or any(character not in "0123456789ABCDEF" for character in group)
+        for group in groups
+    ):
+        raise AuthenticationError("approval request denied")
+    return normalized
+
+
+def _claim_code_hash(request_id: str, value: str) -> str:
+    normalized = _normalized_claim_code(value)
+    return hashlib.sha256(f"{request_id}:{normalized}".encode("ascii")).hexdigest()
+
+
+def _core_request_digest(
+    *,
+    idempotency_key: str,
+    principal_id: str,
+    domain_id: str,
+    approval_purpose: str,
+    transaction_digest: str,
+) -> str:
+    return hashlib.sha256(
+        canonical_json(
+            {
+                "schema": "agentnet.approval.core-request.v1",
+                "idempotency_key": idempotency_key,
+                "approver_principal_id": principal_id,
+                "domain_id": domain_id,
+                "approval_purpose": approval_purpose,
+                "transaction_digest": transaction_digest,
+            }
+        )
+    ).hexdigest()
 
 
 def _user_handle(config: ApprovalServiceConfig, principal_id: str, domain_id: str) -> bytes:
@@ -378,16 +427,39 @@ class WebAuthnApprovalService:
         principal_id: str,
         approval_purpose: str,
         canonical_transaction: bytes,
+        delivery_mode: Literal["direct_receipt", "core_claim_code"] = "direct_receipt",
+        domain_id: str | None = None,
+        idempotency_key: str | None = None,
         now: int | None = None,
     ) -> ApprovalURL:
         at = self.clock() if now is None else now
         self._commit_request_expirations(at=at)
-        item = self.config.approver(principal_id)
+        item = self.config.approver(principal_id, domain_id)
         if approval_purpose not in item.allowed_purposes:
             raise AuthenticationError("approval request denied")
+        if delivery_mode not in _APPROVAL_DELIVERY_MODES:
+            raise ValidationError("approval delivery mode is invalid")
+        if idempotency_key is not None and (
+            delivery_mode != "core_claim_code"
+            or not 16 <= len(idempotency_key) <= 256
+            or idempotency_key != idempotency_key.strip()
+            or any(ord(character) < 0x21 or ord(character) > 0x7E for character in idempotency_key)
+        ):
+            raise ValidationError("approval idempotency key is invalid")
         if not canonical_transaction or len(canonical_transaction) > self.config.max_transaction_bytes:
             raise ValidationError("approval transaction size is invalid")
         transaction_digest = hashlib.sha256(canonical_transaction).hexdigest()
+        request_digest = (
+            _core_request_digest(
+                idempotency_key=idempotency_key,
+                principal_id=item.principal_id,
+                domain_id=item.domain_id,
+                approval_purpose=approval_purpose,
+                transaction_digest=transaction_digest,
+            )
+            if idempotency_key is not None
+            else None
+        )
         token = _capability()
         request_id = str(uuid4())
         expires_at = at + self.config.request_ttl_seconds
@@ -399,6 +471,45 @@ class WebAuthnApprovalService:
         )
         with self.store.transaction() as connection:
             self._expire_requests(connection, at=at)
+            if idempotency_key is not None:
+                existing = connection.execute(
+                    """SELECT i.request_digest,q.*
+                           FROM approval_request_idempotency AS i
+                           JOIN approval_requests AS q ON q.request_id=i.request_id
+                          WHERE i.idempotency_key=?""",
+                    (idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    exact = (
+                        secrets.compare_digest(str(existing["request_digest"]), str(request_digest))
+                        and existing["approver_principal_id"] == item.principal_id
+                        and existing["domain_id"] == item.domain_id
+                        and existing["approval_purpose"] == approval_purpose
+                        and existing["transaction_digest"] == transaction_digest
+                        and existing["delivery_mode"] == delivery_mode
+                    )
+                    if not exact or not existing["capability_encrypted"]:
+                        raise ConflictError("approval idempotency conflict")
+                    value = self.cipher.decrypt_json(
+                        existing["capability_encrypted"],
+                        purpose=f"approval-request-capability:{existing['request_id']}",
+                    )
+                    existing_token = value.get("token") if isinstance(value, dict) else None
+                    if not isinstance(existing_token, str) or not secrets.compare_digest(
+                        _capability_hash(existing_token), str(existing["capability_hash"])
+                    ):
+                        raise AuthenticationError("approval request denied")
+                    return ApprovalURL(
+                        url=(
+                            f"{self.config.public_origin}/approval"
+                            f"#token={existing_token}&kind=approval"
+                        ),
+                        expires_at=int(existing["expires_at"]),
+                        identifier=str(existing["request_id"]),
+                        transaction_digest=str(existing["transaction_digest"]),
+                        state=str(existing["state"]),
+                        duplicate=True,
+                    )
             active = connection.execute(
                 "SELECT request_id FROM approval_requests WHERE active_fingerprint=?",
                 (fingerprint,),
@@ -416,12 +527,20 @@ class WebAuthnApprovalService:
                 {"canonical_transaction": canonical_transaction.decode("utf-8")},
                 purpose=f"approval-canonical-transaction:{request_id}",
             )
+            capability_encrypted = (
+                self.cipher.encrypt_json(
+                    {"token": token},
+                    purpose=f"approval-request-capability:{request_id}",
+                )
+                if delivery_mode == "core_claim_code"
+                else None
+            )
             connection.execute(
                 """INSERT INTO approval_requests(
                        request_id,approver_principal_id,domain_id,approval_purpose,capability_hash,
                        canonical_transaction_encrypted,transaction_digest,state,active_fingerprint,
-                       created_at,expires_at
-                   ) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)""",
+                       created_at,expires_at,delivery_mode,capability_encrypted
+                   ) VALUES(?,?,?,?,?,?,?,'pending',?,?,?,?,?)""",
                 (
                     request_id,
                     item.principal_id,
@@ -433,8 +552,17 @@ class WebAuthnApprovalService:
                     fingerprint,
                     at,
                     expires_at,
+                    delivery_mode,
+                    capability_encrypted,
                 ),
             )
+            if idempotency_key is not None:
+                connection.execute(
+                    """INSERT INTO approval_request_idempotency(
+                           idempotency_key,request_id,request_digest,created_at
+                       ) VALUES(?,?,?,?)""",
+                    (idempotency_key, request_id, request_digest, at),
+                )
             self._audit(
                 connection,
                 action="approval.created",
@@ -445,7 +573,11 @@ class WebAuthnApprovalService:
                 digest=transaction_digest,
                 occurred_at=at,
                 outcome="pending",
-                detail="host_admin_created",
+                detail=(
+                    "core_broker_created"
+                    if delivery_mode == "core_claim_code"
+                    else "host_admin_created"
+                ),
             )
         return ApprovalURL(
             url=f"{self.config.public_origin}/approval#token={token}&kind=approval",
@@ -453,6 +585,75 @@ class WebAuthnApprovalService:
             identifier=request_id,
             transaction_digest=transaction_digest,
         )
+
+    def pending_requests(self, *, now: int | None = None) -> list[dict[str, Any]]:
+        """Return content-free approval-host-local pending request metadata."""
+
+        at = self.clock() if now is None else now
+        self._commit_request_expirations(at=at)
+        rows = self.store.fetch_all(
+            """SELECT request_id,approver_principal_id,domain_id,approval_purpose,
+                      transaction_digest,delivery_mode,
+                      CASE WHEN capability_encrypted IS NOT NULL THEN 1 ELSE 0 END
+                          AS openable_locally,
+                      created_at,expires_at
+                   FROM approval_requests
+                  WHERE state='pending'
+                  ORDER BY created_at,request_id"""
+        )
+        return [
+            {
+                "request_id": str(row["request_id"]),
+                "approver_principal_id": str(row["approver_principal_id"]),
+                "domain_id": str(row["domain_id"]),
+                "approval_purpose": str(row["approval_purpose"]),
+                "transaction_digest": str(row["transaction_digest"]),
+                "delivery_mode": str(row["delivery_mode"]),
+                "openable_locally": bool(row["openable_locally"]),
+                "created_at": int(row["created_at"]),
+                "expires_at": int(row["expires_at"]),
+            }
+            for row in rows
+        ]
+
+    def local_approval_url(self, request_id: str, *, now: int | None = None) -> str:
+        """Recover one browser capability only inside the independent approval host."""
+
+        if not request_id or len(request_id) > 128:
+            raise AuthenticationError("approval request denied")
+        at = self.clock() if now is None else now
+        self._commit_request_expirations(at=at)
+        with self.store.transaction() as connection:
+            self._expire_requests(connection, at=at)
+            row = connection.execute(
+                "SELECT * FROM approval_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            self._require_request_row(row, at=at, state="pending")
+            if row["delivery_mode"] != "core_claim_code" or not row["capability_encrypted"]:
+                raise AuthenticationError("approval request denied")
+            value = self.cipher.decrypt_json(
+                row["capability_encrypted"],
+                purpose=f"approval-request-capability:{request_id}",
+            )
+            token = value.get("token") if isinstance(value, dict) else None
+            if not isinstance(token, str) or not secrets.compare_digest(
+                _capability_hash(token), str(row["capability_hash"])
+            ):
+                raise AuthenticationError("approval request denied")
+            self._audit(
+                connection,
+                action="approval.opened_local",
+                request_id=request_id,
+                principal_id=row["approver_principal_id"],
+                domain_id=row["domain_id"],
+                purpose=row["approval_purpose"],
+                digest=row["transaction_digest"],
+                occurred_at=at,
+                outcome="opened",
+                detail="approval_host_local",
+            )
+        return f"{self.config.public_origin}/approval#token={token}&kind=approval"
 
     def request_options(self, token: str, *, now: int | None = None) -> dict[str, Any]:
         at = self.clock() if now is None else now
@@ -510,6 +711,7 @@ class WebAuthnApprovalService:
             "approver_principal_id": row["approver_principal_id"],
             "domain_id": row["domain_id"],
             "approval_purpose": row["approval_purpose"],
+            "delivery_mode": row["delivery_mode"],
             "transaction_digest": row["transaction_digest"],
             "canonical_transaction_text": canonical.decode("utf-8"),
             "expires_at": row["expires_at"],
@@ -531,14 +733,18 @@ class WebAuthnApprovalService:
         self._commit_request_expirations(at=at)
         token_hash = _capability_hash(token)
         failure: Exception | None = None
-        receipt: dict[str, Any] | None = None
+        result: dict[str, Any] | None = None
         with self.store.transaction() as connection:
             self._expire_requests(connection, at=at)
             row = connection.execute(
                 "SELECT * FROM approval_requests WHERE capability_hash=?", (token_hash,)
             ).fetchone()
             if row is not None and row["state"] == "issued":
-                receipt = self._stored_receipt(connection, row, at=at)
+                result = (
+                    self._issue_claim_code(connection, row, at=at)
+                    if row["delivery_mode"] == "core_claim_code"
+                    else self._stored_receipt(connection, row, at=at)
+                )
             else:
                 self._require_request_row(row, at=at, state="pending", challenge=True)
                 trusted, signer = self._approver(
@@ -660,9 +866,154 @@ class WebAuthnApprovalService:
                             WHERE request_id=?""",
                         (row["request_id"],),
                     )
+                    result = (
+                        self._issue_claim_code(connection, row, at=at)
+                        if row["delivery_mode"] == "core_claim_code"
+                        else receipt
+                    )
         if failure is not None:
             raise AuthenticationError("approval request denied") from failure
-        if receipt is None:
+        if result is None:
+            raise AuthenticationError("approval request denied")
+        return result
+
+    def request_status(
+        self,
+        *,
+        request_id: str,
+        transaction_digest: str,
+        now: int | None = None,
+    ) -> dict[str, Any]:
+        at = self.clock() if now is None else now
+        self._commit_request_expirations(at=at)
+        row = self.store.fetch_one(
+            """SELECT request_id,state,transaction_digest,delivery_mode,expires_at
+                   FROM approval_requests WHERE request_id=?""",
+            (request_id,),
+        )
+        if (
+            row is None
+            or row["delivery_mode"] != "core_claim_code"
+            or len(transaction_digest) != 64
+            or not secrets.compare_digest(str(row["transaction_digest"]), transaction_digest)
+        ):
+            raise AuthenticationError("approval request denied")
+        return {
+            "schema": "agentnet.approval.internal-request-status-result.v1",
+            "request_id": str(row["request_id"]),
+            "state": str(row["state"]),
+            "transaction_digest": str(row["transaction_digest"]),
+            "expires_at": int(row["expires_at"]),
+        }
+
+    def retrieve_core_receipt(
+        self,
+        *,
+        request_id: str,
+        claim_code: str,
+        domain_id: str,
+        approval_purpose: str,
+        transaction_digest: str,
+        retrieval_digest: str,
+        now: int | None = None,
+    ) -> dict[str, Any]:
+        at = self.clock() if now is None else now
+        self._commit_request_expirations(at=at)
+        if len(retrieval_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in retrieval_digest
+        ):
+            raise AuthenticationError("approval request denied")
+        supplied_hash = _claim_code_hash(request_id, claim_code)
+        failure = False
+        receipt: dict[str, Any] | None = None
+        with self.store.transaction() as connection:
+            self._expire_requests(connection, at=at)
+            row = connection.execute(
+                "SELECT * FROM approval_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            exact = (
+                row is not None
+                and row["state"] == "issued"
+                and row["delivery_mode"] == "core_claim_code"
+                and row["domain_id"] == domain_id
+                and row["approval_purpose"] == approval_purpose
+                and secrets.compare_digest(str(row["transaction_digest"]), transaction_digest)
+            )
+            if not exact:
+                raise AuthenticationError("approval request denied")
+            code = connection.execute(
+                "SELECT * FROM approval_claim_codes WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if (
+                code is None
+                or int(code["expires_at"]) <= at
+                or int(code["failed_attempts"]) >= _MAX_CLAIM_CODE_ATTEMPTS
+            ):
+                raise AuthenticationError("approval request denied")
+            if not secrets.compare_digest(str(code["claim_code_hash"]), supplied_hash):
+                attempts = min(
+                    _MAX_CLAIM_CODE_ATTEMPTS,
+                    int(code["failed_attempts"]) + 1,
+                )
+                connection.execute(
+                    """UPDATE approval_claim_codes
+                          SET failed_attempts=?,expires_at=CASE WHEN ? THEN ? ELSE expires_at END
+                        WHERE request_id=?""",
+                    (attempts, attempts >= _MAX_CLAIM_CODE_ATTEMPTS, at, request_id),
+                )
+                self._audit(
+                    connection,
+                    action="approval.receipt_retrieval_denied",
+                    request_id=request_id,
+                    principal_id=row["approver_principal_id"],
+                    domain_id=row["domain_id"],
+                    purpose=row["approval_purpose"],
+                    digest=row["transaction_digest"],
+                    occurred_at=at,
+                    outcome="denied",
+                    detail="claim_code_invalid",
+                )
+                failure = True
+            elif code["last_retrieval_digest"] is not None and not secrets.compare_digest(
+                str(code["last_retrieval_digest"]), retrieval_digest
+            ):
+                self._audit(
+                    connection,
+                    action="approval.receipt_retrieval_denied",
+                    request_id=request_id,
+                    principal_id=row["approver_principal_id"],
+                    domain_id=row["domain_id"],
+                    purpose=row["approval_purpose"],
+                    digest=row["transaction_digest"],
+                    occurred_at=at,
+                    outcome="denied",
+                    detail="retrieval_digest_conflict",
+                )
+                failure = True
+            else:
+                receipt = self._stored_receipt(connection, row, at=at)
+                connection.execute(
+                    """UPDATE approval_claim_codes
+                          SET first_retrieved_at=COALESCE(first_retrieved_at,?),
+                              last_retrieved_at=?,last_retrieval_digest=?
+                        WHERE request_id=?""",
+                    (at, at, retrieval_digest, request_id),
+                )
+                self._audit(
+                    connection,
+                    action="approval.receipt_retrieved",
+                    request_id=request_id,
+                    principal_id=row["approver_principal_id"],
+                    domain_id=row["domain_id"],
+                    purpose=row["approval_purpose"],
+                    digest=row["transaction_digest"],
+                    occurred_at=at,
+                    outcome="retrieved",
+                    detail="core_exact_retryable",
+                )
+        if failure or receipt is None:
             raise AuthenticationError("approval request denied")
         return receipt
 
@@ -781,6 +1132,59 @@ class WebAuthnApprovalService:
         if not isinstance(canonical, str):
             raise AuthenticationError("approval request denied")
         return canonical.encode("utf-8")
+
+    def _issue_claim_code(self, connection: Any, row: Any, *, at: int) -> dict[str, Any]:
+        issued = connection.execute(
+            "SELECT receipt_expires_at FROM approval_issued_receipts WHERE request_id=?",
+            (row["request_id"],),
+        ).fetchone()
+        if issued is None:
+            raise AuthenticationError("approval request denied")
+        expires_at = min(
+            int(issued["receipt_expires_at"]),
+            at + min(_MAX_CLAIM_CODE_TTL_SECONDS, self.config.receipt_ttl_seconds),
+        )
+        if expires_at <= at:
+            raise AuthenticationError("approval request denied")
+        code = _claim_code()
+        connection.execute(
+            """INSERT INTO approval_claim_codes(
+                   request_id,claim_code_hash,issued_at,expires_at,failed_attempts,
+                   first_retrieved_at,last_retrieved_at,last_retrieval_digest
+               ) VALUES(?,?,?,?,0,NULL,NULL,NULL)
+               ON CONFLICT(request_id) DO UPDATE SET
+                   claim_code_hash=excluded.claim_code_hash,
+                   issued_at=excluded.issued_at,
+                   expires_at=excluded.expires_at,
+                   failed_attempts=0,
+                   first_retrieved_at=NULL,
+                   last_retrieved_at=NULL,
+                   last_retrieval_digest=NULL""",
+            (
+                row["request_id"],
+                _claim_code_hash(str(row["request_id"]), code),
+                at,
+                expires_at,
+            ),
+        )
+        self._audit(
+            connection,
+            action="approval.claim_code_issued",
+            request_id=row["request_id"],
+            principal_id=row["approver_principal_id"],
+            domain_id=row["domain_id"],
+            purpose=row["approval_purpose"],
+            digest=row["transaction_digest"],
+            occurred_at=at,
+            outcome="issued",
+            detail="webauthn_receipt_brokered",
+        )
+        return {
+            "schema": "agentnet.approval.claim-code.v1",
+            "request_id": str(row["request_id"]),
+            "claim_code": code,
+            "expires_at": expires_at,
+        }
 
     def _stored_receipt(self, connection: Any, row: Any, *, at: int) -> dict[str, Any]:
         trusted, _signer = self._approver(row["approver_principal_id"], row["domain_id"])

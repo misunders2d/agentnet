@@ -141,7 +141,8 @@ agentnet approval provision \
   --public-origin https://approval.corp.example \
   --rp-id approval.corp.example \
   --verifier-id approval.corp.example \
-  --approvers /root/agentnet-approval-approvers.json
+  --approvers /root/agentnet-approval-approvers.json \
+  --internal-core-credential-env AGENTNET_APPROVAL_CORE_TOKEN
 agentnet approval status --config /etc/agentnet-approval/config.json
 ```
 
@@ -179,11 +180,34 @@ agentnet approval request-create \
 ```
 
 The browser displays exact canonical JSON, purpose, domain, SHA-256 digest, and
-expiry before the explicit approval button invokes WebAuthn UV. Successful
-approval returns one existing-format signed receipt. Response-loss retry with
-the same capability returns those exact stored bytes while current and while
-the credential remains active; it never re-signs or extends expiry. Transfer
-only that receipt to the matching core operation.
+expiry before the explicit approval button invokes WebAuthn UV. Legacy manual
+requests return one existing-format signed receipt. Response-loss retry with the
+same capability returns those exact stored bytes while current and while the
+credential remains active; it never re-signs or extends expiry.
+
+For product-brokered requests, configure only the runtime environment-variable
+**name** above; inject one high-entropy secret separately into approval service
+and Core runtimes. Never put its value in JSON, command arguments, logs, or
+support messages. Broker routes are absent when the reference is unset. Core
+can create/status an exact request and retrieve an already-issued receipt, but
+cannot approve or sign. Approval capability stays encrypted on approval host:
+
+```bash
+agentnet approval pending --config /etc/agentnet-approval/config.json
+agentnet approval watch --config /etc/agentnet-approval/config.json --open
+# or open one known local request without printing its URL
+agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID
+```
+
+After WebAuthn, Core mode shows only a 128-bit one-time claim code. Human sends
+that code through the approved authenticated human channel; exact retries return
+the same current receipt to Core. Candidate never receives receipt or approval
+URL. Unreleased guided-enrollment source composes this broker with hash-only
+Core continuation state and `agentnet join guided`. Core stages the exact
+request outside its database transaction, retrieves the receipt without
+consuming it, and leaves `EnrollmentService.complete()` as the sole atomic
+receipt/challenge consumer. A crash after that commit reconstructs the exact
+created binding and encrypts the same completion response on retry.
 
 Revoke a lost authenticator from the independent host:
 
@@ -253,21 +277,31 @@ independent approval deployment, production key custody, or owner-policy gates.
 
 `agentnet network create` provisions the namespace, PostgreSQL schema, and
 owner-only software-key files, but it does not invent an enrolled identity or
-start a protected service. Complete exact OIDC/key-possession/independent
-approval enrollment first, then bind the offline configuration explicitly:
+start a protected service. For a release that ships the guided flow, complete
+exact OIDC/key-possession/independent approval enrollment with one resumable
+command, then bind the offline configuration explicitly:
 
 ```bash
-agentnet join begin --server https://agents.corp.example
-agentnet join complete \
-  --state .agentnet/join.json \
-  --challenge .agentnet/challenge.json \
-  --approval .agentnet/approval.json \
+agentnet join guided \
+  --server https://agents.corp.example \
+  --domain corp.example \
+  --harness pi \
+  --name server-agent-1 \
+  --state .agentnet/guided-join.json \
   --identity .agentnet/server-agent-identity.json
 agentnet server-agent activate \
   --config agentnet.json \
   --identity .agentnet/server-agent-identity.json
 agentnet serve --config agentnet.json
 ```
+
+The guided command opens the system browser without printing the authorization
+URL, stores candidate key/state as owner-only files, polls only Core, and asks
+the human only for the short-lived claim code shown after independent WebAuthn
+UV. It never accepts or writes a receipt file. On success it replaces pending
+state with a minimal completion marker and reports zero granted authority.
+`join begin`/`join complete` remain available only as the compatible expert
+manual ceremony.
 
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation

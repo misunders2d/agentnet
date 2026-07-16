@@ -354,6 +354,44 @@ class IndependentApproverConfig(BaseModel):
         return self
 
 
+class ApprovalServiceClientConfig(BaseModel):
+    """Non-secret Core client reference for independent approval broker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    origin: str = Field(min_length=8, max_length=2048)
+    service_credential_env: str = Field(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
+    approver_principal_id: str = Field(min_length=1, max_length=256)
+    request_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    maximum_response_bytes: int = Field(default=262_144, ge=4096, le=1_048_576)
+
+    @model_validator(mode="after")
+    def exact_https_origin(self) -> "ApprovalServiceClientConfig":
+        try:
+            parsed = urlsplit(self.origin)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("approval service origin is invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("approval service origin must be one exact HTTPS origin")
+        hostname = parsed.hostname.lower()
+        rendered = f"[{hostname}]" if ":" in hostname else hostname
+        canonical = f"https://{rendered}"
+        if port not in {None, 443}:
+            canonical += f":{port}"
+        if self.origin.rstrip("/") != canonical:
+            raise ValueError("approval service origin must use canonical spelling")
+        return self
+
+
 class OIDCEnrollmentConfig(BaseModel):
     """Non-secret provider and independent approval trust configuration."""
 
@@ -376,6 +414,7 @@ class OIDCEnrollmentConfig(BaseModel):
     binding_assurance: Literal["os_bound", "hardware_bound"] = "hardware_bound"
     verifier_id: str = Field(min_length=1, max_length=128)
     trusted_approvers: tuple[IndependentApproverConfig, ...] = Field(min_length=1, max_length=32)
+    approval_service: ApprovalServiceClientConfig | None = None
 
     @model_validator(mode="after")
     def exact_provider_profile(self) -> "OIDCEnrollmentConfig":

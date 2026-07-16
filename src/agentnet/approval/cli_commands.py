@@ -10,6 +10,8 @@ import secrets
 import shutil
 import stat
 import tempfile
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -180,6 +182,7 @@ def command_approval_provision(args: argparse.Namespace) -> int:
             data_dir=data_dir,
             database_path=data_dir / "approval.sqlite3",
             record_key_path=data_dir / "secrets" / "records.key",
+            internal_core_credential_env=args.internal_core_credential_env,
             approvers=tuple(configured),
         )
         database = staging / "approval.sqlite3"
@@ -295,6 +298,84 @@ def command_approval_request_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_approval_pending(args: argparse.Namespace) -> int:
+    _config, store, service = _open_service(Path(args.config))
+    try:
+        requests = service.pending_requests()
+    finally:
+        store.close()
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.approval.pending-requests.v1",
+                "requests": requests,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_approval_open(args: argparse.Namespace) -> int:
+    _config, store, service = _open_service(Path(args.config))
+    try:
+        url = service.local_approval_url(args.request_id)
+    finally:
+        store.close()
+    opened = bool(webbrowser.open(url, new=2))
+    if not opened:
+        raise SystemExit("approval browser could not be opened locally")
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.approval.local-open.v1",
+                "request_id": args.request_id,
+                "opened": True,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_approval_watch(args: argparse.Namespace) -> int:
+    if not 0.25 <= args.interval <= 60.0:
+        raise SystemExit("approval watch interval must be between 0.25 and 60 seconds")
+    _config, store, service = _open_service(Path(args.config))
+    observed: set[str] = set()
+    try:
+        while True:
+            for request in service.pending_requests():
+                request_id = str(request["request_id"])
+                if request_id in observed:
+                    continue
+                opened = False
+                if args.open and bool(request["openable_locally"]):
+                    url = service.local_approval_url(request_id)
+                    opened = bool(webbrowser.open(url, new=2))
+                    if not opened:
+                        raise SystemExit("approval browser could not be opened locally")
+                print(
+                    json.dumps(
+                        {
+                            "schema": "agentnet.approval.pending-observed.v1",
+                            "request": request,
+                            "opened": opened,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+                observed.add(request_id)
+            if args.once:
+                return 0
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        store.close()
+
+
 def command_approval_credential_revoke(args: argparse.Namespace) -> int:
     _config, store, service = _open_service(Path(args.config))
     try:
@@ -347,6 +428,7 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     provision.add_argument("--rp-name", default="AgentNet Approval")
     provision.add_argument("--verifier-id", required=True)
     provision.add_argument("--approvers", required=True)
+    provision.add_argument("--internal-core-credential-env")
     provision.set_defaults(func=command_approval_provision)
 
     serve = sub.add_parser("serve", help="serve browser ceremonies behind an independent HTTPS proxy")
@@ -367,6 +449,31 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     request.add_argument("--purpose", required=True)
     request.add_argument("--transaction", required=True)
     request.set_defaults(func=command_approval_request_create)
+
+    pending = sub.add_parser(
+        "pending",
+        help="list content-free pending approvals on this approval host",
+    )
+    pending.add_argument("--config", default=".agentnet-approval/config.json")
+    pending.set_defaults(func=command_approval_pending)
+
+    open_request = sub.add_parser(
+        "open",
+        help="open one Core-created pending approval locally without printing its capability",
+    )
+    open_request.add_argument("--config", default=".agentnet-approval/config.json")
+    open_request.add_argument("--request-id", required=True)
+    open_request.set_defaults(func=command_approval_open)
+
+    watch = sub.add_parser(
+        "watch",
+        help="watch approval-host-local pending requests and optionally open them",
+    )
+    watch.add_argument("--config", default=".agentnet-approval/config.json")
+    watch.add_argument("--interval", type=float, default=2.0)
+    watch.add_argument("--open", action="store_true")
+    watch.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
+    watch.set_defaults(func=command_approval_watch)
 
     revoke = sub.add_parser("credential-revoke", help="revoke one exact approver WebAuthn credential")
     revoke.add_argument("--config", default=".agentnet-approval/config.json")

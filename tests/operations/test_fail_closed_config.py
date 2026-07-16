@@ -11,6 +11,7 @@ from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
 from agentnet.operations.config import (
+    ApprovalServiceClientConfig,
     BackupSealKeyConfig,
     BackupTrustConfig,
     ExtensionConfig,
@@ -211,6 +212,65 @@ def test_oidc_public_config_requires_exact_auth_method_secret_reference_pair() -
         )
     with pytest.raises(ValidationError):
         _confidential_oidc_config(client_secret_env="not-an-env-name")
+
+
+def test_guided_approval_client_config_is_reference_only_and_fail_closed(
+    store,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    approval = ApprovalServiceClientConfig(
+        origin="https://approval.example",
+        service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+        approver_principal_id="security-owner",
+    )
+    enrollment = _confidential_oidc_config().model_copy(
+        update={"approval_service": approval}
+    )
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        public_base_url="https://agent.example",
+        data_dir=tmp_path / "data",
+        artifact_dir=tmp_path / "artifacts",
+        oidc_enrollment=enrollment,
+    )
+    exported = config.redacted_export()
+    assert exported["oidc_enrollment"]["approval_service"] == {
+        "origin": "https://approval.example",
+        "service_credential_env": "AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+        "approver_principal_id": "security-owner",
+        "request_timeout_seconds": 5.0,
+        "maximum_response_bytes": 262144,
+    }
+    monkeypatch.setattr("agentnet.core.app.is_verified_postgresql_store", lambda _store: True)
+    monkeypatch.setenv("AGENTNET_TEST_OIDC_CLIENT_SECRET", "O" * 43)
+    with pytest.raises(GateBlocked, match="credential is unavailable"):
+        CommunicationCore(config, store)
+    monkeypatch.setenv("AGENTNET_TEST_APPROVAL_CORE_TOKEN", "A" * 43)
+    core = CommunicationCore(config, store)
+    try:
+        assert core.approval_service_client is not None
+        rendered = repr(core.approval_service_client) + json.dumps(
+            config.redacted_export(), sort_keys=True
+        )
+        assert "A" * 43 not in rendered
+    finally:
+        core.close()
+
+    for origin in (
+        "http://approval.example",
+        "https://user@approval.example",
+        "https://approval.example/path",
+        "https://APPROVAL.example",
+    ):
+        with pytest.raises(ValidationError, match="approval service origin"):
+            ApprovalServiceClientConfig(
+                origin=origin,
+                service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+                approver_principal_id="security-owner",
+            )
 
 
 def test_oidc_secret_reference_is_exported_but_runtime_value_is_not(

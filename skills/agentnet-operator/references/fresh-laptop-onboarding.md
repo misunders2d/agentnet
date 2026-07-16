@@ -133,3 +133,25 @@ AgentNet `0.1.8` fails this gate:
 - no product-owned possession-bound secure approval-receipt handoff exists.
 
 For `0.1.8`, report **blocked: product component not yet shipped** and stop before `join begin`. Do not substitute Slack, A2A, chat, prompts, logs, repositories, copy/paste, USB, QR, or custom glue. Never claim a one-click onboarding link unless the installed release actually ships and verifies it.
+
+A later release may pass the private-artifact handoff gate only when its actual
+CLI exposes and tests `agentnet join guided`. Required invocation shape:
+
+```bash
+agentnet join guided \
+  --server https://agentnet.example \
+  --domain corp.example \
+  --harness pi \
+  --name 'Fresh laptop' \
+  --state .agentnet/guided-join.json \
+  --identity .agentnet/identity.json
+```
+
+The command must open the system browser without printing the private
+authorization URL, keep candidate key/continuation/challenge state owner-only,
+poll only Core, and prompt only for the 128-bit short-lived claim code after
+fresh WebAuthn UV. Normal output must contain no callback code, continuation,
+capability URL, claim code, receipt, private key, or token. Exact rerun must
+resume or return the same completed identity. The result
+`enrolled_identity_only` still blocks first messaging until a separate current
+administrator grants exact `message.send` and recipient/read authority.

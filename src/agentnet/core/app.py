@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from agentnet.approval.internal_client import ApprovalServiceClient
 from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
 from agentnet.artifacts.service import ArtifactService, FilesystemArtifactStore
 from agentnet.artifacts.scanner import ScannerTrustPolicy
@@ -346,6 +347,7 @@ class CommunicationCore:
         )
         self.conversations.artifact_binding_validator = self.artifacts.require_released_binding
         self.oidc_enrollment: OIDCEnrollmentCoordinator | None = None
+        self.approval_service_client: ApprovalServiceClient | None = None
         self.internal_invitation_oidc: InternalInvitationOIDCCoordinator | None = None
         self.internal_invitations: InternalInvitationService | None = None
         if config.oidc_enrollment is not None:
@@ -386,7 +388,18 @@ class CommunicationCore:
                     pinned_endpoint_addresses=oidc.pinned_endpoint_addresses,
                 )
             )
-            self.oidc_enrollment = OIDCEnrollmentCoordinator(store, provider, enrollment)
+            if oidc.approval_service is not None:
+                credential = os.environ.get(oidc.approval_service.service_credential_env, "")
+                self.approval_service_client = ApprovalServiceClient(
+                    oidc.approval_service,
+                    credential,
+                )
+            self.oidc_enrollment = OIDCEnrollmentCoordinator(
+                store,
+                provider,
+                enrollment,
+                approval_client=self.approval_service_client,
+            )
             self.internal_invitation_oidc = InternalInvitationOIDCCoordinator(store, provider)
             self.internal_invitations = InternalInvitationService(
                 store,
@@ -458,6 +471,8 @@ class CommunicationCore:
             raise
 
     def close(self) -> None:
+        if self.approval_service_client is not None:
+            self.approval_service_client.close()
         self.store.close()
 
     def create_enrollment_service(

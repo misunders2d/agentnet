@@ -240,15 +240,21 @@ message content into the foreground. Wake events still carry no authority.
 ## Versioned storage authority boundary
 
 Immutable schema migration 1 is the complete first-release authority model,
-including response obligations and bilateral governance. Current unreleased
-source adds contiguous migration 2 only for protected task-payload disclosure
-receipts. Fresh SQLite creates v2; an exact catalog/checksum-verified v1 store
-may upgrade to v2 in one transaction. PostgreSQL applies the same contiguous
-checksum-bound catalog. Relationship authority still exists only in bilateral
-governance transactions and exact policy-exception records. Startup requires
-exact current metadata, migration rows/checksums, tables, indexes, constraints,
-and security triggers and fails closed on missing, altered, prototype,
-noncontiguous, future, or unsupported older state.
+including response obligations and bilateral governance. Migration 2 adds only
+protected task-payload disclosure receipts. Unreleased migration 3 adds one
+`oidc_enrollment_continuations` table for hash-only guided tokens, encrypted
+challenge/completion state, approval request binding, bounded polling, and
+response-loss idempotency. Fresh SQLite creates v3; only exact
+catalog/checksum-verified v2 stores may upgrade to v3 under the N/N-1 window.
+PostgreSQL applies the same contiguous checksum-bound catalog. The independent
+approval host has its own exact SQLite catalog and atomic v1→v2 migration for
+Core request idempotency, encrypted local capabilities, claim codes, and
+migration evidence; it is not Core authority storage. Relationship authority
+still exists only in bilateral governance transactions and exact
+policy-exception records. Startup requires exact current metadata, migration
+rows/checksums, tables, indexes, constraints, and security triggers and fails
+closed on missing, altered, prototype, noncontiguous, future, or unsupported
+older state.
 
 There is no conversion from a pre-release/differently named database and no
 rule inferring consent from a unilateral edge. Operator exports only reviewed
@@ -375,11 +381,21 @@ unknown/modified SQLite catalog, non-owner-only files, stale/replayed
 capabilities, revoked credentials, expired challenges/requests/receipts, and
 missing configured purpose all fail closed. One receipt and audit record commit
 before response; response-loss retries return the exact encrypted stored receipt
-without re-signing or extending expiry.
+without re-signing or extending expiry. Approval SQLite schema v2 adds exact
+v1→v2 catalog-verified migration, encrypted local capability custody,
+idempotent Core request bindings, and hashed bounded claim-code state.
 
 Core services remain receipt-only consumers through
-`IndependentApprovalVerifier`. No direct network trust from the approval
-service is introduced. Six purposes are mandatory in configuration:
+`IndependentApprovalVerifier`. An optional, disabled-by-default broker surface
+lets a configured Core create/status exact requests and retrieve an already
+issued receipt over runtime-credential-authenticated HTTPS. It cannot approve,
+sign, or bypass WebAuthn. Core-created browser capabilities remain encrypted on
+the approval host; `agentnet approval pending|watch|open` discovers and opens
+them locally without printing or transporting the URL. After WebAuthn, browser
+shows a 128-bit human-transferred claim code instead of receipt JSON. Exact
+code/domain/purpose/transaction/retrieval binding returns the same current
+receipt for response-loss retry; Core remains responsible for atomic receipt
+consumption. Six purposes are mandatory in configuration:
 `identity.enrollment.approve`,
 `authorization.entitlement.bootstrap.approve`,
 `authorization.elevation.approve`,

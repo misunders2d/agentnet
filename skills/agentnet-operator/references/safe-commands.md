@@ -177,9 +177,30 @@ passkey. `status` deliberately reports `independent_boundary_proven: false`;
 real passkey, independent host/device/OS/TLS/admin custody, recovery, and owner
 evidence must be proven separately.
 
-Then complete exact OIDC/key-possession/independent approval enrollment. While
-the server process is offline, bind only that exact identity. Replace `pi` and
-`server-agent-1` with the exact supported harness type and approved agent name:
+For an installed release whose actual help exposes `join guided`, complete exact
+OIDC/key-possession/Core-brokered independent approval enrollment. While the
+server process is offline, bind only that exact identity. Replace `pi`, domain,
+and display name with approved values:
+
+```bash
+agentnet join guided \
+  --server https://agentnet.example \
+  --domain corp.example \
+  --harness pi \
+  --name server-agent-1 \
+  --state .agentnet/guided-join.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet server-agent activate \
+  --config agentnet.json \
+  --identity .agentnet/server-agent-identity.json
+agentnet serve --config agentnet.json
+```
+
+`join guided` opens the system browser and prompts only for the human claim
+code. It must finish as `enrolled_identity_only` and
+`first_message_blocked_explicit_authority_required`. The expert manual
+`join begin`/`join complete` commands remain compatible but require explicit
+local challenge/receipt handling and are not the fresh-laptop workflow:
 
 ```bash
 agentnet join begin \
@@ -192,10 +213,6 @@ agentnet join complete \
   --challenge .agentnet/challenge.json \
   --approval .agentnet/approval.json \
   --identity .agentnet/server-agent-identity.json
-agentnet server-agent activate \
-  --config agentnet.json \
-  --identity .agentnet/server-agent-identity.json
-agentnet serve --config agentnet.json
 ```
 
 Activation uses the exact runtime lease to reject a live server, runs no

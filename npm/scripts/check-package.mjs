@@ -31,7 +31,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-16-v0.1.8/artifacts/RETENTION.md",
+  "evidence/local/2026-07-16-v0.1.9/artifacts/RETENTION.md",
   "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {
@@ -110,6 +110,7 @@ const expectedOnboardingEvalIds = [
   "fresh-laptop-human-copy-paste-bootstrap",
   "hub-generates-public-onboarding-packet",
   "v018-fresh-laptop-receipt-gap",
+  "v019-guided-enrollment-is-identity-only",
 ];
 const actualOnboardingEvalIds = Array.isArray(onboardingEvals)
   ? onboardingEvals.map((item) => item?.id).sort()

@@ -11,6 +11,7 @@ from agentnet.storage.artifact_quota_schema import ARTIFACT_QUOTA_SCHEMA
 from agentnet.storage.authority_bootstrap_schema import AUTHORITY_BOOTSTRAP_SCHEMA
 from agentnet.storage.credential_recovery_schema import CREDENTIAL_RECOVERY_SCHEMA
 from agentnet.storage.effect_lifecycle_schema import EFFECT_LIFECYCLE_SCHEMA
+from agentnet.storage.guided_enrollment_schema import GUIDED_ENROLLMENT_SCHEMA
 from agentnet.storage.identity_schema import IDENTITY_SCHEMA
 from agentnet.storage.ipc_schema import IPC_SCHEMA
 from agentnet.storage.operational_control_schema import OPERATIONAL_CONTROL_SCHEMA
@@ -117,6 +118,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         2,
         "protected_task_payload_release",
         TASK_PAYLOAD_RELEASE_SCHEMA.replace(" INTEGER", " BIGINT"),
+    ),
+    Migration(
+        3,
+        "guided_oidc_enrollment_continuation",
+        GUIDED_ENROLLMENT_SCHEMA.replace(" INTEGER", " BIGINT"),
     ),
 )
 

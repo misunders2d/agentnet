@@ -41,18 +41,24 @@ unique approvers. Configured purposes must collectively cover all six mandatory
 approval consumers, and every approver must cover enrollment. Signer private
 keys remain file references; load verifies each key's configured thumbprint.
 
-The independent SQLite catalog is version 1 and is checked on every open against
-both exact `sqlite_master` objects and a stored catalog SHA-256. It contains:
+The independent SQLite catalog is version 2 and is checked on every open against
+both exact `sqlite_master` objects and a stored catalog SHA-256. Existing exact
+v1 stores upgrade under `BEGIN IMMEDIATE` only after v1 metadata/catalog
+verification; failed or conflicting migration rolls back. It contains:
 
 - `approval_webauthn_credentials`: exact approver/domain/user handle, public key,
   sign count, device/back-up metadata, and active/revoked lifecycle;
 - `approval_registration_sessions`: hashed one-time capability, encrypted
   challenge, bounded attempts, expiry, and consumption;
 - `approval_requests`: approver/domain/purpose, encrypted canonical transaction,
-  exact digest, encrypted challenge, state, active fingerprint, attempts, and
-  expiry;
+  exact digest, encrypted challenge, state, active fingerprint, attempts,
+  delivery mode, approval-host-only encrypted browser capability, and expiry;
+- `approval_request_idempotency`: exact Core request key/digest binding;
+- `approval_claim_codes`: request-bound claim-code hash, five-attempt bound,
+  expiry, and exact retrieval-digest retry binding;
 - `approval_issued_receipts`: one row per request, exact credential,
   authentication/issuance/expiry times, encrypted receipt, and receipt digest;
+- `approval_store_migrations`: applied approval-store migration checksum;
 - `approval_audit`: content-minimized ordered lifecycle outcomes.
 
 SQLite uses WAL, `synchronous=FULL`, foreign keys, bounded busy timeout, and
@@ -69,8 +75,11 @@ Browser/API routes are isolated from core routes:
 | `POST /v1/approval/registration/options` | one bounded token; rotates encrypted challenge and returns UV-required creation options |
 | `POST /v1/approval/registration/verify` | exact token and WebAuthn credential; stores verified credential or commits generic denial |
 | `POST /v1/approval/requests/options` | exact token; returns exact transaction display plus UV-required assertion options |
-| `POST /v1/approval/requests/verify` | literal `approved=true` plus assertion; commits one existing-format signed receipt before returning it |
+| `POST /v1/approval/requests/verify` | literal `approved=true` plus assertion; direct mode returns stored receipt, Core mode returns only a human claim code |
 | `POST /v1/approval/requests/reject` | exact token; terminal human rejection, no receipt |
+| `POST /v1/approval/internal/requests` | runtime-bearer authenticated exact idempotent Core request; never returns approval URL |
+| `POST /v1/approval/internal/requests/status` | runtime-bearer authenticated request/digest status |
+| `POST /v1/approval/internal/receipts/retrieve` | runtime-bearer + exact claim code/domain/purpose/digest binding; retryable receipt retrieval, not consumption |
 
 All POST bodies are bounded while streaming regardless of `Content-Length`, use
 duplicate-key/non-finite rejecting JSON and strict schemas, and expose only a
@@ -106,6 +115,30 @@ exact endpoint addresses, and the token-endpoint authentication method, so
 changing endpoint or client-authentication policy changes verifier identity
 rather than silently reusing an old binding. It excludes the runtime secret and
 the environment-variable reference.
+
+`ApprovalServiceClientConfig` is a non-secret child of `OIDCEnrollmentConfig`.
+It binds one canonical HTTPS approval origin, an environment-variable reference
+for the runtime Core bearer, one approver principal, timeout, and response-body
+ceiling. Core uses a direct `httpx` client with environment proxies and redirects
+disabled and rejects duplicate-key, non-object, oversized, or wrong-status JSON.
+
+Schema migration 3 adds `oidc_enrollment_continuations`. It stores only a
+SHA-256 continuation hash, bounded poll state, encrypted callback challenge,
+exact approval request ID/digest/expiry, completion request digest, and encrypted
+completion response. The public routes are:
+
+| Route | Input/effect |
+|---|---|
+| `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata; creates OIDC transaction plus hash-only continuation |
+| `GET /v1/enrollment/oidc/callback` | exact state/code; stores challenge atomically and returns safe HTML unless explicit JSON compatibility is requested |
+| `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling and Core-side approval staging |
+| `POST /v1/enrollment/oidc/complete` | continuation, human claim code, and candidate PoP; Core retrieves receipt and atomically consumes enrollment challenge |
+
+Receipt bytes never appear in candidate responses. Core reserves an exact
+completion digest only after PoP and claim-code retrieval succeed. Exact retry
+returns the encrypted result; a crash after enrollment commit reconstructs the
+same deterministic harness/credential binding from authoritative rows.
+Enrollment creates no entitlement.
 
 ## Relationship wire and storage contract
 
@@ -188,10 +221,11 @@ Schema migration 2 adds `task_payload_releases`, one row per
 `supervisor_executions`. It binds release request and authorization digests,
 local queue, TaskGrant and policy-decision IDs, intent/payload/envelope digests,
 policy/credential/domain epochs, authorization expiry, release time, and one
-unique receipt ID. SQLite upgrades only an exact checksum/catalog-verified v1
-store to v2 in one transaction; PostgreSQL applies the contiguous checksum-bound
-migration. Unknown, future, prototype, altered, partial, or noncontiguous state
-fails closed. Immutable migration 1 remains unchanged.
+unique receipt ID. Migration 3 is the guided-enrollment continuation table
+described above. SQLite permits only the exact N/N-1 v2→v3 upgrade in one
+transaction; PostgreSQL applies the same contiguous checksum-bound catalog.
+Unknown, future, prototype, altered, partial, noncontiguous, or v1-at-v3 state
+fails closed. Immutable migrations 1 and 2 remain unchanged.
 
 A successful nonduplicate response is HTTP 201; exact retry is HTTP 200.
 Successful responses are `Cache-Control: no-store` and `Pragma: no-cache`.

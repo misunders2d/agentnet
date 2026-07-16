@@ -73,14 +73,15 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_numbered_migration_catalog_preserves_v1_and_adds_protected_release(
+def test_numbered_migration_catalog_preserves_prior_versions_and_adds_guided_enrollment(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 2
+    assert CURRENT_SCHEMA_VERSION == 3
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
         (2, "protected_task_payload_release"),
+        (3, "guided_oidc_enrollment_continuation"),
     ]
     assert (
         MIGRATIONS[0].checksum
@@ -126,6 +127,8 @@ def test_numbered_migration_catalog_preserves_v1_and_adds_protected_release(
         "CREATE INDEX IF NOT EXISTS idx_artifact_reservations_expiry_state",
         "CREATE TABLE IF NOT EXISTS task_payload_releases",
         "CREATE INDEX IF NOT EXISTS idx_task_payload_releases_recipient",
+        "CREATE TABLE IF NOT EXISTS oidc_enrollment_continuations",
+        "CREATE INDEX IF NOT EXISTS idx_oidc_continuation_status_expiry",
     ):
         assert required in schema
     assert "ON CONFLICT(reservation_id) DO NOTHING" in schema
@@ -222,9 +225,11 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
 
     v1 = sqlite3.connect(path)
     try:
+        v1.execute("DROP INDEX idx_oidc_continuation_status_expiry")
+        v1.execute("DROP TABLE oidc_enrollment_continuations")
         v1.execute("DROP INDEX idx_task_payload_releases_recipient")
         v1.execute("DROP TABLE task_payload_releases")
-        v1.execute("DELETE FROM installed_migration_catalog WHERE version=2")
+        v1.execute("DELETE FROM installed_migration_catalog WHERE version IN (2,3)")
         v1.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
         v1.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
         v1.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
@@ -234,21 +239,55 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
         v1.close()
 
 
-def test_sqlite_exact_v1_database_upgrades_to_v2_without_data_loss(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "v1-upgrade.sqlite3"
+def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
+    store = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('preserved-sentinel','exact-v2-data')"
+            )
+    finally:
+        store.close()
+
+    v2 = sqlite3.connect(path)
+    try:
+        v2.execute("DROP INDEX idx_oidc_continuation_status_expiry")
+        v2.execute("DROP TABLE oidc_enrollment_continuations")
+        v2.execute("DELETE FROM installed_migration_catalog WHERE version=3")
+        v2.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
+        v2.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
+        v2.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
+        v2.executescript(RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA)
+        v2.commit()
+    finally:
+        v2.close()
+
+
+def test_sqlite_exact_v1_database_is_outside_n_minus_one_window(tmp_path: Path) -> None:
+    path = tmp_path / "v1-rejected.sqlite3"
     key = b"u" * 32
     _make_exact_v1_sqlite(path, key=key)
+    before = _sqlite_logical_snapshot(path)
+    with pytest.raises(GateBlocked, match="N/N-1 migration window"):
+        SQLiteStore(path, LocalEnvelopeCipher(key))
+    assert _sqlite_logical_snapshot(path) == before
+
+
+def test_sqlite_exact_v2_database_upgrades_to_v3_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v2-upgrade.sqlite3"
+    key = b"u" * 32
+    _make_exact_v2_sqlite(path, key=key)
 
     upgraded = SQLiteStore(path, LocalEnvelopeCipher(key))
     try:
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "2"
+        )["value"] == "3"
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='preserved-sentinel'"
-        )["value"] == "exact-v1-data"
+        )["value"] == "exact-v2-data"
         assert [tuple(row) for row in upgraded.fetch_all(
             "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
         )] == [
@@ -256,24 +295,24 @@ def test_sqlite_exact_v1_database_upgrades_to_v2_without_data_loss(
             for migration in MIGRATIONS
         ]
         assert upgraded.fetch_one(
-            "SELECT COUNT(*) AS count FROM task_payload_releases"
+            "SELECT COUNT(*) AS count FROM oidc_enrollment_continuations"
         )["count"] == 0
     finally:
         upgraded.close()
 
 
-def test_sqlite_v1_to_v2_migration_failure_rolls_back_without_partial_schema(
+def test_sqlite_v2_to_v3_migration_failure_rolls_back_without_partial_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "v1-upgrade-rollback.sqlite3"
+    path = tmp_path / "v2-upgrade-rollback.sqlite3"
     key = b"v" * 32
-    _make_exact_v1_sqlite(path, key=key)
+    _make_exact_v2_sqlite(path, key=key)
     before = _sqlite_logical_snapshot(path)
     monkeypatch.setitem(
         __import__("agentnet.storage.sqlite", fromlist=["_SQLITE_MIGRATION_SQL"])
         ._SQLITE_MIGRATION_SQL,
-        2,
+        3,
         "CREATE TABLE migration_partial(value TEXT); SELECT missing_function();",
     )
 
@@ -288,10 +327,10 @@ def test_sqlite_v1_to_v2_migration_failure_rolls_back_without_partial_schema(
         ).fetchone() is None
         assert raw.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()[0] == "1"
+        ).fetchone()[0] == "2"
         assert raw.execute(
             "SELECT COUNT(*) FROM installed_migration_catalog"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 2
     finally:
         raw.close()
 

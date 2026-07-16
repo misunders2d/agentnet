@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -35,13 +35,20 @@ from agentnet.errors import (
     GateBlocked,
     ReplayError,
 )
+from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.identity.endpoint_policy import (
     canonical_endpoint_address as _canonical_endpoint_address,
     canonical_private_endpoint_network as _canonical_private_endpoint_network,
 )
-from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentService, VerifiedOIDCIdentity
+from agentnet.identity.enrollment import (
+    EnrollmentChallenge,
+    EnrollmentResult,
+    EnrollmentService,
+    VerifiedOIDCIdentity,
+)
 from agentnet.operations.config import OIDCTokenEndpointAuthMethod, RuntimeProfile
+from agentnet.security.signatures import verify_signature
 
 
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -305,6 +312,25 @@ class OIDCAuthorizationRequest:
     authorization_url: str
     state: str
     expires_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class OIDCGuidedAuthorizationRequest:
+    transaction_id: str
+    authorization_url: str
+    state: str
+    expires_at: int
+    continuation_token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class OIDCPollResult:
+    status: str
+    interval_seconds: int
+    expires_at: int
+    challenge_id: str | None = None
+    nonce: str | None = None
+    canonical_transaction_b64: str | None = None
 
 
 class OIDCProvider:
@@ -601,7 +627,14 @@ class OIDCProvider:
 class OIDCEnrollmentCoordinator:
     """Compose verified OIDC identity with enrollment challenge creation."""
 
-    def __init__(self, store: Any, provider: OIDCProvider, enrollment: EnrollmentService) -> None:
+    def __init__(
+        self,
+        store: Any,
+        provider: OIDCProvider,
+        enrollment: EnrollmentService,
+        *,
+        approval_client: Any | None = None,
+    ) -> None:
         if enrollment.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
             raise GateBlocked("oidc_enrollment", "production OIDC enrollment requires the server-agent profile")
         if enrollment.binding_assurance == "lab":
@@ -611,6 +644,7 @@ class OIDCEnrollmentCoordinator:
         self.store = store
         self.provider = provider
         self.enrollment = enrollment
+        self.approval_client = approval_client
 
     def begin_authorization(
         self,
@@ -619,7 +653,7 @@ class OIDCEnrollmentCoordinator:
         harness_kind: str,
         harness_name: str,
         public_key_pem: str,
-    ) -> OIDCAuthorizationRequest:
+    ) -> OIDCGuidedAuthorizationRequest:
         if self.enrollment.outage_gate is not None:
             self.enrollment.outage_gate.require_issuance()
         key_id = self.enrollment.validate_begin_request(
@@ -630,6 +664,8 @@ class OIDCEnrollmentCoordinator:
         )
         transaction_id = str(uuid4())
         state = secrets.token_urlsafe(32)
+        continuation_token = secrets.token_urlsafe(32)
+        continuation_hash = hashlib.sha256(continuation_token.encode("ascii")).hexdigest()
         nonce = secrets.token_urlsafe(32)
         code_verifier = secrets.token_urlsafe(64)
         code_challenge = _b64url_encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
@@ -671,6 +707,20 @@ class OIDCEnrollmentCoordinator:
                     expires_at,
                 ),
             )
+            connection.execute(
+                """INSERT INTO oidc_enrollment_continuations(
+                       transaction_id,continuation_hash,status,poll_after_at,
+                       poll_interval_seconds,poll_count,created_at,updated_at,expires_at
+                   ) VALUES(?,?,'awaiting_oidc',?,2,0,?,?,?)""",
+                (
+                    transaction_id,
+                    continuation_hash,
+                    now + 2,
+                    now,
+                    now,
+                    expires_at,
+                ),
+            )
             self.store.append_audit(
                 connection,
                 {
@@ -681,7 +731,515 @@ class OIDCEnrollmentCoordinator:
                     "transaction_id": transaction_id,
                 },
             )
-        return OIDCAuthorizationRequest(transaction_id, authorization_url, state, expires_at)
+        return OIDCGuidedAuthorizationRequest(
+            transaction_id,
+            authorization_url,
+            state,
+            expires_at,
+            continuation_token,
+        )
+
+    def poll_continuation(
+        self,
+        *,
+        transaction_id: str,
+        continuation_token: str,
+    ) -> OIDCPollResult:
+        if (
+            not isinstance(transaction_id, str)
+            or not 16 <= len(transaction_id) <= 128
+            or not isinstance(continuation_token, str)
+            or not 32 <= len(continuation_token) <= 128
+        ):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        supplied_hash = hashlib.sha256(continuation_token.encode("utf-8")).hexdigest()
+        now = self.provider.clock()
+        challenge_value: dict[str, Any] | None = None
+        should_stage = False
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
+                (transaction_id,),
+            ).fetchone()
+            if row is None or not secrets.compare_digest(
+                str(row["continuation_hash"]), supplied_hash
+            ):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            status = str(row["status"])
+            expires_at = int(row["expires_at"])
+            interval = int(row["poll_interval_seconds"])
+            if now >= expires_at:
+                if status not in {"enrolled", "expired", "failed"}:
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET status='expired',updated_at=? WHERE transaction_id=?""",
+                        (now, transaction_id),
+                    )
+                return OIDCPollResult("expired", interval, expires_at)
+            if status not in {"enrolled", "expired", "failed"}:
+                if int(row["poll_count"]) >= 60:
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET status='failed',updated_at=? WHERE transaction_id=?""",
+                        (now, transaction_id),
+                    )
+                    status = "failed"
+                elif now < int(row["poll_after_at"]):
+                    interval = min(10, interval + 2)
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET poll_interval_seconds=?,poll_after_at=?,poll_count=poll_count+1,
+                                  updated_at=? WHERE transaction_id=?""",
+                        (interval, now + interval, now, transaction_id),
+                    )
+                    return OIDCPollResult("slow_down", interval, expires_at)
+                else:
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET poll_after_at=?,poll_count=poll_count+1,updated_at=?
+                            WHERE transaction_id=?""",
+                        (now + interval, now, transaction_id),
+                    )
+            if status in {"callback_ready", "approval_pending"}:
+                encrypted = row["challenge_encrypted"]
+                if not encrypted:
+                    raise AuthenticationError("OIDC enrollment continuation is unavailable")
+                value = self.store.cipher.decrypt_json(
+                    encrypted,
+                    purpose=f"oidc-guided-challenge:{transaction_id}",
+                )
+                if not isinstance(value, dict):
+                    raise AuthenticationError("OIDC enrollment continuation is unavailable")
+                challenge_value = value
+                should_stage = status == "callback_ready"
+            else:
+                rendered = "authorization_pending" if status == "awaiting_oidc" else status
+                return OIDCPollResult(rendered, interval, expires_at)
+
+        if challenge_value is None:  # pragma: no cover - guarded above
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        if should_stage:
+            if self.approval_client is None:
+                raise GateBlocked(
+                    "guided_enrollment_unavailable",
+                    "guided enrollment approval service is unavailable",
+                )
+            try:
+                canonical = base64.b64decode(
+                    str(challenge_value["canonical_transaction_b64"]).encode("ascii"),
+                    validate=True,
+                )
+            except Exception as exc:
+                raise AuthenticationError("OIDC enrollment continuation is unavailable") from exc
+            transaction_digest = hashlib.sha256(canonical).hexdigest()
+            identity = self.store.fetch_one(
+                "SELECT domain_id FROM oidc_enrollment_transactions WHERE transaction_id=?",
+                (transaction_id,),
+            )
+            if identity is None:
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            created = self.approval_client.create_request(
+                idempotency_key=f"core:identity.enrollment.approve:{transaction_id}",
+                domain_id=str(identity["domain_id"]),
+                approval_purpose="identity.enrollment.approve",
+                canonical_transaction=canonical,
+                transaction_digest=transaction_digest,
+            )
+            request_id = created.get("request_id")
+            response_digest = created.get("transaction_digest")
+            request_expires_at = created.get("expires_at")
+            if (
+                not isinstance(request_id, str)
+                or not 16 <= len(request_id) <= 128
+                or response_digest != transaction_digest
+                or not isinstance(request_expires_at, int)
+                or not now < request_expires_at <= expires_at
+            ):
+                raise AuthenticationError("approval service response denied")
+            with self.store.transaction() as connection:
+                current = connection.execute(
+                    "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
+                    (transaction_id,),
+                ).fetchone()
+                if current is None or not secrets.compare_digest(
+                    str(current["continuation_hash"]), supplied_hash
+                ):
+                    raise AuthenticationError("OIDC enrollment continuation is unavailable")
+                if current["status"] == "callback_ready":
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET status='approval_pending',approval_request_id=?,
+                                  approval_transaction_digest=?,approval_request_expires_at=?,
+                                  updated_at=? WHERE transaction_id=? AND status='callback_ready'""",
+                        (
+                            request_id,
+                            transaction_digest,
+                            request_expires_at,
+                            now,
+                            transaction_id,
+                        ),
+                    )
+                    self.store.append_audit(
+                        connection,
+                        {
+                            "action": "oidc.approval.staged",
+                            "approval_request_id": request_id,
+                            "transaction_digest": transaction_digest,
+                            "transaction_id": transaction_id,
+                        },
+                    )
+                elif (
+                    current["status"] != "approval_pending"
+                    or current["approval_request_id"] != request_id
+                    or current["approval_transaction_digest"] != transaction_digest
+                ):
+                    raise ReplayError("OIDC approval staging conflicted")
+        return OIDCPollResult(
+            "approval_pending",
+            interval,
+            expires_at,
+            challenge_id=str(challenge_value["challenge_id"]),
+            nonce=str(challenge_value["nonce"]),
+            canonical_transaction_b64=str(challenge_value["canonical_transaction_b64"]),
+        )
+
+    def complete_guided_enrollment(
+        self,
+        *,
+        transaction_id: str,
+        continuation_token: str,
+        claim_code: str,
+        possession_signature: str,
+    ) -> EnrollmentResult:
+        """Complete one brokered enrollment without exposing approval receipt."""
+
+        if self.approval_client is None:
+            raise GateBlocked(
+                "guided_enrollment_unavailable",
+                "guided enrollment approval service is unavailable",
+            )
+        if (
+            not isinstance(transaction_id, str)
+            or not 16 <= len(transaction_id) <= 128
+            or not isinstance(continuation_token, str)
+            or not 32 <= len(continuation_token) <= 128
+            or not isinstance(possession_signature, str)
+            or not 16 <= len(possession_signature) <= 2_048
+            or _B64URL.fullmatch(possession_signature) is None
+        ):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        normalized_code = claim_code.strip().upper() if isinstance(claim_code, str) else ""
+        if re.fullmatch(r"[0-9A-F]{4}(?:-[0-9A-F]{4}){7}", normalized_code) is None:
+            raise AuthenticationError("approval request denied")
+
+        supplied_hash = hashlib.sha256(continuation_token.encode("utf-8")).hexdigest()
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "challenge_signature_hash": hashlib.sha256(
+                        possession_signature.encode("ascii")
+                    ).hexdigest(),
+                    "claim_code_hash": hashlib.sha256(
+                        normalized_code.encode("ascii")
+                    ).hexdigest(),
+                    "transaction_id": transaction_id,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        now = self.provider.clock()
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
+                (transaction_id,),
+            ).fetchone()
+            if row is None or not secrets.compare_digest(
+                str(row["continuation_hash"]), supplied_hash
+            ):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            if now >= int(row["expires_at"]):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            if row["status"] == "enrolled":
+                return self._stored_guided_result(row, request_digest=request_digest)
+            if row["status"] != "approval_pending":
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            if (
+                row["approval_request_expires_at"] is None
+                or now >= int(row["approval_request_expires_at"])
+                or not row["approval_request_id"]
+                or not row["approval_transaction_digest"]
+                or not row["challenge_encrypted"]
+            ):
+                raise AuthenticationError("approval request denied")
+            if row["completion_request_digest"] is not None and not secrets.compare_digest(
+                str(row["completion_request_digest"]), request_digest
+            ):
+                raise ReplayError("guided enrollment completion conflicted")
+            challenge_value = self.store.cipher.decrypt_json(
+                row["challenge_encrypted"],
+                purpose=f"oidc-guided-challenge:{transaction_id}",
+            )
+            if not isinstance(challenge_value, dict):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            request_id = str(row["approval_request_id"])
+            approval_transaction_digest = str(row["approval_transaction_digest"])
+            reserved_request_digest = row["completion_request_digest"]
+
+        try:
+            canonical_transaction = base64.b64decode(
+                str(challenge_value["canonical_transaction_b64"]).encode("ascii"),
+                validate=True,
+            )
+        except Exception as exc:
+            raise AuthenticationError("OIDC enrollment continuation is unavailable") from exc
+        if (
+            not canonical_transaction
+            or len(canonical_transaction) > 98_304
+            or hashlib.sha256(canonical_transaction).hexdigest()
+            != approval_transaction_digest
+        ):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        identity = self.store.fetch_one(
+            """SELECT o.domain_id,e.public_key_pem,e.challenge_id
+                 FROM oidc_enrollment_transactions o
+                 JOIN enrollment_challenges e
+                   ON e.challenge_id=o.enrollment_challenge_id
+                WHERE o.transaction_id=?""",
+            (transaction_id,),
+        )
+        if identity is None or identity["challenge_id"] != challenge_value.get("challenge_id"):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        try:
+            transcript = json.loads(canonical_transaction)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AuthenticationError("OIDC enrollment continuation is unavailable") from exc
+        if not isinstance(transcript, dict):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        verify_signature(
+            str(identity["public_key_pem"]),
+            "agentnet.enrollment.pop.v1",
+            transcript,
+            possession_signature,
+        )
+
+        challenge_id = str(challenge_value.get("challenge_id", ""))
+        if reserved_request_digest is not None:
+            consumed = self.store.fetch_one(
+                "SELECT consumed_at FROM enrollment_challenges WHERE challenge_id=?",
+                (challenge_id,),
+            )
+            if consumed is not None and consumed["consumed_at"] is not None:
+                return self._commit_guided_result(
+                    transaction_id=transaction_id,
+                    continuation_hash=supplied_hash,
+                    request_digest=request_digest,
+                    result=self._recover_guided_result(challenge_id),
+                    now=now,
+                )
+
+        # This idempotency key participates in the approval host's versioned
+        # retrieval digest. Exact response-loss retries must preserve this body
+        # shape or the host correctly rejects them as a conflicting retrieval.
+        receipt = self.approval_client.retrieve_receipt(
+            request_id=request_id,
+            claim_code=normalized_code,
+            domain_id=str(identity["domain_id"]),
+            approval_purpose="identity.enrollment.approve",
+            transaction_digest=approval_transaction_digest,
+            idempotency_key=(
+                f"core:identity.enrollment.complete:{transaction_id}:{request_digest}"
+            ),
+        )
+
+        with self.store.transaction() as connection:
+            current = connection.execute(
+                "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
+                (transaction_id,),
+            ).fetchone()
+            if current is None or not secrets.compare_digest(
+                str(current["continuation_hash"]), supplied_hash
+            ):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            if current["status"] == "enrolled":
+                return self._stored_guided_result(current, request_digest=request_digest)
+            if current["status"] != "approval_pending":
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            reserved = current["completion_request_digest"]
+            if reserved is None:
+                update = connection.execute(
+                    """UPDATE oidc_enrollment_continuations
+                          SET completion_request_digest=?,updated_at=?
+                        WHERE transaction_id=? AND status='approval_pending'
+                          AND completion_request_digest IS NULL""",
+                    (request_digest, now, transaction_id),
+                )
+                if update.rowcount != 1:
+                    raise ReplayError("guided enrollment completion conflicted")
+            elif not secrets.compare_digest(str(reserved), request_digest):
+                raise ReplayError("guided enrollment completion conflicted")
+
+        consumed = self.store.fetch_one(
+            "SELECT consumed_at FROM enrollment_challenges WHERE challenge_id=?",
+            (challenge_id,),
+        )
+        if consumed is not None and consumed["consumed_at"] is not None:
+            result = self._recover_guided_result(challenge_id)
+        else:
+            result = self.enrollment.complete(
+                challenge_id=challenge_id,
+                nonce=str(challenge_value.get("nonce", "")),
+                canonical_transaction=canonical_transaction,
+                possession_signature=possession_signature,
+                approval=receipt,
+            )
+        return self._commit_guided_result(
+            transaction_id=transaction_id,
+            continuation_hash=supplied_hash,
+            request_digest=request_digest,
+            result=result,
+            now=now,
+        )
+
+    @staticmethod
+    def _guided_result_payload(result: EnrollmentResult) -> dict[str, Any]:
+        return {
+            "principal_id": result.principal_id,
+            "harness_id": result.harness_id,
+            "credential_id": result.credential_id,
+            "key_id": result.key_id,
+            "credential_epoch": result.credential_epoch,
+            "harness_status": result.harness_status,
+            "actor": result.actor.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _guided_result_from_payload(value: Any) -> EnrollmentResult:
+        if not isinstance(value, dict):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        try:
+            actor_value = dict(value["actor"])
+            actor_value["kind"] = ActorKind(actor_value["kind"])
+            actor = VerifiedActor.model_validate(actor_value, strict=True)
+            return EnrollmentResult(
+                principal_id=str(value["principal_id"]),
+                harness_id=str(value["harness_id"]),
+                credential_id=str(value["credential_id"]),
+                key_id=str(value["key_id"]),
+                credential_epoch=int(value["credential_epoch"]),
+                harness_status=str(value["harness_status"]),
+                actor=actor,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AuthenticationError("OIDC enrollment continuation is unavailable") from exc
+
+    def _stored_guided_result(self, row: Any, *, request_digest: str) -> EnrollmentResult:
+        if (
+            row["completion_request_digest"] is None
+            or not secrets.compare_digest(
+                str(row["completion_request_digest"]), request_digest
+            )
+            or not row["completion_response_encrypted"]
+        ):
+            raise ReplayError("guided enrollment completion conflicted")
+        value = self.store.cipher.decrypt_json(
+            row["completion_response_encrypted"],
+            purpose=f"oidc-guided-result:{row['transaction_id']}",
+        )
+        return self._guided_result_from_payload(value)
+
+    def _recover_guided_result(self, challenge_id: str) -> EnrollmentResult:
+        harness_id = str(uuid5(NAMESPACE_URL, f"agentnet:harness:{challenge_id}"))
+        credential_id = str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}"))
+        row = self.store.fetch_one(
+            """SELECT h.domain_id,h.principal_id,h.status AS harness_status,
+                      h.binding_assurance,h.credential_epoch,
+                      c.credential_id,c.key_id,c.status AS credential_status,
+                      e.consumed_at,e.key_id AS challenge_key_id
+                 FROM harnesses h
+                 JOIN credentials c ON c.harness_id=h.harness_id
+                 JOIN enrollment_challenges e ON e.challenge_id=?
+                WHERE h.harness_id=? AND c.credential_id=?
+                  AND c.epoch=h.credential_epoch""",
+            (challenge_id, harness_id, credential_id),
+        )
+        if (
+            row is None
+            or row["credential_status"] != "active"
+            or row["consumed_at"] is None
+            or row["key_id"] != row["challenge_key_id"]
+        ):
+            raise AuthenticationError("OIDC enrollment completion recovery is unavailable")
+        actor = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=str(row["domain_id"]),
+            principal_id=str(row["principal_id"]),
+            harness_id=harness_id,
+            credential_id=str(row["credential_id"]),
+            credential_epoch=int(row["credential_epoch"]),
+            binding_assurance=str(row["binding_assurance"]),
+        )
+        return EnrollmentResult(
+            principal_id=str(row["principal_id"]),
+            harness_id=harness_id,
+            credential_id=str(row["credential_id"]),
+            key_id=str(row["key_id"]),
+            credential_epoch=int(row["credential_epoch"]),
+            harness_status=str(row["harness_status"]),
+            actor=actor,
+        )
+
+    def _commit_guided_result(
+        self,
+        *,
+        transaction_id: str,
+        continuation_hash: str,
+        request_digest: str,
+        result: EnrollmentResult,
+        now: int,
+    ) -> EnrollmentResult:
+        encrypted = self.store.cipher.encrypt_json(
+            self._guided_result_payload(result),
+            purpose=f"oidc-guided-result:{transaction_id}",
+        )
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
+                (transaction_id,),
+            ).fetchone()
+            if row is None or not secrets.compare_digest(
+                str(row["continuation_hash"]), continuation_hash
+            ):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
+            if row["status"] == "enrolled":
+                return self._stored_guided_result(row, request_digest=request_digest)
+            if (
+                row["status"] != "approval_pending"
+                or row["completion_request_digest"] is None
+                or not secrets.compare_digest(
+                    str(row["completion_request_digest"]), request_digest
+                )
+            ):
+                raise ReplayError("guided enrollment completion conflicted")
+            updated = connection.execute(
+                """UPDATE oidc_enrollment_continuations
+                      SET status='enrolled',completion_response_encrypted=?,updated_at=?
+                    WHERE transaction_id=? AND status='approval_pending'
+                      AND completion_request_digest=?""",
+                (encrypted, now, transaction_id, request_digest),
+            )
+            if updated.rowcount != 1:
+                raise ReplayError("guided enrollment completion conflicted")
+            self.store.append_audit(
+                connection,
+                {
+                    "action": "oidc.enrollment.guided.completed",
+                    "credential_id": result.credential_id,
+                    "harness_id": result.harness_id,
+                    "transaction_id": transaction_id,
+                },
+            )
+        return result
 
     def complete_authorization(self, *, state: str, code: str) -> EnrollmentChallenge:
         if self.enrollment.outage_gate is not None:
@@ -751,6 +1309,12 @@ class OIDCEnrollmentCoordinator:
                     "UPDATE oidc_enrollment_transactions SET status='failed' WHERE transaction_id=? AND status='pending'",
                     (row["transaction_id"],),
                 )
+                connection.execute(
+                    """UPDATE oidc_enrollment_continuations
+                          SET status='expired',updated_at=?
+                        WHERE transaction_id=? AND status='awaiting_oidc'""",
+                    (now, row["transaction_id"]),
+                )
                 expired = True
             else:
                 updated = connection.execute(
@@ -803,6 +1367,24 @@ class OIDCEnrollmentCoordinator:
                     public_key_pem=current["public_key_pem"],
                     now=now,
                 )
+                challenge_encrypted = self.store.cipher.encrypt_json(
+                    {
+                        "challenge_id": challenge.challenge_id,
+                        "nonce": challenge.nonce,
+                        "canonical_transaction_b64": base64.b64encode(
+                            challenge.canonical_transaction
+                        ).decode("ascii"),
+                    },
+                    purpose=f"oidc-guided-challenge:{current['transaction_id']}",
+                )
+                continuation = connection.execute(
+                    """UPDATE oidc_enrollment_continuations
+                          SET status='callback_ready',challenge_encrypted=?,updated_at=?
+                        WHERE transaction_id=? AND status='awaiting_oidc'""",
+                    (challenge_encrypted, now, current["transaction_id"]),
+                )
+                if continuation.rowcount != 1:
+                    raise ReplayError("OIDC enrollment continuation is no longer current")
                 updated = connection.execute(
                     """UPDATE oidc_enrollment_transactions
                        SET status='consumed',consumed_at=?,authorization_code_hash=?,id_token_hash=?,
@@ -854,6 +1436,13 @@ class OIDCEnrollmentCoordinator:
                     (now, transaction_id),
                 )
                 if updated.rowcount:
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET status='failed',updated_at=?
+                            WHERE transaction_id=?
+                              AND status IN ('awaiting_oidc','callback_ready','approval_pending')""",
+                        (now, transaction_id),
+                    )
                     self.store.append_audit(
                         connection,
                         {

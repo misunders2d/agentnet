@@ -10,7 +10,7 @@ import pytest
 from agentnet.core.app import CommunicationCore
 from agentnet.http_api import create_app
 from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentResult
-from agentnet.identity.oidc import OIDCAuthorizationRequest
+from agentnet.identity.oidc import OIDCGuidedAuthorizationRequest, OIDCPollResult
 from agentnet.operations.config import ExtensionConfig
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
@@ -30,15 +30,35 @@ class FakeCoordinator:
         self.store = store
         self.enrollment = FakeEnrollment(result)
         self.begun: dict | None = None
+        self.guided_completed: dict | None = None
 
     def begin_authorization(self, **kwargs):
         self.begun = kwargs
-        return OIDCAuthorizationRequest(
+        return OIDCGuidedAuthorizationRequest(
             transaction_id="oidc-transaction-http-0001",
             authorization_url="https://idp.example/authorize?opaque=1",
             state="s" * 43,
             expires_at=2_000_000_000,
+            continuation_token="c" * 43,
         )
+
+    def poll_continuation(self, *, transaction_id: str, continuation_token: str):
+        assert transaction_id == "oidc-transaction-http-0001"
+        assert continuation_token == "c" * 43
+        return OIDCPollResult(
+            status="approval_pending",
+            interval_seconds=2,
+            expires_at=2_000_000_000,
+            challenge_id="enrollment-challenge-http-0001",
+            nonce="n" * 43,
+            canonical_transaction_b64=base64.b64encode(
+                canonical_json({"schema": "agentnet.enrollment.challenge.v1", "exact": True})
+            ).decode("ascii"),
+        )
+
+    def complete_guided_enrollment(self, **kwargs):
+        self.guided_completed = kwargs
+        return self.enrollment.result
 
     def complete_authorization(self, *, state: str, code: str):
         assert state == "s" * 43
@@ -121,9 +141,56 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         callback = await client.get(
             "/v1/enrollment/oidc/callback",
             params={"state": "s" * 43, "code": "authorization-code-http"},
+            headers={"Accept": "application/json"},
         )
         assert callback.status_code == 200, callback.text
         challenge = callback.json()
+
+        browser_callback = await client.get(
+            "/v1/enrollment/oidc/callback",
+            params={"state": "s" * 43, "code": "authorization-code-http"},
+            headers={"Accept": "text/html"},
+        )
+        assert "Return to the AgentNet onboarding command" in browser_callback.text
+        assert "challenge_id" not in browser_callback.text
+
+        poll = await client.post(
+            "/v1/enrollment/oidc/poll",
+            content=canonical_json(
+                {
+                    "transaction_id": "oidc-transaction-http-0001",
+                    "continuation_token": "c" * 43,
+                }
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        assert poll.status_code == 200
+        assert poll.json()["status"] == "approval_pending"
+        assert "independent_approval" not in poll.text
+
+        guided_completed = await client.post(
+            "/v1/enrollment/oidc/complete",
+            content=canonical_json(
+                {
+                    "transaction_id": "oidc-transaction-http-0001",
+                    "continuation_token": "c" * 43,
+                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+                    "possession_signature": candidate.sign(
+                        "agentnet.enrollment.pop.v1",
+                        {"schema": "agentnet.enrollment.challenge.v1", "exact": True},
+                    ),
+                }
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        assert guided_completed.status_code == 201, guided_completed.text
+        assert guided_completed.json()["actor"]["harness_id"] == actor.harness_id
+        assert "approval" not in guided_completed.text
+        assert coordinator.guided_completed is not None
+        assert coordinator.guided_completed["claim_code"] == (
+            "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
+        )
+
         transaction = base64.b64decode(challenge["canonical_transaction_b64"])
 
         completed = await client.post(

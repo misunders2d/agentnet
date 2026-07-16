@@ -7,6 +7,7 @@ import os
 import sqlite3
 import stat
 import threading
+import time
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -16,8 +17,8 @@ from agentnet.errors import GateBlocked
 from agentnet.security.envelope import LocalEnvelopeCipher
 
 
-APPROVAL_STORE_SCHEMA_VERSION = 1
-APPROVAL_STORE_SCHEMA = """
+APPROVAL_STORE_SCHEMA_VERSION = 2
+APPROVAL_STORE_SCHEMA_V1 = """
 CREATE TABLE approval_store_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -98,6 +99,50 @@ CREATE INDEX idx_approval_audit_subject
     ON approval_audit(approver_principal_id,domain_id,occurred_at);
 """
 
+_APPROVAL_STORE_MIGRATION_V2_STATEMENTS = (
+    """ALTER TABLE approval_requests
+       ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'direct_receipt'
+       CHECK(delivery_mode IN ('direct_receipt','core_claim_code'))""",
+    "ALTER TABLE approval_requests ADD COLUMN capability_encrypted TEXT",
+    """CREATE TABLE approval_request_idempotency (
+        idempotency_key TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(request_id) ON DELETE RESTRICT,
+        request_digest TEXT NOT NULL CHECK(length(request_digest)=64),
+        created_at INTEGER NOT NULL
+    )""",
+    """CREATE TABLE approval_claim_codes (
+        request_id TEXT PRIMARY KEY REFERENCES approval_requests(request_id) ON DELETE RESTRICT,
+        claim_code_hash TEXT NOT NULL UNIQUE CHECK(length(claim_code_hash)=64),
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts BETWEEN 0 AND 5),
+        first_retrieved_at INTEGER,
+        last_retrieved_at INTEGER,
+        last_retrieval_digest TEXT CHECK(
+            last_retrieval_digest IS NULL OR length(last_retrieval_digest)=64
+        )
+    )""",
+    """CREATE TABLE approval_store_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        checksum TEXT NOT NULL CHECK(length(checksum)=64),
+        applied_at INTEGER NOT NULL
+    )""",
+)
+
+APPROVAL_STORE_SCHEMA_V2 = (
+    APPROVAL_STORE_SCHEMA_V1
+    + "\n"
+    + ";\n".join(_APPROVAL_STORE_MIGRATION_V2_STATEMENTS)
+    + ";\n"
+)
+# Current schema alias retained for callers that imported the original name.
+APPROVAL_STORE_SCHEMA = APPROVAL_STORE_SCHEMA_V2
+_APPROVAL_STORE_MIGRATION_V2_NAME = "guided approval handoff"
+_APPROVAL_STORE_MIGRATION_V2_CHECKSUM = hashlib.sha256(
+    "\n".join(_APPROVAL_STORE_MIGRATION_V2_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 _CATALOG_QUERY = (
     "SELECT type,name,tbl_name,sql FROM sqlite_master "
     "WHERE type IN ('table','index','trigger') AND sql IS NOT NULL "
@@ -109,20 +154,56 @@ def _catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str],
     return tuple(tuple(str(value) for value in row) for row in connection.execute(_CATALOG_QUERY))
 
 
-@lru_cache(maxsize=1)
-def expected_catalog() -> tuple[tuple[str, str, str, str], ...]:
+@lru_cache(maxsize=2)
+def expected_catalog(
+    version: int = APPROVAL_STORE_SCHEMA_VERSION,
+) -> tuple[tuple[str, str, str, str], ...]:
+    schemas = {
+        1: APPROVAL_STORE_SCHEMA_V1,
+        2: APPROVAL_STORE_SCHEMA_V2,
+    }
+    schema = schemas.get(version)
+    if schema is None:
+        raise GateBlocked("approval_store", "approval schema version is unsupported")
     reference = sqlite3.connect(":memory:", isolation_level=None)
     try:
-        reference.executescript(APPROVAL_STORE_SCHEMA)
+        reference.executescript(schema)
         return _catalog(reference)
     finally:
         reference.close()
 
 
-@lru_cache(maxsize=1)
-def expected_catalog_digest() -> str:
-    payload = "\n".join("\x1f".join(row) for row in expected_catalog()).encode("utf-8")
+@lru_cache(maxsize=2)
+def expected_catalog_digest(version: int = APPROVAL_STORE_SCHEMA_VERSION) -> str:
+    payload = "\n".join("\x1f".join(row) for row in expected_catalog(version)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _expected_metadata(version: int) -> dict[str, str]:
+    return {
+        "schema_version": str(version),
+        "schema_catalog_sha256": expected_catalog_digest(version),
+    }
+
+
+def _enable_wal(connection: sqlite3.Connection) -> None:
+    """Converge concurrent openers on WAL without an unbounded startup race."""
+
+    for attempt in range(100):
+        try:
+            current = connection.execute("PRAGMA journal_mode").fetchone()
+            if current is not None and str(current[0]).lower() == "wal":
+                return
+            selected = connection.execute("PRAGMA journal_mode=WAL").fetchone()
+            if selected is not None and str(selected[0]).lower() == "wal":
+                return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            if code is None or code & 0xFF not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise GateBlocked("approval_store", "approval WAL mode is unavailable") from exc
+        if attempt < 99:
+            time.sleep(0.05)
+    raise GateBlocked("approval_store_busy", "approval store is busy")
 
 
 def _require_private_database(path: Path) -> os.stat_result:
@@ -162,7 +243,7 @@ class ApprovalStore:
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.execute("PRAGMA foreign_keys=ON")
-        self._connection.execute("PRAGMA journal_mode=WAL")
+        _enable_wal(self._connection)
         self._connection.execute("PRAGMA synchronous=FULL")
         after = self.path.stat(follow_symlinks=False)
         if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
@@ -171,10 +252,23 @@ class ApprovalStore:
         try:
             if initialize:
                 self._initialize()
+            else:
+                self._maybe_migrate()
             self._verify_schema()
         except Exception:
             self._connection.close()
             raise
+
+    def _read_metadata(self) -> dict[str, str]:
+        try:
+            return {
+                str(row["key"]): str(row["value"])
+                for row in self._connection.execute(
+                    "SELECT key,value FROM approval_store_meta"
+                ).fetchall()
+            }
+        except sqlite3.DatabaseError as exc:
+            raise GateBlocked("approval_store", "approval schema metadata is unavailable") from exc
 
     def _initialize(self) -> None:
         existing = self._connection.execute(
@@ -186,9 +280,16 @@ class ApprovalStore:
             self._connection.executescript("BEGIN IMMEDIATE;\n" + APPROVAL_STORE_SCHEMA)
             self._connection.executemany(
                 "INSERT INTO approval_store_meta(key,value) VALUES(?,?)",
+                tuple(_expected_metadata(APPROVAL_STORE_SCHEMA_VERSION).items()),
+            )
+            self._connection.execute(
+                """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
+                   VALUES(?,?,?,?)""",
                 (
-                    ("schema_version", str(APPROVAL_STORE_SCHEMA_VERSION)),
-                    ("schema_catalog_sha256", expected_catalog_digest()),
+                    APPROVAL_STORE_SCHEMA_VERSION,
+                    _APPROVAL_STORE_MIGRATION_V2_NAME,
+                    _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
+                    int(time.time()),
                 ),
             )
             self._connection.execute("COMMIT")
@@ -198,22 +299,72 @@ class ApprovalStore:
                 self._connection.execute("ROLLBACK")
             raise
 
-    def _verify_schema(self) -> None:
-        try:
-            metadata = {
-                str(row["key"]): str(row["value"])
-                for row in self._connection.execute(
-                    "SELECT key,value FROM approval_store_meta"
-                ).fetchall()
-            }
-        except sqlite3.DatabaseError as exc:
-            raise GateBlocked("approval_store", "approval schema metadata is unavailable") from exc
-        if metadata != {
-            "schema_version": str(APPROVAL_STORE_SCHEMA_VERSION),
-            "schema_catalog_sha256": expected_catalog_digest(),
-        }:
+    def _maybe_migrate(self) -> None:
+        metadata = self._read_metadata()
+        if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
+            return
+        if metadata != _expected_metadata(1):
             raise GateBlocked("approval_store", "approval schema metadata mismatches")
-        if _catalog(self._connection) != expected_catalog():
+
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise GateBlocked("approval_store_busy", "approval store is busy") from exc
+        try:
+            # Another exact process may have migrated while this connection
+            # waited for the write lock. Re-read only after acquiring custody.
+            metadata = self._read_metadata()
+            if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
+                self._connection.execute("COMMIT")
+                return
+            if metadata != _expected_metadata(1):
+                raise GateBlocked("approval_store", "approval schema metadata mismatches")
+            if _catalog(self._connection) != expected_catalog(1):
+                raise GateBlocked(
+                    "approval_store",
+                    "approval schema catalog mismatches before migration",
+                )
+
+            for statement in _APPROVAL_STORE_MIGRATION_V2_STATEMENTS:
+                self._connection.execute(statement)
+            self._connection.execute(
+                """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
+                   VALUES(?,?,?,?)""",
+                (
+                    APPROVAL_STORE_SCHEMA_VERSION,
+                    _APPROVAL_STORE_MIGRATION_V2_NAME,
+                    _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
+                    int(time.time()),
+                ),
+            )
+            self._connection.executemany(
+                "UPDATE approval_store_meta SET value=? WHERE key=?",
+                tuple(
+                    (value, key)
+                    for key, value in _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION).items()
+                ),
+            )
+            if self._read_metadata() != _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
+                raise GateBlocked("approval_store", "approval migration metadata mismatches")
+            if _catalog(self._connection) != expected_catalog(APPROVAL_STORE_SCHEMA_VERSION):
+                raise GateBlocked(
+                    "approval_store",
+                    "approval migration did not produce the exact catalog",
+                )
+            self._connection.execute("COMMIT")
+            self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception as exc:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            if isinstance(exc, GateBlocked):
+                raise
+            raise GateBlocked("approval_store", "approval schema migration failed") from exc
+
+    def _verify_schema(self) -> None:
+        metadata = self._read_metadata()
+        if metadata != _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
+            raise GateBlocked("approval_store", "approval schema metadata mismatches")
+        if _catalog(self._connection) != expected_catalog(APPROVAL_STORE_SCHEMA_VERSION):
             raise GateBlocked("approval_store", "approval schema catalog mismatches")
         integrity = self._connection.execute("PRAGMA quick_check").fetchone()
         if integrity is None or str(integrity[0]) != "ok":
@@ -273,6 +424,8 @@ class ApprovalStore:
 
 __all__ = [
     "APPROVAL_STORE_SCHEMA",
+    "APPROVAL_STORE_SCHEMA_V1",
+    "APPROVAL_STORE_SCHEMA_V2",
     "APPROVAL_STORE_SCHEMA_VERSION",
     "ApprovalStore",
     "expected_catalog",
