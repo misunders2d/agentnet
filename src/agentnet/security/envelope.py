@@ -23,6 +23,14 @@ class LocalEnvelopeCipher:
 
     @classmethod
     def from_key_file(cls, path: Path, *, create: bool = True) -> "LocalEnvelopeCipher":
+        if os.name == "nt":
+            from agentnet.windows_security import read_private_file, write_private_file
+
+            if not path.exists():
+                if not create:
+                    raise FileNotFoundError(path)
+                write_private_file(path, os.urandom(32))
+            return cls(read_private_file(path, max_bytes=32))
         if not path.exists():
             if not create:
                 raise FileNotFoundError(path)

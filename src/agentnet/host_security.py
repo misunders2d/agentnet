@@ -81,7 +81,11 @@ def _hash_executable(
 
     try:
         resolved = str(Path(path).resolve(strict=True))
-        source = f"/proc/{pid}/exe" if platform_name == "linux" else resolved
+        source = (
+            f"/proc/{pid}/exe"
+            if platform_name == "linux" and os.path.isdir("/proc/self")
+            else resolved
+        )
         digest = hashlib.sha256()
         with open(source, "rb") as executable:
             before = os.fstat(executable.fileno())

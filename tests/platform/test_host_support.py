@@ -128,10 +128,13 @@ def test_macos_binding_descriptor_is_read_only_pipe() -> None:
     payload = b'{"safe":true}'
     import threading
 
-    thread = threading.Thread(
-        target=BackgroundAdapterRuntime._write_binding_pipe,
-        args=(writer, payload),
-    )
+    def publish() -> None:
+        try:
+            BackgroundAdapterRuntime._write_binding_pipe(writer, payload)
+        finally:
+            os.close(writer)
+
+    thread = threading.Thread(target=publish)
     thread.start()
     received = bytearray()
     while chunk := os.read(reader, 1024):

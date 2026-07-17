@@ -14,6 +14,9 @@ from pathlib import Path
 from agentnet.errors import AuthenticationError
 
 
+_FILE_ALL_ACCESS = 0x001F01FF
+_FILE_GENERIC_READ = 0x00120089
+
 _DANGEROUS_ALLOW_SIDS = frozenset(
     {
         "S-1-1-0",       # Everyone
@@ -64,7 +67,7 @@ def _private_dacl(*, directory: bool):
         dacl.AddAccessAllowedAceEx(
             win32security.ACL_REVISION_DS,
             inheritance,
-            win32con.FILE_ALL_ACCESS,
+            _FILE_ALL_ACCESS,
             sid,
         )
     return dacl
@@ -110,7 +113,7 @@ def _require_private_descriptor(owner, dacl, *, label: str) -> None:
         if ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE:
             if sid_value in _DANGEROUS_ALLOW_SIDS:
                 raise AuthenticationError(f"Windows private DACL grants a broad principal: {label}")
-            if sid_value == current and mask & win32con.FILE_GENERIC_READ:
+            if sid_value == current and mask & _FILE_GENERIC_READ:
                 current_allowed = True
     if not current_allowed:
         raise AuthenticationError(f"Windows private DACL does not grant the current user: {label}")
