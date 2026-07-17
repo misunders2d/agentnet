@@ -18,6 +18,7 @@ from agentnet.windows_security import (
 
 TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
+CREATE_SUSPENDED = 0x00000004
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
@@ -64,7 +65,7 @@ class WindowsJobGuard:
 
     @staticmethod
     def creation_flags() -> int:
-        return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_SUSPENDED
+        return subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
 
     @staticmethod
     def _resume_process_threads(pid: int) -> None:
