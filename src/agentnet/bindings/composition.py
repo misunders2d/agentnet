@@ -200,19 +200,6 @@ def _load_capability_root(path: Path) -> bytes:
         os.close(descriptor)
 
 
-class _UnavailableMCPBootstrapServer:
-    """Allow direct IPC while one host-specific MCP transport remains gated."""
-
-    def __init__(self) -> None:
-        self.last_request_fields: frozenset[str] | None = None
-
-    async def start(self) -> None:
-        return None
-
-    async def close(self) -> None:
-        return None
-
-
 class LocalBindingService:
     """Own the private socket, current-epoch actor resolution, and issuance."""
 

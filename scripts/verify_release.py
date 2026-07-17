@@ -221,6 +221,9 @@ EXPECTED_WHEEL_METADATA = (
 )
 REPRODUCIBLE_TIMESTAMP = 1_580_601_600
 
+# Historical product constants used uppercase ACE_* names. Lowercase ACL
+# vocabulary such as `ace_type` is generic security terminology, not a legacy
+# product namespace, and must not make otherwise-valid source unreleasable.
 _FORBIDDEN_PRODUCT_NAMESPACE = re.compile(
     rb"(?<![A-Za-z0-9_])(?:ACE_[A-Z0-9_]+|(?i:agentic[_-]communication|"
     rb"ace\.[a-z0-9_.-]+|\.ace(?:[/\\]|$)|ace(?:\s*=|\s+(?:init|status|"

@@ -60,6 +60,7 @@ for (const relative of [
   "uv.lock",
   "pyproject.toml",
   "npm/bin/agentnet.mjs",
+  "npm/lib/windows-runtime-acl.ps1",
   "npm/scripts/check-packed-package.mjs",
   "skills/agentnet-operator/SKILL.md",
   "skills/agentnet-operator/references/safe-commands.md",

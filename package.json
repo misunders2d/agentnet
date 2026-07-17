@@ -96,6 +96,7 @@
     "evidence/**/*.whl",
     "evidence/**/*.gz",
     "npm/**/*.mjs",
+    "npm/**/*.ps1",
     "pyproject.toml",
     "schemas/**/*.json",
     "schemas/**/*.md",

@@ -430,6 +430,7 @@ class BackgroundAdapterRuntime:
                 if descriptor is not None or writer_descriptor is not None:
                     raise GateBlocked("G05", "Pi binding delivery has conflicting transports")
                 delivery.publish(payload, expected=measure_process_identity(pid))
+                delivery.wait_delivered()
             elif descriptor is None:
                 raise GateBlocked("G05", "Pi direct IPC binding descriptor is absent")
             elif writer_descriptor is None:

@@ -159,6 +159,16 @@ class WindowsBindingDelivery:
         self._expected = expected
         self._published.set()
 
+    def wait_delivered(self) -> None:
+        if not self._published.is_set():
+            raise GateBlocked("G05", "Windows binding capability is not published")
+        if not self._delivered.wait(self.timeout_seconds):
+            if self._error is not None:
+                raise GateBlocked("G05", "Windows binding capability delivery failed") from self._error
+            raise GateBlocked("G05", "Windows binding capability delivery timed out")
+        if self._error is not None:
+            raise GateBlocked("G05", "Windows binding capability delivery failed") from self._error
+
     def _unblock(self) -> None:
         _pywintypes, win32con, win32file, _win32pipe, _winerror = self._imports()
         try:

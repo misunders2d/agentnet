@@ -2,7 +2,14 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,7 +85,31 @@ if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink()) {
   console.error("AgentNet npm runtime path must be a real directory.");
   process.exit(1);
 }
-if (process.platform !== "win32") chmodSync(runtimeRoot, 0o700);
+if (process.platform !== "win32") {
+  chmodSync(runtimeRoot, 0o700);
+} else {
+  const runtimeMode = readdirSync(runtimeRoot).length === 0 ? "initialize" : "verify";
+  const aclScript = path.join(packageRoot, "npm", "lib", "windows-runtime-acl.ps1");
+  const aclCheck = spawnSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      aclScript,
+      runtimeRoot,
+      runtimeMode,
+    ],
+    { encoding: "utf8", shell: false, windowsHide: true },
+  );
+  if (aclCheck.error || aclCheck.status !== 0) {
+    console.error("AgentNet Windows npm runtime root failed private-DACL verification.");
+    process.exit(1);
+  }
+}
 
 const userArguments = process.argv.slice(2);
 const verify = userArguments[0] === "verify";

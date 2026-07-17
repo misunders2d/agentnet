@@ -323,6 +323,7 @@ def test_windows_binding_delivery_and_job_object_are_live() -> None:
         finally:
             handle.Close()
         assert received == payload
+        delivery.wait_delivered()
     finally:
         delivery.close()
 
@@ -412,8 +413,17 @@ def test_windows_binding_delivery_rejects_wrong_exact_process_identity() -> None
             None,
         )
         try:
-            with pytest.raises(pywintypes.error):
-                win32file.ReadFile(handle, 4)
+            deadline = time.monotonic() + 5
+            rejected = False
+            while time.monotonic() < deadline:
+                try:
+                    _data, available, _remaining = win32pipe.PeekNamedPipe(handle, 0)
+                except pywintypes.error:
+                    rejected = True
+                    break
+                assert available == 0, "wrong process received capability bytes"
+                time.sleep(0.05)
+            assert rejected, "wrong process connection was not rejected"
         finally:
             handle.Close()
     finally:
