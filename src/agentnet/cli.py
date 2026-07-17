@@ -40,6 +40,7 @@ from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked, ValidationError
 from agentnet.http_api import create_app
+from agentnet.host import host_platform
 from agentnet.gateways.a2a import (
     SSRFPolicy,
     StandingA2AGrant,
@@ -120,12 +121,30 @@ def _load_config(path: Path) -> ExtensionConfig:
 
 
 def _owner_only_directory(path: Path) -> None:
+    if host_platform() == "windows":
+        from agentnet.windows_security import ensure_private_directory
+
+        try:
+            ensure_private_directory(path)
+        except Exception as exc:
+            raise SystemExit(f"private state directory DACL is unsafe: {path}") from exc
+        return
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise SystemExit(f"private state directory must be owner-only and not a symlink: {path}")
 
 
 def _write_owner_only(path: Path, content: bytes, *, force: bool = False) -> None:
+    if host_platform() == "windows":
+        from agentnet.windows_security import write_private_file
+
+        try:
+            write_private_file(path, content, force=force)
+        except FileExistsError as exc:
+            raise SystemExit(f"refusing to overwrite {path}; use --force where supported") from exc
+        except Exception as exc:
+            raise SystemExit(f"private state file DACL is unsafe: {path}") from exc
+        return
     _owner_only_directory(path.parent)
     if os.path.lexists(path):
         if not force:
@@ -161,13 +180,21 @@ def _write_owner_json(path: Path, value: dict[str, object], *, force: bool = Fal
 
 
 def _write_private_config(path: Path, value: dict[str, object], *, force: bool = False) -> None:
-    """Atomically write a 0600 config without following or replacing a raced link.
+    """Atomically write a private config without following a raced link/reparse point.
 
     Config files commonly live in an ordinary 0755 project directory, unlike
     credential state.  The containing directory is therefore not required to
     be private, but the final directory and destination must be real objects
     owned by this process.  A directory descriptor pins the replacement seam.
     """
+
+    if host_platform() == "windows":
+        _write_owner_only(
+            path,
+            json.dumps(value, indent=2, sort_keys=True).encode("utf-8") + b"\n",
+            force=force,
+        )
+        return
 
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -249,6 +276,13 @@ def _read_json_object(path: Path, *, label: str) -> dict[str, object]:
 def _owner_only_file(path: Path, *, label: str) -> bytes:
     if not path.is_absolute():
         raise SystemExit(f"{label} must be an owner-only absolute regular file")
+    if host_platform() == "windows":
+        from agentnet.windows_security import read_private_file
+
+        try:
+            return read_private_file(path, max_bytes=65_536)
+        except Exception as exc:
+            raise SystemExit(f"{label} must have a private current-user DACL") from exc
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:

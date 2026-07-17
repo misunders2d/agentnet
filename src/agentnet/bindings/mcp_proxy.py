@@ -9,9 +9,10 @@ import stat
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from agentnet.bindings.mcp import create_mcp_binding
+from agentnet.bindings.mcp_bootstrap import MCP_BOOTSTRAP_ASSURANCE
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.security.signatures import canonical_json
 
@@ -21,13 +22,87 @@ MAX_RESPONSE_BYTES = 1_048_576
 LOCATOR_NAME = "mcp-bootstrap-locator.json"
 
 
-def read_bootstrap_locator(*, timeout_seconds: float = 10.0) -> tuple[Path, str]:
+class _PipeConnection(Protocol):
+    def sendall(self, payload: bytes) -> None: ...
+    def recv(self, length: int) -> bytes: ...
+    def close(self) -> None: ...
+
+
+class _WindowsPipeConnection:
+    def __init__(self, endpoint: str) -> None:
+        try:
+            import win32con
+            import win32file
+            import win32pipe
+        except ImportError as exc:
+            raise AuthenticationError("Windows MCP named-pipe support is unavailable") from exc
+        if not endpoint.startswith(r"\\.\pipe\agentnet-mcp-"):
+            raise AuthenticationError("Windows MCP named-pipe locator is invalid")
+        win32pipe.WaitNamedPipe(endpoint, 10_000)
+        self._win32file = win32file
+        self._handle = win32file.CreateFile(
+            endpoint,
+            win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+            0,
+            None,
+            win32con.OPEN_EXISTING,
+            0,
+            None,
+        )
+
+    def sendall(self, payload: bytes) -> None:
+        self._win32file.WriteFile(self._handle, payload)
+        self._win32file.FlushFileBuffers(self._handle)
+
+    def recv(self, length: int) -> bytes:
+        _status, payload = self._win32file.ReadFile(self._handle, length)
+        return bytes(payload)
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            handle.Close()
+
+
+def _parse_locator(raw: bytes) -> tuple[str, str]:
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AuthenticationError("local MCP bootstrap locator is invalid") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"generation", "schema", "socket_path"}
+        or value["schema"] != "agentnet.mcp.bootstrap-locator.v1"
+        or not isinstance(value["socket_path"], str)
+        or not value["socket_path"]
+        or not isinstance(value["generation"], str)
+        or not 24 <= len(value["generation"]) <= 128
+        or canonical_json(value) != raw
+    ):
+        raise AuthenticationError("local MCP bootstrap locator schema rejected")
+    return value["socket_path"], value["generation"]
+
+
+def read_bootstrap_locator(*, timeout_seconds: float = 10.0) -> tuple[str, str]:
     """Read an owner-only nonsecret socket locator from the private runtime state."""
 
     state_raw = os.environ.get("AGENTNET_STATE_DIR")
     if not state_raw:
         raise AuthenticationError("local MCP runtime state is absent")
     state_dir = Path(state_raw)
+    if os.name == "nt":
+        from agentnet.windows_security import read_private_file, require_private_path
+
+        require_private_path(state_dir, directory=True)
+        locator = state_dir / LOCATOR_NAME
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if not locator.exists():
+                if time.monotonic() >= deadline:
+                    raise AuthenticationError("local MCP bootstrap locator was not published") from None
+                time.sleep(0.01)
+                continue
+            return _parse_locator(read_private_file(locator, max_bytes=MAX_LOCATOR_BYTES))
     try:
         state = state_dir.lstat()
     except OSError as exc:
@@ -66,22 +141,7 @@ def read_bootstrap_locator(*, timeout_seconds: float = 10.0) -> tuple[Path, str]
                 raise AuthenticationError("local MCP bootstrap locator changed during read")
         finally:
             os.close(descriptor)
-        try:
-            value = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise AuthenticationError("local MCP bootstrap locator is invalid") from exc
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"generation", "schema", "socket_path"}
-            or value["schema"] != "agentnet.mcp.bootstrap-locator.v1"
-            or not isinstance(value["socket_path"], str)
-            or not value["socket_path"]
-            or not isinstance(value["generation"], str)
-            or not 24 <= len(value["generation"]) <= 128
-            or canonical_json(value) != raw
-        ):
-            raise AuthenticationError("local MCP bootstrap locator schema rejected")
-        return Path(value["socket_path"]), value["generation"]
+        return _parse_locator(raw)
 
 
 class PeerBoundRemoteDispatcher:
@@ -89,33 +149,38 @@ class PeerBoundRemoteDispatcher:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._connection: socket.socket | None = None
+        self._connection: _PipeConnection | None = None
         self._generation: str | None = None
         self._connect()
 
     def _connect(self) -> None:
         socket_path, generation = read_bootstrap_locator()
-        try:
-            metadata = socket_path.stat()
-        except OSError as exc:
-            raise AuthenticationError("local MCP bootstrap socket is unavailable") from exc
-        if (
-            not stat.S_ISSOCK(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o077
-        ):
-            raise AuthenticationError("local MCP bootstrap socket ownership or mode rejected")
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(10.0)
+        if os.name == "nt":
+            connection: _PipeConnection = _WindowsPipeConnection(socket_path)
+        else:
+            path = Path(socket_path)
+            try:
+                metadata = path.stat()
+            except OSError as exc:
+                raise AuthenticationError("local MCP bootstrap socket is unavailable") from exc
+            if (
+                not stat.S_ISSOCK(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077
+            ):
+                raise AuthenticationError("local MCP bootstrap socket ownership or mode rejected")
+            unix_connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            unix_connection.settimeout(10.0)
+            unix_connection.connect(socket_path)
+            connection = unix_connection
         self._connection = connection
         try:
-            connection.connect(str(socket_path))
             accepted = self._receive_frame()
         except (OSError, ValidationError) as exc:
             self._invalidate()
             raise AuthenticationError("local MCP bootstrap transport is unavailable") from exc
         if accepted != {
-            "assurance": "same_uid_peercred_direct_parent_module",
+            "assurance": MCP_BOOTSTRAP_ASSURANCE,
             "generation": generation,
             "ok": True,
             "schema": "agentnet.mcp.bootstrap-accepted.v1",

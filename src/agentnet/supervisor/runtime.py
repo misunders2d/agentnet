@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import fcntl
 import ctypes
 import os
 import stat
+import sys
 import threading
 import time
 from asyncio import CancelledError as AsyncCancelledError
@@ -14,6 +14,13 @@ from concurrent.futures import CancelledError as FutureCancelledError
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
+
+import psutil
+
+try:  # POSIX-only; capability methods below fail closed when unavailable.
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - exercised on Windows CI
+    fcntl = None  # type: ignore[assignment]
 
 from agentnet.adapters.auth import HarnessAuthInjection
 from agentnet.adapters.base import AdapterLaunchSpec, ExecutableProbe
@@ -24,7 +31,9 @@ from agentnet.adapters.native import (
 )
 from agentnet.adapters.specs import detect_executable
 from agentnet.bindings.ipc import linux_process_probe
+from agentnet.bindings.mcp_bootstrap import MCP_BOOTSTRAP_ASSURANCE
 from agentnet.errors import AuthorizationError, GateBlocked, ValidationError
+from agentnet.host_security import measure_process_identity
 from agentnet.security.signatures import canonical_json
 
 if TYPE_CHECKING:
@@ -146,6 +155,7 @@ class BackgroundAdapterRuntime:
         self._local_binding_expires_at: int | None = None
         self._local_binding_next_renewal = 0.0
         self._local_binding_renewal_failures = 0
+        self._local_binding_delivery: Any | None = None
         self._auth_materialized = False
         self._lock = threading.RLock()
         self._driver: NativeHarnessDriver | None = None
@@ -197,7 +207,12 @@ class BackgroundAdapterRuntime:
         os.chmod(temporary, 0o600)
         os.replace(temporary, self._state_path)
 
-    def _environment(self, *, local_binding_fd: int | None = None) -> dict[str, str]:
+    def _environment(
+        self,
+        *,
+        local_binding_fd: int | None = None,
+        local_binding_endpoint: str | None = None,
+    ) -> dict[str, str]:
         """Complete allowlist; vendor/user credentials are never inherited."""
 
         environment = {
@@ -227,16 +242,30 @@ class BackgroundAdapterRuntime:
             environment["PI_OFFLINE"] = "1"
         if self._auth is not None:
             environment.update(self._auth.environment_for(self.spec.harness))
+        if local_binding_fd is not None and local_binding_endpoint is not None:
+            raise GateBlocked("G05", "local binding has multiple capability locators")
         if local_binding_fd is not None:
             environment["AGENTNET_LOCAL_BINDING_FD"] = str(local_binding_fd)
+        if local_binding_endpoint is not None:
+            environment["AGENTNET_LOCAL_BINDING_ENDPOINT"] = local_binding_endpoint
         return environment
 
     @staticmethod
-    def _binding_memfd() -> int:
+    def _binding_descriptors() -> tuple[int, int | None]:
+        if sys.platform == "darwin":
+            reader, writer = os.pipe()
+            os.set_inheritable(reader, True)
+            os.set_inheritable(writer, False)
+            return reader, writer
+        if sys.platform != "linux":
+            raise GateBlocked("G05", "process-bound local binding requires a host adapter")
         if hasattr(os, "memfd_create"):
-            return os.memfd_create(
-                "agentnet-local-binding",
-                flags=getattr(os, "MFD_ALLOW_SEALING", _MFD_ALLOW_SEALING),
+            return (
+                os.memfd_create(
+                    "agentnet-local-binding",
+                    flags=getattr(os, "MFD_ALLOW_SEALING", _MFD_ALLOW_SEALING),
+                ),
+                None,
             )
         libc = ctypes.CDLL(None, use_errno=True)
         create = getattr(libc, "memfd_create", None)
@@ -247,13 +276,21 @@ class BackgroundAdapterRuntime:
         descriptor = int(create(b"agentnet-local-binding", _MFD_ALLOW_SEALING))
         if descriptor < 0:
             raise GateBlocked("G05", "process-bound local binding memfd creation failed")
-        return descriptor
+        return descriptor, None
 
     def _mcp_locator_path(self) -> Path:
         return self.spec.state_dir / "mcp-bootstrap-locator.json"
 
     def _clear_mcp_locator(self) -> None:
         path = self._mcp_locator_path()
+        if sys.platform == "win32":
+            if not path.exists():
+                return
+            from agentnet.windows_security import require_private_path
+
+            require_private_path(path, directory=False)
+            path.unlink()
+            return
         try:
             metadata = path.lstat()
         except FileNotFoundError:
@@ -279,7 +316,7 @@ class BackgroundAdapterRuntime:
             or issued.get("schema") != "agentnet.mcp.registered-launch.v1"
             or issued.get("session_id") != self.spec.session_id
             or issued.get("harness_id") != self.spec.harness_id
-            or issued.get("assurance") != "same_uid_peercred_direct_parent_module"
+            or issued.get("assurance") != MCP_BOOTSTRAP_ASSURANCE
             or not isinstance(issued.get("bootstrap_socket_path"), str)
             or not isinstance(issued.get("bootstrap_generation"), str)
             or not 24 <= len(issued["bootstrap_generation"]) <= 128
@@ -288,16 +325,22 @@ class BackgroundAdapterRuntime:
         ):
             raise GateBlocked("G05", "MCP launch registration response is invalid")
         socket_path = Path(issued["bootstrap_socket_path"])
-        try:
-            socket_metadata = socket_path.lstat()
-        except OSError as exc:
-            raise GateBlocked("G05", "MCP bootstrap socket is unavailable after registration") from exc
-        if (
-            not stat.S_ISSOCK(socket_metadata.st_mode)
-            or socket_metadata.st_uid != os.geteuid()
-            or socket_metadata.st_mode & 0o077
-        ):
-            raise GateBlocked("G05", "MCP bootstrap socket ownership or mode rejected")
+        if sys.platform == "win32":
+            if not issued["bootstrap_socket_path"].startswith(r"\\.\pipe\agentnet-mcp-"):
+                raise GateBlocked("G05", "MCP bootstrap named-pipe locator rejected")
+            socket_identity = (0, 0)
+        else:
+            try:
+                socket_metadata = socket_path.lstat()
+            except OSError as exc:
+                raise GateBlocked("G05", "MCP bootstrap socket is unavailable after registration") from exc
+            if (
+                not stat.S_ISSOCK(socket_metadata.st_mode)
+                or socket_metadata.st_uid != os.geteuid()
+                or socket_metadata.st_mode & 0o077
+            ):
+                raise GateBlocked("G05", "MCP bootstrap socket ownership or mode rejected")
+            socket_identity = (socket_metadata.st_dev, socket_metadata.st_ino)
         locator = canonical_json(
             {
                 "generation": issued["bootstrap_generation"],
@@ -307,21 +350,26 @@ class BackgroundAdapterRuntime:
         )
         path = self._mcp_locator_path()
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(temporary, flags, 0o600)
-            try:
-                os.write(descriptor, locator)
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-            os.replace(temporary, path)
-            metadata = path.lstat()
-            if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
-                raise GateBlocked("G05", "MCP bootstrap locator publication failed closed")
+            if sys.platform == "win32":
+                from agentnet.windows_security import write_private_file
+
+                write_private_file(path, locator, force=True)
+            else:
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(temporary, flags, 0o600)
+                try:
+                    os.write(descriptor, locator)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.replace(temporary, path)
+                metadata = path.lstat()
+                if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+                    raise GateBlocked("G05", "MCP bootstrap locator publication failed closed")
             self._local_binding_socket_identity = (
-                socket_metadata.st_dev,
-                socket_metadata.st_ino,
+                socket_identity[0],
+                socket_identity[1],
                 issued["bootstrap_generation"],
             )
             self._local_binding_expires_at = issued["expires_at"]
@@ -336,7 +384,14 @@ class BackgroundAdapterRuntime:
             except FileNotFoundError:
                 pass
 
-    def _activate_binding(self, descriptor: int | None, pid: int, command: tuple[str, ...]) -> None:
+    def _activate_binding(
+        self,
+        descriptor: int | None,
+        writer_descriptor: int | None,
+        delivery: Any | None,
+        pid: int,
+        command: tuple[str, ...],
+    ) -> None:
         if self._local_binding_issuer is None:
             return
         probe = self._probe
@@ -351,14 +406,12 @@ class BackgroundAdapterRuntime:
         deadline = time.monotonic() + self.request_timeout_seconds
         while True:
             try:
-                linux_process_probe(pid)
-                executable = os.path.realpath(f"/proc/{pid}/exe")
-                with open(f"/proc/{pid}/cmdline", "rb") as command_line:
-                    raw_arguments = command_line.read().split(b"\0")
+                identity = measure_process_identity(pid)
+                executable = os.path.realpath(identity.executable_path)
                 arguments = {
-                    os.path.realpath(item.decode("utf-8", errors="strict"))
-                    for item in raw_arguments
-                    if item.startswith(b"/")
+                    os.path.realpath(item)
+                    for item in psutil.Process(pid).cmdline()
+                    if os.path.isabs(item)
                 }
             except Exception:
                 executable = ""
@@ -372,10 +425,17 @@ class BackgroundAdapterRuntime:
             time.sleep(0.01)
         issued = self._local_binding_issuer(pid, self.spec.session_id)
         if self.spec.harness == "pi":
-            if descriptor is None:
-                raise GateBlocked("G05", "Pi direct IPC binding descriptor is absent")
             payload = canonical_json(issued)
-            self._seal_binding_descriptor(descriptor, payload)
+            if delivery is not None:
+                if descriptor is not None or writer_descriptor is not None:
+                    raise GateBlocked("G05", "Pi binding delivery has conflicting transports")
+                delivery.publish(payload, expected=measure_process_identity(pid))
+            elif descriptor is None:
+                raise GateBlocked("G05", "Pi direct IPC binding descriptor is absent")
+            elif writer_descriptor is None:
+                self._seal_binding_descriptor(descriptor, payload)
+            else:
+                self._write_binding_pipe(writer_descriptor, payload)
         else:
             if descriptor is not None:
                 raise GateBlocked("G05", "MCP binding must not inherit a descriptor")
@@ -391,18 +451,29 @@ class BackgroundAdapterRuntime:
         identity = self._local_binding_socket_identity
         socket_changed = identity is None
         if identity is not None:
-            locator = json.loads(self._mcp_locator_path().read_text(encoding="utf-8"))
-            socket_path = Path(locator["socket_path"])
-            try:
-                metadata = socket_path.lstat()
-            except OSError:
-                socket_changed = True
+            if sys.platform == "win32":
+                from agentnet.windows_security import read_private_file
+
+                locator = json.loads(
+                    read_private_file(
+                        self._mcp_locator_path(),
+                        max_bytes=4096,
+                    )
+                )
+                socket_changed = locator.get("generation") != identity[2]
             else:
-                socket_changed = (
-                    metadata.st_dev,
-                    metadata.st_ino,
-                    locator.get("generation"),
-                ) != identity
+                locator = json.loads(self._mcp_locator_path().read_text(encoding="utf-8"))
+                socket_path = Path(locator["socket_path"])
+                try:
+                    metadata = socket_path.lstat()
+                except OSError:
+                    socket_changed = True
+                else:
+                    socket_changed = (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        locator.get("generation"),
+                    ) != identity
         renewal_due = (
             time.monotonic() >= self._local_binding_next_renewal
             or self._local_binding_expires_at is None
@@ -414,7 +485,20 @@ class BackgroundAdapterRuntime:
         self._publish_mcp_locator(issued)
 
     @staticmethod
+    def _write_binding_pipe(descriptor: int, payload: bytes) -> None:
+        if len(payload) > 65_536:
+            raise GateBlocked("G05", "local binding capability response is oversized")
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise GateBlocked("G05", "local binding pipe write made no progress")
+            view = view[written:]
+
+    @staticmethod
     def _seal_binding_descriptor(descriptor: int, payload: bytes) -> None:
+        if fcntl is None:
+            raise GateBlocked("G05", "local binding descriptor sealing is unavailable")
         if len(payload) > 65_536:
             raise GateBlocked("G05", "local binding capability response is oversized")
         os.pwrite(descriptor, payload, 0)
@@ -474,6 +558,8 @@ class BackgroundAdapterRuntime:
         self._persist_content_free_state()
         driver = create_native_driver(self.spec)
         binding_descriptor: int | None = None
+        binding_writer: int | None = None
+        binding_delivery: Any | None = None
         try:
             command = self._resolved_command()
             if self._auth is not None and not self._auth_materialized:
@@ -481,39 +567,89 @@ class BackgroundAdapterRuntime:
                 self._auth_materialized = True
             if self._local_binding_issuer is not None:
                 if self.spec.harness == "pi":
-                    binding_descriptor = self._binding_memfd()
+                    previous_delivery, self._local_binding_delivery = (
+                        self._local_binding_delivery,
+                        None,
+                    )
+                    if previous_delivery is not None:
+                        previous_delivery.close()
+                    if sys.platform == "win32":
+                        from agentnet.supervisor.windows_binding_delivery import (
+                            WindowsBindingDelivery,
+                        )
+
+                        binding_delivery = WindowsBindingDelivery(
+                            timeout_seconds=max(10.0, self.request_timeout_seconds * 5)
+                        )
+                        binding_delivery.start()
+                        self._local_binding_delivery = binding_delivery
+                    else:
+                        binding_descriptor, binding_writer = self._binding_descriptors()
                 else:
                     self._clear_mcp_locator()
             driver.start(
                 command,
-                environment=self._environment(local_binding_fd=binding_descriptor),
+                environment=self._environment(
+                    local_binding_fd=binding_descriptor,
+                    local_binding_endpoint=(
+                        binding_delivery.endpoint if binding_delivery is not None else None
+                    ),
+                ),
                 recover=recover,
                 timeout_seconds=self.request_timeout_seconds,
                 inherited_fds=(binding_descriptor,) if binding_descriptor is not None else (),
                 process_started=(
-                    (lambda pid: self._activate_binding(binding_descriptor, pid, command))
+                    (
+                        lambda pid: self._activate_binding(
+                            binding_descriptor,
+                            binding_writer,
+                            binding_delivery,
+                            pid,
+                            command,
+                        )
+                    )
                     if self._local_binding_issuer is not None
                     else None
                 ),
             )
         except GateBlocked:
             driver.stop()
+            if binding_delivery is not None:
+                binding_delivery.close()
+                if self._local_binding_delivery is binding_delivery:
+                    self._local_binding_delivery = None
             self._phase = "offline"
             self._persist_content_free_state()
             raise
         except (AsyncCancelledError, FutureCancelledError):
             driver.stop()
+            if binding_delivery is not None:
+                binding_delivery.close()
+                if self._local_binding_delivery is binding_delivery:
+                    self._local_binding_delivery = None
             self._phase = "offline"
             self._persist_content_free_state()
             raise
         except Exception as exc:
             driver.stop()
+            if binding_delivery is not None:
+                binding_delivery.close()
+                if self._local_binding_delivery is binding_delivery:
+                    self._local_binding_delivery = None
             self._phase = "offline"
             self._persist_content_free_state()
             raise AdapterProcessError(f"{self.spec.harness} native driver startup failed") from exc
         finally:
             if binding_descriptor is not None:
-                os.close(binding_descriptor)
+                try:
+                    os.close(binding_descriptor)
+                except OSError:
+                    pass
+            if binding_writer is not None:
+                try:
+                    os.close(binding_writer)
+                except OSError:
+                    pass
         self._driver = driver
         self._generation += 1
         self._phase = "ready"
@@ -650,6 +786,9 @@ class BackgroundAdapterRuntime:
             self._persist_content_free_state()
         if driver is not None:
             driver.stop()
+        delivery, self._local_binding_delivery = self._local_binding_delivery, None
+        if delivery is not None:
+            delivery.close()
         monitor = self._monitor_thread
         if monitor is not None and monitor is not threading.current_thread():
             monitor.join(timeout=2.0)

@@ -706,7 +706,7 @@ def test_signed_supervisor_registers_only_its_measured_current_epoch_child(
         else:
             assert issued["schema"] == "agentnet.mcp.registered-launch.v1"
             assert "capability" not in issued
-            assert issued["assurance"] == "same_uid_peercred_direct_parent_module"
+            assert issued["assurance"] == "server_derived_account_process_parent_module"
 
         injected = signed.request(
             "POST",

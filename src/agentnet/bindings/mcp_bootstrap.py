@@ -10,28 +10,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import stat
-import struct
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agentnet.bindings.ipc import linux_process_parent, linux_process_probe
+from agentnet.bindings.ipc import AcceptedProcessPeer, accepted_unix_socket_peer
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.security.signatures import canonical_json
 
 
-@dataclass(frozen=True, slots=True)
-class UnixProcessPeer:
-    pid: int
-    uid: int
-    process_start_time: str
-    process_measurement: str
-    parent_pid: int
-    parent_process_start_time: str
-    parent_process_measurement: str
+UnixProcessPeer = AcceptedProcessPeer
+MCP_BOOTSTRAP_ASSURANCE = "server_derived_account_process_parent_module"
 
 
 PeerBinder = Callable[[UnixProcessPeer], Any]
@@ -48,12 +38,14 @@ class UnixMCPBootstrapServer:
         bind_peer: PeerBinder,
         handler: BoundHandler,
         generation: str,
+        assurance: str = MCP_BOOTSTRAP_ASSURANCE,
         max_frame: int = 1_048_576,
     ) -> None:
         self.path = path
         self.bind_peer = bind_peer
         self.handler = handler
         self.generation = generation
+        self.assurance = assurance
         self.max_frame = max_frame
         self._server: asyncio.AbstractServer | None = None
         self._socket_identity: tuple[int, int] | None = None
@@ -113,28 +105,14 @@ class UnixMCPBootstrapServer:
         self._clients.add(writer)
         try:
             sock = writer.get_extra_info("socket")
-            if sock is None or not hasattr(socket, "SO_PEERCRED"):
+            if sock is None:
                 raise AuthenticationError("platform peer credentials unavailable")
-            pid, uid, _gid = struct.unpack(
-                "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-            )
-            process_start_time, process_measurement = linux_process_probe(pid)
-            parent_pid = linux_process_parent(pid)
-            parent_start_time, parent_measurement = linux_process_probe(parent_pid)
-            peer = UnixProcessPeer(
-                pid=pid,
-                uid=uid,
-                process_start_time=process_start_time,
-                process_measurement=process_measurement,
-                parent_pid=parent_pid,
-                parent_process_start_time=parent_start_time,
-                parent_process_measurement=parent_measurement,
-            )
+            peer = accepted_unix_socket_peer(sock)
             bound = self.bind_peer(peer)
             await self._write_frame(
                 writer,
                 {
-                    "assurance": "same_uid_peercred_direct_parent_module",
+                    "assurance": self.assurance,
                     "generation": self.generation,
                     "ok": True,
                     "schema": "agentnet.mcp.bootstrap-accepted.v1",
@@ -164,4 +142,8 @@ class UnixMCPBootstrapServer:
                 writer.transport.abort()
 
 
-__all__ = ["UnixMCPBootstrapServer", "UnixProcessPeer"]
+__all__ = [
+    "MCP_BOOTSTRAP_ASSURANCE",
+    "UnixMCPBootstrapServer",
+    "UnixProcessPeer",
+]

@@ -8,7 +8,9 @@
     "node": ">=22.19.0"
   },
   "os": [
-    "linux"
+    "linux",
+    "darwin",
+    "win32"
   ],
   "keywords": [
     "pi-package",

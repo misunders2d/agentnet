@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from agentnet.errors import GateBlocked, IdempotencyConflict, ReplayError
+from agentnet.host import host_platform
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import canonical_json
 from agentnet.storage.a2a_schema import A2A_SCHEMA, A2A_SCHEMA_VERSION
@@ -580,33 +581,94 @@ class SQLiteStore:
         from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS
 
         path = path.absolute()
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        directory_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
-        try:
-            directory = os.open(path.parent, directory_flags)
-        except OSError as exc:
-            raise GateBlocked(
-                "sqlite_path",
-                "SQLite state directory must be owner-only and not a symlink",
-            ) from exc
-        parent = os.fstat(directory)
-        current_parent = path.parent.lstat()
-        if (
-            not stat.S_ISDIR(parent.st_mode)
-            or parent.st_uid != os.geteuid()
-            or parent.st_mode & 0o077
-            or (parent.st_dev, parent.st_ino)
-            != (current_parent.st_dev, current_parent.st_ino)
-        ):
-            os.close(directory)
-            raise GateBlocked(
-                "sqlite_path",
-                "SQLite state directory must be owner-only and not a symlink",
+        platform_name = host_platform()
+        directory: int | None = None
+        if platform_name == "windows":
+            from agentnet.windows_security import ensure_private_directory
+
+            ensure_private_directory(path.parent)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
             )
+            try:
+                directory = os.open(path.parent, directory_flags)
+            except OSError as exc:
+                raise GateBlocked(
+                    "sqlite_path",
+                    "SQLite state directory must be owner-only and not a symlink",
+                ) from exc
+            parent = os.fstat(directory)
+            current_parent = path.parent.lstat()
+            if (
+                not stat.S_ISDIR(parent.st_mode)
+                or parent.st_uid != os.geteuid()
+                or parent.st_mode & 0o077
+                or (parent.st_dev, parent.st_ino)
+                != (current_parent.st_dev, current_parent.st_ino)
+            ):
+                os.close(directory)
+                raise GateBlocked(
+                    "sqlite_path",
+                    "SQLite state directory must be owner-only and not a symlink",
+                )
+
+        def stat_entry(name: str) -> os.stat_result:
+            if directory is not None:
+                return os.stat(name, dir_fd=directory, follow_symlinks=False)
+            candidate = path.parent / name
+            if candidate.is_symlink():
+                raise GateBlocked("sqlite_path", "SQLite state path cannot be a link")
+            return candidate.lstat()
+
+        def unlink_entry(name: str) -> None:
+            if directory is not None:
+                os.unlink(name, dir_fd=directory)
+            else:
+                (path.parent / name).unlink()
+
+        def open_entry(name: str, flags: int, mode: int = 0o600) -> int:
+            if directory is not None:
+                return os.open(name, flags | getattr(os, "O_NOFOLLOW", 0), mode, dir_fd=directory)
+            candidate = path.parent / name
+            if os.path.lexists(candidate) and candidate.is_symlink():
+                raise GateBlocked("sqlite_path", "SQLite state path cannot be a link")
+            return os.open(candidate, flags | getattr(os, "O_BINARY", 0), mode)
+
+        def sqlite_uri(*, mode: str, immutable: bool = False) -> str:
+            if platform_name == "linux":
+                assert descriptor is not None
+                base = f"file:/proc/self/fd/{descriptor}"
+            else:
+                base = path.as_uri()
+            suffix = f"?mode={mode}"
+            if immutable:
+                suffix += "&immutable=1"
+            return base + suffix
+
+        def secure_entry(name: str) -> None:
+            candidate = path.parent / name
+            if platform_name == "windows":
+                from agentnet.windows_security import apply_private_dacl, require_private_path
+
+                apply_private_dacl(candidate, directory=False)
+                require_private_path(candidate, directory=False)
+            else:
+                metadata = stat_entry(name)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or metadata.st_nlink != 1
+                    or metadata.st_mode & 0o077
+                ):
+                    raise GateBlocked(
+                        "sqlite_path",
+                        "existing SQLite database must already be owner-only",
+                    )
+
         descriptor: int | None = None
         connection: sqlite3.Connection | None = None
         created_identity: tuple[int, int] | None = None
@@ -616,7 +678,7 @@ class SQLiteStore:
             if created_identity is None:
                 return
             try:
-                current = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+                current = stat_entry(path.name)
             except FileNotFoundError:
                 return
             if (current.st_dev, current.st_ino) != created_identity:
@@ -624,63 +686,37 @@ class SQLiteStore:
             for suffix in ("-wal", "-shm", "-journal"):
                 name = path.name + suffix
                 try:
-                    sidecar = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                    sidecar = stat_entry(name)
                 except FileNotFoundError:
                     continue
-                if (
-                    stat.S_ISREG(sidecar.st_mode)
-                    and sidecar.st_uid == os.geteuid()
-                    and sidecar.st_nlink == 1
-                ):
-                    current_sidecar = os.stat(
-                        name,
-                        dir_fd=directory,
-                        follow_symlinks=False,
-                    )
+                if stat.S_ISREG(sidecar.st_mode) and sidecar.st_nlink == 1:
+                    current_sidecar = stat_entry(name)
                     if (current_sidecar.st_dev, current_sidecar.st_ino) == (
                         sidecar.st_dev,
                         sidecar.st_ino,
                     ):
-                        os.unlink(name, dir_fd=directory)
-            current = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+                        unlink_entry(name)
+            current = stat_entry(path.name)
             if (current.st_dev, current.st_ino) == created_identity:
-                os.unlink(path.name, dir_fd=directory)
+                unlink_entry(path.name)
 
         try:
             try:
-                descriptor = os.open(
-                    path.name,
-                    os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=directory,
-                )
+                descriptor = open_entry(path.name, os.O_RDWR)
             except FileNotFoundError:
-                descriptor = os.open(
-                    path.name,
-                    os.O_RDWR
-                    | os.O_CREAT
-                    | os.O_EXCL
-                    | getattr(os, "O_NOFOLLOW", 0),
-                    0o600,
-                    dir_fd=directory,
-                )
+                descriptor = open_entry(path.name, os.O_RDWR | os.O_CREAT | os.O_EXCL)
                 created = True
             existing = os.fstat(descriptor)
             if created:
                 created_identity = (existing.st_dev, existing.st_ino)
-            if (
-                not stat.S_ISREG(existing.st_mode)
-                or existing.st_uid != os.geteuid()
-                or existing.st_nlink != 1
-            ):
+                if platform_name == "windows":
+                    secure_entry(path.name)
+            if not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1:
                 raise GateBlocked(
                     "sqlite_path",
                     "SQLite database must be a singly linked owner-owned regular file",
                 )
-            if existing.st_mode & 0o077:
-                raise GateBlocked(
-                    "sqlite_path",
-                    "existing SQLite database must already be owner-only",
-                )
+            secure_entry(path.name)
 
             # Inspect an existing file through the pinned descriptor in
             # immutable read-only mode. Unknown/prototype bytes must be rejected
@@ -690,7 +726,7 @@ class SQLiteStore:
             preflight: sqlite3.Connection | None = None
             try:
                 preflight = sqlite3.connect(
-                    f"file:/proc/self/fd/{descriptor}?mode=ro&immutable=1",
+                    sqlite_uri(mode="ro", immutable=True),
                     uri=True,
                     isolation_level=None,
                     check_same_thread=False,
@@ -789,7 +825,7 @@ class SQLiteStore:
                 if preflight is not None:
                     preflight.close()
 
-            current_file = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+            current_file = stat_entry(path.name)
             pinned_file = os.fstat(descriptor)
             if (
                 (current_file.st_dev, current_file.st_ino)
@@ -804,13 +840,13 @@ class SQLiteStore:
                     "SQLite database path changed while it was opened",
                 )
             connection = sqlite3.connect(
-                f"file:/proc/self/fd/{descriptor}?mode=rw",
+                sqlite_uri(mode="rw"),
                 uri=True,
                 isolation_level=None,
                 check_same_thread=False,
             )
             connection.row_factory = sqlite3.Row
-            current_file = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+            current_file = stat_entry(path.name)
             connected = os.fstat(descriptor)
             if (
                 (current_file.st_dev, current_file.st_ino)
@@ -825,6 +861,11 @@ class SQLiteStore:
                     "SQLite database path changed while it was opened",
                 )
             connection.execute("PRAGMA journal_mode=WAL")
+            for suffix in ("-wal", "-shm"):
+                try:
+                    secure_entry(path.name + suffix)
+                except FileNotFoundError:
+                    pass
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
@@ -896,11 +937,13 @@ class SQLiteStore:
                 os.close(descriptor)
                 descriptor = None
             cleanup_created_file()
-            os.close(directory)
+            if directory is not None:
+                os.close(directory)
             raise
         assert descriptor is not None and connection is not None
         os.close(descriptor)
-        os.close(directory)
+        if directory is not None:
+            os.close(directory)
 
     @contextmanager
     def transaction(self, *, immediate: bool = True) -> Iterator[sqlite3.Connection]:

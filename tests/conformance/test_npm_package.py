@@ -40,7 +40,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
     assert package["scripts"]["check"].endswith("&& npm run check:packed")
-    assert package["os"] == ["linux"]
+    assert package["os"] == ["linux", "darwin", "win32"]
     assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", package["version"])
     assert package["peerDependenciesMeta"] == {
         "@earendil-works/pi-ai": {"optional": True},
@@ -206,6 +206,9 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
     ):
         assert required in launcher
     assert '">=3.13,<3.15"' not in launcher
+    assert 'process.platform !== "linux"' not in launcher
+    assert "platformStateRoot" in launcher
+    assert "supportedPlatform" in launcher
     assert "curl" not in launcher
     assert "postinstall" not in json.loads(
         (ROOT / "package.json").read_text(encoding="utf-8")
@@ -216,8 +219,11 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
 def test_npm_launcher_rejects_unsupported_uv_before_runtime_creation(tmp_path: Path) -> None:
     package_root = tmp_path / "package"
     launcher = package_root / "npm/bin/agentnet.mjs"
+    platform_helper = package_root / "npm/lib/platform.mjs"
     launcher.parent.mkdir(parents=True)
+    platform_helper.parent.mkdir(parents=True)
     shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
+    shutil.copy2(ROOT / "npm/lib/platform.mjs", platform_helper)
     (package_root / "package.json").write_text(
         json.dumps({"version": "0.1.8"}),
         encoding="utf-8",
@@ -310,8 +316,11 @@ def test_same_version_npm_installs_use_distinct_runtime_roots(tmp_path: Path) ->
     for name in ("global-copy", "pi-copy"):
         package_root = tmp_path / name
         launcher = package_root / "npm/bin/agentnet.mjs"
+        platform_helper = package_root / "npm/lib/platform.mjs"
         launcher.parent.mkdir(parents=True)
+        platform_helper.parent.mkdir(parents=True)
         shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
+        shutil.copy2(ROOT / "npm/lib/platform.mjs", platform_helper)
         (package_root / "package.json").write_text(
             json.dumps({"version": package_version}),
             encoding="utf-8",

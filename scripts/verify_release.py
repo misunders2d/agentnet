@@ -222,14 +222,17 @@ EXPECTED_WHEEL_METADATA = (
 REPRODUCIBLE_TIMESTAMP = 1_580_601_600
 
 _FORBIDDEN_PRODUCT_NAMESPACE = re.compile(
-    rb"(?i)(?<![a-z0-9_])(?:ACE_[a-z0-9_]+|agentic[_-]communication|"
+    rb"(?<![A-Za-z0-9_])(?:ACE_[A-Z0-9_]+|(?i:agentic[_-]communication|"
     rb"ace\.[a-z0-9_.-]+|\.ace(?:[/\\]|$)|ace(?:\s*=|\s+(?:init|status|"
-    rb"serve|demo|a2a-demo|harness(?:-probe|-demo|-live-gate)?)))"
+    rb"serve|demo|a2a-demo|harness(?:-probe|-demo|-live-gate)?))))"
 )
 
 _EXACT_REQUIREMENT = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[([A-Za-z0-9._,-]+)\])?"
     r"==([A-Za-z0-9][A-Za-z0-9._+!-]*)$"
+)
+_EXACT_PLATFORM_MARKER = re.compile(
+    r"^sys_platform\s*==\s*(['\"])(win32|darwin|linux)\1$"
 )
 
 
@@ -504,14 +507,27 @@ def _normalized_constraint(value: str) -> str:
 
 
 def parse_exact_requirement(requirement: str) -> tuple[str, dict[str, Any]] | None:
-    """Parse one direct dependency only when it has one exact ``==`` pin."""
+    """Parse one exact pin plus at most one allowlisted platform marker."""
 
-    match = _EXACT_REQUIREMENT.fullmatch(requirement.strip())
-    if match is None or "*" in requirement or ";" in requirement:
+    if "*" in requirement or requirement.count(";") > 1:
         return None
+    pinned, separator, raw_marker = requirement.strip().partition(";")
+    match = _EXACT_REQUIREMENT.fullmatch(pinned.strip())
+    if match is None:
+        return None
+    marker: str | None = None
+    if separator:
+        marker_match = _EXACT_PLATFORM_MARKER.fullmatch(raw_marker.strip())
+        if marker_match is None:
+            return None
+        marker = f"sys_platform == '{marker_match.group(2)}'"
     name, raw_extras, version = match.groups()
     extras = sorted(filter(None, (raw_extras or "").split(",")))
-    return _canonical_name(name), {"version": version, "extras": extras}
+    return _canonical_name(name), {
+        "version": version,
+        "extras": extras,
+        "marker": marker,
+    }
 
 
 def _collect_direct_dependencies(pyproject: dict[str, Any], failures: list[str]) -> dict[str, Any]:

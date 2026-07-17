@@ -159,7 +159,11 @@ class OutagePolicy(_Policy):
 
 
 class OperationsPolicy(_Policy):
-    supported_os: tuple[Literal["linux"], ...] = ("linux",)
+    supported_os: tuple[Literal["linux", "macos", "windows"], ...] = (
+        "linux",
+        "macos",
+        "windows",
+    )
     supported_architectures: tuple[Literal["x86_64", "aarch64"], ...] = ("x86_64", "aarch64")
     regions: Literal[1] = 1
     accepted_durable_enabled: Literal[False] = False

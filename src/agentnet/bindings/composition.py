@@ -12,19 +12,28 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+import psutil
 
 from agentnet.adapters.capabilities import ALL as ADAPTER_CAPABILITIES
 from agentnet.bindings.ipc import (
     IPCSessionClaims,
     UnixIPCServer,
+    WindowsNamedPipeIPCServer,
     linux_process_parent,
     linux_process_probe,
     mint_inherited_session_capability,
 )
 from agentnet.bindings.mcp import create_mcp_binding
-from agentnet.bindings.mcp_bootstrap import UnixMCPBootstrapServer, UnixProcessPeer
+from agentnet.bindings.mcp_bootstrap import (
+    MCP_BOOTSTRAP_ASSURANCE,
+    UnixMCPBootstrapServer,
+    UnixProcessPeer,
+)
+from agentnet.bindings.windows_mcp_bootstrap import WindowsMCPBootstrapServer
 from agentnet.bindings.tools import CANONICAL_TOOL_NAMES, CanonicalToolDispatcher
 from agentnet.errors import AuthenticationError, AuthorizationError, GateBlocked, ValidationError
+from agentnet.host import HostPlatform, host_platform
+from agentnet.host_security import current_account_id, measure_process_identity
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import CredentialBinding, load_credential_binding
 from agentnet.operations.config import LocalBindingConfig
@@ -56,7 +65,7 @@ class IssuedChildCapability:
     credential_id: str
     credential_epoch: int
     expires_at: int
-    socket_path: Path
+    socket_path: Path | str
 
     def redacted(self) -> dict[str, Any]:
         return {
@@ -77,7 +86,7 @@ class RegisteredMCPLaunch:
     credential_id: str
     credential_epoch: int
     expires_at: int
-    bootstrap_socket_path: Path
+    bootstrap_socket_path: Path | str
     bootstrap_generation: str
 
     def redacted(self) -> dict[str, Any]:
@@ -90,7 +99,7 @@ class RegisteredMCPLaunch:
             "expires_at": self.expires_at,
             "bootstrap_socket_path": str(self.bootstrap_socket_path),
             "bootstrap_generation": self.bootstrap_generation,
-            "assurance": "same_uid_peercred_direct_parent_module",
+            "assurance": MCP_BOOTSTRAP_ASSURANCE,
         }
 
 
@@ -99,6 +108,8 @@ class _MCPLaunchRecord:
     record_id: str
     session: BoundHarnessSession
     session_id: str
+    platform: HostPlatform
+    account_id: str
     uid: int
     parent_pid: int
     parent_process_start_time: str
@@ -115,6 +126,19 @@ class _BoundMCPPeer:
     proxy_pid: int
     proxy_process_start_time: str
     proxy_process_measurement: str
+
+
+def _posix_uid(account_id: str) -> int:
+    if account_id.startswith("uid:"):
+        try:
+            uid = int(account_id.removeprefix("uid:"))
+        except ValueError as exc:
+            raise AuthenticationError("local binding process account is invalid") from exc
+        if uid >= 0:
+            return uid
+    if account_id.startswith("sid:S-"):
+        return 0
+    raise AuthenticationError("local binding process account is invalid")
 
 
 def _binding_actor(binding: CredentialBinding, *, now: int) -> VerifiedActor:
@@ -138,6 +162,16 @@ def _binding_actor(binding: CredentialBinding, *, now: int) -> VerifiedActor:
 
 
 def _load_capability_root(path: Path) -> bytes:
+    if host_platform() == "windows":
+        from agentnet.windows_security import read_private_file
+
+        try:
+            value = read_private_file(path, max_bytes=MAX_CAPABILITY_ROOT_BYTES)
+        except Exception as exc:
+            raise GateBlocked("G05", "local IPC capability root is unavailable") from exc
+        if len(value) < 32:
+            raise GateBlocked("G05", "local IPC capability root must contain at least 256 bits")
+        return value
     try:
         parent = path.parent.lstat()
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -166,6 +200,19 @@ def _load_capability_root(path: Path) -> bytes:
         os.close(descriptor)
 
 
+class _UnavailableMCPBootstrapServer:
+    """Allow direct IPC while one host-specific MCP transport remains gated."""
+
+    def __init__(self) -> None:
+        self.last_request_fields: frozenset[str] | None = None
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
 class LocalBindingService:
     """Own the private socket, current-epoch actor resolution, and issuance."""
 
@@ -174,8 +221,8 @@ class LocalBindingService:
         core: LocalBindingCore,
         *,
         config: LocalBindingConfig,
-        socket_path: Path,
-        mcp_bootstrap_socket_path: Path,
+        socket_path: Path | str,
+        mcp_bootstrap_socket_path: Path | str,
         capability_root: bytes,
         clock: Any = None,
     ) -> None:
@@ -185,7 +232,8 @@ class LocalBindingService:
         self.mcp_bootstrap_socket_path = mcp_bootstrap_socket_path
         self._capability_root = bytes(capability_root)
         self._clock = clock or (lambda: int(time.time()))
-        self.server = UnixIPCServer(
+        server_type = WindowsNamedPipeIPCServer if host_platform() == "windows" else UnixIPCServer
+        self.server = server_type(
             socket_path,
             capability_root=self._capability_root,
             replay_store=core.store,
@@ -199,13 +247,24 @@ class LocalBindingService:
         self._proxy_measurement = linux_process_probe(os.getpid())[1]
         self._proxy_module = Path(__file__).with_name("mcp_proxy.py").resolve()
         self._proxy_module_identity = self._proxy_module.stat()
-        self.mcp_bootstrap_server = UnixMCPBootstrapServer(
-            mcp_bootstrap_socket_path,
-            bind_peer=self._bind_mcp_peer,
-            handler=self._handle_mcp_peer,
-            generation=self.bootstrap_generation,
-            max_frame=config.max_frame_bytes,
-        )
+        if host_platform() == "windows":
+            self.mcp_bootstrap_server = WindowsMCPBootstrapServer(
+                str(mcp_bootstrap_socket_path),
+                bind_peer=self._bind_mcp_peer,
+                handler=self._handle_mcp_peer,
+                generation=self.bootstrap_generation,
+                assurance=MCP_BOOTSTRAP_ASSURANCE,
+                max_frame=config.max_frame_bytes,
+            )
+        else:
+            self.mcp_bootstrap_server = UnixMCPBootstrapServer(
+                mcp_bootstrap_socket_path,
+                bind_peer=self._bind_mcp_peer,
+                handler=self._handle_mcp_peer,
+                generation=self.bootstrap_generation,
+                assurance=MCP_BOOTSTRAP_ASSURANCE,
+                max_frame=config.max_frame_bytes,
+            )
 
     def _current_session(self, harness_id: str) -> BoundHarnessSession:
         row = self.core.store.fetch_one(
@@ -276,12 +335,13 @@ class LocalBindingService:
         del dispatcher  # Mechanism and current actor were verified; claims carry only the binding.
         session = self._current_session(harness_id)
         try:
-            process = Path(f"/proc/{pid}").stat()
-        except OSError as exc:
+            identity = measure_process_identity(pid)
+        except AuthenticationError as exc:
             raise AuthenticationError("IPC child process is unavailable") from exc
-        if process.st_uid != os.geteuid():
+        if identity.account_id != current_account_id():
             raise AuthenticationError("IPC child process owner is not the ordinary extension user")
-        start_time, measurement = linux_process_probe(pid)
+        start_time = identity.start_time
+        measurement = identity.executable_measurement
         if (
             expected_process_start_time is not None
             and expected_process_start_time != start_time
@@ -305,7 +365,9 @@ class LocalBindingService:
             process_binding="exact",
             child_process_measurement=None,
             allowed_methods=CANONICAL_TOOL_NAMES,
-            uid=process.st_uid,
+            platform=identity.platform,
+            account_id=identity.account_id,
+            uid=_posix_uid(identity.account_id),
             pid=pid,
             process_start_time=start_time,
             process_measurement=measurement,
@@ -331,11 +393,18 @@ class LocalBindingService:
                 stale.append(record_id)
                 continue
             try:
-                parent_identity = linux_process_probe(record.parent_pid)
+                parent_identity = measure_process_identity(record.parent_pid)
             except AuthenticationError:
                 stale.append(record_id)
                 continue
-            if parent_identity != (
+            if (
+                parent_identity.platform,
+                parent_identity.account_id,
+                parent_identity.start_time,
+                parent_identity.executable_measurement,
+            ) != (
+                record.platform,
+                record.account_id,
                 record.parent_process_start_time,
                 record.parent_process_measurement,
             ):
@@ -362,14 +431,14 @@ class LocalBindingService:
         if ADAPTER_CAPABILITIES[row["kind"]].local_binding != "mcp":
             raise AuthorizationError("enrolled harness does not use the MCP bootstrap binding")
         session = self._current_session(harness_id)
-        process_path = Path(f"/proc/{pid}")
         try:
-            process = process_path.stat()
-        except OSError as exc:
+            identity = measure_process_identity(pid)
+        except AuthenticationError as exc:
             raise AuthenticationError("MCP harness process is unavailable") from exc
-        if process.st_uid != os.geteuid():
+        if identity.account_id != current_account_id():
             raise AuthenticationError("MCP harness owner is not the ordinary extension user")
-        start_time, measurement = linux_process_probe(pid)
+        start_time = identity.start_time
+        measurement = identity.executable_measurement
         if (
             expected_process_start_time is not None
             and expected_process_start_time != start_time
@@ -392,7 +461,9 @@ class LocalBindingService:
                     if (
                         candidate.session == session
                         and candidate.session_id == session_id
-                        and candidate.uid == process.st_uid
+                        and candidate.platform == identity.platform
+                        and candidate.account_id == identity.account_id
+                        and candidate.uid == _posix_uid(identity.account_id)
                         and candidate.parent_pid == pid
                         and candidate.parent_process_start_time == start_time
                         and candidate.parent_process_measurement == measurement
@@ -408,7 +479,9 @@ class LocalBindingService:
                     record_id=secrets.token_urlsafe(32),
                     session=session,
                     session_id=session_id,
-                    uid=process.st_uid,
+                    platform=identity.platform,
+                    account_id=identity.account_id,
+                    uid=_posix_uid(identity.account_id),
                     parent_pid=pid,
                     parent_process_start_time=start_time,
                     parent_process_measurement=measurement,
@@ -467,31 +540,33 @@ class LocalBindingService:
     def _proxy_has_expected_module_open(self, pid: int) -> bool:
         expected = self._proxy_module_identity
         try:
-            descriptors = Path(f"/proc/{pid}/fd").iterdir()
-            for candidate in descriptors:
-                try:
-                    actual = candidate.stat()
-                except OSError:
-                    continue
-                if (
-                    actual.st_dev == expected.st_dev
-                    and actual.st_ino == expected.st_ino
-                    and stat.S_ISREG(actual.st_mode)
-                ):
-                    return True
-        except OSError:
+            opened = psutil.Process(pid).open_files()
+        except (OSError, psutil.Error):
             return False
+        for candidate in opened:
+            try:
+                actual = Path(candidate.path).stat()
+            except OSError:
+                continue
+            if (
+                actual.st_dev == expected.st_dev
+                and actual.st_ino == expected.st_ino
+                and stat.S_ISREG(actual.st_mode)
+            ):
+                return True
         return False
 
     def _verify_proxy_identity(self, peer: UnixProcessPeer) -> None:
-        if peer.uid != os.geteuid() or peer.process_measurement != self._proxy_measurement:
+        if (
+            peer.account_id != current_account_id()
+            or peer.process_measurement != self._proxy_measurement
+        ):
             raise AuthenticationError("MCP proxy executable identity rejected")
         try:
-            raw = Path(f"/proc/{peer.pid}/cmdline").read_bytes()
-            arguments = tuple(part for part in raw.split(b"\0") if part)
-        except OSError as exc:
+            arguments = tuple(psutil.Process(peer.pid).cmdline())
+        except (OSError, psutil.Error) as exc:
             raise AuthenticationError("MCP proxy command identity is unavailable") from exc
-        if arguments[1:] != (b"-m", b"agentnet.bindings.mcp_proxy"):
+        if arguments[1:] != ("-m", "agentnet.bindings.mcp_proxy"):
             raise AuthenticationError("MCP proxy module command identity rejected")
         if not self._proxy_has_expected_module_open(peer.pid):
             raise AuthenticationError("MCP proxy loaded-module identity rejected")
@@ -504,12 +579,16 @@ class LocalBindingService:
                 record
                 for record in self._mcp_launches.values()
                 if (
+                    record.platform,
+                    record.account_id,
                     record.uid,
                     record.parent_pid,
                     record.parent_process_start_time,
                     record.parent_process_measurement,
                 )
                 == (
+                    peer.platform,
+                    peer.parent_account_id,
                     peer.uid,
                     peer.parent_pid,
                     peer.parent_process_start_time,
@@ -558,11 +637,18 @@ class LocalBindingService:
                 bound.proxy_process_measurement,
             ):
                 raise AuthenticationError("MCP proxy process changed after bootstrap")
-            if linux_process_parent(peer.pid) != record.parent_pid:
+            if peer.parent_pid != record.parent_pid:
                 self._mcp_launches.pop(record.record_id, None)
                 raise AuthenticationError("MCP proxy parent exited or changed")
-            parent_identity = linux_process_probe(record.parent_pid)
-            if parent_identity != (
+            parent_identity = measure_process_identity(record.parent_pid)
+            if (
+                parent_identity.platform,
+                parent_identity.account_id,
+                parent_identity.start_time,
+                parent_identity.executable_measurement,
+            ) != (
+                record.platform,
+                record.account_id,
                 record.parent_process_start_time,
                 record.parent_process_measurement,
             ):
@@ -643,12 +729,17 @@ def _configured_path(data_dir: Path, configured: Path) -> Path:
 
 def _configured_unix_socket_path(data_dir: Path, configured: Path) -> Path:
     path = _configured_path(data_dir, configured)
-    # Linux reserves one byte of sockaddr_un.sun_path for the terminating NUL.
-    # Peer-credential bindings are Linux-only, so reject an unusable locator at
-    # composition rather than leaking a platform OSError during app startup.
-    if len(os.fsencode(path)) > 107:
+    # Linux has 108 bytes including NUL; Darwin sockaddr_un.sun_path has 104.
+    limit = 103 if host_platform() == "macos" else 107
+    if len(os.fsencode(path)) > limit:
         raise GateBlocked("G05", "local binding Unix socket path exceeds the platform limit")
     return path
+
+
+def _windows_pipe_path(kind: str) -> str:
+    if kind not in {"direct", "mcp"}:
+        raise GateBlocked("G05", "local binding pipe kind is invalid")
+    return rf"\\.\pipe\agentnet-{kind}-{secrets.token_urlsafe(24)}"
 
 
 def create_local_binding_service(core: LocalBindingCore) -> LocalBindingService:
@@ -657,10 +748,14 @@ def create_local_binding_service(core: LocalBindingCore) -> LocalBindingService:
     if configured is None:
         raise GateBlocked("G05", "local binding configuration is absent")
     root_path = _configured_path(core.config.data_dir, configured.capability_root_path)
-    socket_path = _configured_unix_socket_path(core.config.data_dir, configured.socket_path)
-    mcp_bootstrap_socket_path = _configured_unix_socket_path(
-        core.config.data_dir, configured.mcp_bootstrap_socket_path
-    )
+    if host_platform() == "windows":
+        socket_path: Path | str = _windows_pipe_path("direct")
+        mcp_bootstrap_socket_path: Path | str = _windows_pipe_path("mcp")
+    else:
+        socket_path = _configured_unix_socket_path(core.config.data_dir, configured.socket_path)
+        mcp_bootstrap_socket_path = _configured_unix_socket_path(
+            core.config.data_dir, configured.mcp_bootstrap_socket_path
+        )
     return LocalBindingService(
         core,
         config=configured,

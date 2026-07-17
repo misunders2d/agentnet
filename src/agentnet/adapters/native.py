@@ -44,6 +44,47 @@ class NativeTurnResult:
     terminal_event: str
 
 
+def _spawn_process_tree(
+    command: tuple[str, ...],
+    *,
+    inherited_fds: tuple[int, ...] = (),
+    **kwargs: Any,
+) -> tuple[subprocess.Popen[Any], Any | None]:
+    """Start child under race-free host process-tree custody."""
+
+    if os.name != "nt":
+        process = subprocess.Popen(
+            command,
+            start_new_session=True,
+            pass_fds=inherited_fds,
+            **kwargs,
+        )
+        return process, None
+    if inherited_fds:
+        raise GateBlocked("G05", "Windows adapters cannot inherit POSIX descriptors")
+    from agentnet.adapters.windows_job import WindowsJobGuard
+
+    guard = WindowsJobGuard()
+    process: subprocess.Popen[Any] | None = None
+    try:
+        process = subprocess.Popen(
+            command,
+            creationflags=guard.creation_flags(),
+            **kwargs,
+        )
+        guard.assign_and_resume(process)
+    except Exception:
+        if process is not None:
+            try:
+                process.kill()
+                process.wait(timeout=2.0)
+            except Exception:
+                pass
+        guard.close()
+        raise
+    return process, guard
+
+
 class _StrictJsonLineProcess:
     """LF-only bounded JSONL subprocess transport."""
 
@@ -60,16 +101,15 @@ class _StrictJsonLineProcess:
         process_started: Callable[[int], None] | None = None,
     ) -> None:
         self.max_frame_bytes = max_frame_bytes
-        self.process = subprocess.Popen(
+        self.process, self._windows_job = _spawn_process_tree(
             command,
             cwd=cwd,
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
             close_fds=True,
-            pass_fds=inherited_fds,
+            inherited_fds=inherited_fds,
         )
         if process_started is not None:
             try:
@@ -163,6 +203,10 @@ class _StrictJsonLineProcess:
         return self.process.pid
 
     def stop(self, timeout_seconds: float = 2.0) -> None:
+        if self._windows_job is not None:
+            self._windows_job.stop(self.process, timeout_seconds=timeout_seconds)
+            self._windows_job = None
+            return
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -669,8 +713,9 @@ class AntigravityPrintDriver(NativeHarnessDriver):
             raise ValidationError("Antigravity print driver is not ready")
         with self._turn_lock:
             process: subprocess.Popen[str] | None = None
+            windows_job: Any | None = None
             try:
-                process = subprocess.Popen(
+                process, windows_job = _spawn_process_tree(
                     (*self._command, prompt),
                     cwd=self.spec.work_dir,
                     env=self._environment,
@@ -681,19 +726,20 @@ class AntigravityPrintDriver(NativeHarnessDriver):
                     encoding="utf-8",
                     errors="strict",
                     close_fds=True,
-                    start_new_session=True,
                 )
                 stdout, _stderr = process.communicate(timeout=timeout_seconds)
             except subprocess.TimeoutExpired as exc:
                 self._ready = False
                 assert process is not None
-                _terminate_process_group(process)
+                _terminate_process_group(process, windows_job=windows_job)
                 raise NativeProtocolError("Antigravity print invocation timed out") from exc
             except (OSError, UnicodeError) as exc:
                 self._ready = False
                 if process is not None:
-                    _terminate_process_group(process)
+                    _terminate_process_group(process, windows_job=windows_job)
                 raise NativeProtocolError("Antigravity print invocation failed") from exc
+            if windows_job is not None:
+                windows_job.close()
             if process.returncode != 0:
                 self._ready = False
                 raise NativeProtocolError("Antigravity print invocation failed")
@@ -722,9 +768,16 @@ class AntigravityPrintDriver(NativeHarnessDriver):
         self._ready = False
 
 
-def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
+def _terminate_process_group(
+    process: subprocess.Popen[Any],
+    *,
+    windows_job: Any | None = None,
+) -> None:
     """Bounded two-stage shutdown for one-shot native process trees."""
 
+    if windows_job is not None:
+        windows_job.stop(process, timeout_seconds=1.0)
+        return
     if process.poll() is not None:
         return
     try:

@@ -10,6 +10,7 @@ closed for a sibling process and for PID reuse.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import hashlib
 import hmac
 import json
@@ -19,8 +20,10 @@ import socket
 import sqlite3
 import stat
 import struct
+import threading
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -28,6 +31,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticVa
 
 from agentnet.bindings.tools import CANONICAL_TOOL_NAMES, CanonicalToolName
 from agentnet.errors import AuthenticationError, ReplayError, ValidationError
+from agentnet.host import HostPlatform, host_platform
+from agentnet.host_security import HostProcessIdentity, measure_process_identity
 from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 
@@ -36,6 +41,22 @@ CanonicalIPCMethod = CanonicalToolName
 LocalBindingMechanism = Literal["direct_ipc", "mcp"]
 ProcessBindingMode = Literal["exact", "direct_child"]
 Handler = Callable[["IPCSessionClaims", dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedProcessPeer:
+    """Server-derived peer and direct-parent process identity."""
+
+    platform: HostPlatform
+    account_id: str
+    pid: int
+    uid: int
+    process_start_time: str
+    process_measurement: str
+    parent_pid: int
+    parent_account_id: str
+    parent_process_start_time: str
+    parent_process_measurement: str
 
 
 class IPCSessionClaims(BaseModel):
@@ -58,6 +79,8 @@ class IPCSessionClaims(BaseModel):
         min_length=1,
         max_length=len(CANONICAL_TOOL_NAMES),
     )
+    platform: HostPlatform
+    account_id: str = Field(min_length=4, max_length=256)
     uid: int = Field(ge=0)
     pid: int = Field(gt=0)
     process_start_time: str = Field(pattern=r"^[0-9]{1,128}$")
@@ -80,11 +103,16 @@ class IPCSessionClaims(BaseModel):
             raise ValueError("direct-child IPC binding requires one exact child measurement")
         if self.binding == "direct_ipc" and self.process_binding != "exact":
             raise ValueError("direct IPC must bind the exact harness process")
+        if self.platform in {"linux", "macos"}:
+            if self.account_id != f"uid:{self.uid}":
+                raise ValueError("POSIX IPC account must match its peer UID")
+        elif self.uid != 0 or not self.account_id.startswith("sid:S-"):
+            raise ValueError("Windows IPC account must use a process-token SID")
         return self
 
 
-class ProcessProbe(Protocol):
-    def __call__(self, pid: int) -> tuple[str, str]: ...
+class ProcessIdentityProbe(Protocol):
+    def __call__(self, pid: int) -> HostProcessIdentity: ...
 
 
 def _require_root(root: bytes) -> None:
@@ -180,13 +208,15 @@ class IPCSessionVerifier:
 
     def _consume_replay_fence(self, claims: IPCSessionClaims, nonce: str, *, now: int) -> None:
         context = {
+            "account_id": claims.account_id,
             "capability_id": claims.capability_id,
             "peer_pid": claims.pid,
             "peer_uid": claims.uid,
+            "platform": claims.platform,
             "process_measurement": claims.process_measurement,
             "process_start_time": claims.process_start_time,
             "root_key_id": self._root_key_id,
-            "schema": "agentnet.ipc.replay-context.v1",
+            "schema": "agentnet.ipc.replay-context.v2",
             "session_id": claims.session_id,
         }
         context_digest = canonical_digest(context)
@@ -226,31 +256,16 @@ class IPCSessionVerifier:
         self,
         frame: dict[str, Any],
         *,
-        peer_uid: int,
-        peer_pid: int,
-        process_start_time: str,
-        process_measurement: str,
+        peer: AcceptedProcessPeer,
     ) -> dict[str, Any]:
-        _claims, request = self.verify_context(
-            frame,
-            peer_uid=peer_uid,
-            peer_pid=peer_pid,
-            process_start_time=process_start_time,
-            process_measurement=process_measurement,
-        )
+        _claims, request = self.verify_context(frame, peer=peer)
         return request
 
     def verify_context(
         self,
         frame: dict[str, Any],
         *,
-        peer_uid: int,
-        peer_pid: int,
-        process_start_time: str,
-        process_measurement: str,
-        parent_pid: int | None = None,
-        parent_process_start_time: str | None = None,
-        parent_process_measurement: str | None = None,
+        peer: AcceptedProcessPeer,
     ) -> tuple[IPCSessionClaims, dict[str, Any]]:
         if not isinstance(frame, dict) or set(frame) != {
             "authenticator",
@@ -274,21 +289,29 @@ class IPCSessionVerifier:
             raise AuthenticationError("IPC capability is outside its validity window")
         if claims.process_binding == "exact":
             actual_binding = (
-                peer_uid,
-                peer_pid,
-                process_start_time,
-                process_measurement,
+                peer.platform,
+                peer.account_id,
+                peer.uid,
+                peer.pid,
+                peer.process_start_time,
+                peer.process_measurement,
                 frame["session_id"],
             )
         else:
+            if peer.account_id != peer.parent_account_id:
+                raise AuthenticationError("IPC child and parent accounts differ")
             actual_binding = (
-                peer_uid,
-                parent_pid,
-                parent_process_start_time,
-                parent_process_measurement,
+                peer.platform,
+                peer.parent_account_id,
+                peer.uid,
+                peer.parent_pid,
+                peer.parent_process_start_time,
+                peer.parent_process_measurement,
                 frame["session_id"],
             )
         expected_binding = (
+            claims.platform,
+            claims.account_id,
             claims.uid,
             claims.pid,
             claims.process_start_time,
@@ -299,7 +322,7 @@ class IPCSessionVerifier:
             raise AuthenticationError("IPC process/session binding mismatch")
         if (
             claims.process_binding == "direct_child"
-            and process_measurement != claims.child_process_measurement
+            and peer.process_measurement != claims.child_process_measurement
         ):
             raise AuthenticationError("IPC child executable measurement mismatch")
         expected_authenticator = _frame_authenticator(
@@ -316,34 +339,352 @@ class IPCSessionVerifier:
 
 
 def linux_process_probe(pid: int) -> tuple[str, str]:
-    """Read Linux PID-reuse evidence and hash the running executable."""
+    """Compatibility name for cross-platform PID-reuse and executable proof."""
 
-    try:
-        stat_value = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-        suffix = stat_value[stat_value.rindex(")") + 2 :].split()
-        # Fields after comm begin at stat field 3; starttime is field 22.
-        start_time = suffix[19]
-        digest = hashlib.sha256()
-        with Path(f"/proc/{pid}/exe").open("rb") as executable:
-            for chunk in iter(lambda: executable.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except (OSError, ValueError, IndexError) as exc:
-        raise AuthenticationError("IPC process identity could not be measured") from exc
-    return start_time, f"sha256:{digest.hexdigest()}"
+    identity = measure_process_identity(pid)
+    return identity.start_time, identity.executable_measurement
 
 
 def linux_process_parent(pid: int) -> int:
-    """Return the exact Linux parent PID without trusting caller-supplied ancestry."""
+    """Compatibility name for cross-platform server-measured ancestry."""
 
-    try:
-        stat_value = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-        suffix = stat_value[stat_value.rindex(")") + 2 :].split()
-        parent_pid = int(suffix[1])
-    except (OSError, ValueError, IndexError) as exc:
-        raise AuthenticationError("IPC process ancestry could not be measured") from exc
+    parent_pid = measure_process_identity(pid).parent_pid
     if parent_pid <= 0:
         raise AuthenticationError("IPC process ancestry is invalid")
     return parent_pid
+
+
+def _macos_peer_ids(sock: socket.socket) -> tuple[int, int]:
+    """Read effective peer PID and UID from one accepted Darwin Unix socket."""
+
+    try:
+        raw_pid = sock.getsockopt(0, 0x002, struct.calcsize("i"))  # SOL_LOCAL/LOCAL_PEERPID
+        if not isinstance(raw_pid, bytes) or len(raw_pid) != struct.calcsize("i"):
+            raise OSError("LOCAL_PEERPID returned an invalid payload")
+        pid = struct.unpack("i", raw_pid)[0]
+        libc = ctypes.CDLL(None, use_errno=True)
+        getpeereid = libc.getpeereid
+        getpeereid.argtypes = [
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        getpeereid.restype = ctypes.c_int
+        uid = ctypes.c_uint()
+        gid = ctypes.c_uint()
+        if getpeereid(sock.fileno(), ctypes.byref(uid), ctypes.byref(gid)) != 0:
+            errno_value = ctypes.get_errno()
+            raise OSError(errno_value, os.strerror(errno_value))
+    except (AttributeError, OSError, TypeError, struct.error) as exc:
+        raise AuthenticationError("macOS Unix peer credentials unavailable") from exc
+    if pid <= 0:
+        raise AuthenticationError("macOS Unix peer PID is invalid")
+    return pid, int(uid.value)
+
+
+def accepted_windows_pipe_peer(
+    handle: Any,
+    *,
+    process_identity_probe: ProcessIdentityProbe = measure_process_identity,
+) -> AcceptedProcessPeer:
+    """Derive Windows peer authority from connected named-pipe client PID."""
+
+    try:
+        import win32pipe
+    except ImportError as exc:  # pragma: no cover - Windows dependency gate
+        raise AuthenticationError("pywin32 named-pipe identity is unavailable") from exc
+    try:
+        pid = int(win32pipe.GetNamedPipeClientProcessId(handle))
+        peer = process_identity_probe(pid)
+        parent = process_identity_probe(peer.parent_pid)
+    except Exception as exc:
+        raise AuthenticationError("Windows named-pipe client process identity rejected") from exc
+    if (
+        peer.platform != "windows"
+        or parent.platform != "windows"
+        or not peer.account_id.startswith("sid:S-")
+        or not parent.account_id.startswith("sid:S-")
+    ):
+        raise AuthenticationError("Windows named-pipe client process identity rejected")
+    return AcceptedProcessPeer(
+        platform="windows",
+        account_id=peer.account_id,
+        pid=peer.pid,
+        uid=0,
+        process_start_time=peer.start_time,
+        process_measurement=peer.executable_measurement,
+        parent_pid=parent.pid,
+        parent_account_id=parent.account_id,
+        parent_process_start_time=parent.start_time,
+        parent_process_measurement=parent.executable_measurement,
+    )
+
+
+def accepted_unix_socket_peer(
+    sock: socket.socket,
+    *,
+    platform_name: HostPlatform | None = None,
+    process_identity_probe: ProcessIdentityProbe = measure_process_identity,
+) -> AcceptedProcessPeer:
+    """Derive peer authority only from accepted-socket and host process facts."""
+
+    platform_value = host_platform() if platform_name is None else platform_name
+    if platform_value == "linux":
+        if not hasattr(socket, "SO_PEERCRED"):
+            raise AuthenticationError("Linux Unix peer credentials unavailable")
+        try:
+            pid, uid, _gid = struct.unpack(
+                "3i",
+                sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12),
+            )
+        except (OSError, TypeError, struct.error) as exc:
+            raise AuthenticationError("Linux Unix peer credentials unavailable") from exc
+    elif platform_value == "macos":
+        pid, uid = _macos_peer_ids(sock)
+    else:
+        raise AuthenticationError("Unix peer credentials are unavailable on Windows")
+
+    peer = process_identity_probe(pid)
+    if peer.platform != platform_value or peer.account_id != f"uid:{uid}":
+        raise AuthenticationError("Unix peer process account does not match socket credentials")
+    parent = process_identity_probe(peer.parent_pid)
+    if parent.platform != platform_value:
+        raise AuthenticationError("Unix peer parent platform changed during measurement")
+    return AcceptedProcessPeer(
+        platform=platform_value,
+        account_id=peer.account_id,
+        pid=peer.pid,
+        uid=uid,
+        process_start_time=peer.start_time,
+        process_measurement=peer.executable_measurement,
+        parent_pid=parent.pid,
+        parent_account_id=parent.account_id,
+        parent_process_start_time=parent.start_time,
+        parent_process_measurement=parent.executable_measurement,
+    )
+
+
+class WindowsNamedPipeIPCServer:
+    """Private byte-stream named pipe with server-derived client identity."""
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        capability_root: bytes,
+        replay_store: StoreBackend,
+        handler: Handler,
+        max_frame: int = 1_048_576,
+        clock: Callable[[], int] | None = None,
+        process_identity_probe: ProcessIdentityProbe = measure_process_identity,
+    ) -> None:
+        if not isinstance(path, str) or not path.startswith(r"\\.\pipe\agentnet-"):
+            raise ValidationError("Windows named-pipe locator is invalid")
+        self.path = path
+        self._verifier = IPCSessionVerifier(
+            capability_root,
+            replay_store=replay_store,
+            clock=clock,
+        )
+        self.handler = handler
+        self.max_frame = max_frame
+        self.process_identity_probe = process_identity_probe
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._server_thread: threading.Thread | None = None
+        self._client_threads: set[threading.Thread] = set()
+        self._handles: set[Any] = set()
+        self._guard = threading.Lock()
+        self._startup_error: BaseException | None = None
+
+    @staticmethod
+    def _imports():
+        try:
+            import pywintypes
+            import win32con
+            import win32file
+            import win32pipe
+            import winerror
+        except ImportError as exc:  # pragma: no cover - Windows dependency gate
+            raise AuthenticationError("pywin32 named-pipe support is unavailable") from exc
+        return pywintypes, win32con, win32file, win32pipe, winerror
+
+    def _create_pipe(self):
+        _pywintypes, _win32con, _win32file, win32pipe, _winerror = self._imports()
+        from agentnet.windows_security import (
+            private_security_attributes,
+            require_private_kernel_handle,
+        )
+
+        reject_remote = getattr(win32pipe, "PIPE_REJECT_REMOTE_CLIENTS", 0x00000008)
+        handle = win32pipe.CreateNamedPipe(
+            self.path,
+            win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_TYPE_BYTE
+            | win32pipe.PIPE_READMODE_BYTE
+            | win32pipe.PIPE_WAIT
+            | reject_remote,
+            win32pipe.PIPE_UNLIMITED_INSTANCES,
+            self.max_frame + 4,
+            self.max_frame + 4,
+            5_000,
+            private_security_attributes(),
+        )
+        require_private_kernel_handle(handle, label=self.path)
+        return handle
+
+    @staticmethod
+    def _read_exact(handle, length: int) -> bytes:
+        _pywintypes, _win32con, win32file, _win32pipe, _winerror = WindowsNamedPipeIPCServer._imports()
+        value = bytearray()
+        while len(value) < length:
+            _status, chunk = win32file.ReadFile(handle, length - len(value))
+            if not chunk:
+                raise ValidationError("Windows named-pipe frame ended early")
+            value.extend(chunk)
+        return bytes(value)
+
+    @staticmethod
+    def _write_frame(handle, value: dict[str, Any]) -> None:
+        _pywintypes, _win32con, win32file, _win32pipe, _winerror = WindowsNamedPipeIPCServer._imports()
+        body = canonical_json(value)
+        win32file.WriteFile(handle, len(body).to_bytes(4, "big") + body)
+        win32file.FlushFileBuffers(handle)
+
+    def _accepted_peer(self, handle) -> AcceptedProcessPeer:
+        return accepted_windows_pipe_peer(
+            handle,
+            process_identity_probe=self.process_identity_probe,
+        )
+
+    def _serve_client(self, handle) -> None:
+        _pywintypes, _win32con, _win32file, win32pipe, _winerror = self._imports()
+        try:
+            peer = self._accepted_peer(handle)
+            length = int.from_bytes(self._read_exact(handle, 4), "big")
+            if length < 2 or length > self.max_frame:
+                raise ValidationError("IPC frame length rejected")
+            raw = self._read_exact(handle, length)
+            message = json.loads(raw)
+            if not isinstance(message, dict) or canonical_json(message) != raw:
+                raise ValidationError("IPC frame must use exact canonical JSON")
+            claims, request = self._verifier.verify_context(message, peer=peer)
+            loop = self._loop
+            if loop is None or loop.is_closed():
+                raise AuthenticationError("Windows named-pipe event loop is unavailable")
+            result = asyncio.run_coroutine_threadsafe(
+                self.handler(claims, request), loop
+            ).result(timeout=30)
+            self._write_frame(handle, result)
+        except Exception as exc:
+            try:
+                self._write_frame(handle, {"error": getattr(exc, "code", "invalid_request")})
+            except Exception:
+                pass
+        finally:
+            try:
+                win32pipe.DisconnectNamedPipe(handle)
+            except Exception:
+                pass
+            try:
+                handle.Close()
+            except Exception:
+                pass
+            with self._guard:
+                self._handles.discard(handle)
+                self._client_threads.discard(threading.current_thread())
+
+    def _serve(self) -> None:
+        pywintypes, _win32con, _win32file, win32pipe, winerror = self._imports()
+        try:
+            while not self._stop.is_set():
+                handle = self._create_pipe()
+                with self._guard:
+                    self._handles.add(handle)
+                self._ready.set()
+                try:
+                    win32pipe.ConnectNamedPipe(handle, None)
+                except pywintypes.error as exc:
+                    if getattr(exc, "winerror", None) != winerror.ERROR_PIPE_CONNECTED:
+                        raise
+                if self._stop.is_set():
+                    try:
+                        handle.Close()
+                    finally:
+                        with self._guard:
+                            self._handles.discard(handle)
+                    break
+                thread = threading.Thread(
+                    target=self._serve_client,
+                    args=(handle,),
+                    name="agentnet-windows-pipe-client",
+                    daemon=True,
+                )
+                with self._guard:
+                    self._client_threads.add(thread)
+                thread.start()
+        except Exception as exc:
+            if not self._stop.is_set():
+                self._startup_error = exc
+            self._ready.set()
+
+    async def start(self) -> None:
+        if host_platform() != "windows":
+            raise AuthenticationError("Windows named-pipe server requires Windows")
+        if self._server_thread is not None:
+            raise AuthenticationError("Windows named-pipe server is already started")
+        self._loop = asyncio.get_running_loop()
+        self._stop.clear()
+        self._ready.clear()
+        self._startup_error = None
+        self._server_thread = threading.Thread(
+            target=self._serve,
+            name="agentnet-windows-pipe-accept",
+            daemon=True,
+        )
+        self._server_thread.start()
+        ready = await asyncio.to_thread(self._ready.wait, 10)
+        if not ready or self._startup_error is not None:
+            await self.close()
+            if self._startup_error is not None:
+                raise AuthenticationError("Windows named-pipe server failed to start") from self._startup_error
+            raise AuthenticationError("Windows named-pipe server startup timed out")
+
+    def _unblock_accept(self) -> None:
+        _pywintypes, win32con, win32file, _win32pipe, _winerror = self._imports()
+        try:
+            handle = win32file.CreateFile(
+                self.path,
+                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                0,
+                None,
+                win32con.OPEN_EXISTING,
+                0,
+                None,
+            )
+            handle.Close()
+        except Exception:
+            pass
+
+    async def close(self) -> None:
+        self._stop.set()
+        await asyncio.to_thread(self._unblock_accept)
+        thread = self._server_thread
+        if thread is not None:
+            await asyncio.to_thread(thread.join, 10)
+        with self._guard:
+            handles = tuple(self._handles)
+            clients = tuple(self._client_threads)
+        for handle in handles:
+            try:
+                handle.Close()
+            except Exception:
+                pass
+        for client in clients:
+            await asyncio.to_thread(client.join, 2)
+        self._server_thread = None
+        self._loop = None
 
 
 class UnixIPCServer:
@@ -356,7 +697,7 @@ class UnixIPCServer:
         handler: Handler,
         max_frame: int = 1_048_576,
         clock: Callable[[], int] | None = None,
-        process_probe: ProcessProbe = linux_process_probe,
+        process_identity_probe: ProcessIdentityProbe = measure_process_identity,
     ) -> None:
         self.path = path
         self._verifier = IPCSessionVerifier(
@@ -366,7 +707,7 @@ class UnixIPCServer:
         )
         self.handler = handler
         self.max_frame = max_frame
-        self.process_probe = process_probe
+        self.process_identity_probe = process_identity_probe
         self._server: asyncio.AbstractServer | None = None
         self._socket_identity: tuple[int, int] | None = None
 
@@ -395,12 +736,12 @@ class UnixIPCServer:
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             sock = writer.get_extra_info("socket")
-            if sock is None or not hasattr(socket, "SO_PEERCRED"):
+            if sock is None:
                 raise AuthenticationError("platform peer credentials unavailable")
-            pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-            start_time, measurement = self.process_probe(pid)
-            parent_pid = linux_process_parent(pid)
-            parent_start_time, parent_measurement = self.process_probe(parent_pid)
+            peer = accepted_unix_socket_peer(
+                sock,
+                process_identity_probe=self.process_identity_probe,
+            )
             prefix = await reader.readexactly(4)
             length = int.from_bytes(prefix, "big")
             if length < 2 or length > self.max_frame:
@@ -409,16 +750,7 @@ class UnixIPCServer:
             message = json.loads(raw_message)
             if not isinstance(message, dict) or canonical_json(message) != raw_message:
                 raise ValidationError("IPC frame must use exact canonical JSON")
-            claims, request = self._verifier.verify_context(
-                message,
-                peer_uid=uid,
-                peer_pid=pid,
-                process_start_time=start_time,
-                process_measurement=measurement,
-                parent_pid=parent_pid,
-                parent_process_start_time=parent_start_time,
-                parent_process_measurement=parent_measurement,
-            )
+            claims, request = self._verifier.verify_context(message, peer=peer)
             response = await self.handler(claims, request)
             body = canonical_json(response)
             writer.write(len(body).to_bytes(4, "big") + body)

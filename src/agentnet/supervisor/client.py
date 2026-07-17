@@ -405,7 +405,7 @@ class AgentNetSupervisorCoreClient:
             and set(value) == mcp_required
             and value["schema"] == "agentnet.mcp.registered-launch.v1"
             and value["session_id"] == session_id
-            and value["assurance"] == "same_uid_peercred_direct_parent_module"
+            and value["assurance"] == "server_derived_account_process_parent_module"
             and isinstance(value["bootstrap_socket_path"], str)
             and bool(value["bootstrap_socket_path"])
             and isinstance(value["bootstrap_generation"], str)

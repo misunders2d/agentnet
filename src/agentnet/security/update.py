@@ -28,7 +28,7 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
 class UpdateArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    platform: Literal["linux"]
+    platform: Literal["linux", "macos", "windows"]
     architecture: Literal["x86_64", "aarch64"]
     uri: str = Field(min_length=1, max_length=2048)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

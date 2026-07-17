@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agentnet.bindings.ipc import (
+    AcceptedProcessPeer,
     IPCSessionClaims,
     IPCSessionVerifier,
     build_ipc_frame,
@@ -29,6 +31,8 @@ def claims(**updates: object) -> IPCSessionClaims:
         "credential_id": "credential-bound-to-ipc-session-001",
         "credential_epoch": 1,
         "allowed_methods": ["agentnet.inbox", "agentnet.send"],
+        "platform": "linux",
+        "account_id": "uid:1000",
         "uid": 1000,
         "pid": 4242,
         "process_start_time": "987654321",
@@ -51,14 +55,26 @@ def frame(token: str, *, nonce: str = "nonce-with-enough-entropy-value-001", req
 
 
 def verify(verifier: IPCSessionVerifier, value: dict[str, object], **updates: object):
-    inputs: dict[str, object] = {
-        "peer_uid": 1000,
-        "peer_pid": 4242,
-        "process_start_time": "987654321",
-        "process_measurement": MEASUREMENT,
+    peer = AcceptedProcessPeer(
+        platform="linux",
+        account_id="uid:1000",
+        pid=4242,
+        uid=1000,
+        process_start_time="987654321",
+        process_measurement=MEASUREMENT,
+        parent_pid=4000,
+        parent_account_id="uid:1000",
+        parent_process_start_time="123456789",
+        parent_process_measurement="sha256:" + "c" * 64,
+    )
+    aliases = {
+        "peer_uid": "uid",
+        "peer_pid": "pid",
     }
-    inputs.update(updates)
-    return verifier.verify(value, **inputs)  # type: ignore[arg-type]
+    normalized = {aliases.get(name, name): update for name, update in updates.items()}
+    if "uid" in normalized and "account_id" not in normalized:
+        normalized["account_id"] = f"uid:{normalized['uid']}"
+    return verifier.verify(value, peer=replace(peer, **normalized))
 
 
 def test_inherited_capability_is_exact_process_session_bound_and_one_use(store) -> None:

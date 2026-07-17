@@ -13,6 +13,7 @@ type Binding = {
 };
 
 let cachedBinding: Binding | undefined;
+let pendingBinding: Promise<Binding> | undefined;
 
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -26,21 +27,9 @@ function canonical(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-function binding(): Binding {
-	if (cachedBinding) return cachedBinding;
-	const rendered = process.env.AGENTNET_LOCAL_BINDING_FD;
-	if (!rendered || !/^[0-9]+$/.test(rendered)) {
-		throw new Error(
-			"AgentNet local binding is unavailable: package installation alone does not activate it; " +
-			"launch this measured Pi through agentnet supervisor-run with local_bindings_required=true",
-		);
-	}
-	const descriptor = Number(rendered);
-	const size = fstatSync(descriptor).size;
-	if (size < 2 || size > 65536) throw new Error("AgentNet local binding was not activated");
-	const buffer = Buffer.alloc(size);
-	if (readSync(descriptor, buffer, 0, size, 0) !== size) throw new Error("AgentNet local binding read failed");
-	const value = JSON.parse(buffer.toString("utf8")) as Record<string, unknown>;
+function parseBinding(buffer: Buffer): Binding {
+	const raw = buffer.toString("utf8");
+	const value = JSON.parse(raw) as Record<string, unknown>;
 	const keys = Object.keys(value).sort();
 	const expected = [
 		"capability",
@@ -53,15 +42,108 @@ function binding(): Binding {
 		"socket_path",
 	];
 	if (
-		canonical(value) !== buffer.toString("utf8") ||
+		canonical(value) !== raw ||
 		canonical(keys) !== canonical(expected) ||
 		value.schema !== "agentnet.ipc.issued-child.v1" ||
 		typeof value.capability !== "string" ||
 		typeof value.session_id !== "string" ||
 		typeof value.socket_path !== "string"
 	) throw new Error("AgentNet local binding schema is invalid");
-	cachedBinding = value as unknown as Binding;
-	return cachedBinding;
+	return value as unknown as Binding;
+}
+
+function bindingFromDescriptor(rendered: string): Binding {
+	if (!/^[0-9]+$/.test(rendered)) throw new Error("AgentNet local binding descriptor is invalid");
+	const descriptor = Number(rendered);
+	const metadata = fstatSync(descriptor);
+	let buffer: Buffer;
+	if (metadata.isFile()) {
+		if (metadata.size < 2 || metadata.size > 65536) throw new Error("AgentNet local binding was not activated");
+		buffer = Buffer.alloc(metadata.size);
+		if (readSync(descriptor, buffer, 0, metadata.size, 0) !== metadata.size) {
+			throw new Error("AgentNet local binding read failed");
+		}
+	} else if (metadata.isFIFO()) {
+		const chunks: Buffer[] = [];
+		let total = 0;
+		for (;;) {
+			const chunk = Buffer.alloc(16384);
+			const read = readSync(descriptor, chunk, 0, chunk.length, null);
+			if (read === 0) break;
+			total += read;
+			if (total > 65536) throw new Error("AgentNet local binding response is oversized");
+			chunks.push(chunk.subarray(0, read));
+		}
+		if (total < 2) throw new Error("AgentNet local binding was not activated");
+		buffer = Buffer.concat(chunks, total);
+	} else {
+		throw new Error("AgentNet local binding descriptor type is invalid");
+	}
+	return parseBinding(buffer);
+}
+
+function bindingFromEndpoint(endpoint: string): Promise<Binding> {
+	if (!/^\\\\\.\\pipe\\agentnet-binding-[A-Za-z0-9_-]{24,}$/.test(endpoint)) {
+		return Promise.reject(new Error("AgentNet local binding endpoint is invalid"));
+	}
+	const deadline = Date.now() + 10000;
+	return new Promise((resolve, reject) => {
+		const attempt = () => {
+			const socket = createConnection(endpoint);
+			let response = Buffer.alloc(0);
+			let settled = false;
+			const retry = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				socket.destroy();
+				if (Date.now() >= deadline) reject(error);
+				else setTimeout(attempt, 50);
+			};
+			socket.setTimeout(1000);
+			socket.on("data", (chunk) => {
+				response = Buffer.concat([response, chunk]);
+				if (response.length < 4) return;
+				const length = response.readUInt32BE(0);
+				if (length < 2 || length > 65536) return retry(new Error("AgentNet binding response length rejected"));
+				if (response.length < length + 4) return;
+				try {
+					const parsed = parseBinding(response.subarray(4, length + 4));
+					settled = true;
+					socket.end();
+					resolve(parsed);
+				} catch (error) {
+					retry(error instanceof Error ? error : new Error("AgentNet binding response rejected"));
+				}
+			});
+			socket.on("end", () => retry(new Error("AgentNet binding endpoint closed early")));
+			socket.on("timeout", () => retry(new Error("AgentNet binding endpoint timed out")));
+			socket.on("error", (error) => retry(error));
+		};
+		attempt();
+	});
+}
+
+async function binding(): Promise<Binding> {
+	if (cachedBinding) return cachedBinding;
+	if (pendingBinding) return pendingBinding;
+	const descriptor = process.env.AGENTNET_LOCAL_BINDING_FD;
+	const endpoint = process.env.AGENTNET_LOCAL_BINDING_ENDPOINT;
+	if (descriptor && endpoint) throw new Error("AgentNet local binding has conflicting locators");
+	if (descriptor) {
+		cachedBinding = bindingFromDescriptor(descriptor);
+		return cachedBinding;
+	}
+	if (endpoint) {
+		pendingBinding = bindingFromEndpoint(endpoint).then((value) => {
+			cachedBinding = value;
+			return value;
+		});
+		return pendingBinding;
+	}
+	throw new Error(
+		"AgentNet local binding is unavailable: package installation alone does not activate it; " +
+		"launch this measured Pi through agentnet supervisor-run with local_bindings_required=true",
+	);
 }
 
 type CanonicalMethod =
@@ -78,8 +160,8 @@ type CanonicalMethod =
 	| "agentnet.obligation.cancel"
 	| "agentnet.obligation.reconcile";
 
-function invoke(method: CanonicalMethod, args: Record<string, unknown>): Promise<unknown> {
-	const local = binding();
+async function invoke(method: CanonicalMethod, args: Record<string, unknown>): Promise<unknown> {
+	const local = await binding();
 	const nonce = randomBytes(24).toString("hex");
 	const request = { arguments: args, method };
 	const authenticated = { nonce, request, session_id: local.session_id };

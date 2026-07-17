@@ -37,7 +37,10 @@ for (const relative of requiredPublishedFiles) {
   if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
 }
 if (metadata.bin?.agentnet !== "npm/bin/agentnet.mjs") fail("agentnet launcher missing");
-if (!metadata.os?.includes("linux") || metadata.os.length !== 1) fail("Linux-only qualification changed");
+const supportedPlatforms = ["linux", "darwin", "win32"];
+if (JSON.stringify(metadata.os) !== JSON.stringify(supportedPlatforms)) {
+  fail("supported operating-system matrix changed");
+}
 if (metadata.scripts?.["check:packed"] !== "node npm/scripts/check-packed-package.mjs") {
   fail("full packed-package check is not wired");
 }

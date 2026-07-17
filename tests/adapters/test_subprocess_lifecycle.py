@@ -429,7 +429,7 @@ def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_withou
             "expires_at": int(time.time()) + 300,
             "bootstrap_socket_path": str(bootstrap_path),
             "bootstrap_generation": bootstrap_generation,
-            "assurance": "same_uid_peercred_direct_parent_module",
+            "assurance": "server_derived_account_process_parent_module",
         }
 
     runtime = BackgroundAdapterRuntime(
@@ -510,7 +510,7 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
             "expires_at": int(time.time()) + 300,
             "bootstrap_socket_path": str(bootstrap_path),
             "bootstrap_generation": "renewal-test-bootstrap-generation-001",
-            "assurance": "same_uid_peercred_direct_parent_module",
+            "assurance": "server_derived_account_process_parent_module",
         }
 
     runtime = BackgroundAdapterRuntime(

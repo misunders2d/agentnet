@@ -6,6 +6,11 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  forwardedSignals,
+  platformStateRoot,
+  supportedPlatform,
+} from "../lib/platform.mjs";
 
 const packageRoot = realpathSync(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -16,8 +21,8 @@ const installIdentity = createHash("sha256")
   .digest("hex")
   .slice(0, 12);
 
-if (process.platform !== "linux") {
-  console.error("AgentNet 0.1.x npm packages support Linux only; this platform is not qualified.");
+if (!supportedPlatform(process.platform)) {
+  console.error(`AgentNet does not support host platform: ${process.platform}`);
   process.exit(1);
 }
 
@@ -56,9 +61,13 @@ if (!versionAtLeast(actualUvVersion, minimumUvVersion)) {
   process.exit(1);
 }
 
-const stateRoot = process.env.XDG_STATE_HOME
-  ? path.resolve(process.env.XDG_STATE_HOME)
-  : path.join(os.homedir(), ".local", "state");
+let stateRoot;
+try {
+  stateRoot = path.resolve(platformStateRoot(process.platform, process.env, os.homedir()));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "AgentNet host state path is invalid");
+  process.exit(1);
+}
 const runtimeRoot = process.env.AGENTNET_NPM_RUNTIME_DIR
   ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
   : path.join(stateRoot, "agentnet", "npm-runtime", `${metadata.version}-${installIdentity}`);
@@ -69,7 +78,7 @@ if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink()) {
   console.error("AgentNet npm runtime path must be a real directory.");
   process.exit(1);
 }
-chmodSync(runtimeRoot, 0o700);
+if (process.platform !== "win32") chmodSync(runtimeRoot, 0o700);
 
 const userArguments = process.argv.slice(2);
 const verify = userArguments[0] === "verify";
@@ -96,7 +105,7 @@ const child = spawn(uvExecutable, uvArguments, {
   shell: false,
 });
 
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+for (const signal of forwardedSignals(process.platform)) {
   process.on(signal, () => {
     if (!child.killed) child.kill(signal);
   });
@@ -113,7 +122,7 @@ child.on("error", (error) => {
 
 child.on("exit", (code, signal) => {
   if (signal) {
-    process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[signal] ?? 1;
+    process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143, SIGBREAK: 149 }[signal] ?? 1;
     return;
   }
   process.exitCode = code ?? 1;

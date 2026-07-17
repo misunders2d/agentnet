@@ -15,7 +15,6 @@ import re
 import secrets
 import shutil
 import stat
-import fcntl
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -25,7 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from agentnet.errors import ConflictError, GateBlocked, ValidationError
+from agentnet.host import HostPlatform, host_platform
 from agentnet.security.signatures import canonical_digest, canonical_json
+try:  # POSIX locking; Windows uses msvcrt below.
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - exercised on Windows CI
+    fcntl = None  # type: ignore[assignment]
+
 from agentnet.security.update import (
     UpdateArtifact,
     UpdateManifest,
@@ -352,6 +357,7 @@ class DistributionInstaller:
         bootstrap_state: UpdateVerificationState,
         health_check_timeout_seconds: int = 30,
         architecture: str | None = None,
+        platform_name: HostPlatform | None = None,
         cleanup_allowlist: Sequence[Path] = (),
     ) -> None:
         self.root = install_root.absolute()
@@ -371,6 +377,7 @@ class DistributionInstaller:
             raise ValidationError("health-check timeout is outside the bounded profile")
         self.health_check_timeout_seconds = health_check_timeout_seconds
         self.architecture = _canonical_architecture(architecture)
+        self.platform_name = host_platform() if platform_name is None else platform_name
         self.cleanup_allowlist = frozenset(path.absolute() for path in cleanup_allowlist)
 
     @property
@@ -431,11 +438,26 @@ class DistributionInstaller:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
                 raise GateBlocked("distribution_state", "distribution lock is not owner-only")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            else:  # Windows byte-range lock; lock file is private and process-owned.
+                import msvcrt
+
+                if info.st_size == 0:
+                    os.write(descriptor, b"\\0")
+                    os.fsync(descriptor)
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
             yield
         finally:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                else:
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
             finally:
                 os.close(descriptor)
 
@@ -443,7 +465,7 @@ class DistributionInstaller:
         selected = [
             artifact
             for artifact in release.manifest.artifacts
-            if artifact.platform == "linux" and artifact.architecture == self.architecture
+            if artifact.platform == self.platform_name and artifact.architecture == self.architecture
         ]
         if len(selected) != 1:
             raise GateBlocked(
@@ -453,6 +475,11 @@ class DistributionInstaller:
         return selected[0]
 
     def _run_health_check(self, command: HealthCheckCommand, bundle: Path) -> bool:
+        if self.platform_name != "linux":
+            raise GateBlocked(
+                "distribution_health",
+                f"{self.platform_name} distribution health supervisor is not yet admitted",
+            )
         if not isinstance(command, HealthCheckCommand):
             raise ValidationError("typed health-check command is required")
         health_descriptor = command.open_validated_executable()
