@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ from agentnet.bindings.ipc import (
 )
 from agentnet.bindings.mcp_bootstrap import MCP_BOOTSTRAP_ASSURANCE
 from agentnet.bindings.windows_mcp_bootstrap import WindowsMCPBootstrapServer
-from agentnet.errors import AuthenticationError
+from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.host import host_platform
 from agentnet.host_security import measure_process_identity
 from agentnet.operations.policy_defaults import OperationsPolicy
@@ -125,6 +126,8 @@ def test_macos_binding_descriptor_is_read_only_pipe() -> None:
 
     reader, writer = BackgroundAdapterRuntime._binding_descriptors()
     assert writer is not None
+    with pytest.raises(OSError):
+        os.write(reader, b"not-writable")
     payload = b'{"safe":true}'
     import threading
 
@@ -220,6 +223,7 @@ async def test_windows_named_pipe_uses_dacl_client_pid_and_exact_claims(store) -
             "ok": True,
             "result": {"arguments": {}, "method": "agentnet.inbox"},
         }
+        assert await asyncio.to_thread(exchange) == {"error": "replay_rejected"}
     finally:
         await server.close()
 
@@ -336,6 +340,109 @@ def test_windows_binding_delivery_and_job_object_are_live() -> None:
     guard.close()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows DACL contract")
+def test_windows_private_state_rejects_broad_dacl_and_reparse_points(tmp_path: Path) -> None:
+    import win32security
+
+    from agentnet.windows_security import (
+        ensure_private_directory,
+        require_private_path,
+        write_private_file,
+    )
+
+    private_file = (tmp_path / "private" / "secret.bin").absolute()
+    write_private_file(private_file, b"secret")
+    descriptor = win32security.GetNamedSecurityInfo(
+        str(private_file),
+        win32security.SE_FILE_OBJECT,
+        win32security.DACL_SECURITY_INFORMATION,
+    )
+    dacl = descriptor.GetSecurityDescriptorDacl()
+    assert dacl is not None
+    dacl.AddAccessAllowedAceEx(
+        win32security.ACL_REVISION_DS,
+        0,
+        0x00120089,
+        win32security.ConvertStringSidToSid("S-1-1-0"),
+    )
+    win32security.SetNamedSecurityInfo(
+        str(private_file),
+        win32security.SE_FILE_OBJECT,
+        win32security.DACL_SECURITY_INFORMATION
+        | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        dacl,
+        None,
+    )
+    with pytest.raises(AuthenticationError, match="broad principal"):
+        require_private_path(private_file, directory=False)
+
+    target = (tmp_path / "reparse-target").absolute()
+    target.mkdir()
+    link = (tmp_path / "reparse-link").absolute()
+    os.symlink(target, link, target_is_directory=True)
+    with pytest.raises(AuthenticationError, match="reparse point"):
+        ensure_private_directory(link / "child")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows capability theft contract")
+def test_windows_binding_delivery_rejects_wrong_exact_process_identity() -> None:
+    import pywintypes
+    import win32con
+    import win32file
+    import win32pipe
+
+    from agentnet.supervisor.windows_binding_delivery import WindowsBindingDelivery
+
+    actual = measure_process_identity(os.getpid())
+    wrong = replace(actual, start_time=str(int(actual.start_time) + 1))
+    delivery = WindowsBindingDelivery(timeout_seconds=5)
+    delivery.start()
+    delivery.publish(b'{"binding":"private"}', expected=wrong)
+    try:
+        win32pipe.WaitNamedPipe(delivery.endpoint, 5_000)
+        handle = win32file.CreateFile(
+            delivery.endpoint,
+            win32con.GENERIC_READ,
+            0,
+            None,
+            win32con.OPEN_EXISTING,
+            0,
+            None,
+        )
+        try:
+            with pytest.raises(pywintypes.error):
+                win32file.ReadFile(handle, 4)
+        finally:
+            handle.Close()
+    finally:
+        delivery.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job cleanup contract")
+def test_windows_job_admission_failure_reaps_suspended_child(monkeypatch) -> None:
+    from agentnet.adapters.native import _spawn_process_tree
+    from agentnet.adapters.windows_job import WindowsJobGuard
+
+    seen = []
+
+    def reject(_self, process) -> None:
+        seen.append(process)
+        raise GateBlocked("G05", "synthetic Job admission failure")
+
+    monkeypatch.setattr(WindowsJobGuard, "assign_and_resume", reject)
+    with pytest.raises(GateBlocked, match="synthetic Job admission failure"):
+        _spawn_process_tree(
+            (sys.executable, "-c", "raise SystemExit(0)"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+        )
+    assert len(seen) == 1
+    assert seen[0].poll() is not None
+
+
 def test_operations_policy_names_every_supported_host() -> None:
     assert OperationsPolicy().supported_os == ("linux", "macos", "windows")
 
@@ -387,6 +494,20 @@ def test_live_sqlite_store_creates_reopens_and_persists_replay(tmp_path: Path) -
             "SELECT nonce_hash FROM replay_nonces WHERE actor_id=?",
             ("platform-test-actor",),
         ) is not None
+        if sys.platform == "win32":
+            from agentnet.windows_security import require_private_path
+
+            sidecars = tuple(
+                candidate
+                for candidate in (
+                    path.with_name(path.name + "-wal"),
+                    path.with_name(path.name + "-shm"),
+                )
+                if candidate.exists()
+            )
+            assert sidecars
+            for sidecar in sidecars:
+                require_private_path(sidecar, directory=False)
     finally:
         first.close()
     second = SQLiteStore(path, cipher)
@@ -402,6 +523,16 @@ def test_live_sqlite_store_creates_reopens_and_persists_replay(tmp_path: Path) -
 
         require_private_path(path.parent, directory=True)
         require_private_path(path, directory=False)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS SQLite link contract")
+def test_macos_sqlite_state_rejects_symlinked_parent(tmp_path: Path) -> None:
+    target = (tmp_path / "real-state").absolute()
+    target.mkdir(mode=0o700)
+    linked = (tmp_path / "linked-state").absolute()
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(GateBlocked, match="owner-only and not a symlink"):
+        SQLiteStore(linked / "core.sqlite3", LocalEnvelopeCipher(b"s" * 32))
 
 
 def test_cli_private_state_round_trip_uses_host_security(tmp_path: Path) -> None:
