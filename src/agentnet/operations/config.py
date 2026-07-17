@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
@@ -344,6 +344,10 @@ class IndependentApproverConfig(BaseModel):
     signer_key_id: str = Field(min_length=16, max_length=256)
     public_key_pem: str = Field(min_length=128, max_length=16_384)
     allowed_purposes: frozenset[str] = Field(min_length=1)
+
+    @field_serializer("allowed_purposes")
+    def stable_allowed_purposes(self, value: frozenset[str]) -> list[str]:
+        return sorted(value)
 
     @model_validator(mode="after")
     def public_key_only(self) -> "IndependentApproverConfig":

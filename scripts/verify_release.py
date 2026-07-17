@@ -297,7 +297,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
 
 
 def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
-    base = "evidence/local/2026-07-16-v0.1.10/artifacts"
+    base = "evidence/local/2026-07-17-v0.1.11/artifacts"
     ignore_path = root / base / ".gitignore"
     retention_path = root / base / "RETENTION.md"
     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
@@ -311,8 +311,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
     if ignore_path.is_file() and ignore_path.read_text(encoding="utf-8") != expected_ignore:
         failures.append("final package artifact ignore policy does not retain its archives")
     expected_paths = {
-        f"{base}/agentnet-0.1.10.tar.gz",
-        f"{base}/agentnet-0.1.10-py3-none-any.whl",
+        f"{base}/agentnet-0.1.11.tar.gz",
+        f"{base}/agentnet-0.1.11-py3-none-any.whl",
     }
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         failures.append("final package evidence must contain exactly the sdist and wheel")
@@ -365,8 +365,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
             names = set(listed_names)
             if len(names) != len(listed_names):
                 failures.append("wheel contains duplicate archive member names")
-            dist_info = "agentnet-0.1.10.dist-info"
-            shared = "agentnet-0.1.10.data/data/share/agentnet"
+            dist_info = "agentnet-0.1.11.dist-info"
+            shared = "agentnet-0.1.11.data/data/share/agentnet"
             expected_payloads = dict(source_files)
             expected_payloads.update(
                 {
@@ -421,7 +421,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
                 wheel_metadata = archive.read(metadata_name)
                 if (
                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
-                    or b"\nVersion: 0.1.10\n" not in b"\n" + wheel_metadata
+                    or b"\nVersion: 0.1.11\n" not in b"\n" + wheel_metadata
                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
                 ):
                     failures.append("wheel core metadata differs from the release identity/runtime")
@@ -448,7 +448,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
         failures.append(f"final wheel is unreadable or malformed: {exc}")
 
     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
-    prefix = "agentnet-0.1.10/"
+    prefix = "agentnet-0.1.11/"
     try:
         with tarfile.open(sdist_path, mode="r:gz") as archive:
             all_members = archive.getmembers()
@@ -923,12 +923,12 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     ):
         failures.append("final clean-install status does not preserve the local blocked-release boundary")
     package_evidence = _load_json(
-        root / "evidence/local/2026-07-16-v0.1.10/manifest.json",
+        root / "evidence/local/2026-07-17-v0.1.11/manifest.json",
         failures,
-        "0.1.10 package evidence manifest",
+        "0.1.11 package evidence manifest",
     )
     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
-        failures.append("0.1.10 package evidence is not bound to the current source tree")
+        failures.append("0.1.11 package evidence is not bound to the current source tree")
     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
 

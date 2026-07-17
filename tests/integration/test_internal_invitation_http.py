@@ -171,7 +171,6 @@ async def test_internal_invitation_http_is_zero_authority_two_step_and_revocable
     core.internal_invitations = InternalInvitationService(
         store,
         oidc_verifier=verifier,
-        clock=lambda: int(now.timestamp()),
     )
     core.internal_invitation_oidc = PreparedInvitationCoordinator(verifier)  # type: ignore[assignment]
     invitation = InternalInvitationRequest(

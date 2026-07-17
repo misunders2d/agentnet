@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine, PolicyEngine
-from agentnet.errors import AuthorizationError, ValidationError
+from agentnet.errors import AuthorizationError, IdempotencyConflict, ValidationError
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.conversation import ConversationService, build_conversation_event
 from agentnet.messaging.events import new_event
@@ -304,7 +304,16 @@ def test_production_conversation_rejects_deterministic_recipient_even_for_c0(
         )
 
 
-def test_operational_conversation_task_handoff_cancel_completion_and_receipts(store, identity_factory) -> None:
+def test_operational_conversation_task_handoff_cancel_completion_and_receipts(
+    store,
+    identity_factory,
+    monkeypatch,
+) -> None:
+    test_clock = {"value": int(datetime.now(UTC).timestamp())}
+    monkeypatch.setattr(
+        "agentnet.messaging.conversation.time.time",
+        lambda: test_clock["value"],
+    )
     creator, _ = identity_factory()
     first_assignee, _ = identity_factory(kind="claude")
     second_assignee, _ = identity_factory(kind="pi")
@@ -370,6 +379,7 @@ def test_operational_conversation_task_handoff_cancel_completion_and_receipts(st
         action={"kind": "task", "task_id": "task:work", "summary": "do exact work"},
         idempotency_key="conversation-operational-task",
     )
+    test_clock["value"] += 1
     duplicate_task = service.post(
         actor=creator,
         recipients=(first_assignee.harness_id,),
@@ -381,6 +391,23 @@ def test_operational_conversation_task_handoff_cancel_completion_and_receipts(st
     assert duplicate_task["duplicate"] is True
     assert duplicate_task["proposal_id"] == task["proposal_id"]
     assert duplicate_task["request_digest"] == task["request_digest"]
+    with pytest.raises(IdempotencyConflict):
+        service.post(
+            actor=creator,
+            recipients=(first_assignee.harness_id,),
+            conversation_id=conversation_id,
+            thread_id="thread:work",
+            action={
+                "kind": "task",
+                "task_id": "task:work",
+                "summary": "do exact work",
+                "effect_deadline": datetime.fromtimestamp(
+                    test_clock["value"] + 7_200,
+                    UTC,
+                ),
+            },
+            idempotency_key="conversation-operational-task",
+        )
     assert all(
         item["event"]["event_type"] != "task_assignment"
         for item in mailbox.reconcile(first_assignee.harness_id)

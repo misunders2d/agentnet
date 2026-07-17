@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-17-v0.1.11",
+  "evaluated_at": "2026-07-17T13:30:00+00:00",
+  "scope": "v0_1_11_recursive_generation_repair_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "d7daa58f37aa245b193bc33e64aec71059b5190cb4a0dccc41f98b1bd3c6dd43",
+  "prior_runtime_evidence": "evidence/local/2026-07-16-v0.1.10/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-16-v0.1.10/manifest.json",
+  "change_boundary": "Exact omitted-deadline conversation retries reuse their stored canonical deadline; explicit deadline changes still conflict. Relay production freshness is unchanged; test clocks are coherent. Approval-purpose config serialization is stable. No enrollment, authority grant, activation, company data, or cutover.",
+  "commands": [
+    {
+      "command": "bounded edge inventory plus Codex scout, DeepSeek critic, and GLM constitution review",
+      "result": "root causes reproduced before fixes; final repair review PASS/converged; no freshness weakening"
+    },
+    {
+      "command": "focused conversation, assignment, relay, invitation, and config suites plus repeated targets",
+      "result": "56 focused conversation/assignment/relay tests passed; relay 100/100; activation serialization 100/100; internal-invitation HTTP 100/100"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1079 passed; 7 expected mutation-authorized PostgreSQL skips"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1106 passed; 2 preserved G01 failures; 7 expected PostgreSQL skips; one expected manifest drift failure occurred before metadata refresh"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.11 sdist and wheel archives"
+    },
+    {
+      "command": "npm run check",
+      "result": "source: 1030 passed, 7 expected PostgreSQL skips; release verifier PASS; generation 1: 1030 passed, 7 expected PostgreSQL skips; generation 2: 1030 passed, 7 expected PostgreSQL skips; complete prepublication check PASS"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed; independent Hub rerun required after publication"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-17-v0.1.11/artifacts/agentnet-0.1.11.tar.gz",
+      "sha256": "5d6a4c497b5b2bdc05241b6ce8ab30ddb2cbaf41a328d6f9dab3dc9d8f86ce82"
+    },
+    {
+      "path": "evidence/local/2026-07-17-v0.1.11/artifacts/agentnet-0.1.11-py3-none-any.whl",
+      "sha256": "91de031ae2723031606941e83f1aa6e2b4f4b57d97c28d6c5156f77395709f86"
+    }
+  ]
+}

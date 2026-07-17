@@ -166,6 +166,9 @@ def test_server_agent_activate_binds_only_exact_identity_without_granting_author
 ) -> None:
     state = activation_fixture(tmp_path)
     before = state.config.redacted_export()
+    assert before["oidc_enrollment"]["trusted_approvers"][0][
+        "allowed_purposes"
+    ] == sorted(PURPOSES)
     writes, opened = install_activation_fakes(monkeypatch, state)
 
     assert cli.command_server_agent_activate(activation_args(state)) == 0

@@ -500,7 +500,8 @@ def stage_additional_message(pair, source: ServerAgentRelayService, *, label: st
             policy_revision=1,
             context=context,
             classification=Classification.C0_PUBLIC,
-        )
+        ),
+        when=datetime.fromtimestamp(source.clock(), UTC),
     )
     return source.stage(
         packet_id=packet_id,

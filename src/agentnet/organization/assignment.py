@@ -753,6 +753,11 @@ class AssignmentService:
         if request.deadline is not None and request.deadline <= when:
             raise ValidationError("task custody deadline must be in the future")
         now = epoch_seconds(when)
+        existing = connection.execute(
+            """SELECT * FROM task_custody_proposals
+                 WHERE domain_id=? AND sender_harness_id=? AND idempotency_key=?""",
+            (request.actor.domain_id, request.actor.harness_id, event.idempotency_key),
+        ).fetchone()
         evaluation = self._evaluate_in_transaction(
             connection,
             request,
@@ -762,31 +767,72 @@ class AssignmentService:
         decision = evaluation.decision
         relationship_digest = evaluation.relationship_digest
 
-        if decision.fact is DeliveryFact.ACCEPTED_QUEUED:
-            effective_deadline = evaluation.effective_deadline
-            if effective_deadline is None:  # pragma: no cover - defensive invariant
-                raise AuthorizationError("automatic task custody lacks an exact deadline")
+        restored_conversation_retry = (
+            existing is not None
+            and ingress in {
+                TaskIngressKind.CONVERSATION_TASK,
+                TaskIngressKind.CONVERSATION_HANDOFF,
+            }
+            and request.deadline is None
+            and event.delivery_expires_at is None
+        )
+        if restored_conversation_retry:
+            proposal_id = str(existing["proposal_id"])
+            stored_request = AssignmentRequest.model_validate_json(
+                canonical_json(
+                    self.store.cipher.decrypt_json(
+                        existing["request_encrypted"],
+                        purpose=f"task-proposal-request:{proposal_id}",
+                    )
+                )
+            )
+            stored_event = EventEnvelope.model_validate(
+                self.store.cipher.decrypt_json(
+                    existing["event_encrypted"],
+                    purpose=f"task-proposal-event:{proposal_id}",
+                )
+            )
+            effective_deadline = stored_request.deadline
+            if (
+                effective_deadline is None
+                or stored_event.effect_deadline != effective_deadline
+                or stored_event.delivery_expires_at is None
+            ):
+                raise ConflictError("stored conversation task deadline binding is incomplete")
+            request = request.model_copy(update={"deadline": effective_deadline})
+            event = event.model_copy(
+                update={
+                    "effect_deadline": stored_event.effect_deadline,
+                    "delivery_expires_at": stored_event.delivery_expires_at,
+                    "payload_access": "task_grant_required",
+                }
+            )
         else:
-            proposal_deadline = self._proposal_expiry(
+            if decision.fact is DeliveryFact.ACCEPTED_QUEUED:
+                effective_deadline = evaluation.effective_deadline
+                if effective_deadline is None:  # pragma: no cover - defensive invariant
+                    raise AuthorizationError("automatic task custody lacks an exact deadline")
+            else:
+                proposal_deadline = self._proposal_expiry(
+                    request,
+                    event,
+                    when=when,
+                    proposal_expires_at=proposal_expires_at,
+                )
+                # A proposal has no relationship scope from which to derive a task
+                # duration.  Keep omitted-deadline bytes non-executable and bound
+                # them to a conservative one-hour custody window.  A later edge
+                # may resume only when that exact stored bound fits its scope.
+                effective_deadline = request.deadline or min(
+                    proposal_deadline,
+                    event.created_at + timedelta(hours=1),
+                )
+            request, event = self._bind_custody_deadline(
                 request,
                 event,
+                effective_deadline=effective_deadline,
                 when=when,
-                proposal_expires_at=proposal_expires_at,
             )
-            # A proposal has no relationship scope from which to derive a task
-            # duration.  Keep omitted-deadline bytes non-executable and bound
-            # them to a conservative one-hour custody window.  A later edge
-            # may resume only when that exact stored bound fits its scope.
-            effective_deadline = request.deadline or min(
-                proposal_deadline,
-                event.created_at + timedelta(hours=1),
-            )
-        request, event = self._bind_custody_deadline(
-            request,
-            event,
-            effective_deadline=effective_deadline,
-            when=when,
-        )
         decision = decision.model_copy(update={"effective_deadline": effective_deadline})
         request_digest = self._request_digest(
             request=request,
@@ -796,11 +842,6 @@ class AssignmentService:
             relationship_digest=relationship_digest,
         )
 
-        existing = connection.execute(
-            """SELECT * FROM task_custody_proposals
-                 WHERE domain_id=? AND sender_harness_id=? AND idempotency_key=?""",
-            (request.actor.domain_id, request.actor.harness_id, event.idempotency_key),
-        ).fetchone()
         if existing is not None:
             if (
                 existing["request_digest"] != request_digest
