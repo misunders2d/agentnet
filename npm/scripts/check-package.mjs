@@ -122,7 +122,9 @@ if (JSON.stringify(actualOnboardingEvalIds) !== JSON.stringify(expectedOnboardin
 }
 
 const launcher = path.join(root, "npm/bin/agentnet.mjs");
-if ((lstatSync(launcher).mode & 0o111) === 0) fail("agentnet launcher is not executable");
+if (process.platform !== "win32" && (lstatSync(launcher).mode & 0o111) === 0) {
+  fail("agentnet launcher is not executable");
+}
 const launcherText = readFileSync(launcher, "utf8");
 if (!launcherText.includes('"3.13.13"') || launcherText.includes('">=3.13,<3.15"')) {
   fail("npm launcher is not pinned to certified CPython 3.13.13");
