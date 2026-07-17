@@ -241,16 +241,22 @@ def read_private_file(path: Path, *, max_bytes: int = 65_536) -> bytes:
             if len(content) > max_bytes:
                 raise AuthenticationError(f"Windows private file exceeds its bounded size: {path}")
         after = os.fstat(descriptor)
+        current = require_private_path(path, directory=False)
     finally:
         os.close(descriptor)
-    identity = lambda value: (
-        value.st_dev,
-        value.st_ino,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
-    if identity(before) != identity(opened) or identity(opened) != identity(after):
+
+    # Windows path stat and descriptor fstat can report timestamp precision
+    # differently.  File identity is volume + file index; descriptor timestamps
+    # and all observed sizes must remain stable while bytes are read.
+    identity = lambda value: (value.st_dev, value.st_ino)
+    observations = (before, opened, after, current)
+    if any(value.st_ino == 0 for value in observations):
+        raise AuthenticationError(f"Windows private file identity is unavailable: {path}")
+    if any(identity(value) != identity(opened) for value in observations):
+        raise AuthenticationError(f"Windows private file changed while read: {path}")
+    if any(value.st_size != len(content) for value in observations):
+        raise AuthenticationError(f"Windows private file changed while read: {path}")
+    if opened.st_mtime_ns != after.st_mtime_ns:
         raise AuthenticationError(f"Windows private file changed while read: {path}")
     return bytes(content)
 

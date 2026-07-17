@@ -649,15 +649,24 @@ class SQLiteStore:
                 suffix += "&immutable=1"
             return base + suffix
 
-        def secure_entry(name: str) -> None:
+        def secure_entry(name: str, *, missing_ok: bool = False) -> None:
             candidate = path.parent / name
             if platform_name == "windows":
                 from agentnet.windows_security import apply_private_dacl, require_private_path
 
+                if missing_ok and not candidate.exists():
+                    # WAL/SHM creation is lazy. Any later sidecar inherits the
+                    # already-protected parent DACL.
+                    return
                 apply_private_dacl(candidate, directory=False)
                 require_private_path(candidate, directory=False)
             else:
-                metadata = stat_entry(name)
+                try:
+                    metadata = stat_entry(name)
+                except FileNotFoundError:
+                    if missing_ok:
+                        return
+                    raise
                 if (
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_uid != os.geteuid()
@@ -862,10 +871,7 @@ class SQLiteStore:
                 )
             connection.execute("PRAGMA journal_mode=WAL")
             for suffix in ("-wal", "-shm"):
-                try:
-                    secure_entry(path.name + suffix)
-                except FileNotFoundError:
-                    pass
+                secure_entry(path.name + suffix, missing_ok=True)
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
@@ -923,6 +929,11 @@ class SQLiteStore:
                     )
                 connection.execute("COMMIT")
                 connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if platform_name == "windows":
+                # Initialization/migration may create sidecars after WAL mode
+                # is selected. Re-apply and verify any sidecar that now exists.
+                for suffix in ("-wal", "-shm"):
+                    secure_entry(path.name + suffix, missing_ok=True)
             self.path = path
             self.cipher = cipher
             self._connection = connection

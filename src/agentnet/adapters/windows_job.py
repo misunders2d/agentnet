@@ -44,7 +44,9 @@ class WindowsJobGuard:
         except ImportError as exc:  # pragma: no cover - Windows dependency gate
             raise GateBlocked("G05", "pywin32 Job Object support is unavailable") from exc
         self._win32job = win32job
-        self._job = win32job.CreateJobObject(private_security_attributes(), None)
+        # pywin32 requires a string even though Win32 accepts NULL for an
+        # unnamed job; an empty string maps to the unnamed-object behavior.
+        self._job = win32job.CreateJobObject(private_security_attributes(), "")
         require_private_kernel_handle(self._job, label="AgentNet native adapter job")
         information = win32job.QueryInformationJobObject(
             self._job,

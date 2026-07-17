@@ -352,6 +352,7 @@ def test_update_artifact_accepts_each_supported_host(platform: str) -> None:
     assert artifact.platform == platform
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="portable POSIX path simulation")
 def test_portable_sqlite_path_branch_preserves_schema_and_reopen(
     tmp_path: Path,
     monkeypatch,
