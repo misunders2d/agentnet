@@ -1,13 +1,14 @@
 # Requirements Status
 
-Snapshot: 2026-07-17. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-07-18. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
 
 Current observed evidence:
 
-- For the unreleased `0.1.12` cross-platform candidate, GitHub Actions run
+- The `0.1.13` candidate is a skill-only correction over published `0.1.12`: the canonical packaged `agentnet-operator` skill now contains one exact single-paste blank-laptop onboarding prompt template with verified public placeholders. Source commit `2dc177c` passed the Pi skill loader, npm package check, focused conformance (`8 passed`), and Ubuntu/macOS/Windows workflow `29648784947`; frozen-version recursive package evidence is recorded separately below and promotes no runtime, enrollment, authority, production, or cutover gate.
+- For the published `0.1.12` cross-platform release, GitHub Actions run
   `29610467753` at commit `6d7834e` passed the named source and packed-install
   contracts on Ubuntu, macOS, and Windows. The platform suite reported
   **13 passed/8 skipped** on Ubuntu, **15 passed/6 skipped** on macOS, and

@@ -1,0 +1,45 @@
+{
+  "run_id": "2026-07-18-v0.1.13",
+  "evaluated_at": "2026-07-18T15:30:00+00:00",
+  "scope": "v0_1_13_canonical_single_prompt_skill_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "b60207252c36fc0cfcc453cb1a11f8473a1513769e76d38023ffe796075a5488",
+  "prior_runtime_evidence": "evidence/local/2026-07-17-v0.1.12/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-17-v0.1.12/manifest.json",
+  "change_boundary": "Skill-only release delta: the canonical packaged AgentNet operator skill now contains one exact single-paste blank-laptop onboarding prompt template with verified public placeholders and a regression gate. Runtime communication, identity, authority, A2A, enrollment, Core, approval, activation, and cutover behavior are unchanged.",
+  "commands": [
+    {
+      "command": "Pi actual skill loader against source SKILL.md",
+      "result": "SKILL_LOADED"
+    },
+    {
+      "command": "node npm/scripts/check-package.mjs",
+      "result": "PASS"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/conformance/test_npm_package.py",
+      "result": "8 passed"
+    },
+    {
+      "command": "GitHub Actions cross-platform.yml run 29648784947 at commit 2dc177c",
+      "result": "PASS on Ubuntu, macOS, and Windows before the mechanical 0.1.13 version/evidence freeze; runtime code unchanged except version metadata"
+    },
+    {
+      "command": "full and recursive release gates",
+      "result": "npm run check PASS; source, installed generation 1, and repacked generation 2 each reported 1043 passed and 15 expected non-Linux host or mutation-authorized PostgreSQL skips; release verifier and two-generation packed gate passed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-18-v0.1.13/artifacts/agentnet-0.1.13.tar.gz",
+      "sha256": "f85bd503ffac15040b2fe74f247bf98588d68c232508fe7141ac876e6e13bffe"
+    },
+    {
+      "path": "evidence/local/2026-07-18-v0.1.13/artifacts/agentnet-0.1.13-py3-none-any.whl",
+      "sha256": "2573ba401748de8778c7b25ba27f0963b9b0d65035c9c24f2af634d555af1c58"
+    }
+  ],
+  "limits": [
+    "Skill/template packaging evidence only; no Core deployment, approval-device independence, live OIDC/passkey, fresh-laptop enrollment, first message, activation, production, or cutover evidence is promoted."
+  ]
+}
