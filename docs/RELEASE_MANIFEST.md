@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-17
-Candidate: `agentnet 0.1.11`
+Candidate: `agentnet 0.1.12`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -23,8 +23,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `7251ad966094661cf33cc914a6e8af7c4586b3d433a0d0f8155611814659d97c` |
-| `pyproject.toml` | SHA-256 `ef896d65850133d70920ab7ec312d09626be4dceb41534bf8be41f979003122d` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `9134e0f5fc12c080fe19bca76038a4cf174505fa43fc7554359db6a2d7e93926` |
+| `pyproject.toml` | SHA-256 `69a0513c1225535a76ccb9734e49861b697f2adf3d56c6683d9995ca33d51d5e` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -32,7 +32,11 @@ the project with `uv sync --frozen --no-build-isolation`. Runtime, test, and
 build direct dependencies are exact-pinned and checked against the complete
 locked name/version resolution.
 `jsonschema==4.26.0` remains the direct runtime pin for immutable response
-schemas. `webauthn==3.0.0` is the exact maintained server-side registration and
+schemas. `psutil==7.2.2` supplies cross-platform process metadata under
+AgentNet-owned repeated-time/digest/account fencing. Conditional
+`pywin32==312; sys_platform == 'win32'` supplies Windows SID, DACL, named-pipe,
+and Job Object mechanisms. Neither package owns identity or authority.
+`webauthn==3.0.0` is the exact maintained server-side registration and
 assertion verification mechanism for the separately operated approval service;
 AgentNet still owns identity, purpose, transaction, receipt, audit, and
 lifecycle semantics.
@@ -46,9 +50,11 @@ lifecycle semantics.
 | MCP | spec `2025-11-25`; Python SDK `1.28.1` |
 
 A2A is an external low-trust edge. MCP and direct IPC share a server-bound
-canonical composition service; the ordinary supervisor launches parent-bound
-MCP endpoints and directly delivers sealed Pi capabilities. Exact installed
-semantic interoperability remains external under G05.
+canonical composition service. Linux/macOS use peer-credential Unix sockets;
+Windows uses protected remote-rejecting named pipes with server-derived client
+PID. Pi capabilities use sealed memfd, a read-only inherited pipe, or a one-time
+exact-process Windows pipe. Exact installed semantic interoperability and
+privileged hostile-host qualification remain external under G05/G07.
 
 ## Generated schema catalog
 

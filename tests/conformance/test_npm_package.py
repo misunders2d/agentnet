@@ -20,6 +20,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     python_version = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
     assert package["name"] == "@misunders2d/agentnet"
     assert package["version"] == python_version.group(1)
+    from agentnet import __version__
+
+    assert __version__ == package["version"]
     assert package["license"] == "Apache-2.0"
     assert package["publishConfig"] == {"access": "public"}
     assert "pi-package" in package["keywords"]
@@ -35,7 +38,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-17-v0.1.11/artifacts/RETENTION.md",
+        "evidence/local/2026-07-17-v0.1.12/artifacts/RETENTION.md",
         "skills/**/*.md",
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
@@ -279,7 +282,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-17-v0.1.11/artifacts/RETENTION.md",
+        "evidence/local/2026-07-17-v0.1.12/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

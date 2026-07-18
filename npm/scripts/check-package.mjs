@@ -30,7 +30,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-17-v0.1.11/artifacts/RETENTION.md",
+  "evidence/local/2026-07-17-v0.1.12/artifacts/RETENTION.md",
   "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {
@@ -49,6 +49,11 @@ if (!metadata.scripts?.check?.endsWith("&& npm run check:packed")) {
 }
 const version = pyproject.match(/^version = "([^"]+)"$/m)?.[1];
 if (!version || version !== metadata.version) fail("npm and Python versions differ");
+const runtimeVersion = readFileSync(path.join(root, "src/agentnet/__init__.py"), "utf8")
+  .match(/^__version__ = "([^"]+)"$/m)?.[1];
+if (!runtimeVersion || runtimeVersion !== metadata.version) {
+  fail("npm and Python runtime versions differ");
+}
 if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(metadata.version)) {
   fail("package version is not valid semantic versioning");
 }
@@ -60,6 +65,7 @@ for (const relative of [
   "uv.lock",
   "pyproject.toml",
   "npm/bin/agentnet.mjs",
+  "npm/lib/platform.mjs",
   "npm/lib/windows-runtime-acl.ps1",
   "npm/scripts/check-packed-package.mjs",
   "skills/agentnet-operator/SKILL.md",

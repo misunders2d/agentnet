@@ -4,7 +4,7 @@
   "snapshot_date": "2026-07-17",
   "release": {
     "name": "agentnet",
-    "version": "0.1.11",
+    "version": "0.1.12",
     "profile": "self_hosted_local_conformance_candidate",
     "status": "BLOCKED",
     "production_ready": false,
@@ -14,7 +14,7 @@
   "authoritative_sources": {
     "concept": {
       "path": "docs/specification.md",
-      "sha256": "73c8415622f3b328159e67ce84dfebe79bdee5df15f9923f4e2b9768eb8d1a8d"
+      "sha256": "a85fa244d8427106fe8272d9e92df99da34d36571d6b80e22edf71fcda3fa505"
     },
     "requirements": {
       "path": "docs/requirements.md",
@@ -32,22 +32,24 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "7251ad966094661cf33cc914a6e8af7c4586b3d433a0d0f8155611814659d97c",
+    "sha256": "9134e0f5fc12c080fe19bca76038a4cf174505fa43fc7554359db6a2d7e93926",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "ef896d65850133d70920ab7ec312d09626be4dceb41534bf8be41f979003122d"
+      "sha256": "69a0513c1225535a76ccb9734e49861b697f2adf3d56c6683d9995ca33d51d5e"
     },
     "direct_dependencies": {
       "build": {
         "hatchling": {
           "version": "1.28.0",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "editables": {
           "version": "0.5",
-          "extras": []
+          "extras": [],
+          "marker": null
         }
       },
       "runtime": {
@@ -55,51 +57,72 @@
           "version": "1.1.0",
           "extras": [
             "http-server"
-          ]
+          ],
+          "marker": null
         },
         "cryptography": {
           "version": "49.0.0",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "jsonschema": {
           "version": "4.26.0",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "mcp": {
           "version": "1.28.1",
-          "extras": []
+          "extras": [],
+          "marker": null
+        },
+        "psutil": {
+          "version": "7.2.2",
+          "extras": [],
+          "marker": null
         },
         "psycopg": {
           "version": "3.3.4",
           "extras": [
             "binary"
-          ]
+          ],
+          "marker": null
         },
         "pydantic": {
           "version": "2.13.4",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "starlette": {
           "version": "1.3.1",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "uvicorn": {
           "version": "0.51.0",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "webauthn": {
           "version": "3.0.0",
-          "extras": []
+          "extras": [],
+          "marker": null
+        },
+        "pywin32": {
+          "version": "312",
+          "extras": [],
+          "marker": "sys_platform == 'win32'"
         }
       },
       "test": {
         "hypothesis": {
           "version": "6.156.6",
-          "extras": []
+          "extras": [],
+          "marker": null
         },
         "pytest": {
           "version": "9.1.1",
-          "extras": []
+          "extras": [],
+          "marker": null
         }
       }
     },
@@ -136,6 +159,7 @@
       "pluggy": "1.6.0",
       "proto-plus": "1.28.1",
       "protobuf": "6.33.6",
+      "psutil": "7.2.2",
       "psycopg": "3.3.4",
       "psycopg-binary": "3.3.4",
       "pyasn1": "0.6.4",
@@ -169,11 +193,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "94d76398bafc1961603da6bc1b2fa894682aab8b8b2df9a2a8daa0c35a3d8168"
+      "sha256": "8e1cdd207cc5000ea84ae54b611ac6c7a1585093028ec8c32a610cd560f26c3b"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "cd37f8ac753d0feb2f092fa9523854bd5af89805ceb315594bd04bca668cc22a"
+      "sha256": "9cde8dcfbef09cf0d21bad90fc075649148d97fa8dbdc8998ac2c88e92f7fde2"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -193,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "efffd122f3b71ec4d2cc8eea34b46556223b4e742ea1b6ad571830550f1f0350"
+      "sha256": "9f80d8775bb4538d36230a2bbace15345f1beb4eff7ab933359b3a42ecde555b"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "ec7bc609386eb713eb042f31a60539106f21d1c7e506e6745c1def928b32b8d1"
+      "sha256": "36439cbf30835e209a03aced68af1ad146b218d878dd8f7a60df8dbb06deb09a"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -221,13 +245,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "abe4d8f32e13a840101f48df3becfc83d1a95df93da0f41192a3e57e44cfb1f8"
+      "sha256": "6adf782c22e29e0bb88d3639a9c417746fbfa1bd1395a942d405afa44fb31171"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "d7daa58f37aa245b193bc33e64aec71059b5190cb4a0dccc41f98b1bd3c6dd43"
+    "sha256": "58b72be69b61cef163068581cc40bbaa97a5dfafb7446774e43c3dd405a295a0"
   },
   "protocols": {
     "a2a": {
@@ -386,7 +410,7 @@
     },
     "supervisor_harness_lifecycle": {
       "status": "BUILD_OWN_INTEGRATION",
-      "pin": "agentnet-0.1.11",
+      "pin": "agentnet-0.1.12",
       "boundary": "Exact human plus harness binding and foreground isolation remain owned."
     },
     "a2a_gateway": {
@@ -531,6 +555,7 @@
       "required_tiers": [
         "H",
         "L",
+        "P",
         "E"
       ],
       "status": "BLOCKED_EXTERNAL",

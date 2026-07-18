@@ -29,8 +29,28 @@ expiry, effect deadline, retention deletion, and legal hold are separate.
 | `WorkloadIdentityProvider` | verified SPIFFE/mTLS context seam | workload never becomes a human |
 | `WorkflowEngine` | explicit transactional effects; optional Temporal-style | workflow success never fabricates effect evidence |
 | `MLSProvider` | unavailable until maintained stack passes | room policy/membership and visible key holders remain explicit |
-| MCP/direct IPC | official MCP or private Unix framing | arguments cannot establish caller identity |
+| MCP/direct IPC | official MCP; Unix peer-credential framing on Linux/macOS; protected client-PID named pipes on Windows | arguments cannot establish caller identity |
 | A2A SDK routes | official SDK 1.1.0 | public identity remains external-low-trust |
+
+## Host-local session and replay contract
+
+`IPCSessionClaims` remains schema `agentnet.ipc.session.v1` but now requires the
+canonical host `platform` and account identity (`uid:<n>` or `sid:S-...`) in
+addition to PID, process creation time, executable digest, session, credential
+epoch, methods, and expiry. These claims are supervisor-sealed; accepted peer
+and direct-parent facts are always server-derived. The replay namespace is
+`agentnet.ipc.replay-context.v2`, adding platform and account identity. This is
+a deliberate pre-stable replay-domain break: older local capabilities expire
+within their bounded one-hour lifetime and are not accepted by the new
+supervisor root/session path.
+
+MCP bootstrap assurance is
+`server_derived_account_process_parent_module`. Linux/macOS use owner-only Unix
+sockets; Windows uses protected named pipes with remote-client rejection and
+server-derived client PID. Pi capability bytes never enter argv or environment:
+Linux uses sealed memfd, macOS a read-only inherited pipe, and Windows a one-time
+exact-process private pipe. Missing delivery acknowledgement fails local-binding
+activation.
 
 ## Independent approval configuration, storage, and HTTP contract
 

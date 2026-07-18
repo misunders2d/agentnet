@@ -1,4 +1,11 @@
-"""Cross-platform host process identity with PID-reuse fencing."""
+"""Cross-platform host process identity with PID-reuse fencing.
+
+Linux hashes the live ``/proc/<pid>/exe`` object. macOS and Windows hash a
+resolved executable path while holding one file descriptor and checking stable
+file identity plus repeated process creation time. The latter fails closed but
+is intentionally documented as lower assurance against privileged path
+replacement until stronger target-host evidence exists.
+"""
 
 from __future__ import annotations
 

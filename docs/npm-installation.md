@@ -22,11 +22,13 @@ pi install git:github.com/misunders2d/agentnet
 
 ## Requirements
 
-- Linux
+- Linux, macOS, or Windows
 - Node.js 22.19 or newer
 - [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer on `PATH`
 
 The launcher uses the committed `uv.lock` and selects the release-certified CPython `3.13.13` runtime. The Python package remains compatible with `>=3.13,<3.15`, but the npm launcher is deliberately stricter so different hosts cannot silently verify the same release with different interpreter minors. It keeps an environment keyed by package version and install identity under the current user's state directory. Global npm and Pi-managed copies therefore do not rebind each other's Python environment. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
+
+Host state uses XDG state paths on Linux, `~/Library/Application Support/agentnet` on macOS, and `%LOCALAPPDATA%\\agentnet` on Windows. POSIX state is owner-mode checked. Windows private state and npm runtime roots use protected current-user DACLs and reject reparse-point roots. Linux uses descriptor-pinned executable measurement; macOS and Windows use repeated process creation-time, account, parent, path identity, and executable digest checks. The latter path-based measurement is fail-closed but is not claimed equivalent to Linux `/proc/<pid>/exe` against privileged path replacement.
 
 Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension plus a documentation-only `agentnet-operator` skill with safe setup examples and fail-closed references. The skill provides guidance only; it grants no authority and performs no automatic initialization. Extension tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
 
@@ -43,13 +45,17 @@ npm prefix -g
 export PATH="$(npm prefix -g)/bin:$PATH"
 ```
 
-Also verify `uv` independently:
+On Windows PowerShell, use:
 
-```bash
-command -v uv
+```powershell
+Get-Command agentnet
+npm prefix -g
+& "$(npm prefix -g)\\agentnet.cmd" --version
+Get-Command uv
 ```
 
-Run `uv --version` and require 0.11.28 or newer. Install or explicitly upgrade `uv` from <https://docs.astral.sh/uv/> when needed; AgentNet never modifies the host `uv` installation automatically.
+On Linux/macOS, verify `uv` independently with `command -v uv`.
+Run `uv --version` on every host and require 0.11.28 or newer. Install or explicitly upgrade `uv` from <https://docs.astral.sh/uv/> when needed; AgentNet never modifies the host `uv` installation automatically.
 
 ## Verify a source checkout before publication
 

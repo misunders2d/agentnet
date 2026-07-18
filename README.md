@@ -147,7 +147,8 @@ controls.
   recovery, incident response, backup, and verification.
 - **HTTP API** for authenticated network operations and administration.
 - **MCP tools** for measured local harness integration.
-- **Private Unix IPC** for bindings such as Pi that need a direct local path.
+- **Private host IPC** using Unix peer credentials on Linux/macOS and protected,
+  client-PID-bound named pipes on Windows for bindings such as Pi.
 - **Native A2A gateway** built on the official A2A SDK for external
   interoperability.
 - **Background supervisor** for isolated workers, passive status, live delivery,
@@ -158,8 +159,12 @@ controls.
 
 ## Install
 
-AgentNet currently supports Linux and requires Node.js 22.19 or newer plus
-[`uv`](https://docs.astral.sh/uv/) on `PATH`.
+AgentNet package installation, local SQLite state, signed HTTP clients, and
+host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
+newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
+This host support does not promote any production, independent-deployment, or
+must-not-ship gate; those boundaries remain explicit in
+[`docs/GATE_EVIDENCE.md`](docs/GATE_EVIDENCE.md).
 
 ### Try the Pi extension without installing it
 

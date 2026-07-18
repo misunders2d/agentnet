@@ -36,6 +36,28 @@ The local executable composes logical roles in one process but preserves
 separate interfaces and actor types. Production requires distinct credentials
 and the physical/administrative topology selected under PD-010.
 
+## Host-local binding profile
+
+The npm launcher and local conformance profile run on Linux, macOS, and Windows
+without treating installation as enrollment or authority. Linux binds Unix
+peers with `SO_PEERCRED`, hashes the live `/proc/<pid>/exe` object, delivers Pi
+capabilities through sealed memfd state, and owns child process groups. macOS
+uses Unix `LOCAL_PEERPID` plus `getpeereid`, a caller-closed inherited read-only
+pipe, and a separate process group. Windows uses protected current-user DACLs,
+`PIPE_REJECT_REMOTE_CLIENTS`, `GetNamedPipeClientProcessId`, one-time exact-
+process capability pipes, and `CREATE_SUSPENDED` admission to a kill-on-close
+Job Object before child execution resumes.
+
+Every host binds platform, account UID/SID, PID, repeated creation time,
+executable digest, parent identity where required, session, generation, expiry,
+and replay nonce. Payload fields never establish those facts. Windows npm
+runtime roots and private state reject reparse points and broad allow ACEs.
+macOS/Windows executable hashing is path-based with before/after identity checks;
+it remains a documented lower-assurance boundary than Linux's live executable
+handle until privileged host trials establish a stronger mechanism. Real-host
+CI proves only the named package/local contracts, not production deployment or
+semantic clean-worker qualification.
+
 An always-on process has a separate deployment-identity binding step. After
 real enrollment, `server-agent activate` holds the exact runtime lease under a
 distinct activation owner, verifies the current credential and private key

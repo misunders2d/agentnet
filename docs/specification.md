@@ -977,7 +977,8 @@ JetStream may later carry wake/fanout behind the transactional outbox if benchma
 
 ### 14.2 Deployment profile
 
-- Linux x86_64 and arm64 first, after exact distro, service lifecycle, IPC, storage, and update tests.
+- Linux x86_64 and arm64 first for production-topology qualification, after exact distro, service lifecycle, IPC, storage, and update tests.
+- Current owner instruction (2026-07-17) requires the installable package and local conformance mechanisms on Linux, macOS, and Windows now rather than deferring portable implementation. Real-host CI may establish only its named package, state, SQLite, IPC, and lifecycle contracts; privileged hostile-host, signed update/install/uninstall, semantic harness, and production topology gates remain separate.
 - Two stateless core replicas and HA PostgreSQL for a production durable claim.
 - Company-controlled deployment by default; a filesystem-backed artifact store is acceptable only for an explicitly weaker pilot, while production requires independently tested replication, backup, immutability, encryption, and restore behavior from the selected self-hosted backend.
 - One region initially; residency and multi-region require explicit owner/legal decision.
@@ -1078,7 +1079,7 @@ This reconciles the useful early-pilot proposal with the operational objection: 
 ### Phase 1 — Single-domain production
 
 - all four adapters pass isolation/recovery tests;
-- Linux-first supervisor distribution;
+- Linux-first production supervisor topology qualification; the shared package and local conformance adapters remain available on Linux, macOS, and Windows without promoting production support;
 - HA PostgreSQL and a self-hosted, provider-neutral immutable artifact store;
 - C1/C2 direct communication, tasks, files, rooms, offline delivery, receipts, policy, elevation, audit, scanner, and effect worker;
 - isolated native A2A gateway passes conformance/security tests and is enabled for Corporate GA;
