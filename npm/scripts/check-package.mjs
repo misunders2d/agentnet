@@ -106,6 +106,9 @@ const onboardingText = readFileSync(
 for (const required of [
   "The unconnected laptop has no agent inbox",
   "Required bootstrap packet",
+  "Canonical public onboarding prompt template",
+  "single fresh-laptop onboarding prompt",
+  "Any unresolved required placeholder blocks issuance",
   "first-message verification",
   "AgentNet `0.1.8` fails this gate",
 ]) {
@@ -116,6 +119,7 @@ const onboardingEvals = JSON.parse(
 );
 const expectedOnboardingEvalIds = [
   "fresh-agent-receives-bootstrap-packet",
+  "fresh-laptop-canonical-single-prompt-is-mandatory",
   "fresh-laptop-human-copy-paste-bootstrap",
   "hub-generates-public-onboarding-packet",
   "v018-fresh-laptop-receipt-gap",

@@ -96,6 +96,9 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     for required in (
         "The unconnected laptop has no agent inbox",
         "Required bootstrap packet",
+        "Canonical public onboarding prompt template",
+        "single fresh-laptop onboarding prompt",
+        "Any unresolved required placeholder blocks issuance",
         "Public package installation",
         "System-browser Google OIDC",
         "Independent approval",
@@ -114,6 +117,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "v018-fresh-laptop-receipt-gap",
         "v019-guided-enrollment-is-identity-only",
         "hub-generates-public-onboarding-packet",
+        "fresh-laptop-canonical-single-prompt-is-mandatory",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
