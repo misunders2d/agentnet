@@ -23,8 +23,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `9134e0f5fc12c080fe19bca76038a4cf174505fa43fc7554359db6a2d7e93926` |
-| `pyproject.toml` | SHA-256 `69a0513c1225535a76ccb9734e49861b697f2adf3d56c6683d9995ca33d51d5e` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `98bf7cf769716eacbfdea3a168f9f2f65ab1f6d91c52414532115c93d59f4e55` |
+| `pyproject.toml` | SHA-256 `9905bfdcf04c1d455cba115cebe1412159645dfe253b7eca24d8654b74cc2e60` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs

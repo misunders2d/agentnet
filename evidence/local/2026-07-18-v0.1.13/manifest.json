@@ -1,45 +1,42 @@
 {
   "run_id": "2026-07-18-v0.1.13",
-  "evaluated_at": "2026-07-18T15:30:00+00:00",
-  "scope": "v0_1_13_canonical_single_prompt_skill_candidate",
+  "evaluated_at": "2026-07-18T15:00:00+00:00",
+  "scope": "v0_1_13_canonical_onboarding_prompt_patch_candidate",
   "release_certified": false,
   "release_source_tree_sha256": "b60207252c36fc0cfcc453cb1a11f8473a1513769e76d38023ffe796075a5488",
   "prior_runtime_evidence": "evidence/local/2026-07-17-v0.1.12/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-17-v0.1.12/manifest.json",
-  "change_boundary": "Skill-only release delta: the canonical packaged AgentNet operator skill now contains one exact single-paste blank-laptop onboarding prompt template with verified public placeholders and a regression gate. Runtime communication, identity, authority, A2A, enrollment, Core, approval, activation, and cutover behavior are unchanged.",
+  "change_boundary": "Documentation/skill-only canonical fresh-laptop onboarding prompt and regression checks. Runtime authority, enrollment implementation, A2A, activation, company data, first-message, production readiness, and cutover remain unchanged and not authorized.",
   "commands": [
     {
-      "command": "Pi actual skill loader against source SKILL.md",
-      "result": "SKILL_LOADED"
+      "command": "pre-release critic and constitution-watcher review",
+      "result": "PASS; release remains owner-controlled and unrelated worktree edits are excluded"
     },
     {
-      "command": "node npm/scripts/check-package.mjs",
-      "result": "PASS"
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/conformance/test_npm_package.py tests/conformance/test_release_manifest.py",
+      "result": "30 passed; 0 failed"
     },
     {
-      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/conformance/test_npm_package.py",
-      "result": "8 passed"
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.13 sdist and wheel archives"
     },
     {
-      "command": "GitHub Actions cross-platform.yml run 29648784947 at commit 2dc177c",
-      "result": "PASS on Ubuntu, macOS, and Windows before the mechanical 0.1.13 version/evidence freeze; runtime code unchanged except version metadata"
+      "command": "npm run check",
+      "result": "source, installed generation 1, and repacked generation 2 each reported 1043 passed and 15 expected host/PostgreSQL skips; package check, release verifier, and two-generation packed gate passed"
     },
     {
-      "command": "full and recursive release gates",
-      "result": "npm run check PASS; source, installed generation 1, and repacked generation 2 each reported 1043 passed and 15 expected non-Linux host or mutation-authorized PostgreSQL skips; release verifier and two-generation packed gate passed"
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed"
     }
   ],
   "artifacts": [
     {
       "path": "evidence/local/2026-07-18-v0.1.13/artifacts/agentnet-0.1.13.tar.gz",
-      "sha256": "f85bd503ffac15040b2fe74f247bf98588d68c232508fe7141ac876e6e13bffe"
+      "sha256": "b45e3a73ca1d82ebef61ad0c1a78f95b0cd312c18670ff5cc8363bfdbd970e54"
     },
     {
       "path": "evidence/local/2026-07-18-v0.1.13/artifacts/agentnet-0.1.13-py3-none-any.whl",
-      "sha256": "2573ba401748de8778c7b25ba27f0963b9b0d65035c9c24f2af634d555af1c58"
+      "sha256": "22fbc24ad51a9fafb4414b04e3941117b20ecb6181282c94ac07a490a8102c50"
     }
-  ],
-  "limits": [
-    "Skill/template packaging evidence only; no Core deployment, approval-device independence, live OIDC/passkey, fresh-laptop enrollment, first message, activation, production, or cutover evidence is promoted."
   ]
 }
