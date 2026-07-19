@@ -29,6 +29,10 @@
       "result": "PASS; source, installed generation 1, and repacked generation 2 each reported 1049 passed and 15 expected host/PostgreSQL skips; package check, release verifier, and recursive packed gate passed"
     },
     {
+      "command": "GitHub Actions cross-platform package conformance run 29705571577 at 1abd4aad0c30f4cf026c050d628da44a83e65b4e",
+      "result": "PASS; Ubuntu, macOS, and Windows portable platform contracts plus pack/install/launch completed successfully"
+    },
+    {
       "command": "mutation-authorized local PostgreSQL attempt",
       "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed"
     }
@@ -36,11 +40,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-07-19-v0.1.15/artifacts/agentnet-0.1.15.tar.gz",
-      "sha256": "36a6e832a6bc587330be5b08cfc9d8693212958424e54078d0ded85cd78042fa"
+      "sha256": "f715f88ab9376e508f206dbad14f96bf07e6d38eec76466fa48d96cded86aed1"
     },
     {
       "path": "evidence/local/2026-07-19-v0.1.15/artifacts/agentnet-0.1.15-py3-none-any.whl",
-      "sha256": "ff59bab6335114e92c60a3d226d7ad5c4b9f837c8ef83a7603d348d35d21b4fe"
+      "sha256": "68a9a4380f822d4bb936bec498930f71504b407a6ff92209f4667056da84c5c8"
     }
   ]
 }
