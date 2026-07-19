@@ -303,6 +303,46 @@ state with a minimal completion marker and reports zero granted authority.
 `join begin`/`join complete` remain available only as the compatible expert
 manual ceremony.
 
+Fresh-laptop enrollment remains identity-only. A remote administrator must
+never request or copy the beneficiary identity file/private key merely to issue
+messaging authority. When the installed CLI exposes
+`--beneficiary-principal-id`, use the owner-approved principal ID and issue each
+exact entitlement independently through the same signed, audited administration
+path:
+
+```bash
+agentnet admin entitlement issue \
+  --identity .agentnet/admin-identity.json \
+  --beneficiary-principal-id principal-fresh-laptop \
+  --action message.send \
+  --resource direct \
+  --policy-revision 1 \
+  --reason 'authorize isolated C0 direct-message test'
+agentnet admin entitlement issue \
+  --identity .agentnet/admin-identity.json \
+  --beneficiary-principal-id principal-fresh-laptop \
+  --action mailbox.read \
+  --resource harness-fresh-laptop \
+  --policy-revision 1 \
+  --reason 'authorize isolated C0 mailbox read'
+agentnet admin entitlement issue \
+  --identity .agentnet/admin-identity.json \
+  --beneficiary-principal-id principal-fresh-laptop \
+  --action mailbox.acknowledge \
+  --resource harness-fresh-laptop \
+  --policy-revision 1 \
+  --reason 'authorize isolated C0 mailbox acknowledgement'
+```
+
+The beneficiary-principal path never opens beneficiary private state. Core still
+rejects a missing, inactive, non-human, or cross-domain principal and stale
+policy revision. Replace the example `--policy-revision 1` with the exact current
+domain policy revision when it is not 1. The administrator may learn
+principal/harness identifiers only
+through the owner-approved PD-001 path; the claim code may travel only through
+the separately approved PD-002 out-of-band channel. Enrollment itself grants
+none of these entitlements.
+
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation
 never fences or restarts a live server. It runs no migrations or artifact

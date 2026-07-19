@@ -73,6 +73,7 @@ for (const relative of [
   "skills/agentnet-operator/references/fail-closed-boundaries.md",
   "skills/agentnet-operator/references/required-communication-scope.md",
   "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+  "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
   "skills/agentnet-operator/evals/evals.json",
   "src/agentnet/bindings/pi_extension.ts",
   "src/agentnet/adapters/claude.py",
@@ -96,6 +97,7 @@ for (const required of [
   "local_bindings_required=true",
   "Fresh-laptop onboarding is human-mediated",
   "references/fresh-laptop-onboarding.md",
+  "references/examples/fresh-laptop-single-prompt.md",
 ]) {
   if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
 }
@@ -106,13 +108,43 @@ const onboardingText = readFileSync(
 for (const required of [
   "The unconnected laptop has no agent inbox",
   "Required bootstrap packet",
-  "Canonical public onboarding prompt template",
+  "Canonical public onboarding prompt example",
   "single fresh-laptop onboarding prompt",
   "Any unresolved required placeholder blocks issuance",
-  "first-message verification",
+  "Full C0 success",
   "AgentNet `0.1.8` fails this gate",
+  "references/examples/fresh-laptop-single-prompt.md",
 ]) {
   if (!onboardingText.includes(required)) fail(`fresh-laptop onboarding reference is missing: ${required}`);
+}
+if (onboardingText.includes("AgentNet blank-laptop onboarding — exact public packet")) {
+  fail("fresh-laptop onboarding contract embeds the canonical packet instead of routing to the example");
+}
+const onboardingExampleText = readFileSync(
+  path.join(root, "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md"),
+  "utf8",
+);
+for (const required of [
+  "AgentNet blank-laptop onboarding — exact public packet",
+  "<APPROVER_NAME>",
+  "<APPROVAL_CODE_CHANNEL>",
+  "<PRINCIPAL_ID_REPORTING_APPROVED>",
+  "<MESSAGING_TEST_IN_SCOPE>",
+  "message.send on direct",
+  "mailbox.read on this laptop's own harness",
+  "mailbox.acknowledge on this laptop's own harness",
+  "different from <HUMAN_REPORT_CHANNEL>",
+  "blocked: principal-id reporting not approved",
+  "blocked: agent file-write not available",
+  "--beneficiary-principal-id",
+]) {
+  if (!onboardingExampleText.includes(required)) fail(`fresh-laptop prompt example is missing: ${required}`);
+}
+for (const forbidden of ["BEGIN PRIVATE KEY", "agcap1.", "Authorization: Bearer"]) {
+  if (onboardingExampleText.includes(forbidden)) fail(`fresh-laptop prompt example contains forbidden secret shape: ${forbidden}`);
+}
+if (skillText.includes("AgentNet blank-laptop onboarding — exact public packet")) {
+  fail("AgentNet operator SKILL.md embeds the canonical packet");
 }
 const onboardingEvals = JSON.parse(
   readFileSync(path.join(root, "skills/agentnet-operator/evals/evals.json"), "utf8"),
@@ -120,7 +152,9 @@ const onboardingEvals = JSON.parse(
 const expectedOnboardingEvalIds = [
   "fresh-agent-receives-bootstrap-packet",
   "fresh-laptop-canonical-single-prompt-is-mandatory",
+  "fresh-laptop-claim-code-channel-is-approved",
   "fresh-laptop-human-copy-paste-bootstrap",
+  "fresh-laptop-messaging-authority-blocked",
   "hub-generates-public-onboarding-packet",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",

@@ -11,7 +11,7 @@ from agentnet.authorization import (
     OperationClass,
     PolicyEngine,
 )
-from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError
+from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.config import RuntimeProfile
 from agentnet.operations.policy_defaults import AttenuationPolicy
@@ -61,6 +61,51 @@ def test_human_entitlement_allows_and_persists_decision(store, actor, now, futur
     assert engine.recorder.get(decision.decision_id) == decision
     assert store.fetch_one("SELECT COUNT(*) AS count FROM policy_decisions")["count"] == 1
     assert store.verify_audit_chain()[0] is True
+
+
+def test_positive_entitlement_rejects_missing_or_cross_domain_principal(
+    store, actor, now, future
+):
+    engine = LocalConformancePolicyEngine(store)
+    missing = entitlement(actor, future).model_copy(update={"principal_id": "missing-human"})
+    with pytest.raises(ValidationError, match="active human principal"):
+        engine.bootstrap_entitlement_for_local_conformance(missing, when=now)
+
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE principals SET status='quarantined' WHERE principal_id=?",
+            (actor.principal_id,),
+        )
+    with pytest.raises(ValidationError, match="active human principal"):
+        engine.bootstrap_entitlement_for_local_conformance(entitlement(actor, future), when=now)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE principals SET status='active' WHERE principal_id=?",
+            (actor.principal_id,),
+        )
+
+    with store.transaction() as connection:
+        connection.execute(
+            "INSERT INTO domains(domain_id,status,policy_revision,revocation_epoch,created_at) "
+            "VALUES(?,?,?,?,?)",
+            ("domain-b", "active", 1, 1, int(now.timestamp()) - 10),
+        )
+        connection.execute(
+            "INSERT INTO principals(principal_id,domain_id,oidc_issuer,oidc_subject,"
+            "verified_email,status,created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                "human-b",
+                "domain-b",
+                "https://idp.example",
+                "subject-b",
+                "b@example.test",
+                "active",
+                int(now.timestamp()) - 10,
+            ),
+        )
+    cross_domain = entitlement(actor, future).model_copy(update={"principal_id": "human-b"})
+    with pytest.raises(ValidationError, match="active human principal"):
+        engine.bootstrap_entitlement_for_local_conformance(cross_domain, when=now)
 
 
 def test_eligible_harness_cannot_create_positive_authority(store, actor, now):

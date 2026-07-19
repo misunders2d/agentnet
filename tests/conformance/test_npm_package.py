@@ -63,6 +63,7 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
         "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+        "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
         "skills/agentnet-operator/evals/evals.json",
         "src/agentnet/bindings/pi_extension.ts",
         "src/agentnet/adapters/claude.py",
@@ -89,6 +90,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     assert "operator must not have to write integration code" in skill
     assert "Fresh-laptop onboarding is human-mediated" in skill
     assert "references/fresh-laptop-onboarding.md" in skill
+    assert "references/examples/fresh-laptop-single-prompt.md" in skill
+    assert "AgentNet blank-laptop onboarding — exact public packet" not in skill
 
     onboarding = (
         ROOT / "skills/agentnet-operator/references/fresh-laptop-onboarding.md"
@@ -96,7 +99,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     for required in (
         "The unconnected laptop has no agent inbox",
         "Required bootstrap packet",
-        "Canonical public onboarding prompt template",
+        "Canonical public onboarding prompt example",
         "single fresh-laptop onboarding prompt",
         "Any unresolved required placeholder blocks issuance",
         "Public package installation",
@@ -105,8 +108,51 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "Connection and first-message verification",
         "AgentNet `0.1.8` fails this gate",
         "blocked: product component not yet shipped",
+        "references/examples/fresh-laptop-single-prompt.md",
     ):
         assert required in onboarding
+    assert "AgentNet blank-laptop onboarding — exact public packet" not in onboarding
+
+    example = (
+        ROOT
+        / "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "AgentNet blank-laptop onboarding — exact public packet" in example
+    for placeholder in (
+        "<AUTHORIZED_HUMAN>",
+        "<BLANK_LAPTOP_DISPLAY_NAME>",
+        "<HARNESS_KIND>",
+        "<AGENTNET_DOMAIN>",
+        "<CORE_HTTPS_ORIGIN>",
+        "<APPROVAL_HTTPS_ORIGIN>",
+        "<OIDC_ISSUER>",
+        "<OIDC_CALLBACK>",
+        "<NPM_PACKAGE>",
+        "<AGENTNET_VERSION>",
+        "<NPM_INTEGRITY>",
+        "<NODE_MIN_VERSION>",
+        "<UV_MIN_VERSION>",
+        "<APPROVER_NAME>",
+        "<APPROVAL_CODE_CHANNEL>",
+        "<ADMINISTRATOR_NAME>",
+        "<PRINCIPAL_ID_REPORTING_APPROVED>",
+        "<MESSAGING_TEST_IN_SCOPE>",
+        "<TEST_RECIPIENT>",
+        "<C0_TEST_MESSAGE>",
+        "<C0_IDEMPOTENCY_KEY>",
+        "<RETENTION_ABORT_POLICY>",
+        "<HUMAN_REPORT_CHANNEL>",
+    ):
+        assert placeholder in example
+    for forbidden in ("BEGIN PRIVATE KEY", "agcap1.", "Authorization: Bearer"):
+        assert forbidden not in example
+    assert "message.send on direct" in example
+    assert "mailbox.read on this laptop's own harness" in example
+    assert "mailbox.acknowledge on this laptop's own harness" in example
+    assert "<APPROVAL_CODE_CHANNEL>" in example
+    assert "different from <HUMAN_REPORT_CHANNEL>" in example
+    assert "blocked: principal-id reporting not approved" in example
+    assert "blocked: agent file-write not available" in example
 
     evals = json.loads(
         (ROOT / "skills/agentnet-operator/evals/evals.json").read_text(encoding="utf-8")
@@ -118,6 +164,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "v019-guided-enrollment-is-identity-only",
         "hub-generates-public-onboarding-packet",
         "fresh-laptop-canonical-single-prompt-is-mandatory",
+        "fresh-laptop-messaging-authority-blocked",
+        "fresh-laptop-claim-code-channel-is-approved",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
@@ -182,6 +230,106 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "tool and effect authority false",
     ):
         assert required in boundaries
+
+
+def test_fresh_laptop_prompt_uses_the_shipped_cli_surface() -> None:
+    from agentnet.cli import build_parser
+
+    example = (
+        ROOT
+        / "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md"
+    ).read_text(encoding="utf-8")
+    parser = build_parser()
+    commands = (
+        (
+            [
+                "join",
+                "guided",
+                "--server",
+                "https://agentnet.example",
+                "--domain",
+                "corp.example",
+                "--harness",
+                "pi",
+                "--name",
+                "Fresh laptop",
+                "--state",
+                ".agentnet/guided-join.json",
+                "--identity",
+                ".agentnet/identity.json",
+                "--timeout",
+                "600",
+            ],
+            "agentnet join guided",
+        ),
+        (
+            ["authority", "inventory", "--identity", ".agentnet/identity.json"],
+            "agentnet authority inventory",
+        ),
+        (
+            [
+                "message",
+                "send",
+                "--identity",
+                ".agentnet/identity.json",
+                "--recipient",
+                "test-recipient",
+                "--classification",
+                "C0",
+                "--idempotency-key",
+                "fresh-laptop-c0-0001",
+                "--payload",
+                "agentnet-c0-test-message.json",
+            ],
+            "agentnet message send",
+        ),
+        (
+            [
+                "message",
+                "inbox",
+                "--identity",
+                ".agentnet/identity.json",
+                "--after",
+                "0",
+                "--limit",
+                "50",
+            ],
+            "agentnet message inbox",
+        ),
+        (
+            [
+                "message",
+                "acknowledge",
+                "event-1",
+                "--envelope-digest",
+                "a" * 64,
+                "--identity",
+                ".agentnet/identity.json",
+            ],
+            "agentnet message acknowledge",
+        ),
+        (
+            [
+                "admin",
+                "entitlement",
+                "issue",
+                "--beneficiary-principal-id",
+                "principal-fresh-laptop",
+                "--action",
+                "message.send",
+                "--resource",
+                "direct",
+                "--policy-revision",
+                "1",
+                "--reason",
+                "authorize isolated C0 test",
+            ],
+            "agentnet admin entitlement issue",
+        ),
+    )
+    for arguments, prompt_fragment in commands:
+        parser.parse_args(arguments)
+        assert prompt_fragment in example
 
 
 def test_pi_binding_failure_explains_supervisor_activation() -> None:
@@ -292,6 +440,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
         "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+        "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
     } <= filenames
     assert ".gitignore" not in filenames
     assert ".npmignore" not in filenames

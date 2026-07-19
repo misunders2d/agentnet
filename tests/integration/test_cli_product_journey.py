@@ -74,23 +74,37 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "Laptop",
         ]
     ).func.__name__ == "command_join_begin"
+    entitlement_args = [
+        "admin",
+        "entitlement",
+        "issue",
+        "--action",
+        "identity.credential.recover.approve",
+        "--resource",
+        "*",
+        "--policy-revision",
+        "1",
+        "--reason",
+        "establish independent recovery administrator",
+    ]
     assert parser.parse_args(
-        [
-            "admin",
-            "entitlement",
-            "issue",
-            "--beneficiary-identity",
-            "second-admin.json",
-            "--action",
-            "identity.credential.recover.approve",
-            "--resource",
-            "*",
-            "--policy-revision",
-            "1",
-            "--reason",
-            "establish independent recovery administrator",
-        ]
+        [*entitlement_args, "--beneficiary-identity", "second-admin.json"]
     ).func.__name__ == "command_admin_entitlement_issue"
+    assert parser.parse_args(
+        [*entitlement_args, "--beneficiary-principal-id", "principal-second-admin"]
+    ).func.__name__ == "command_admin_entitlement_issue"
+    with pytest.raises(SystemExit):
+        parser.parse_args(entitlement_args)
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                *entitlement_args,
+                "--beneficiary-identity",
+                "second-admin.json",
+                "--beneficiary-principal-id",
+                "principal-second-admin",
+            ]
+        )
     assert parser.parse_args(
         [
             "admin",
@@ -344,6 +358,11 @@ def test_guided_join_is_resumable_private_and_identity_only(
     assert result["authority_granted"] is False
     assert result["first_message_status"] == (
         "first_message_blocked_explicit_authority_required"
+    )
+    assert result["next"] == (
+        "an authorized administrator must explicitly grant message.send on direct, "
+        "mailbox.read on harness-1, and mailbox.acknowledge on "
+        "harness-1 before the first test message"
     )
     private_values = (
         "https://accounts.example/authorize",

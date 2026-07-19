@@ -1270,8 +1270,9 @@ def _guided_success_output(
         "authority_granted": False,
         "first_message_status": "first_message_blocked_explicit_authority_required",
         "next": (
-            "an authorized administrator must explicitly grant exact message.send "
-            "and required recipient/read entitlement before the first test message"
+            "an authorized administrator must explicitly grant message.send on direct, "
+            f"mailbox.read on {actor.harness_id}, and mailbox.acknowledge on "
+            f"{actor.harness_id} before the first test message"
         ),
     }
 
@@ -2527,17 +2528,27 @@ def command_admin_entitlement_issue(args: argparse.Namespace) -> int:
     if args.expires_in < 300 or args.expires_in > 31_536_000:
         raise SystemExit("entitlement lifetime must be between five minutes and one year")
     client, actor, key = _load_identity_client(Path(args.identity))
-    beneficiary_client, beneficiary, _beneficiary_key = _load_identity_client(
-        Path(args.beneficiary_identity)
-    )
-    beneficiary_client.close()
-    if beneficiary.domain_id != actor.domain_id or beneficiary.principal_id is None:
-        client.close()
-        raise SystemExit("beneficiary identity is not a human in the issuer's exact domain")
+    if args.beneficiary_identity is not None:
+        beneficiary_client, beneficiary, _beneficiary_key = _load_identity_client(
+            Path(args.beneficiary_identity)
+        )
+        beneficiary_client.close()
+        if beneficiary.domain_id != actor.domain_id or beneficiary.principal_id is None:
+            client.close()
+            raise SystemExit("beneficiary identity is not a human in the issuer's exact domain")
+        beneficiary_principal_id = beneficiary.principal_id
+    else:
+        beneficiary_principal_id = args.beneficiary_principal_id
+        if (
+            not beneficiary_principal_id
+            or beneficiary_principal_id.strip() != beneficiary_principal_id
+        ):
+            client.close()
+            raise SystemExit("beneficiary principal id must be a non-empty exact value")
     entitlement = HumanEntitlement(
         entitlement_id=args.entitlement_id or str(uuid4()),
         domain_id=actor.domain_id,
-        principal_id=beneficiary.principal_id,
+        principal_id=beneficiary_principal_id,
         action=args.action,
         resource_pattern=args.resource,
         revision=args.revision,
@@ -2575,12 +2586,9 @@ def command_admin_entitlement_issue(args: argparse.Namespace) -> int:
         json.dumps(
             {
                 "entitlement": response.json(),
-                "beneficiary_principal_id": beneficiary.principal_id,
+                "beneficiary_principal_id": beneficiary_principal_id,
                 "authority_is_human_only": True,
-                "next": (
-                    "retain at least two independently operated recovery approvers; "
-                    "issue only the exact approval actions and scopes they require"
-                ),
+                "next": "verify the exact bounded entitlement and retain its audit evidence",
             },
             indent=2,
             sort_keys=True,
@@ -3603,7 +3611,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     entitlement_issue = entitlement_commands.add_parser("issue")
     entitlement_issue.add_argument("--identity", default=".agentnet/identity.json")
-    entitlement_issue.add_argument("--beneficiary-identity", required=True)
+    beneficiary = entitlement_issue.add_mutually_exclusive_group(required=True)
+    beneficiary.add_argument("--beneficiary-identity")
+    beneficiary.add_argument("--beneficiary-principal-id")
     entitlement_issue.add_argument("--entitlement-id")
     entitlement_issue.add_argument("--action", required=True)
     entitlement_issue.add_argument("--resource", required=True)
