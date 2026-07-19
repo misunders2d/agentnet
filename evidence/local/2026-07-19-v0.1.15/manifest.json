@@ -1,0 +1,46 @@
+{
+  "run_id": "2026-07-19-v0.1.15",
+  "evaluated_at": "2026-07-19T22:00:00+00:00",
+  "scope": "v0_1_15_ordinary_onboarding_simplification_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "7301267661ace789c92a3adeeac451ae51903a66edcc03cea500c6188583551c",
+  "prior_runtime_evidence": "evidence/local/2026-07-19-v0.1.14/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-19-v0.1.14/manifest.json",
+  "change_boundary": "Owner-approved ordinary onboarding now uses the existing server for Core, PostgreSQL, and approval under distinct OS identities, the owner laptop for WebAuthn, and one fresh-laptop prompt. Separate approval hosting remains optional high assurance; the shared-host profile reports independent_boundary_proven=false. OIDC/PKCE, candidate proof of possession, 128-bit five-minute five-attempt claim code, explicit individually issued C0 entitlements, and no implicit authority remain unchanged. No live deployment, company data, activation, production readiness, or A2A cutover is authorized or claimed.",
+  "commands": [
+    {
+      "command": "DeepSeek adversarial review, GLM constitution-watcher, and Codex implementation scout",
+      "result": "PASS after correcting the PD-002 attribution, preserving unsigned O-tier status, and replacing a nonexistent batch-orchestrator claim with three individually signed/audited entitlements"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q focused approval/onboarding/installed-harness suites",
+      "result": "23 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1128 passed, 15 expected host/PostgreSQL skips; 0 failed"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.15 sdist and wheel archives"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS; source, installed generation 1, and repacked generation 2 each reported 1049 passed and 15 expected host/PostgreSQL skips; package check, release verifier, and recursive packed gate passed"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-19-v0.1.15/artifacts/agentnet-0.1.15.tar.gz",
+      "sha256": "36a6e832a6bc587330be5b08cfc9d8693212958424e54078d0ded85cd78042fa"
+    },
+    {
+      "path": "evidence/local/2026-07-19-v0.1.15/artifacts/agentnet-0.1.15-py3-none-any.whl",
+      "sha256": "ff59bab6335114e92c60a3d226d7ad5c4b9f837c8ef83a7603d348d35d21b4fe"
+    }
+  ]
+}

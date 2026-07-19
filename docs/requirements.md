@@ -47,8 +47,8 @@ The brainstorm must not merely restate this document. It must:
 
 - [ ] **ID-001 — HARD — Verified human principal.** Every enrolled agent/harness must be linked to a clearly identified real human, initially expected to use a verified user email.
   - Acceptance: Enrollment produces a durable binding between a human principal and an agent/harness identity.
-- [ ] **ID-002 — HARD — Out-of-band human confirmation.** A real user controlling the claimed identity must approve enrollment through an independently authenticated channel such as Slack, Telegram, or email.
-  - Acceptance: Merely possessing the agent connection or submitting an email cannot complete enrollment.
+- [ ] **ID-002 — HARD — Out-of-band human confirmation.** A real user controlling the claimed identity must approve enrollment through an independently authenticated channel such as Slack, Telegram, email, or an owner-controlled WebAuthn authenticator.
+  - Acceptance: Merely possessing the agent connection or submitting an email cannot complete enrollment. Independence means the confirmation is authenticated independently of the enrolling harness and cannot be read or completed by that harness; it does not require a separate physical approval host. The default self-hosted profile may colocate Core, PostgreSQL, and approval under distinct OS identities while the human approves on an owner-controlled authenticator, and must report `independent_boundary_proven=false`. Separately administered approval hosting is an optional high-assurance tier, not an ordinary-onboarding prerequisite.
 - [ ] **ID-003 — HARD — No self-asserted identity trust.** No caller may gain identity or authority by placing an email, username, agent ID, or role claim in a payload.
   - Acceptance: Altering claimed identity fields without valid cryptographic/authenticated proof never changes the verified caller.
 - [ ] **ID-004 — HARD — Cryptographic binding.** Post-enrollment identity must be bound to cryptographic credentials or an equally strong authenticated mechanism.

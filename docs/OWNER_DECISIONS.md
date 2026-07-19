@@ -1,12 +1,16 @@
 # Owner decision inputs
 
-Status: **proposed safe defaults, not owner-approved**. This file is not an
-approval record and cannot satisfy Gate 17.
+Status: **PD-001 and the ordinary-onboarding portion of PD-002 were recorded
+from the accountable owner's explicit authenticated instruction on 2026-07-19.**
+This is the governing repository decision for the bounded ordinary profile, but
+it is not an independently signed O-tier artifact and does not pass an owner or
+production gate. Remaining decisions and the optional high-assurance/production
+evidence tier are not approved.
 
 | Decision | Reversible implementation default | Launch blocker requiring accountable owner |
 |---|---|---|
-| PD-001 | opaque domain principal = OIDC issuer+subject; verified email alias/history | identity owner accepts migration/appeal semantics |
-| PD-002 | phishing-resistant primary auth plus exact transaction and independent device/boundary | approved channels/boundaries, recovery owners, TTL/entropy/throttling |
+| PD-001 | opaque domain principal = OIDC issuer+subject; verified email alias/history; principal/harness IDs remain inside authenticated Core/Manager authority operations and are omitted from public human reports | migration/appeal semantics outside this bounded default |
+| PD-002 | owner-controlled WebAuthn UV plus exact transaction and 128-bit one-time code; confirmation independent of the enrolling harness; colocated server profile allowed with `independent_boundary_proven=false` | separately administered approval host and stronger recovery/production evidence for the optional high-assurance tier |
 | PD-003 | harness/device/session only attenuate; posture disabled | exact posture/appeal policy |
 | PD-004 | one independent approver ordinary; two high-impact/break-glass | risk classes, approver sets, TTL/use, break-glass |
 | PD-005 | retain inert accepted history only under lawful retention; conservative compromise quarantine | event matrix, erasure/hold, adjudicator |
@@ -16,6 +20,43 @@ approval record and cannot satisfy Gate 17.
 | PD-009 | kill next decision; no issuance during outage; short-token low-risk continuity | token TTL, signal SLO, outage/audit ceiling |
 | PD-010 | Linux x86_64/arm64, one region, RPO=0 only for proven `accepted_durable` | RPO/RTO/capacity/residency/topology/admin/key/witness/retention |
 | PD-011 | routine silence; content-free count; four redacted exceptional classes | channels, quiet hours, redaction/escalation |
+
+## Recorded ordinary-onboarding decisions — 2026-07-19
+
+The accountable owner approved these bounded defaults after reviewing the
+usability and threat-model tradeoff:
+
+- **PD-001:** OIDC issuer plus subject is the canonical principal; verified
+  email remains an alias. Principal and harness identifiers may flow only
+  inside authenticated Core/Manager operations needed for exact authority
+  issuance and are omitted from public human reports by default.
+- **PD-002:** the default self-hosted profile uses an owner-controlled WebAuthn
+  authenticator to approve the exact enrollment transaction independently of
+  the enrolling harness. Core, PostgreSQL, and approval may share the existing
+  server under distinct OS identities. This profile reports
+  `independent_boundary_proven=false`; separately administered approval is an
+  optional high-assurance tier.
+- The one-time claim code is 128 bits, expires after five minutes, permits at
+  most five failed attempts, and is typed only into the fresh laptop's masked
+  prompt. When the enrollee and approver are the same owner, direct human
+  transfer between the approval UI and fresh laptop is allowed; no extra
+  person, host, Slack/A2A relay, or second reporting channel is required.
+- Recovery requires fresh OIDC plus WebAuthn and creates a new binding. It does
+  not resurrect or copy a lost harness key.
+- One owner may act as enrollee, WebAuthn approver, and messaging administrator
+  in ordinary onboarding. OIDC authentication, passkey approval, candidate-key
+  possession, and signed authority issuance remain distinct cryptographic acts;
+  no role acquires authority merely because the human is the same.
+- Ordinary setup uses one frozen consolidated approval. Separate confirmation
+  remains required for a materially changed scope or a new destructive,
+  restart, privilege-expanding, or high-risk action.
+- AgentNet requires secure runtime injection but no named secret manager.
+  Infisical and equivalent products are optional mechanisms, never onboarding
+  prerequisites.
+
+This decision does not approve production certification, the optional
+independent-administration tier, high-impact/break-glass elevation, company
+content, federation, C3, or unrelated PD/ORG decisions.
 
 ## ORG-006 relationship lifecycle policy — unapproved
 

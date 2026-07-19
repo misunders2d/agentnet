@@ -16,7 +16,7 @@ Use the smallest safe workflow matching the request. AgentNet installation is co
 3. **Harness readiness** — exact version probes and diagnostic-only single-harness probes.
 4. **Supervisor or Pi binding** — separate supervisor config, measured child, private Unix IPC.
 5. **Always-on server agent** — PostgreSQL, HTTPS, secret injection, identity and recovery prerequisites.
-6. **Enrollment or authority** — workforce OIDC, proof of possession, independent WebAuthn/OOB approval, explicit grants.
+6. **Enrollment or authority** — workforce OIDC, proof of possession, WebAuthn/OOB human approval independent of the enrolling harness, explicit grants.
 7. **Fresh-laptop bootstrap** — one complete public instruction packet for a human to paste into a newly installed generic agent with no prior AgentNet/A2A knowledge.
 8. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
 
@@ -30,14 +30,23 @@ Until a required product component is shipped and its applicable gate passes, re
 
 ## Fresh-laptop onboarding is human-mediated
 
-Treat this as one reusable product flow for any fresh laptop—not a device-specific workaround. A fresh laptop may have only a newly installed generic agent and a human manager. Never assume it already has AgentNet, A2A, Pi extensions, Node.js, `uv`, Infisical, private-repository access, credentials, or technical operator knowledge.
+Treat this as one reusable product flow for any fresh laptop—not a device-specific workaround. A fresh laptop may have only a newly installed generic agent and a human manager. Never assume it already has AgentNet, A2A, Pi extensions, Node.js, `uv`, a secret manager, private-repository access, credentials, or technical operator knowledge.
+
+Default ordinary onboarding uses the existing server for Core, PostgreSQL, and
+approval under distinct OS identities; the current owner laptop supplies the
+browser/passkey; the fresh laptop receives one complete prompt. Do not require
+an extra approval host, extra person, Infisical or another named secret manager,
+per-command setup approvals, or technical values from the human that AgentNet
+can resolve. Separate approval hosting is an optional high-assurance profile.
+Routine setup uses one frozen approval; ask again only for a materially changed
+scope or a new destructive, restart, privilege-expanding, or high-risk action.
 
 The same shared skill serves two roles:
 
 - **Sender/Hub/current manager:** give the human one self-contained, public, copyable bootstrap packet through an authenticated human channel. Do not try to contact the unconnected laptop as an agent.
 - **Fresh-laptop agent:** when the human pastes that packet, guide them step by step from prerequisites and exact public package installation through enrollment and the first verified AgentNet-native message. Explain where each command runs, expected safe output, and exact stop conditions.
 
-Before producing or following a live packet, read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and its [canonical single-paste example](references/examples/fresh-laptop-single-prompt.md). Resolve and verify every required placeholder in the example from approved public metadata, then issue the resulting packet unchanged rather than splitting, handcrafting, shortening, or paraphrasing it. Any unresolved required placeholder blocks issuance. `SKILL.md` contains routing only; the canonical prompt belongs exclusively in the example file. Verify the installed release actually ships every selected phase. The packet must cover the exact public installation source/version, OS/CPU/Node/`uv` prerequisites, install verification, guided join, system-browser Google OIDC, independent approval, identity-only completion, separate exact messaging authority when in scope, C0 verification, expected outputs, and safe recovery.
+Before producing or following a live packet, read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and its [canonical single-paste example](references/examples/fresh-laptop-single-prompt.md). Resolve and verify every required placeholder in the example from approved public metadata, then issue the resulting packet unchanged rather than splitting, handcrafting, shortening, or paraphrasing it. Any unresolved required placeholder blocks issuance. `SKILL.md` contains routing only; the canonical prompt belongs exclusively in the example file. Verify the installed release actually ships every selected phase. The packet must cover the exact public installation source/version, OS/CPU/Node/`uv` prerequisites, install verification, guided join, system-browser Google OIDC, WebAuthn human approval, identity-only completion, separate exact messaging authority when in scope, C0 verification, expected outputs, and safe recovery. Sender/Hub resolves package integrity, origins, callbacks, administrator/recipient metadata, and runtime identifiers; do not interrogate the human for them.
 
 Keep public instructions separate from local/private material. Private keys, join state, callback codes or challenges, identity profiles, approval capabilities, signed approval receipts, tokens, and secret values never belong in Slack, A2A, chat, prompts, logs, repositories, or the copied bootstrap packet.
 
@@ -91,11 +100,11 @@ Do not initialize or enroll until all required inputs exist:
 - dedicated HTTPS/TLS endpoint and exact service audience;
 - workforce OIDC provider with exact issuer, callback, endpoint origins, signing algorithms, and token-endpoint authentication method;
 - for confidential OIDC, a public `client_secret_env` reference plus a private runtime value; never a secret in config, commands, logs, evidence, or chat;
-- independently controlled WebAuthn user-verification approval authority;
+- owner-controlled WebAuthn user-verification authority that the enrolling harness cannot read or automate;
 - per-harness keys, proof of possession, revocation and recovery procedures;
 - explicit capabilities, policies, retention, and evidence appropriate to enabled features.
 
-The WebAuthn-UV ceremony service is an AgentNet product component operated through `agentnet approval`; it uses pinned maintained verification and the existing receipt contract. It must run under config, keys, database, TLS, OS identity, browser/passkey, and administration that enrolling/enrolled harnesses cannot read or control. Same-user or same-host testing never proves independence. Other deployment manifests and required adapters must likewise ship from pinned mechanisms; operators supply approved infrastructure, secrets, and human decisions—not custom integration code. Until each selected profile passes its gates, do not normalize manual IdP/PostgreSQL/object-store assembly as the supported production experience.
+The WebAuthn-UV ceremony service is an AgentNet product component operated through `agentnet approval`; it uses pinned maintained verification and the existing receipt contract. In the default self-hosted profile it may share the existing server with Core/PostgreSQL under a distinct OS identity, credential, storage root, and loopback service that the enrolling harness cannot read or control. The owner approves with a WebAuthn authenticator on the current laptop. This profile reports `independent_boundary_proven=false`; separate administration is optional high assurance. Operators must not be sent through manual extra-host, secret-manager, or per-command setup choreography.
 
 OIDC token-endpoint authentication must be explicit: `none`,
 `client_secret_post`, or `client_secret_basic`. Existing public clients default
@@ -143,7 +152,7 @@ Always distinguish:
 - **Skill/package discovery failure:** run the package check and inspect Pi skill-loader diagnostics; do not copy skill files into unrelated global directories as a workaround.
 - **Core config failure:** run `agentnet status --config agentnet.json` and preserve its named blocker.
 - **Supervisor/Pi binding failure:** run `agentnet supervisor-run --config agentnet-supervisor.json --check`; never fall back to ambient tools or a foreground process.
-- **Identity/enrollment failure:** distinguish OIDC endpoint validation, proof of possession, approval-service config/catalog/key custody, registration, RP/origin/UV/challenge verification, exact transaction/purpose/digest, receipt expiry/replay, credential revocation, and independently administered deployment evidence. Use `agentnet approval status`; never substitute synthetic identity, co-located agent control, or chat approval.
+- **Identity/enrollment failure:** distinguish OIDC endpoint validation, proof of possession, approval-service config/catalog/key custody, registration, RP/origin/UV/challenge verification, exact transaction/purpose/digest, receipt expiry/replay, credential revocation, and the selected deployment profile's evidence. Use `agentnet approval status`; never substitute synthetic identity, enrolling-harness control, or chat approval. Do not reject default server colocation merely because it is not the optional high-assurance tier.
 - **Storage/durability failure:** report the actual backend/readiness evidence and state vocabulary; never promote `accepted_local` to durable acceptance.
 - **Artifact failure:** distinguish reservation, exact byte upload, quarantine promotion, scan, release, capability issuance, and single-use download. Never pass bytes/base64 or arbitrary host paths through model-visible tools, print capabilities/private object keys, or treat quarantine as availability.
 - **Task execution failure:** distinguish `accepted_queued` custody from exact recipient-owned `task.process` authorization, durable local queue custody, protected payload release, and separately authorized result/effect handling. Generic reads stay redacted. If installed release predates schema migration 2, report a version/component gap; never add an `include_payload` workaround.

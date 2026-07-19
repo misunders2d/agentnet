@@ -52,7 +52,7 @@ Linux uses sealed memfd, macOS a read-only inherited pipe, and Windows a one-tim
 exact-process private pipe. Missing delivery acknowledgement fails local-binding
 activation.
 
-## Independent approval configuration, storage, and HTTP contract
+## Approval configuration, storage, and HTTP contract
 
 `ApprovalServiceConfig` is strict (`extra="forbid"`, schema `1.0`) and binds
 one canonical HTTPS `public_origin`, an exactly matching `rp_id`, `verifier_id`,
@@ -61,8 +61,12 @@ unique approvers. Configured purposes must collectively cover all six mandatory
 approval consumers, and every approver must cover enrollment. Signer private
 keys remain file references; load verifies each key's configured thumbprint.
 
-The independent SQLite catalog is version 2 and is checked on every open against
-both exact `sqlite_master` objects and a stored catalog SHA-256. Existing exact
+The approval SQLite catalog is version 2 and is checked on every open against
+both exact `sqlite_master` objects and a stored catalog SHA-256. The default
+self-hosted profile may run this service on the existing Core server under a
+distinct OS identity, credential, storage root, and loopback listener, while
+retaining `independent_boundary_proven=false`. Separate administration is the
+optional high-assurance profile. Existing exact
 v1 stores upgrade under `BEGIN IMMEDIATE` only after v1 metadata/catalog
 verification; failed or conflicting migration rolls back. It contains:
 
@@ -103,8 +107,10 @@ Browser/API routes are isolated from core routes:
 
 All POST bodies are bounded while streaming regardless of `Content-Length`, use
 duplicate-key/non-finite rejecting JSON and strict schemas, and expose only a
-generic `request_denied` error. The service binds loopback only; TLS exposure
-belongs to the separately administered reverse proxy.
+generic `request_denied` error. The service binds loopback only. TLS exposure belongs to a separately
+credentialed reverse-proxy role; that role may share the existing server in the
+default profile or use separate administration in the optional high-assurance
+profile.
 
 ## OIDC endpoint configuration contract
 

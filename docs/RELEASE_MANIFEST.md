@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-19
-Candidate: `agentnet 0.1.14`
+Candidate: `agentnet 0.1.15`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of

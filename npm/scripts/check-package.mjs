@@ -30,7 +30,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-19-v0.1.14/artifacts/RETENTION.md",
+  "evidence/local/2026-07-19-v0.1.15/artifacts/RETENTION.md",
   "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {
@@ -126,22 +126,32 @@ const onboardingExampleText = readFileSync(
 );
 for (const required of [
   "AgentNet blank-laptop onboarding — exact public packet",
-  "<APPROVER_NAME>",
-  "<APPROVAL_CODE_CHANNEL>",
-  "<PRINCIPAL_ID_REPORTING_APPROVED>",
-  "<MESSAGING_TEST_IN_SCOPE>",
   "message.send on direct",
-  "mailbox.read on this laptop's own harness",
-  "mailbox.acknowledge on this laptop's own harness",
-  "different from <HUMAN_REPORT_CHANNEL>",
-  "blocked: principal-id reporting not approved",
-  "blocked: agent file-write not available",
-  "--beneficiary-principal-id",
+  "mailbox.read on this laptop's harness",
+  "mailbox.acknowledge on this laptop's harness",
+  "No other human setup",
+  "no extra approval host",
+  "No relay channel or second person is required",
+  "Do not report or relay principal/harness IDs",
+  "Infisical or other named secret manager",
+  "per-command setup approvals",
+  "Three separate issuance records are expected",
+  "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value",
 ]) {
   if (!onboardingExampleText.includes(required)) fail(`fresh-laptop prompt example is missing: ${required}`);
 }
-for (const forbidden of ["BEGIN PRIVATE KEY", "agcap1.", "Authorization: Bearer"]) {
-  if (onboardingExampleText.includes(forbidden)) fail(`fresh-laptop prompt example contains forbidden secret shape: ${forbidden}`);
+for (const forbidden of [
+  "BEGIN PRIVATE KEY",
+  "agcap1.",
+  "Authorization: Bearer",
+  "<APPROVER_NAME>",
+  "<APPROVAL_CODE_CHANNEL>",
+  "<ADMINISTRATOR_NAME>",
+  "<PRINCIPAL_ID_REPORTING_APPROVED>",
+  "<MESSAGING_TEST_IN_SCOPE>",
+  "server-side onboarding orchestrator",
+]) {
+  if (onboardingExampleText.includes(forbidden)) fail(`fresh-laptop prompt example contains forbidden or obsolete content: ${forbidden}`);
 }
 if (skillText.includes("AgentNet blank-laptop onboarding — exact public packet")) {
   fail("AgentNet operator SKILL.md embeds the canonical packet");
@@ -153,8 +163,12 @@ const expectedOnboardingEvalIds = [
   "fresh-agent-receives-bootstrap-packet",
   "fresh-laptop-canonical-single-prompt-is-mandatory",
   "fresh-laptop-claim-code-channel-is-approved",
+  "fresh-laptop-default-needs-no-extra-approval-host",
   "fresh-laptop-human-copy-paste-bootstrap",
+  "fresh-laptop-human-never-supplies-technical-metadata",
   "fresh-laptop-messaging-authority-blocked",
+  "fresh-laptop-never-requires-infisical",
+  "fresh-laptop-one-consolidated-setup-approval",
   "hub-generates-public-onboarding-packet",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",

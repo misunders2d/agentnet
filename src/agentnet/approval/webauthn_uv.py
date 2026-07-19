@@ -617,7 +617,7 @@ class WebAuthnApprovalService:
         ]
 
     def local_approval_url(self, request_id: str, *, now: int | None = None) -> str:
-        """Recover one browser capability only inside the independent approval host."""
+        """Recover one browser capability only inside the dedicated approval service."""
 
         if not request_id or len(request_id) > 128:
             raise AuthenticationError("approval request denied")

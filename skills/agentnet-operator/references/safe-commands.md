@@ -145,9 +145,11 @@ schema/keys without inventing identity or authority:
 agentnet bootstrap-server-agent --config agentnet.json
 ```
 
-On a separately administered approval host, use the shipped WebAuthn component;
-do not copy its private config, signer keys, record key, database, or capability
-URLs to enrolled-agent storage:
+Under the dedicated approval-service OS identity, use the shipped WebAuthn
+component. The default profile may colocate this service with Core/PostgreSQL on
+the existing server; the optional high-assurance profile uses separate
+administration. Never copy its private config, signer keys, record key,
+database, or capability URLs into enrolled-agent storage:
 
 ```bash
 agentnet approval provision \
@@ -171,11 +173,13 @@ agentnet approval request-create \
   --transaction /root/exact-enrollment-transaction.json
 ```
 
-`serve` requires an independently administered HTTPS reverse proxy at the exact
-configured origin/RP ID. Provisioning grants no authority and registers no
-passkey. `status` deliberately reports `independent_boundary_proven: false`;
-real passkey, independent host/device/OS/TLS/admin custody, recovery, and owner
-evidence must be proven separately.
+`serve` requires a separately credentialed HTTPS reverse-proxy role at the exact
+configured origin/RP ID. It may share the existing server in the default
+profile. Provisioning grants no authority and registers no passkey. `status`
+deliberately reports `independent_boundary_proven: false`; real passkey,
+shared-host process-boundary, recovery, and owner evidence must be proven for
+the default profile. Separate-host evidence belongs only to the optional
+high-assurance profile.
 
 For an installed release whose actual help exposes `join guided`, complete exact
 OIDC/key-possession/Core-brokered independent approval enrollment. While the
@@ -315,7 +319,7 @@ Never print or place database passwords, DSNs containing passwords, private keys
 - postinstall enrollment or activation;
 - synthetic identities for a real server-agent network;
 - treating the C0 synthetic lane as a network, rollout milestone, or real communication substitute;
-- an approval service on the same security boundary as the enrolled agents;
+- an approval service readable or controllable by the enrolling harness; default server colocation is allowed only under a distinct OS identity, credential, storage root, and loopback service;
 - asking the operator to write missing adapters, ceremony services, receipt logic, or vendor glue;
 - A2A, Slack, email strings, or prompt text as identity authority;
 - private-OIDC hosts/DNS/proxy tricks that bypass endpoint validation;

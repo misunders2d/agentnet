@@ -150,6 +150,27 @@ offboarding, and sibling-harness behavior. Missing or ambiguous lifecycle state
 fails closed. Recovery creates an explicit new binding; it must not silently
 resurrect lost authority.
 
+### Default onboarding topology and human experience
+
+For ordinary self-hosted onboarding, "independent confirmation" means human
+authentication independent of the enrolling harness; it does not mandate
+another physical approval computer. The supported default may colocate Core,
+PostgreSQL, and approval on the existing server under distinct OS identities,
+while the owner approves the exact transaction with a WebAuthn authenticator on
+an owner-controlled device. This profile must honestly report
+`independent_boundary_proven=false`. A separately administered approval host is
+an optional high-assurance profile, not a prerequisite for ordinary onboarding.
+
+Normal onboarding must not require a named secret manager, an extra host or
+person, per-command infrastructure approvals, or technical values from the
+human that AgentNet can resolve itself. The sender/server resolves package
+integrity, origins, callbacks, identifiers, and config metadata. Routine setup
+uses one frozen, reviewable deployment approval. A fresh approval is required
+only when scope materially changes or a new destructive, restart, privilege-
+expanding, or high-risk action appears. One owner may perform the enrollee,
+approver, and administrator human roles; cryptographic actors and authority
+steps remain distinct.
+
 ## 7. Verified caller and authorization rules
 
 Every protected message, task, room operation, file action, data request,

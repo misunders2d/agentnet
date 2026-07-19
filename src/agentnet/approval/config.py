@@ -1,4 +1,4 @@
-"""Strict configuration for the separately operated WebAuthn approval service."""
+"""Strict configuration for the dedicated WebAuthn approval service."""
 
 from __future__ import annotations
 
@@ -128,9 +128,9 @@ class ApprovalServiceConfig(BaseModel):
         if len(set(paths)) != len(paths):
             raise ValueError("approval service paths must be distinct")
         if self.database_path.parent != self.data_dir:
-            raise ValueError("approval database must live directly in the independent data directory")
+            raise ValueError("approval database must live directly in the dedicated data directory")
         if self.record_key_path.parent != self.data_dir / "secrets":
-            raise ValueError("approval record key must live in the independent secrets directory")
+            raise ValueError("approval record key must live in the dedicated secrets directory")
 
         principals = [(item.domain_id, item.principal_id) for item in self.approvers]
         key_ids = [item.signer_key_id for item in self.approvers]

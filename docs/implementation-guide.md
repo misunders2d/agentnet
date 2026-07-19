@@ -98,17 +98,25 @@ vendor glue. A missing product component is a named blocker, not an operator
 integration assignment or justification to weaken identity, authority,
 durability, artifact, task, room, federation, or non-interruption semantics.
 
-## Independent WebAuthn-UV approval service
+## WebAuthn-UV approval service and deployment profiles
 
-AgentNet now includes the separately runnable ceremony component under
-`agentnet approval`. This closes the missing software-component gap; it does not
-prove deployment independence. Put its config, database, AES-GCM record key,
-receipt signer keys, OS account, TLS termination, passkeys, backups, and
-administration outside every enrolling or enrolled harness's readable or
-controllable boundary. Same-user/same-host operation is suitable only for local
-mechanism testing and must report `independent_boundary_proven: false`.
+AgentNet includes the approval ceremony component under `agentnet approval`.
+For the default self-hosted profile, run Core, PostgreSQL, and approval on the
+existing server under distinct OS identities, credentials, storage roots, and
+loopback services. The owner uses a WebAuthn authenticator outside the enrolling
+harness. This profile reports `independent_boundary_proven: false`; it does not
+claim protection from shared-server root compromise. A separately administered
+approval host remains the optional high-assurance profile.
 
-On the independent approval host, create an owner-only approver specification:
+Normal onboarding does not require another computer, another person, Infisical
+or another named secret manager, or per-command infrastructure approvals. Use
+one frozen deployment approval; ask again only for materially changed,
+destructive, restart, privilege-expanding, or high-risk scope. AgentNet resolves
+hostnames, callbacks, package integrity, and configuration metadata rather than
+asking the human for technical values.
+
+Under the dedicated approval-service OS identity, create an owner-only approver
+specification:
 
 ```json
 {
@@ -152,9 +160,11 @@ Install that public trust in each core's existing
 `IndependentApprovalVerifier`; never copy approval private keys, record key, DB,
 or browser capability into an agent host.
 
-`serve` deliberately binds only an explicit loopback IP. Place an independently
-administered HTTPS reverse proxy in front without changing the exact configured
-origin/RP ID; keep access logs free of bodies. The one-time capability is in the
+`serve` deliberately binds only an explicit loopback IP. Place a separately
+credentialed HTTPS reverse-proxy role in front without changing the exact
+configured origin/RP ID; keep access logs free of bodies. The proxy may share
+the existing server in the default profile or use separate administration in
+the optional high-assurance profile. The one-time capability is in the
 URL fragment and is removed by browser JavaScript before API calls:
 
 ```bash
@@ -166,8 +176,8 @@ agentnet approval register-begin \
   --approver security-owner
 ```
 
-Open the registration URL on the independently controlled browser/device and
-register a phishing-resistant authenticator with user verification. Then a
+Open the registration URL on the owner's browser/device, outside the enrolling
+harness, and register a phishing-resistant authenticator with user verification. Then a
 host administrator creates one request from an owner-only canonical JSON
 transaction file:
 
@@ -199,9 +209,12 @@ agentnet approval watch --config /etc/agentnet-approval/config.json --open
 agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID
 ```
 
-After WebAuthn, Core mode shows only a 128-bit one-time claim code. Human sends
-that code through the approved authenticated human channel; exact retries return
-the same current receipt to Core. Candidate never receives receipt or approval
+After WebAuthn, Core mode shows only a 128-bit one-time claim code. It expires
+after five minutes and allows at most five failed attempts. When the owner is
+both enrollee and approver, the owner reads it in the approval UI and types it
+directly into the fresh laptop's masked prompt; no extra person, host, Slack/A2A
+relay, or second report channel is required. Exact retries return the same
+current receipt to Core. Candidate never receives receipt or approval
 URL. Unreleased guided-enrollment source composes this broker with hash-only
 Core continuation state and `agentnet join guided`. Core stages the exact
 request outside its database transaction, retrieves the receipt without
@@ -209,7 +222,7 @@ consuming it, and leaves `EnrollmentService.complete()` as the sole atomic
 receipt/challenge consumer. A crash after that commit reconstructs the exact
 created binding and encrypts the same completion response on retry.
 
-Revoke a lost authenticator from the independent host:
+Revoke a lost authenticator from the approval-service administrative context:
 
 ```bash
 agentnet approval credential-revoke \
@@ -221,10 +234,12 @@ agentnet approval credential-revoke \
 
 When the last active credential is revoked, pending requests expire. Missing
 service, TLS, passkey, signer, record key, schema integrity, configured purpose,
-current challenge, or qualifying independence blocks approval. SQLite reports
-`single_host_local_only`; production claims still require real authenticator,
-independent-host/device/TLS, key rotation/recovery, backup/restore, operator,
-and PD-002/004/005/009 evidence.
+or current challenge blocks approval. SQLite reports `single_host_local_only`;
+the default profile also reports `independent_boundary_proven=false`. Real
+Google/passkey, shared-host attack, rotation/recovery, backup/restore, and
+operator evidence remain required for the claims they support. Separate-host
+administration is required only for the optional high-assurance independence
+claim.
 
 ## Confidential workforce OIDC
 
@@ -277,9 +292,9 @@ independent approval deployment, production key custody, or owner-policy gates.
 
 `agentnet network create` provisions the namespace, PostgreSQL schema, and
 owner-only software-key files, but it does not invent an enrolled identity or
-start a protected service. For a release that ships the guided flow, complete
-exact OIDC/key-possession/independent approval enrollment with one resumable
-command, then bind the offline configuration explicitly:
+start a protected service. For a release that ships the guided flow, complete exact OIDC, candidate-key
+possession, and WebAuthn human-approval enrollment with one resumable command,
+then bind the offline configuration explicitly:
 
 ```bash
 agentnet join guided \
@@ -297,8 +312,8 @@ agentnet serve --config agentnet.json
 
 The guided command opens the system browser without printing the authorization
 URL, stores candidate key/state as owner-only files, polls only Core, and asks
-the human only for the short-lived claim code shown after independent WebAuthn
-UV. It never accepts or writes a receipt file. On success it replaces pending
+the human only for the short-lived claim code shown after WebAuthn UV on the
+owner-controlled approval device. It never accepts or writes a receipt file. On success it replaces pending
 state with a minimal completion marker and reports zero granted authority.
 `join begin`/`join complete` remain available only as the compatible expert
 manual ceremony.
@@ -337,11 +352,11 @@ agentnet admin entitlement issue \
 The beneficiary-principal path never opens beneficiary private state. Core still
 rejects a missing, inactive, non-human, or cross-domain principal and stale
 policy revision. Replace the example `--policy-revision 1` with the exact current
-domain policy revision when it is not 1. The administrator may learn
-principal/harness identifiers only
-through the owner-approved PD-001 path; the claim code may travel only through
-the separately approved PD-002 out-of-band channel. Enrollment itself grants
-none of these entitlements.
+domain policy revision when it is not 1. Principal and harness identifiers remain inside the authenticated Core/Manager
+PD-001 path and are omitted from public human reports. Under the recorded PD-002
+default, the owner may move the claim code directly from the approval UI to the
+fresh laptop's masked prompt. Enrollment itself grants none of these
+entitlements.
 
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation

@@ -282,7 +282,7 @@ async function start() {
     const result = await post('/v1/approval/requests/verify', {token, approved: true, credential: authenticationJSON(credential)});
     transactionNode.textContent = '';
     if (options.delivery_mode === 'core_claim_code') {
-      statusNode.textContent = 'Approved. Send this one-time code through the authenticated human channel.';
+      statusNode.textContent = 'Approved. Enter this one-time code into the fresh laptop AgentNet prompt.';
       resultNode.textContent = `One-time AgentNet approval code (expires ${result.expires_at}):\n${result.claim_code}`;
     } else {
       statusNode.textContent = 'Approved. Copy receipt to the existing AgentNet operation.';

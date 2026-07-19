@@ -2,7 +2,8 @@
 
 These defaults make behavior executable without inventing owner approval.  An
 organization can version and replace them explicitly; external credentials and
-independently controlled ceremonies still have to exist at runtime.
+human ceremonies authenticated independently of the requesting harness still have
+to exist at runtime.
 """
 
 from __future__ import annotations

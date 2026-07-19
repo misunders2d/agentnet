@@ -18,7 +18,7 @@ from typing import Any
 
 
 VERSIONS = {
-    "claude": "2.1.212 (Claude Code)",
+    "claude": "2.1.215 (Claude Code)",
     "codex": "codex-cli 0.144.5",
     "pi": "0.80.10",
     "agy": "1.1.3",

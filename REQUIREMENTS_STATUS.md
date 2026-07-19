@@ -31,9 +31,9 @@ Current observed evidence:
   3 PostgreSQL lane has not been rerun locally because no disposable
   mutation-authorized database is configured. No database was changed.
 - The current installed-harness probe reports **8 passed** for exact installed
-  Claude `2.1.212`, Codex `0.144.5`, Pi `0.80.10`, and Antigravity `1.1.3`
-  version probes plus deterministic private lifecycles. No semantic/model
-  inference was performed.
+  Claude `2.1.215`, Codex `0.144.5`, Pi `0.80.10`, and Antigravity `1.1.3`
+  version probes plus deterministic private lifecycles on 2026-07-19. No
+  semantic/model inference was performed.
 - The official A2A TCK `1.0.0.alpha2` HTTP+JSON run selected 235 tests:
   **46 passed, 12 failed, 177 skipped, 0 errors**. All 12 failures were
   classified; all 177 skips were exhaustively categorized from the durable
@@ -63,8 +63,8 @@ Status vocabulary:
 | ARC-004 — native A2A interoperability | partial-external | `src/agentnet/gateways/a2a_service.py`; `src/agentnet/gateways/a2a_runtime.py`; `src/agentnet/protocol/a2a_mapping.py` | Local positive/negative/callback/recovery suites: `tests/a2a/test_persistent_service_mount.py`; `tests/a2a/test_native_client_and_callbacks.py`; `tests/a2a/test_signed_native_gateway.py`; official reviewed run: `evidence/gates/G04/2026-07-13-alpha2-http-json/manifest.json` | Official alpha2 recorded 46 passed, 12 failed, and 177 skipped; cross-SDK/public-peer/certificate evidence is absent. |
 | ARC-005 — internal mechanisms need not be A2A | partial-external | `src/agentnet/mailbox/service.py`; `src/agentnet/relay/service.py`; `src/agentnet/storage/postgres.py` | Mailbox/property/relay/PostgreSQL behavior: `tests/delivery/test_mailbox.py`; `tests/property/test_delivery_state_machine_properties.py`; `tests/relay/test_server_agent_relay.py`; `tests/production/test_postgres_runtime.py` | No comparative SLIM/Matrix/workflow-engine adoption evidence exists. |
 | ARC-006 — public-peer trust isolation | partial-external | `src/agentnet/gateways/a2a.py`; `src/agentnet/gateways/a2a_runtime.py`; `src/agentnet/identity/actors.py` | Unsigned proposals, signed peers, SSRF, grants, and mapping negatives: `tests/a2a/test_signed_native_gateway.py`; `tests/a2a/test_gateway_profile.py`; `tests/a2a/test_routes_and_grants.py` | Public hostile-peer and adaptive abuse campaigns are absent. |
-| ID-001 — verified human principal bound to each harness | owner-blocked | `src/agentnet/identity/enrollment.py`; `src/agentnet/identity/oidc.py`; `src/agentnet/identity/domains.py` | OIDC subject/alias/collision and enrollment races: `tests/identity/test_oidc_enrollment.py`; `tests/identity/test_enrollment.py`; HTTP composition: `tests/integration/test_enrollment_http.py` | A real workforce IdP plus signed PD-001 canonical-principal rules is absent. |
-| ID-002 — independently authenticated human enrollment approval | owner-blocked | `src/agentnet/approval/service.py`; `src/agentnet/approval/config.py`; `src/agentnet/approval/store.py`; `src/agentnet/approval/webauthn_uv.py`; `src/agentnet/approval/http.py`; `src/agentnet/approval/internal_client.py`; `src/agentnet/identity/enrollment.py`; `src/agentnet/enrollment_http.py` | Existing receipt attacks plus strict versioned approval-store migration, UV-required ceremony, host-local capability custody, authenticated Core request/status/retrieval, bounded claim-code attempts, candidate PoP-before-retrieval, exact retry recovery, and receipt non-disclosure: `tests/approval/test_webauthn_service.py`; `tests/approval/test_approval_http.py`; `tests/approval/test_approval_cli.py`; `tests/approval/test_approval_store_migration.py`; `tests/approval/test_internal_client.py`; `tests/identity/test_oidc_enrollment.py`; `tests/authorization/test_authority_bootstrap.py`; `tests/integration/test_enrollment_http.py` | Local mechanism exists, but no release-bound live Google/passkey ceremony, independently administered production host/device/TLS boundary, recovery drill, or signed PD-002 record is attached. Status remains owner-blocked. |
+| ID-001 — verified human principal bound to each harness | partial-external | `src/agentnet/identity/enrollment.py`; `src/agentnet/identity/oidc.py`; `src/agentnet/identity/domains.py` | OIDC subject/alias/collision and enrollment races: `tests/identity/test_oidc_enrollment.py`; `tests/identity/test_enrollment.py`; HTTP composition: `tests/integration/test_enrollment_http.py` | The ordinary PD-001 canonical-principal/reporting rule was recorded on 2026-07-19; live workforce IdP and alias migration/appeal evidence remain absent. |
+| ID-002 — independently authenticated human enrollment approval | partial-external | `src/agentnet/approval/service.py`; `src/agentnet/approval/config.py`; `src/agentnet/approval/store.py`; `src/agentnet/approval/webauthn_uv.py`; `src/agentnet/approval/http.py`; `src/agentnet/approval/internal_client.py`; `src/agentnet/identity/enrollment.py`; `src/agentnet/enrollment_http.py` | Existing receipt attacks plus strict versioned approval-store migration, UV-required ceremony, host-local capability custody, authenticated Core request/status/retrieval, bounded claim-code attempts, candidate PoP-before-retrieval, exact retry recovery, and receipt non-disclosure: `tests/approval/test_webauthn_service.py`; `tests/approval/test_approval_http.py`; `tests/approval/test_approval_cli.py`; `tests/approval/test_approval_store_migration.py`; `tests/approval/test_internal_client.py`; `tests/identity/test_oidc_enrollment.py`; `tests/authorization/test_authority_bootstrap.py`; `tests/integration/test_enrollment_http.py` | The ordinary PD-002 WebAuthn/code/default-colocation policy was recorded on 2026-07-19. Live Google/passkey, distinct-OS-identity shared-host attack, recovery, and cross-device evidence remain absent. Separately administered hosting is optional high-assurance evidence, not an ordinary-onboarding prerequisite. |
 | ID-003 — payload identity claims confer no trust | local-tested | `src/agentnet/identity/actors.py`; `src/agentnet/identity/context.py`; `src/agentnet/http_api.py` | Payload spoof and transport-derived actor tests: `tests/identity/test_context.py`; `tests/identity/test_actor_union.py`; `tests/integration/test_identity_admin_http.py` | Local claim rejection is proven; target-platform attribution is covered separately. |
 | ID-004 — credentials cryptographically bind post-enrollment identity | partial-external | `src/agentnet/identity/credentials.py`; `src/agentnet/security/dpop.py`; `src/agentnet/security/signatures.py` | Wrong target/key, replay, rotation, and restart lineage: `tests/security/test_signatures_and_replay.py`; `tests/identity/test_credential_rotation.py`; `tests/a2a/test_persistent_service_mount.py` | Hardware/OS key custody and cross-language vectors are absent. |
 | ID-005 — signing-key enrollment has an exact migration-safe ceremony | local-tested | `src/agentnet/identity/enrollment.py`; `src/agentnet/identity/oidc.py`; `src/agentnet/storage/guided_enrollment_schema.py`; `src/agentnet/cli.py` | Transcript/PoP/approval positives, hash-only continuation, expiry/slow-down, wrong-token/code/key denial, response-loss convergence, v2→v3 migration, owner-only resumable CLI state, and zero implicit entitlements: `tests/identity/test_enrollment.py`; `tests/identity/test_oidc_enrollment.py`; `tests/integration/test_enrollment_http.py`; `tests/integration/test_cli_product_journey.py` | Local identity-only ceremony is implemented; external custody and live cross-host evidence remain under ID-004/009 and G06. |
@@ -188,14 +188,15 @@ has this fail-closed dependency order:
    enforcement. Local Google multi-origin, PKCE, redaction, rotation, migration,
    IPv4/IPv6, and deployment-config tests pass; real provider operation remains
    unproven.
-3. **Independent WebAuthn-UV ceremony production (`ID-002/009`,
-   `AUTH-008..010`, `ORG-006`, `SEC-003/005/006`).** Current source includes a
-   separately runnable registration/UV/origin/RP-ID/display/signing/expiry/
-   revocation service covering every mandatory mounted purpose and issuing the
-   existing strict receipt. Remaining product/evidence gap is real independent
-   administration: separate host/device/OS control, TLS, physical passkeys,
-   signer/authenticator rotation and recovery drills, and owner policy. Local
-   co-location or mocked verification is mechanism evidence only.
+3. **WebAuthn-UV ceremony deployment (`ID-002/009`, `AUTH-008..010`,
+   `ORG-006`, `SEC-003/005/006`).** Current source includes a separately
+   runnable registration/UV/origin/RP-ID/display/signing/expiry/revocation
+   service covering every mandatory mounted purpose and issuing the existing
+   strict receipt. The ordinary profile now permits Core/PostgreSQL/approval
+   colocation under distinct OS identities and reports
+   `independent_boundary_proven=false`; it still needs live TLS, Google,
+   passkey, shared-host attack, rotation, and recovery evidence. Separate
+   physical/administrative hosting remains an optional high-assurance tier.
 4. **Activation and lifecycle productization (`ARC-001`, `ID-006/007/009`,
    `OPS-001/003/006`).** First server-agent binding, supervisor configuration,
    install/update/uninstall/rollback, principal offboarding, and all four exact

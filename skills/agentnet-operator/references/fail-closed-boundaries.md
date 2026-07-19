@@ -22,13 +22,22 @@ An always-on server-agent enrollment requires:
 
 - verified workforce OIDC identity using issuer and subject;
 - exact harness key and proof of possession;
-- independently controlled WebAuthn user verification/OOB approval;
+- WebAuthn user verification/OOB approval authenticated independently of the enrolling harness;
 - current credential, domain, policy, and revocation state;
 - explicit human-scoped authority and harness attribution.
 
 No payload field, prompt text, claimed email, role name, A2A message, Slack message, or model output grants identity or authority.
 
-The production approval ceremony is not enrollment-only. The configured independent approver set must cover the exact required purposes for enrollment, entitlement bootstrap, elevation, credential recovery, harness revocation, and relationship acceptance. Missing purpose coverage blocks configuration; do not collapse these ceremonies into a generic approval.
+The approval ceremony is not enrollment-only. The configured approver set must cover the exact required purposes for enrollment, entitlement bootstrap, elevation, credential recovery, harness revocation, and relationship acceptance. Missing purpose coverage blocks configuration; do not collapse these ceremonies into a generic approval.
+
+The default self-hosted profile may colocate Core, PostgreSQL, and approval on
+the existing server under distinct OS identities, credentials, storage roots,
+and loopback services. The owner-controlled WebAuthn authenticator remains
+outside the enrolling harness. This profile reports
+`independent_boundary_proven=false`. Separately administered approval hosting
+is an optional high-assurance tier, not an ordinary-onboarding prerequisite.
+Normal onboarding must not introduce an extra host, person, named secret
+manager, or per-command approval loop.
 
 ## PostgreSQL and durability
 

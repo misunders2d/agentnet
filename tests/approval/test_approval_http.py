@@ -66,6 +66,8 @@ def test_browser_page_uses_fragment_cleanup_external_script_and_security_headers
             assert "navigator.credentials.get" in script.text
             assert "options.delivery_mode === 'core_claim_code'" in script.text
             assert "result.claim_code" in script.text
+            assert "Enter this one-time code into the fresh laptop AgentNet prompt." in script.text
+            assert "Send this one-time code through the authenticated human channel." not in script.text
             assert script.headers["cache-control"] == "no-store"
 
     asyncio.run(exercise())

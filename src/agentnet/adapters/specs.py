@@ -16,7 +16,7 @@ from agentnet.adapters.base import AdapterLaunchSpec, ExecutableProbe, HarnessKi
 
 
 PINNED_VERSIONS: dict[HarnessKind, str] = {
-    "claude": "2.1.212",
+    "claude": "2.1.215",
     "codex": "0.144.5",
     "pi": "0.80.10",
     "antigravity": "1.1.3",

@@ -10,7 +10,7 @@ Assume the laptop has only:
 - a newly installed generic agent or harness;
 - a human who can paste one instruction packet and respond to local browser or installer prompts.
 
-Do not assume AgentNet, A2A, Pi extensions, Node.js, `uv`, Infisical, private-repository access, credentials, keys, configuration files, or technical operator knowledge.
+Do not assume AgentNet, A2A, Pi extensions, Node.js, `uv`, a secret manager, private-repository access, credentials, keys, configuration files, or technical operator knowledge.
 
 ## Human channel boundary
 
@@ -20,7 +20,7 @@ The unconnected laptop has no agent inbox. Hub cannot message it directly. A2A i
 
 The packet contains public instructions only. It never contains private keys, secret values, join state, OAuth callback data, approval capabilities, signed approval receipts, bearer credentials, cookies, identity profiles, or private host paths.
 
-A short-lived claim code is a distinct enrollment factor, not public packet content. When the selected release uses one, a separately authorized approver may convey only that code over the exact owner-approved out-of-band channel named by `<APPROVAL_CODE_CHANNEL>`. That channel must be different from `<HUMAN_REPORT_CHANNEL>` and must not be the agent conversation, Slack, A2A, a support report, a log, a screenshot, a repository, USB, or QR. The laptop human types the code only into AgentNet's masked local terminal prompt. No key, receipt, file, URL, continuation, challenge, or identity state may accompany it.
+A short-lived claim code is a distinct enrollment factor, not public packet content. Under the recorded ordinary profile, the owner reads the 128-bit code in the approval UI on the current laptop and types it directly into AgentNet's masked prompt on the fresh laptop. It expires after five minutes and permits at most five failed attempts. No extra person, host, Slack/A2A relay, second report channel, key, receipt, file, URL, continuation, challenge, or identity-state transfer is required. If an organization selects a different human channel, that channel must remain authenticated and unreadable by the enrolling harness.
 
 If AgentNet is already installed, the receiving agent loads `agentnet-operator` and follows this contract. If it is absent, the single packet remains self-contained through prerequisites and public npm installation; after installation the receiving agent reloads the bundled skill when supported, then continues the same packet. The packet cannot assume the skill exists before installation.
 
@@ -34,12 +34,13 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 - types the short-lived claim code into the masked local prompt;
 - sends only the bounded completion status allowed by the packet.
 
-### Independent approver
+### Human approver
 
-- is separately authorized and operates from the approval boundary;
+- may be the same owner as the laptop human and administrator;
+- uses an owner-controlled browser/passkey that the enrolling harness cannot read or automate;
 - reviews the exact human, domain, harness, candidate-key thumbprint, purpose, transaction digest, and expiry;
 - completes WebAuthn user verification;
-- conveys only the short-lived claim code over `<APPROVAL_CODE_CHANNEL>`;
+- reads the short-lived code in the approval UI and types it directly into the fresh laptop's masked prompt;
 - never sends the signed receipt, approval capability, private URL, key, or file.
 
 ### Administrator
@@ -53,7 +54,7 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 
 ### Sender, Hub, or current manager
 
-1. Verify the intended human, laptop/harness name, domain, Core, approval service, OIDC values, exact release, approver, approved claim-code channel, reporting channel, test recipient, and whether C0 messaging is in scope.
+1. Resolve and verify the intended human, laptop/harness name, domain, Core, approval service, OIDC values, exact release, approver, test recipient, package integrity, and C0 scope from approved server/package metadata. Do not ask the human for hostnames, callbacks, hashes, identifiers, or configuration values.
 2. Verify the release's public package metadata, OS/CPU/Node/`uv` support, integrity, and actual CLI surface.
 3. Verify the full selected flow exists in that release. Identity-only onboarding and C0 messaging are separate gates.
 4. Resolve every sender placeholder in the canonical example from approved public metadata.
@@ -100,16 +101,17 @@ A valid packet covers every selected phase below. Missing phases block issuance.
 - exact `agentnet join guided` command;
 - owner-only candidate key/state;
 - system-browser Authorization Code + PKCE;
-- Core-brokered independent approval;
+- Core-brokered WebAuthn human approval independent of the enrolling harness;
 - masked claim-code input;
 - resumable/idempotent completion ending at `enrolled_identity_only`.
 
-### 5. Independent approval
+### 5. WebAuthn human approval
 
-- a separately authorized approver reviews the exact transaction on the approval boundary;
+- the owner reviews the exact transaction on an owner-controlled browser/passkey outside the enrolling harness;
 - explicit WebAuthn user verification is required;
-- only the short-lived claim code may cross the owner-approved OOB boundary;
-- receipt, capability, URL, key, identity, and continuation state never reach a human channel.
+- the default server may host approval under a distinct OS identity and must report `independent_boundary_proven=false`;
+- the owner transfers only the short-lived code directly to the fresh laptop's masked prompt;
+- receipt, capability, URL, key, identity, and continuation state never move between machines or enter a human channel.
 
 ### 6. Separate messaging authority
 
@@ -121,7 +123,7 @@ C0 messaging is allowed only when the installed release exposes a safe administr
 
 `recipient authority` is not an AgentNet entitlement. Enrollment never grants any of these.
 
-Phase B also requires owner approval for the exact principal/harness identifier reporting path (PD-001) and for the claim-code OOB boundary (PD-002). Without either decision, `<MESSAGING_TEST_IN_SCOPE>` must be `no`.
+The recorded ordinary PD-001/PD-002 defaults keep principal/harness identifiers inside authenticated Core/Manager authority operations and permit direct owner transfer of the claim code between approval UI and masked prompt. The human does not relay identifiers or approve three separate grant commands. An authorized server-side administrator may issue the three exact grants under the frozen onboarding plan; inventory must still prove them before messaging.
 
 ### 7. Connection and first-message verification
 
@@ -139,7 +141,7 @@ Phase B also requires owner approval for the exact principal/harness identifier 
 - browser cancellation, network loss, timeout, expired code, duplicate paste, restart, and response loss resume from owner-only state without a second identity;
 - no private artifact is moved between systems;
 - public completion report contains only owner-approved fields;
-- principal/harness identifiers are omitted unless PD-001 explicitly permits their use on the named reporting path.
+- principal/harness identifiers remain inside authenticated Core/Manager operations and are omitted from the public completion report.
 
 ## Canonical public onboarding prompt example
 
@@ -173,6 +175,6 @@ For `0.1.8`, report **blocked: product component not yet shipped** and stop befo
 
 ## Pilot acceptance
 
-Identity-only pilot success requires one paste, distinct laptop/Core/approval boundaries, real workforce OIDC, real WebAuthn UV, no leaked private state, safe idempotent rerun, and no implicit authority.
+Identity-only pilot success requires one paste, a fresh laptop unable to read or automate the approval authenticator, real workforce OIDC, real WebAuthn UV, no leaked private state, safe idempotent rerun, and no implicit authority. Default server colocation retains `independent_boundary_proven=false`; separate approval hosting is optional high assurance.
 
 Full C0 success additionally requires exact principal-ID-based entitlement issuance, safe inventory confirmation, C0 submission, custody, recipient acknowledgement, reply, retrieval, and envelope acknowledgement as distinct facts. A mock/local run or transport ACK is not this proof.

@@ -12,7 +12,7 @@
 ## Deployment shape
 
 ```text
-verified/OOB identity                 independent approval verifier
+verified/OOB identity                 owner-controlled WebAuthn approval
           |                                      |
           +---------- enrollment authority ------+
                               |
@@ -33,8 +33,13 @@ partner domain -> federation gateway -> host-local guest candidate -> exact host
 ```
 
 The local executable composes logical roles in one process but preserves
-separate interfaces and actor types. Production requires distinct credentials
-and the physical/administrative topology selected under PD-010.
+separate interfaces and actor types. The ordinary self-hosted deployment may
+colocate Core, PostgreSQL, and approval on the existing server under distinct
+OS identities, credentials, storage roots, and loopback services. Human
+confirmation remains independent of the enrolling harness through the owner's
+WebAuthn authenticator. This profile reports
+`independent_boundary_proven=false`. Separate physical/administrative approval
+hosting is the optional high-assurance topology governed by PD-002.
 
 ## Host-local binding profile
 
@@ -268,10 +273,12 @@ protected task-payload disclosure receipts. Unreleased migration 3 adds one
 challenge/completion state, approval request binding, bounded polling, and
 response-loss idempotency. Fresh SQLite creates v3; only exact
 catalog/checksum-verified v2 stores may upgrade to v3 under the N/N-1 window.
-PostgreSQL applies the same contiguous checksum-bound catalog. The independent
-approval host has its own exact SQLite catalog and atomic v1→v2 migration for
-Core request idempotency, encrypted local capabilities, claim codes, and
-migration evidence; it is not Core authority storage. Relationship authority
+PostgreSQL applies the same contiguous checksum-bound catalog. The approval
+service has its own exact SQLite catalog and atomic v1→v2 migration for Core
+request idempotency, encrypted local capabilities, claim codes, and migration
+evidence; it is not Core authority storage. In the default topology it is a
+distinct OS-identity service on the existing server; optional high-assurance
+deployments place it under separate administration. Relationship authority
 still exists only in bilateral governance transactions and exact
 policy-exception records. Startup requires exact current metadata, migration
 rows/checksums, tables, indexes, constraints, and security triggers and fails
@@ -411,9 +418,10 @@ Core services remain receipt-only consumers through
 `IndependentApprovalVerifier`. An optional, disabled-by-default broker surface
 lets a configured Core create/status exact requests and retrieve an already
 issued receipt over runtime-credential-authenticated HTTPS. It cannot approve,
-sign, or bypass WebAuthn. Core-created browser capabilities remain encrypted on
-the approval host; `agentnet approval pending|watch|open` discovers and opens
-them locally without printing or transporting the URL. After WebAuthn, browser
+sign, or bypass WebAuthn. Core-created browser capabilities remain encrypted in
+the approval service store; `agentnet approval pending|watch|open` discovers
+and opens them on an owner-controlled browser without printing or transporting
+the URL. After WebAuthn, browser
 shows a 128-bit human-transferred claim code instead of receipt JSON. Exact
 code/domain/purpose/transaction/retrieval binding returns the same current
 receipt for response-loss retry; Core remains responsible for atomic receipt

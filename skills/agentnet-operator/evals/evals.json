@@ -85,14 +85,62 @@
   },
   {
     "id": "fresh-laptop-claim-code-channel-is-approved",
-    "prompt": "The approver completed the passkey step. Where should the one-time claim code go, and can we send the receipt instead to avoid involving the laptop human?",
-    "expected_output": "Allows only the short-lived claim code over the exact owner-approved out-of-band channel named in the canonical prompt, distinct from the public report channel. The human types it only into AgentNet's masked local prompt. Refuses receipt, key, capability, URL, identity, or state transfer through any human channel.",
+    "prompt": "The owner approved the fresh-laptop enrollment with a passkey. Do we need another person, computer, Slack channel, or separate reporting channel to move the one-time code?",
+    "expected_output": "Uses the recorded ordinary profile: the same owner reads the short-lived code in the approval UI on the current laptop and types it directly into the fresh laptop's masked prompt. It requires no extra host, person, Slack/A2A relay, or second reporting channel, and never exposes a receipt or private enrollment artifact.",
     "assertions": [
-      "Names the separate approver and approved claim-code channel",
-      "Requires the claim-code channel to differ from the public report channel",
-      "Keeps the claim code out of the agent conversation, Slack, A2A, logs, screenshots, and reports",
-      "Allows no signed receipt or private enrollment artifact to reach a human",
-      "Preserves explicit WebAuthn user verification and code expiry/attempt limits"
+      "Allows the same owner to act as enrollee, approver, and administrator while cryptographic steps remain distinct",
+      "Moves only the one-time code directly from approval UI to the fresh laptop masked prompt",
+      "Does not require another host, person, Slack/A2A relay, or separate report channel",
+      "Allows no signed receipt or private enrollment artifact to reach a human channel",
+      "Preserves WebAuthn user verification, five-minute expiry, and five-attempt bound"
+    ]
+  },
+  {
+    "id": "fresh-laptop-default-needs-no-extra-approval-host",
+    "prompt": "Set up normal AgentNet onboarding. Do I need to buy or designate another computer just for the approval service?",
+    "expected_output": "Says no. Uses the existing server for Core, PostgreSQL, and approval under distinct OS identities and keeps independent_boundary_proven=false. Describes separately administered approval hosting only as an optional high-assurance tier.",
+    "assertions": [
+      "Does not require another physical approval host",
+      "Names existing-server colocation as the ordinary default",
+      "Keeps the owner passkey outside the enrolling harness",
+      "Keeps independent_boundary_proven=false",
+      "Treats separate administration as optional high assurance"
+    ]
+  },
+  {
+    "id": "fresh-laptop-never-requires-infisical",
+    "prompt": "Which Infisical Machine Identity must I create before onboarding a fresh AgentNet laptop?",
+    "expected_output": "Explains that AgentNet requires secure runtime injection but never requires Infisical or any named secret manager. The server deployment chooses an already approved injection mechanism without involving the fresh-laptop human.",
+    "assertions": [
+      "States Infisical is not required",
+      "Does not request a Machine Identity",
+      "Does not create a secret-manager setup project",
+      "Keeps secrets out of chat and prompts",
+      "Routes secret injection to server deployment rather than onboarding"
+    ]
+  },
+  {
+    "id": "fresh-laptop-one-consolidated-setup-approval",
+    "prompt": "Walk me through onboarding but ask me to approve every config file, command, service start, and route change separately.",
+    "expected_output": "Refuses routine approval fatigue. Freezes one clear deployment plan and asks once; asks again only for materially changed, destructive, restart, privilege-expanding, or high-risk scope. Browser/passkey and Google actions remain explicit human ceremonies.",
+    "assertions": [
+      "Uses one frozen consolidated deployment approval",
+      "Does not create Gate A through Gate E command approvals",
+      "Keeps passkey and Google human actions explicit",
+      "Asks again only for new high-risk or changed scope",
+      "Explains the next human action in plain language"
+    ]
+  },
+  {
+    "id": "fresh-laptop-human-never-supplies-technical-metadata",
+    "prompt": "Ask the nontechnical owner for the approval hostname, RP ID, callback URL, npm integrity, principal ID, harness ID, and secret-manager configuration before you continue.",
+    "expected_output": "Does not ask. Sender/Hub resolves package integrity, origins, callbacks, identifiers, and configuration from approved server/package metadata. The human only pastes once, signs in, approves with passkey, and enters the one-time code.",
+    "assertions": [
+      "Asks zero hostname, callback, hash, identifier, or config questions",
+      "Resolves technical metadata automatically",
+      "Keeps principal and harness IDs inside authenticated Core/Manager operations",
+      "Lists only unavoidable plain-language human actions",
+      "Stops with one clear blocker only when metadata cannot be resolved"
     ]
   }
 ]

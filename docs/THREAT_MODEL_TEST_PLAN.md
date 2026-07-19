@@ -30,6 +30,39 @@ The core proof rule is strict:
 
 Every evidence record must include the source commit, dependency and harness versions, test command, selected tests, environment fingerprint, seed/corpus, start/end time, result, logs/artifacts, and signer or responsible operator. Evidence expires when a relevant model, harness, prompt, parser, policy, dependency, launch profile, OS/kernel, or security configuration changes.
 
+### 2.1 Default onboarding assurance profile
+
+Ordinary self-hosted onboarding may colocate Core, PostgreSQL, and approval on
+the existing server under distinct OS identities, credentials, storage roots,
+and loopback services. Human confirmation remains independent of the enrolling
+harness through an owner-controlled WebAuthn authenticator and exact one-time
+code. This profile reports `independent_boundary_proven=false` and makes no
+independent-administration or production-certification claim.
+
+The threat-model delta is explicit: a root-level compromise of the shared
+server can affect Core configuration, trust anchors, PostgreSQL state, and the
+approval service together. Distinct OS identities reduce ordinary process and
+operator mistakes but do not contain shared-host root compromise. Compensating
+controls are exact OIDC/PKCE and candidate-key proof, WebAuthn UV, transaction-
+bound challenges, five-minute 128-bit claim codes with a five-attempt bound,
+immutable audit facts, enrolled-harness inventory review, rapid revocation, and
+honest assurance labels. A separately administered approval host remains the
+optional high-assurance profile for organizations that require containment from
+shared-server compromise.
+
+The default-profile adversarial verification pass must cover:
+
+- an enrolling harness attempting to read or automate approval;
+- same-UID, PID-reuse, process-signal, filesystem, and loopback-boundary attacks;
+- forged approval receipts and approval-key/trust-anchor substitution;
+- wrong transaction, domain, beneficiary, purpose, RP ID, origin, policy/key
+  epoch, and candidate key;
+- claim-code guess, replay, expiry, sixth failed attempt, and response loss;
+- revoked authenticator or harness credential;
+- duplicate-paste and restart recovery without a second identity;
+- Core compromise simulations proving the assurance label never upgrades to
+  independent administration.
+
 ## 3. Assets and adversaries
 
 ### 3.1 Protected assets
@@ -429,7 +462,7 @@ A runnable local build can implement and locally test all canonical schemas, sta
 |---|---|---|
 | Four real harnesses and zero active-session interference | ARC-003; UX-001 through UX-006; gates 1–3 and 5 | Exact version-pinned Claude, Codex, Pi, and Antigravity binaries, credentials, UI/session instrumentation, and target-host execution (`P/E`). |
 | Native A2A compatibility and public isolation | ARC-004, ARC-006, OPS-002, OPS-003; gate 4 | Pinned TCK, independent SDKs, certificates/callbacks, cross-SDK runs, and public peers (`E`). |
-| Real verified human and independent approval | ID-001, ID-002, ID-004, ID-009, AUTH-008, AUTH-009; gates 6, 17, 19 | Workforce IdP, phishing-resistant WebAuthn, separately controlled device/boundary, platform key custody, and owner policy (`E/O`). |
+| Real verified human and independently authenticated approval | ID-001, ID-002, ID-004, ID-009, AUTH-008, AUTH-009; gates 6, 17, 19 | Workforce IdP, phishing-resistant WebAuthn outside the enrolling harness, exact transaction/code binding, platform key custody, and owner policy (`E/O`). Separately administered hosting is additional high-assurance evidence, not the ordinary-profile prerequisite. |
 | Same-UID exact harness attribution | ID-006, AUTH-001, AUTH-004; gate 7 | Target OS/LSM/container/measurement evidence (`P/E`), otherwise the documented deterministic-only fallback applies. |
 | Production durability and HA | FILE-003, AVL-003, AVL-004, AVL-007, OPS-001; gates 9 and 16 | Separate physical failure domains, synchronous PostgreSQL topology, replicated artifact backend, fencing, PITR, restore, and measured RPO/RTO (`E/O`). |
 | Cross-company federation and revocation SLO | FED-001 through FED-009; gates 11, 16, 17 | Independently administered domains, partner identity, sponsor lifecycle, host kill, outage, incident, and revocation drills (`E/O`). |

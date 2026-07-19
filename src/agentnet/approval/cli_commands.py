@@ -1,4 +1,4 @@
-"""Owner-operated CLI commands for the independent approval service."""
+"""Owner-operated CLI commands for the WebAuthn approval service."""
 
 from __future__ import annotations
 
@@ -416,11 +416,11 @@ def command_approval_status(args: argparse.Namespace) -> int:
 def configure_approval_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     approval = commands.add_parser(
         "approval",
-        help="operate a separately controlled WebAuthn-UV approval service",
+        help="operate a dedicated WebAuthn-UV approval service",
     )
     sub = approval.add_subparsers(dest="approval_command", required=True)
 
-    provision = sub.add_parser("provision", help="create an unregistered independent approval profile")
+    provision = sub.add_parser("provision", help="create an unregistered WebAuthn approval profile")
     provision.add_argument("--config", default=".agentnet-approval/config.json")
     provision.add_argument("--data-dir", required=True)
     provision.add_argument("--public-origin", required=True)

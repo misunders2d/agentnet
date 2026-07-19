@@ -38,7 +38,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-19-v0.1.14/artifacts/RETENTION.md",
+        "evidence/local/2026-07-19-v0.1.15/artifacts/RETENTION.md",
         "skills/**/*.md",
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
@@ -104,7 +104,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "Any unresolved required placeholder blocks issuance",
         "Public package installation",
         "System-browser Google OIDC",
-        "Independent approval",
+        "WebAuthn human approval",
         "Connection and first-message verification",
         "AgentNet `0.1.8` fails this gate",
         "blocked: product component not yet shipped",
@@ -132,11 +132,6 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "<NPM_INTEGRITY>",
         "<NODE_MIN_VERSION>",
         "<UV_MIN_VERSION>",
-        "<APPROVER_NAME>",
-        "<APPROVAL_CODE_CHANNEL>",
-        "<ADMINISTRATOR_NAME>",
-        "<PRINCIPAL_ID_REPORTING_APPROVED>",
-        "<MESSAGING_TEST_IN_SCOPE>",
         "<TEST_RECIPIENT>",
         "<C0_TEST_MESSAGE>",
         "<C0_IDEMPOTENCY_KEY>",
@@ -147,12 +142,23 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     for forbidden in ("BEGIN PRIVATE KEY", "agcap1.", "Authorization: Bearer"):
         assert forbidden not in example
     assert "message.send on direct" in example
-    assert "mailbox.read on this laptop's own harness" in example
-    assert "mailbox.acknowledge on this laptop's own harness" in example
-    assert "<APPROVAL_CODE_CHANNEL>" in example
-    assert "different from <HUMAN_REPORT_CHANNEL>" in example
-    assert "blocked: principal-id reporting not approved" in example
-    assert "blocked: agent file-write not available" in example
+    assert "mailbox.read on this laptop's harness" in example
+    assert "mailbox.acknowledge on this laptop's harness" in example
+    assert "No other human setup" in example
+    assert "no extra approval host" in example
+    assert "No relay channel or second person is required" in example
+    assert "Do not report or relay principal/harness IDs" in example
+    assert "Infisical or other named secret manager" in example
+    assert "per-command setup approvals" in example
+    assert "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value" in example
+    for removed_placeholder in (
+        "<APPROVER_NAME>",
+        "<APPROVAL_CODE_CHANNEL>",
+        "<ADMINISTRATOR_NAME>",
+        "<PRINCIPAL_ID_REPORTING_APPROVED>",
+        "<MESSAGING_TEST_IN_SCOPE>",
+    ):
+        assert removed_placeholder not in example
 
     evals = json.loads(
         (ROOT / "skills/agentnet-operator/evals/evals.json").read_text(encoding="utf-8")
@@ -166,6 +172,10 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "fresh-laptop-canonical-single-prompt-is-mandatory",
         "fresh-laptop-messaging-authority-blocked",
         "fresh-laptop-claim-code-channel-is-approved",
+        "fresh-laptop-default-needs-no-extra-approval-host",
+        "fresh-laptop-never-requires-infisical",
+        "fresh-laptop-one-consolidated-setup-approval",
+        "fresh-laptop-human-never-supplies-technical-metadata",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
@@ -193,7 +203,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "agentnet artifact upload",
         "OIDC discovery is public-only by default",
         "exact JWK thumbprints",
-        "approval service on the same security boundary",
+        "approval service readable or controllable by the enrolling harness",
     ):
         assert required in commands
 
@@ -219,8 +229,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     ).read_text(encoding="utf-8")
     for required in (
         "workforce OIDC",
-        "independently controlled WebAuthn",
-        "Infisical",
+        "WebAuthn user verification/OOB approval authenticated independently",
+        "does not require Infisical",
         "PostgreSQL 18.4",
         "accepted_local",
         "measured supervisor-launched child",
@@ -230,6 +240,38 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "tool and effect authority false",
     ):
         assert required in boundaries
+
+
+def test_ordinary_onboarding_stays_one_server_one_owner_one_prompt() -> None:
+    requirements = (ROOT / "docs/requirements.md").read_text(encoding="utf-8")
+    specification = (ROOT / "docs/specification.md").read_text(encoding="utf-8")
+    decisions = (ROOT / "docs/OWNER_DECISIONS.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs/implementation-guide.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skills/agentnet-operator/SKILL.md").read_text(encoding="utf-8")
+    prompt = (
+        ROOT / "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md"
+    ).read_text(encoding="utf-8")
+
+    assert "does not require a separate physical approval host" in requirements
+    assert "A separately administered approval host is an optional high-assurance profile" in specification
+    assert "One owner may act as enrollee, WebAuthn approver, and messaging administrator" in decisions
+    assert "Normal onboarding does not require another computer, another person" in guide
+    assert "Do not require\nan extra approval host, extra person" in skill
+    assert "This entire packet is the only prompt" in prompt
+    assert "independent_boundary_proven=false" in prompt
+    assert "No relay channel or second person is required" in prompt
+    assert "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value" in prompt
+    assert "per-command setup approvals" in prompt
+    assert "Three separate issuance records are expected" in prompt
+    assert "server-side onboarding orchestrator" not in prompt
+    for obsolete in (
+        "<APPROVER_NAME>",
+        "<APPROVAL_CODE_CHANNEL>",
+        "<ADMINISTRATOR_NAME>",
+        "<PRINCIPAL_ID_REPORTING_APPROVED>",
+        "<MESSAGING_TEST_IN_SCOPE>",
+    ):
+        assert obsolete not in prompt
 
 
 def test_fresh_laptop_prompt_uses_the_shipped_cli_surface() -> None:
@@ -307,24 +349,6 @@ def test_fresh_laptop_prompt_uses_the_shipped_cli_surface() -> None:
                 ".agentnet/identity.json",
             ],
             "agentnet message acknowledge",
-        ),
-        (
-            [
-                "admin",
-                "entitlement",
-                "issue",
-                "--beneficiary-principal-id",
-                "principal-fresh-laptop",
-                "--action",
-                "message.send",
-                "--resource",
-                "direct",
-                "--policy-revision",
-                "1",
-                "--reason",
-                "authorize isolated C0 test",
-            ],
-            "agentnet admin entitlement issue",
         ),
     )
     for arguments, prompt_fragment in commands:
@@ -434,7 +458,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-19-v0.1.14/artifacts/RETENTION.md",
+        "evidence/local/2026-07-19-v0.1.15/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
