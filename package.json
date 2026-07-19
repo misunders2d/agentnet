@@ -1,6 +1,6 @@
 {
   "name": "@misunders2d/agentnet",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -91,7 +91,7 @@
     "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
     "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
     "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-    "evidence/local/2026-07-18-v0.1.13/artifacts/RETENTION.md",
+    "evidence/local/2026-07-19-v0.1.14/artifacts/RETENTION.md",
     "evidence/**/*.json",
     "evidence/**/*.whl",
     "evidence/**/*.gz",
