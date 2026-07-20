@@ -458,5 +458,5 @@ component must not migrate principal IDs or rewrite signed/event history.
 | Artifacts | encrypted immutable filesystem | selected replicated self-hosted backend, scanner/WORM/restore |
 | Policy | reference single-revision evaluator | pinned Cedar or measured single-engine replacement |
 | A2A | SDK-backed local routes/mapping | pinned TCK, negative suite, cross-SDK/public peers |
-| Workers | deterministic-only unless exact sandbox evidence | per-harness clean worker and credential-free model broker |
+| Workers | deterministic-only unless exact sandbox evidence | per-harness clean worker and credential-free model broker with persistent one-use request nonces |
 | Federation/C3/mesh | schemas and disabled seams | bilateral/MLS/quorum evidence plus owner decisions |

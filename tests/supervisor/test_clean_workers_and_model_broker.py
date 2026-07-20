@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from agentnet.errors import AuthorizationError, GateBlocked
+from agentnet.errors import AuthorizationError, GateBlocked, ReplayError
 from agentnet.protocol.models import Classification
 from agentnet.provenance import (
     OriginKind,
@@ -49,6 +49,10 @@ def input_provenance(store, identity_factory, frames, *, model="local-test"):
         when=now,
     )
     return service, record.reference()
+
+
+def fresh_request_nonce() -> str:
+    return f"model-broker-request-{uuid4().hex}"
 
 
 def test_nonsemantic_worker_has_sanitized_environment_and_no_foreground_fallback(tmp_path: Path) -> None:
@@ -133,6 +137,7 @@ def test_model_broker_binds_worker_grant_schema_budget_and_output_provenance(
                 task_grant_id="grant-1",
                 prompt_frames=frames,
                 max_output_tokens=1,
+                request_nonce=fresh_request_nonce(),
             )
         )
     with pytest.raises(AuthorizationError, match="exact content"):
@@ -143,6 +148,7 @@ def test_model_broker_binds_worker_grant_schema_budget_and_output_provenance(
                 task_grant_id="grant-1",
                 prompt_frames=[{"role": "user", "content": "substituted prompt"}],
                 max_output_tokens=1,
+                request_nonce=fresh_request_nonce(),
             )
         )
     result = asyncio.run(
@@ -152,6 +158,7 @@ def test_model_broker_binds_worker_grant_schema_budget_and_output_provenance(
             task_grant_id="grant-1",
             prompt_frames=frames,
             max_output_tokens=5,
+            request_nonce=fresh_request_nonce(),
         )
     )
     assert result["response"] == {"output": "synthetic"}
@@ -176,11 +183,236 @@ def test_model_broker_binds_worker_grant_schema_budget_and_output_provenance(
                 task_grant_id="grant-1",
                 prompt_frames=[{"role": "user", "content": "again"}],
                 max_output_tokens=1,
+                request_nonce=fresh_request_nonce(),
             )
         )
 
 
-def test_model_broker_rejects_unbounded_lifetime_malformed_frames_and_cross_grant_replay(
+def test_model_broker_consumes_each_request_nonce_once(store, identity_factory) -> None:
+    calls: list[tuple[str, dict[str, object], str]] = []
+
+    async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
+        calls.append((model, payload, secret))
+        return {"output": "synthetic"}
+
+    frames = [{"role": "user", "content": "replay-fenced"}]
+    provenance, reference = input_provenance(store, identity_factory, frames)
+    broker = ModelEgressBroker(
+        allowed_models={"local-test"},
+        upstream_secret="broker-only-secret",
+        transport=transport,
+        provenance=provenance,
+        replay_cache=store,
+    )
+    token = broker.issue(
+        worker_id="worker-replay",
+        task_grant_id="grant-replay",
+        model="local-test",
+        max_tokens=2,
+        max_requests=2,
+        input_provenance=reference,
+    )
+    request_nonce = "model-broker-request-nonce-000000000001"
+    first = asyncio.run(
+        broker.infer(
+            token,
+            worker_id="worker-replay",
+            task_grant_id="grant-replay",
+            prompt_frames=frames,
+            max_output_tokens=1,
+            request_nonce=request_nonce,
+        )
+    )
+    assert first["response"] == {"output": "synthetic"}
+    with pytest.raises(ReplayError, match="already consumed"):
+        asyncio.run(
+            broker.infer(
+                token,
+                worker_id="worker-replay",
+                task_grant_id="grant-replay",
+                prompt_frames=frames,
+                max_output_tokens=1,
+                request_nonce=request_nonce,
+            )
+        )
+    assert len(calls) == 1
+    second = asyncio.run(
+        broker.infer(
+            token,
+            worker_id="worker-replay",
+            task_grant_id="grant-replay",
+            prompt_frames=frames,
+            max_output_tokens=1,
+            request_nonce=fresh_request_nonce(),
+        )
+    )
+    assert second["response"] == {"output": "synthetic"}
+    assert len(calls) == 2
+
+
+def test_model_broker_requires_well_formed_request_nonce(store, identity_factory) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
+        calls.append(payload)
+        return {"output": "synthetic"}
+
+    frames = [{"role": "user", "content": "nonce-required"}]
+    provenance, reference = input_provenance(store, identity_factory, frames)
+    broker = ModelEgressBroker(
+        allowed_models={"local-test"},
+        upstream_secret="broker-only-secret",
+        transport=transport,
+        provenance=provenance,
+    )
+    token = broker.issue(
+        worker_id="worker-nonce",
+        task_grant_id="grant-nonce",
+        model="local-test",
+        max_tokens=1,
+        max_requests=1,
+        input_provenance=reference,
+    )
+    for invalid_nonce in (None, "", "short", "a" * 31, " " * 32, "a" * 257, object()):
+        with pytest.raises(AuthorizationError, match="request nonce"):
+            asyncio.run(
+                broker.infer(
+                    token,
+                    worker_id="worker-nonce",
+                    task_grant_id="grant-nonce",
+                    prompt_frames=frames,
+                    max_output_tokens=1,
+                    request_nonce=invalid_nonce,  # type: ignore[arg-type]
+                )
+            )
+    assert calls == []
+    result = asyncio.run(
+        broker.infer(
+            token,
+            worker_id="worker-nonce",
+            task_grant_id="grant-nonce",
+            prompt_frames=frames,
+            max_output_tokens=1,
+            request_nonce=fresh_request_nonce(),
+        )
+    )
+    assert result["response"] == {"output": "synthetic"}
+    assert len(calls) == 1
+
+
+def test_model_broker_requires_replay_cache(store, identity_factory) -> None:
+    frames = [{"role": "user", "content": "replay-cache-required"}]
+    provenance, _reference = input_provenance(store, identity_factory, frames)
+    provenance.store = object()  # type: ignore[assignment]
+
+    async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
+        raise AssertionError("invalid broker configuration must not reach transport")
+
+    with pytest.raises(AuthorizationError, match="configuration"):
+        ModelEgressBroker(
+            allowed_models={"local-test"},
+            upstream_secret="broker-only-secret",
+            transport=transport,
+            provenance=provenance,
+        )
+
+
+def test_model_broker_concurrent_duplicate_nonce_calls_transport_once(store, identity_factory) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
+        calls.append(payload)
+        await asyncio.sleep(0)
+        return {"output": "synthetic"}
+
+    frames = [{"role": "user", "content": "concurrent-replay"}]
+    provenance, reference = input_provenance(store, identity_factory, frames)
+    broker = ModelEgressBroker(
+        allowed_models={"local-test"},
+        upstream_secret="broker-only-secret",
+        transport=transport,
+        provenance=provenance,
+    )
+    token = broker.issue(
+        worker_id="worker-race",
+        task_grant_id="grant-race",
+        model="local-test",
+        max_tokens=2,
+        max_requests=2,
+        input_provenance=reference,
+    )
+    nonce = fresh_request_nonce()
+
+    async def race() -> list[object]:
+        return await asyncio.gather(
+            broker.infer(
+                token,
+                worker_id="worker-race",
+                task_grant_id="grant-race",
+                prompt_frames=frames,
+                max_output_tokens=1,
+                request_nonce=nonce,
+            ),
+            broker.infer(
+                token,
+                worker_id="worker-race",
+                task_grant_id="grant-race",
+                prompt_frames=frames,
+                max_output_tokens=1,
+                request_nonce=nonce,
+            ),
+            return_exceptions=True,
+        )
+
+    outcomes = asyncio.run(race())
+    assert sum(isinstance(outcome, ReplayError) for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, dict) for outcome in outcomes) == 1
+    assert len(calls) == 1
+
+
+def test_model_broker_scopes_request_nonce_to_capability(store, identity_factory) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
+        calls.append(payload)
+        return {"output": "synthetic"}
+
+    frames = [{"role": "user", "content": "capability-scoped"}]
+    provenance, reference = input_provenance(store, identity_factory, frames)
+    broker = ModelEgressBroker(
+        allowed_models={"local-test"},
+        upstream_secret="broker-only-secret",
+        transport=transport,
+        provenance=provenance,
+    )
+    tokens = [
+        broker.issue(
+            worker_id="worker-scope",
+            task_grant_id="grant-scope",
+            model="local-test",
+            max_tokens=1,
+            max_requests=1,
+            input_provenance=reference,
+        )
+        for _ in range(2)
+    ]
+    nonce = fresh_request_nonce()
+    for token in tokens:
+        result = asyncio.run(
+            broker.infer(
+                token,
+                worker_id="worker-scope",
+                task_grant_id="grant-scope",
+                prompt_frames=frames,
+                max_output_tokens=1,
+                request_nonce=nonce,
+            )
+        )
+        assert result["response"] == {"output": "synthetic"}
+    assert len(calls) == 2
+
+
+def test_model_broker_rejects_unbounded_lifetime_malformed_frames_and_cross_grant_use(
     store, identity_factory
 ) -> None:
     async def transport(model: str, payload: dict[str, object], secret: str) -> dict[str, object]:
@@ -227,6 +459,7 @@ def test_model_broker_rejects_unbounded_lifetime_malformed_frames_and_cross_gran
                 task_grant_id="grant-2",
                 prompt_frames=[{"role": "user", "content": "cross grant"}],
                 max_output_tokens=1,
+                request_nonce=fresh_request_nonce(),
             )
         )
     for frames in (
@@ -243,6 +476,7 @@ def test_model_broker_rejects_unbounded_lifetime_malformed_frames_and_cross_gran
                     task_grant_id="grant-1",
                     prompt_frames=frames,
                     max_output_tokens=1,
+                    request_nonce=fresh_request_nonce(),
                 )
             )
     broker.revoke(token)
@@ -254,6 +488,7 @@ def test_model_broker_rejects_unbounded_lifetime_malformed_frames_and_cross_gran
                 task_grant_id="grant-1",
                 prompt_frames=[{"role": "user", "content": "after revoke"}],
                 max_output_tokens=1,
+                request_nonce=fresh_request_nonce(),
             )
         )
 
@@ -286,6 +521,7 @@ def test_model_response_is_withheld_when_parent_lineage_disappears_during_transp
         max_requests=1,
         input_provenance=reference,
     )
+    request_nonce = fresh_request_nonce()
     with pytest.raises(AuthorizationError, match="parent is unavailable"):
         asyncio.run(
             broker.infer(
@@ -294,8 +530,10 @@ def test_model_response_is_withheld_when_parent_lineage_disappears_during_transp
                 task_grant_id="grant-atomic",
                 prompt_frames=frames,
                 max_output_tokens=4,
+                request_nonce=request_nonce,
             )
         )
+    assert store.fetch_one("SELECT COUNT(*) AS total FROM replay_nonces")["total"] == 1
     assert store.fetch_one(
         "SELECT COUNT(*) AS total FROM content_provenance WHERE object_type='model_output'"
     )["total"] == 0

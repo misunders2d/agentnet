@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -18,7 +19,11 @@ from agentnet.provenance import (
     TransformationKind,
     TransformationStep,
 )
+from agentnet.security.replay import ReplayCache
 from agentnet.security.signatures import canonical_digest, canonical_json
+
+
+_REQUEST_NONCE = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 
 
 @dataclass(slots=True)
@@ -47,19 +52,25 @@ class ModelEgressBroker:
         upstream_secret: str,
         transport: InferenceTransport,
         provenance: ProvenanceService,
+        replay_cache: ReplayCache | None = None,
     ) -> None:
+        resolved_replay_cache = (
+            replay_cache if replay_cache is not None else getattr(provenance, "store", None)
+        )
         if (
             not allowed_models
             or any(not isinstance(model, str) or not 1 <= len(model) <= 256 for model in allowed_models)
             or not isinstance(upstream_secret, str)
             or not upstream_secret
             or not isinstance(provenance, ProvenanceService)
+            or not callable(getattr(resolved_replay_cache, "consume_once", None))
         ):
             raise AuthorizationError("model broker configuration is invalid")
         self.allowed_models = frozenset(allowed_models)
         self._upstream_secret = upstream_secret
         self._transport = transport
         self.provenance = provenance
+        self._replay_cache = resolved_replay_cache
         self._capabilities: dict[str, BrokerCapability] = {}
 
     def _require_input_provenance(
@@ -129,6 +140,25 @@ class ModelEgressBroker:
         )
         return token
 
+    @staticmethod
+    def _require_request_nonce(request_nonce: str | None) -> str:
+        if not isinstance(request_nonce, str) or _REQUEST_NONCE.fullmatch(request_nonce) is None:
+            raise AuthorizationError("model broker request nonce is invalid")
+        return request_nonce
+
+    @staticmethod
+    def _replay_actor_id(token: str, capability: BrokerCapability) -> str:
+        capability_digest = canonical_digest({"model_broker_capability": token})
+        binding_digest = canonical_digest(
+            {
+                "worker_id": capability.worker_id,
+                "task_grant_id": capability.task_grant_id,
+                "model": capability.model,
+                "capability_token_digest": capability_digest,
+            }
+        )
+        return f"model-egress-infer:v1:{binding_digest}"
+
     async def infer(
         self,
         token: str,
@@ -137,6 +167,7 @@ class ModelEgressBroker:
         task_grant_id: str,
         prompt_frames: list[dict[str, str]],
         max_output_tokens: int,
+        request_nonce: str | None = None,
     ) -> dict[str, Any]:
         capability = self._capabilities.get(token)
         if (
@@ -147,6 +178,7 @@ class ModelEgressBroker:
             or capability.task_grant_id != task_grant_id
         ):
             raise AuthorizationError("model broker capability is invalid")
+        request_nonce = self._require_request_nonce(request_nonce)
         if (
             type(max_output_tokens) is not int
             or max_output_tokens <= 0
@@ -175,6 +207,11 @@ class ModelEgressBroker:
             capability.input_provenance,
             prompt_digest=prompt_digest,
             required_sink=self._model_sink(capability.model),
+        )
+        self._replay_cache.consume_once(
+            self._replay_actor_id(token, capability),
+            request_nonce,
+            expires_at=capability.expires_at,
         )
         capability.remaining_tokens -= max_output_tokens
         capability.remaining_requests -= 1
