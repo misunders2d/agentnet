@@ -13,11 +13,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
-from agentnet.errors import GateBlocked
+from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.security.envelope import LocalEnvelopeCipher
 
 
-APPROVAL_STORE_SCHEMA_VERSION = 2
+APPROVAL_STORE_SCHEMA_VERSION = 3
 APPROVAL_STORE_SCHEMA_V1 = """
 CREATE TABLE approval_store_meta (
     key TEXT PRIMARY KEY,
@@ -136,12 +136,44 @@ APPROVAL_STORE_SCHEMA_V2 = (
     + ";\n".join(_APPROVAL_STORE_MIGRATION_V2_STATEMENTS)
     + ";\n"
 )
-# Current schema alias retained for callers that imported the original name.
-APPROVAL_STORE_SCHEMA = APPROVAL_STORE_SCHEMA_V2
 _APPROVAL_STORE_MIGRATION_V2_NAME = "guided approval handoff"
 _APPROVAL_STORE_MIGRATION_V2_CHECKSUM = hashlib.sha256(
     "\n".join(_APPROVAL_STORE_MIGRATION_V2_STATEMENTS).encode("utf-8")
 ).hexdigest()
+
+_APPROVAL_STORE_MIGRATION_V3_STATEMENTS = (
+    """CREATE TABLE approval_internal_broker_replay (
+        key_id TEXT NOT NULL,
+        nonce_hash TEXT NOT NULL CHECK(length(nonce_hash)=64),
+        purpose TEXT NOT NULL,
+        audience TEXT NOT NULL,
+        method TEXT NOT NULL CHECK(method='POST'),
+        path TEXT NOT NULL,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256)=64),
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL CHECK(expires_at > issued_at),
+        consumed_at INTEGER NOT NULL,
+        PRIMARY KEY(key_id,nonce_hash)
+    )""",
+    """CREATE INDEX idx_approval_internal_broker_replay_expiry
+       ON approval_internal_broker_replay(expires_at)""",
+)
+APPROVAL_STORE_SCHEMA_V3 = (
+    APPROVAL_STORE_SCHEMA_V2
+    + "\n"
+    + ";\n".join(_APPROVAL_STORE_MIGRATION_V3_STATEMENTS)
+    + ";\n"
+)
+# Current schema alias retained for callers that imported the original name.
+APPROVAL_STORE_SCHEMA = APPROVAL_STORE_SCHEMA_V3
+_APPROVAL_STORE_MIGRATION_V3_NAME = "signed approval broker replay custody"
+_APPROVAL_STORE_MIGRATION_V3_CHECKSUM = hashlib.sha256(
+    "\n".join(_APPROVAL_STORE_MIGRATION_V3_STATEMENTS).encode("utf-8")
+).hexdigest()
+_MIGRATION_RECORDS = {
+    2: (_APPROVAL_STORE_MIGRATION_V2_NAME, _APPROVAL_STORE_MIGRATION_V2_CHECKSUM),
+    3: (_APPROVAL_STORE_MIGRATION_V3_NAME, _APPROVAL_STORE_MIGRATION_V3_CHECKSUM),
+}
 
 _CATALOG_QUERY = (
     "SELECT type,name,tbl_name,sql FROM sqlite_master "
@@ -154,13 +186,14 @@ def _catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str],
     return tuple(tuple(str(value) for value in row) for row in connection.execute(_CATALOG_QUERY))
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def expected_catalog(
     version: int = APPROVAL_STORE_SCHEMA_VERSION,
 ) -> tuple[tuple[str, str, str, str], ...]:
     schemas = {
         1: APPROVAL_STORE_SCHEMA_V1,
         2: APPROVAL_STORE_SCHEMA_V2,
+        3: APPROVAL_STORE_SCHEMA_V3,
     }
     schema = schemas.get(version)
     if schema is None:
@@ -173,7 +206,7 @@ def expected_catalog(
         reference.close()
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def expected_catalog_digest(version: int = APPROVAL_STORE_SCHEMA_VERSION) -> str:
     payload = "\n".join("\x1f".join(row) for row in expected_catalog(version)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -184,6 +217,25 @@ def _expected_metadata(version: int) -> dict[str, str]:
         "schema_version": str(version),
         "schema_catalog_sha256": expected_catalog_digest(version),
     }
+
+
+def _verify_migration_history(connection: sqlite3.Connection, version: int) -> None:
+    expected = [
+        (migration_version, name, checksum)
+        for migration_version, (name, checksum) in sorted(_MIGRATION_RECORDS.items())
+        if migration_version <= version
+    ]
+    try:
+        observed = [
+            (int(row[0]), str(row[1]), str(row[2]))
+            for row in connection.execute(
+                "SELECT version,name,checksum FROM approval_store_migrations ORDER BY version"
+            ).fetchall()
+        ]
+    except sqlite3.DatabaseError as exc:
+        raise GateBlocked("approval_store", "approval migration history is unavailable") from exc
+    if observed != expected:
+        raise GateBlocked("approval_store", "approval migration history mismatches")
 
 
 def _enable_wal(connection: sqlite3.Connection) -> None:
@@ -282,14 +334,13 @@ class ApprovalStore:
                 "INSERT INTO approval_store_meta(key,value) VALUES(?,?)",
                 tuple(_expected_metadata(APPROVAL_STORE_SCHEMA_VERSION).items()),
             )
-            self._connection.execute(
+            applied_at = int(time.time())
+            self._connection.executemany(
                 """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
                    VALUES(?,?,?,?)""",
-                (
-                    APPROVAL_STORE_SCHEMA_VERSION,
-                    _APPROVAL_STORE_MIGRATION_V2_NAME,
-                    _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
-                    int(time.time()),
+                tuple(
+                    (version, name, checksum, applied_at)
+                    for version, (name, checksum) in sorted(_MIGRATION_RECORDS.items())
                 ),
             )
             self._connection.execute("COMMIT")
@@ -303,7 +354,7 @@ class ApprovalStore:
         metadata = self._read_metadata()
         if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
             return
-        if metadata != _expected_metadata(1):
+        if metadata not in (_expected_metadata(1), _expected_metadata(2)):
             raise GateBlocked("approval_store", "approval schema metadata mismatches")
 
         try:
@@ -317,24 +368,49 @@ class ApprovalStore:
             if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
                 self._connection.execute("COMMIT")
                 return
-            if metadata != _expected_metadata(1):
+            if metadata not in (_expected_metadata(1), _expected_metadata(2)):
                 raise GateBlocked("approval_store", "approval schema metadata mismatches")
-            if _catalog(self._connection) != expected_catalog(1):
+
+            source_version = 1 if metadata == _expected_metadata(1) else 2
+            if _catalog(self._connection) != expected_catalog(source_version):
                 raise GateBlocked(
                     "approval_store",
                     "approval schema catalog mismatches before migration",
                 )
+            if source_version == 2:
+                _verify_migration_history(self._connection, 2)
 
-            for statement in _APPROVAL_STORE_MIGRATION_V2_STATEMENTS:
+            applied_at = int(time.time())
+            if source_version == 1:
+                for statement in _APPROVAL_STORE_MIGRATION_V2_STATEMENTS:
+                    self._connection.execute(statement)
+                self._connection.execute(
+                    """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
+                       VALUES(?,?,?,?)""",
+                    (
+                        2,
+                        _APPROVAL_STORE_MIGRATION_V2_NAME,
+                        _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
+                        applied_at,
+                    ),
+                )
+                if _catalog(self._connection) != expected_catalog(2):
+                    raise GateBlocked(
+                        "approval_store",
+                        "approval migration did not produce the exact v2 catalog",
+                    )
+                _verify_migration_history(self._connection, 2)
+
+            for statement in _APPROVAL_STORE_MIGRATION_V3_STATEMENTS:
                 self._connection.execute(statement)
             self._connection.execute(
                 """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
                    VALUES(?,?,?,?)""",
                 (
-                    APPROVAL_STORE_SCHEMA_VERSION,
-                    _APPROVAL_STORE_MIGRATION_V2_NAME,
-                    _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
-                    int(time.time()),
+                    3,
+                    _APPROVAL_STORE_MIGRATION_V3_NAME,
+                    _APPROVAL_STORE_MIGRATION_V3_CHECKSUM,
+                    applied_at,
                 ),
             )
             self._connection.executemany(
@@ -351,6 +427,7 @@ class ApprovalStore:
                     "approval_store",
                     "approval migration did not produce the exact catalog",
                 )
+            _verify_migration_history(self._connection, APPROVAL_STORE_SCHEMA_VERSION)
             self._connection.execute("COMMIT")
             self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception as exc:
@@ -366,6 +443,7 @@ class ApprovalStore:
             raise GateBlocked("approval_store", "approval schema metadata mismatches")
         if _catalog(self._connection) != expected_catalog(APPROVAL_STORE_SCHEMA_VERSION):
             raise GateBlocked("approval_store", "approval schema catalog mismatches")
+        _verify_migration_history(self._connection, APPROVAL_STORE_SCHEMA_VERSION)
         integrity = self._connection.execute("PRAGMA quick_check").fetchone()
         if integrity is None or str(integrity[0]) != "ok":
             raise GateBlocked("approval_store", "approval database integrity check failed")
@@ -392,6 +470,88 @@ class ApprovalStore:
     def fetch_all(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return list(self._connection.execute(sql, params).fetchall())
+
+    def consume_internal_broker_replay(
+        self,
+        *,
+        key_id: str,
+        nonce: str,
+        purpose: str,
+        audience: str,
+        method: str,
+        path: str,
+        body_sha256: str,
+        issued_at: int,
+        expires_at: int,
+        consumed_at: int | None = None,
+    ) -> None:
+        """Persist one-use broker proof custody before route action."""
+
+        checked_at = int(time.time()) if consumed_at is None else consumed_at
+        valid = (
+            isinstance(key_id, str)
+            and 1 <= len(key_id) <= 128
+            and isinstance(nonce, str)
+            and 1 <= len(nonce) <= 128
+            and isinstance(purpose, str)
+            and 1 <= len(purpose) <= 256
+            and isinstance(audience, str)
+            and 1 <= len(audience) <= 512
+            and method == "POST"
+            and isinstance(path, str)
+            and path.startswith("/v1/approval/internal/")
+            and isinstance(body_sha256, str)
+            and len(body_sha256) == 64
+            and all(character in "0123456789abcdef" for character in body_sha256)
+            and isinstance(issued_at, int)
+            and not isinstance(issued_at, bool)
+            and isinstance(expires_at, int)
+            and not isinstance(expires_at, bool)
+            and isinstance(checked_at, int)
+            and not isinstance(checked_at, bool)
+            and issued_at <= checked_at < expires_at
+        )
+        if not valid:
+            raise AuthenticationError("approval request denied")
+        try:
+            nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        except (UnicodeEncodeError, AttributeError) as exc:
+            raise AuthenticationError("approval request denied") from exc
+
+        with self.transaction() as connection:
+            try:
+                connection.execute(
+                    "DELETE FROM approval_internal_broker_replay WHERE expires_at <= ?",
+                    (checked_at,),
+                )
+                connection.execute(
+                    """INSERT INTO approval_internal_broker_replay(
+                           key_id,nonce_hash,purpose,audience,method,path,body_sha256,
+                           issued_at,expires_at,consumed_at
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        key_id,
+                        nonce_hash,
+                        purpose,
+                        audience,
+                        method,
+                        path,
+                        body_sha256,
+                        issued_at,
+                        expires_at,
+                        checked_at,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                extended = getattr(exc, "sqlite_errorcode", None)
+                if extended in {
+                    getattr(sqlite3, "SQLITE_CONSTRAINT_PRIMARYKEY", -1),
+                    getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", -1),
+                }:
+                    raise AuthenticationError("approval request denied") from exc
+                raise GateBlocked("approval_store", "approval replay custody failed") from exc
+            except sqlite3.DatabaseError as exc:
+                raise GateBlocked("approval_store", "approval replay custody failed") from exc
 
     def readiness(self) -> dict[str, Any]:
         try:
@@ -426,6 +586,7 @@ __all__ = [
     "APPROVAL_STORE_SCHEMA",
     "APPROVAL_STORE_SCHEMA_V1",
     "APPROVAL_STORE_SCHEMA_V2",
+    "APPROVAL_STORE_SCHEMA_V3",
     "APPROVAL_STORE_SCHEMA_VERSION",
     "ApprovalStore",
     "expected_catalog",

@@ -61,14 +61,16 @@ unique approvers. Configured purposes must collectively cover all six mandatory
 approval consumers, and every approver must cover enrollment. Signer private
 keys remain file references; load verifies each key's configured thumbprint.
 
-The approval SQLite catalog is version 2 and is checked on every open against
-both exact `sqlite_master` objects and a stored catalog SHA-256. The default
+The approval SQLite catalog is version 3 and is checked on every open against
+both exact `sqlite_master` objects, stored catalog SHA-256, and immutable
+migration names/checksums. The default
 self-hosted profile may run this service on the existing Core server under a
 distinct OS identity, credential, storage root, and loopback listener, while
 retaining `independent_boundary_proven=false`. Separate administration is the
-optional high-assurance profile. Existing exact
-v1 stores upgrade under `BEGIN IMMEDIATE` only after v1 metadata/catalog
-verification; failed or conflicting migration rolls back. It contains:
+optional high-assurance profile. Existing exact v1 or v2 stores upgrade under `BEGIN IMMEDIATE` only after
+source metadata/catalog and applicable migration-history verification. The
+atomic chain is v1→v2→v3 or v2→v3; failed or conflicting migration rolls back.
+It contains:
 
 - `approval_webauthn_credentials`: exact approver/domain/user handle, public key,
   sign count, device/back-up metadata, and active/revoked lifecycle;
@@ -82,7 +84,10 @@ verification; failed or conflicting migration rolls back. It contains:
   expiry, and exact retrieval-digest retry binding;
 - `approval_issued_receipts`: one row per request, exact credential,
   authentication/issuance/expiry times, encrypted receipt, and receipt digest;
-- `approval_store_migrations`: applied approval-store migration checksum;
+- `approval_store_migrations`: exact ordered approval-store migration names and checksums;
+- `approval_internal_broker_replay`: derived key identity, nonce SHA-256, exact
+  request bindings, issue/expiry, and committed consumption time; never the raw
+  nonce or runtime credential;
 - `approval_audit`: content-minimized ordered lifecycle outcomes.
 
 SQLite uses WAL, `synchronous=FULL`, foreign keys, bounded busy timeout, and
@@ -101,9 +106,23 @@ Browser/API routes are isolated from core routes:
 | `POST /v1/approval/requests/options` | exact token; returns exact transaction display plus UV-required assertion options |
 | `POST /v1/approval/requests/verify` | literal `approved=true` plus assertion; direct mode returns stored receipt, Core mode returns only a human claim code |
 | `POST /v1/approval/requests/reject` | exact token; terminal human rejection, no receipt |
-| `POST /v1/approval/internal/requests` | runtime-bearer authenticated exact idempotent Core request; never returns approval URL |
-| `POST /v1/approval/internal/requests/status` | runtime-bearer authenticated request/digest status |
-| `POST /v1/approval/internal/receipts/retrieve` | runtime-bearer + exact claim code/domain/purpose/digest binding; retryable receipt retrieval, not consumption |
+| `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; exact idempotent Core request; never returns approval URL |
+| `POST /v1/approval/internal/requests/status` | runtime Bearer plus signed one-use broker proof; request/digest status |
+| `POST /v1/approval/internal/receipts/retrieve` | runtime Bearer plus signed one-use broker proof and exact claim code/domain/purpose/digest binding; retryable receipt retrieval, not claim-code consumption |
+
+Each internal proof uses a fixed schema and domain-separated HMAC-SHA256 key
+derived from the existing high-entropy runtime credential. It binds exact
+`POST`, route path, canonical wire-body SHA-256, configured Approval origin,
+route-specific purpose, derived key ID, random 32-byte nonce, issued time, and a
+maximum 30-second lifetime with five seconds future-clock tolerance. Approval
+fully verifies the proof, then atomically commits one-use `(key_id, nonce_hash)`
+replay custody before parsing/acting on the canonical body. Each successful
+consume prunes expired replay rows in the same transaction; idle stores retain
+expired rows until the next consume without affecting authorization. A malformed proof
+does not touch replay state. A valid proof over a noncanonical or schema-invalid
+body may consume its nonce but performs no business action. Transport retry uses
+a fresh broker nonce; business idempotency remains a separate unchanged layer.
+Core and Approval have no mixed-version compatibility mode.
 
 All POST bodies are bounded while streaming regardless of `Content-Length`, use
 duplicate-key/non-finite rejecting JSON and strict schemas, and expose only a
@@ -146,7 +165,9 @@ the environment-variable reference.
 It binds one canonical HTTPS approval origin, an environment-variable reference
 for the runtime Core bearer, one approver principal, timeout, and response-body
 ceiling. Core uses a direct `httpx` client with environment proxies and redirects
-disabled and rejects duplicate-key, non-object, oversized, or wrong-status JSON.
+disabled, serializes each internal body once as canonical JSON, creates a fresh
+broker proof per attempt, and rejects duplicate-key, non-object, oversized, or
+wrong-status response JSON.
 
 Schema migration 3 adds `oidc_enrollment_continuations`. It stores only a
 SHA-256 continuation hash, bounded poll state, encrypted callback challenge,

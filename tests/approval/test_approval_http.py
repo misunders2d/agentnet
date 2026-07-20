@@ -2,16 +2,39 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from agentnet.approval.http import SECURITY_HEADERS, create_approval_app
-from agentnet.security.signatures import b64url_encode
+from agentnet.approval.internal_broker import (
+    INTERNAL_BROKER_PROOF_HEADER,
+    INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_RETRIEVE,
+    INTERNAL_BROKER_PURPOSE_STATUS,
+    build_internal_broker_proof,
+)
+from agentnet.errors import AuthenticationError
+from agentnet.security.signatures import b64url_encode, canonical_json
 
 
 TOKEN = "agcap1." + "A" * 43
+NOW = 1_800_000_000
+
+
+class FakeReplayStore:
+    def __init__(self) -> None:
+        self.seen: set[tuple[str, str]] = set()
+        self.calls: list[dict[str, object]] = []
+
+    def consume_internal_broker_replay(self, **kwargs: object) -> None:
+        key = (str(kwargs["key_id"]), str(kwargs["nonce"]))
+        if key in self.seen:
+            raise AuthenticationError("approval request denied")
+        self.seen.add(key)
+        self.calls.append(dict(kwargs))
 
 
 class FakeApprovalService:
@@ -115,7 +138,10 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             self.config = SimpleNamespace(
                 max_http_body_bytes=4096,
                 internal_core_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+                public_origin="https://approval.corp.example",
             )
+            self.clock = lambda: NOW
+            self.store = FakeReplayStore()
 
         def create_request(self, **kwargs):
             self.calls.append(("create_request", kwargs))
@@ -166,11 +192,50 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             assert denied.json() == {"error": "request_denied"}
             assert service.calls == []
 
-            headers = {"Authorization": f"Bearer {secret}"}
+            bearer = {"Authorization": f"Bearer {secret}"}
+            bearer_only = await client.post(
+                "/v1/approval/internal/requests",
+                content=canonical_json(create_body),
+                headers={**bearer, "Content-Type": "application/json"},
+            )
+            assert bearer_only.status_code == 400
+            assert service.calls == []
+            assert service.store.calls == []
+
+            def signed_headers(
+                path: str,
+                purpose: str,
+                body: dict[str, object],
+                *,
+                nonce: bytes,
+            ) -> dict[str, str]:
+                raw = canonical_json(body)
+                return {
+                    **bearer,
+                    "Content-Type": "application/json",
+                    INTERNAL_BROKER_PROOF_HEADER: build_internal_broker_proof(
+                        credential=secret,
+                        audience="https://approval.corp.example",
+                        method="POST",
+                        path=path,
+                        purpose=purpose,
+                        raw_body=raw,
+                        now=NOW,
+                        nonce=nonce,
+                    ),
+                }
+
+            create_raw = canonical_json(create_body)
+            create_headers = signed_headers(
+                "/v1/approval/internal/requests",
+                INTERNAL_BROKER_PURPOSE_CREATE,
+                create_body,
+                nonce=b"c" * 32,
+            )
             created = await client.post(
                 "/v1/approval/internal/requests",
-                json=create_body,
-                headers=headers,
+                content=create_raw,
+                headers=create_headers,
             )
             assert created.status_code == 201
             created_text = created.text
@@ -178,34 +243,128 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             assert "agcap1." not in created_text
             assert secret not in created_text
 
+            replay = await client.post(
+                "/v1/approval/internal/requests",
+                content=create_raw,
+                headers=create_headers,
+            )
+            assert replay.status_code == 400
+            assert [name for name, _value in service.calls] == ["create_request"]
+
+            status_body = {
+                "schema": "agentnet.approval.internal-request-status.v1",
+                "request_id": "request-1",
+                "transaction_digest": digest,
+            }
+            status_path = "/v1/approval/internal/requests/status"
             status = await client.post(
-                "/v1/approval/internal/requests/status",
-                json={
-                    "schema": "agentnet.approval.internal-request-status.v1",
-                    "request_id": "request-1",
-                    "transaction_digest": digest,
-                },
-                headers=headers,
+                status_path,
+                content=canonical_json(status_body),
+                headers=signed_headers(
+                    status_path,
+                    INTERNAL_BROKER_PURPOSE_STATUS,
+                    status_body,
+                    nonce=b"s" * 32,
+                ),
             )
             assert status.status_code == 200
             assert status.json()["state"] == "issued"
 
+            retrieve_body = {
+                "schema": "agentnet.approval.internal-receipt-retrieve.v1",
+                "request_id": "request-1",
+                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+                "domain_id": "corp.example",
+                "approval_purpose": "identity.enrollment.approve",
+                "transaction_digest": digest,
+                "idempotency_key": "core:enrollment-complete:test-1",
+            }
+            retrieve_path = "/v1/approval/internal/receipts/retrieve"
             retrieved = await client.post(
-                "/v1/approval/internal/receipts/retrieve",
-                json={
-                    "schema": "agentnet.approval.internal-receipt-retrieve.v1",
-                    "request_id": "request-1",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
-                    "domain_id": "corp.example",
-                    "approval_purpose": "identity.enrollment.approve",
-                    "transaction_digest": digest,
-                    "idempotency_key": "core:enrollment-complete:test-1",
-                },
-                headers=headers,
+                retrieve_path,
+                content=canonical_json(retrieve_body),
+                headers=signed_headers(
+                    retrieve_path,
+                    INTERNAL_BROKER_PURPOSE_RETRIEVE,
+                    retrieve_body,
+                    nonce=b"r" * 32,
+                ),
             )
             assert retrieved.status_code == 200
             assert retrieved.json()["receipt"]["value"] == "safe"
             assert secret not in retrieved.text
+            assert len(service.store.calls) == 3
+
+            noncanonical_raw = json.dumps(status_body, indent=1).encode("utf-8")
+            noncanonical = await client.post(
+                status_path,
+                content=noncanonical_raw,
+                headers={
+                    **bearer,
+                    "Content-Type": "application/json",
+                    INTERNAL_BROKER_PROOF_HEADER: build_internal_broker_proof(
+                        credential=secret,
+                        audience="https://approval.corp.example",
+                        method="POST",
+                        path=status_path,
+                        purpose=INTERNAL_BROKER_PURPOSE_STATUS,
+                        raw_body=noncanonical_raw,
+                        now=NOW,
+                        nonce=b"n" * 32,
+                    ),
+                },
+            )
+            assert noncanonical.status_code == 400
+            assert len(service.store.calls) == 4
+            assert [name for name, _value in service.calls] == [
+                "create_request",
+                "request_status",
+                "retrieve_core_receipt",
+            ]
+
+            query_denied = await client.post(
+                status_path + "?unexpected=1",
+                content=canonical_json(status_body),
+                headers=signed_headers(
+                    status_path,
+                    INTERNAL_BROKER_PURPOSE_STATUS,
+                    status_body,
+                    nonce=b"q" * 32,
+                ),
+            )
+            assert query_denied.status_code == 400
+            assert len(service.store.calls) == 4
+
+            duplicate_proof = signed_headers(
+                status_path,
+                INTERNAL_BROKER_PURPOSE_STATUS,
+                status_body,
+                nonce=b"d" * 32,
+            )[INTERNAL_BROKER_PROOF_HEADER]
+            duplicate_header_denied = await client.post(
+                status_path,
+                content=canonical_json(status_body),
+                headers=[
+                    ("Authorization", f"Bearer {secret}"),
+                    ("Content-Type", "application/json"),
+                    (INTERNAL_BROKER_PROOF_HEADER, duplicate_proof),
+                    (INTERNAL_BROKER_PROOF_HEADER, duplicate_proof),
+                ],
+            )
+            assert duplicate_header_denied.status_code == 400
+            assert len(service.store.calls) == 4
+
+            malformed = await client.post(
+                status_path,
+                content=canonical_json(status_body),
+                headers={
+                    **bearer,
+                    "Content-Type": "application/json",
+                    INTERNAL_BROKER_PROOF_HEADER: "not-a-valid-proof",
+                },
+            )
+            assert malformed.status_code == 400
+            assert len(service.store.calls) == 4
 
     asyncio.run(exercise())
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import secrets
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
@@ -15,6 +16,13 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from agentnet.approval.internal_broker import (
+    INTERNAL_BROKER_PROOF_HEADER,
+    INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_RETRIEVE,
+    INTERNAL_BROKER_PURPOSE_STATUS,
+    verify_internal_broker_proof,
+)
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_json
@@ -112,7 +120,7 @@ def _reject_nonfinite(_value: str) -> object:
     raise ValueError("non-finite JSON number")
 
 
-async def _bounded_json(request: Request, service: WebAuthnApprovalService) -> dict[str, Any]:
+async def _bounded_body(request: Request, service: WebAuthnApprovalService) -> bytes:
     maximum = service.config.max_http_body_bytes
     declared = request.headers.get("content-length")
     if declared is not None:
@@ -129,9 +137,13 @@ async def _bounded_json(request: Request, service: WebAuthnApprovalService) -> d
         if size > maximum:
             raise ValidationError("request body is invalid")
         chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _strict_json(raw_body: bytes) -> dict[str, Any]:
     try:
         value = json.loads(
-            b"".join(chunks).decode("utf-8"),
+            raw_body.decode("utf-8"),
             object_pairs_hook=_reject_duplicates,
             parse_constant=_reject_nonfinite,
         )
@@ -142,6 +154,10 @@ async def _bounded_json(request: Request, service: WebAuthnApprovalService) -> d
     return value
 
 
+async def _bounded_json(request: Request, service: WebAuthnApprovalService) -> dict[str, Any]:
+    return _strict_json(await _bounded_body(request, service))
+
+
 def _json(value: Any, *, status_code: int = 200) -> JSONResponse:
     return JSONResponse(value, status_code=status_code)
 
@@ -150,10 +166,22 @@ def _denied() -> JSONResponse:
     return _json({"error": "request_denied"}, status_code=400)
 
 
-def _require_internal_auth(request: Request, service: WebAuthnApprovalService) -> None:
+def _single_header(request: Request, name: str) -> str:
+    encoded = name.lower().encode("ascii")
+    values = [
+        value.decode("latin-1")
+        for key, value in request.scope.get("headers", [])
+        if key.lower() == encoded
+    ]
+    if len(values) != 1:
+        raise AuthenticationError("approval request denied")
+    return values[0]
+
+
+def _require_internal_auth(request: Request, service: WebAuthnApprovalService) -> str:
     reference = getattr(service.config, "internal_core_credential_env", None)
     expected = os.environ.get(reference, "") if reference else ""
-    supplied = request.headers.get("authorization", "")
+    supplied = _single_header(request, "authorization")
     candidate = supplied.removeprefix("Bearer ") if supplied.startswith("Bearer ") else ""
     valid = (
         bool(reference)
@@ -164,6 +192,49 @@ def _require_internal_auth(request: Request, service: WebAuthnApprovalService) -
     )
     if not valid:
         raise AuthenticationError("approval request denied")
+    return expected
+
+
+def _require_internal_broker(
+    request: Request,
+    service: WebAuthnApprovalService,
+    *,
+    raw_body: bytes,
+    path: str,
+    purpose: str,
+) -> None:
+    credential = _require_internal_auth(request, service)
+    if (
+        request.method != "POST"
+        or request.url.path != path
+        or request.scope.get("query_string", b"") != b""
+    ):
+        raise AuthenticationError("approval request denied")
+    audience = getattr(service.config, "public_origin", "").rstrip("/")
+    clock = getattr(service, "clock", None)
+    checked_at = clock() if callable(clock) else int(time.time())
+    proof = verify_internal_broker_proof(
+        credential=credential,
+        header_value=_single_header(request, INTERNAL_BROKER_PROOF_HEADER),
+        audience=audience,
+        method="POST",
+        path=path,
+        purpose=purpose,
+        raw_body=raw_body,
+        now=checked_at,
+    )
+    service.store.consume_internal_broker_replay(
+        key_id=proof.key_id,
+        nonce=proof.nonce,
+        purpose=proof.purpose,
+        audience=proof.audience,
+        method=proof.method,
+        path=proof.path,
+        body_sha256=proof.body_sha256,
+        issued_at=proof.issued_at,
+        expires_at=proof.expires_at,
+        consumed_at=checked_at,
+    )
 
 
 _APPROVAL_HTML = """<!doctype html>
@@ -359,8 +430,18 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
 
     async def internal_create(request: Request) -> Response:
         try:
-            _require_internal_auth(request, service)
-            body = _InternalCreateBody.model_validate(await _bounded_json(request, service))
+            raw_body = await _bounded_body(request, service)
+            _require_internal_broker(
+                request,
+                service,
+                raw_body=raw_body,
+                path="/v1/approval/internal/requests",
+                purpose=INTERNAL_BROKER_PURPOSE_CREATE,
+            )
+            value = _strict_json(raw_body)
+            if canonical_json(value) != raw_body:
+                raise AuthenticationError("approval request denied")
+            body = _InternalCreateBody.model_validate(value)
             canonical = b64url_decode(body.canonical_transaction_b64)
             if (
                 b64url_encode(canonical) != body.canonical_transaction_b64
@@ -394,8 +475,18 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
 
     async def internal_status(request: Request) -> Response:
         try:
-            _require_internal_auth(request, service)
-            body = _InternalStatusBody.model_validate(await _bounded_json(request, service))
+            raw_body = await _bounded_body(request, service)
+            _require_internal_broker(
+                request,
+                service,
+                raw_body=raw_body,
+                path="/v1/approval/internal/requests/status",
+                purpose=INTERNAL_BROKER_PURPOSE_STATUS,
+            )
+            value = _strict_json(raw_body)
+            if canonical_json(value) != raw_body:
+                raise AuthenticationError("approval request denied")
+            body = _InternalStatusBody.model_validate(value)
             return _json(
                 service.request_status(
                     request_id=body.request_id,
@@ -407,8 +498,18 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
 
     async def internal_retrieve(request: Request) -> Response:
         try:
-            _require_internal_auth(request, service)
-            body = _InternalRetrieveBody.model_validate(await _bounded_json(request, service))
+            raw_body = await _bounded_body(request, service)
+            _require_internal_broker(
+                request,
+                service,
+                raw_body=raw_body,
+                path="/v1/approval/internal/receipts/retrieve",
+                purpose=INTERNAL_BROKER_PURPOSE_RETRIEVE,
+            )
+            value = _strict_json(raw_body)
+            if canonical_json(value) != raw_body:
+                raise AuthenticationError("approval request denied")
+            body = _InternalRetrieveBody.model_validate(value)
             retrieval_digest = hashlib.sha256(
                 canonical_json(
                     {

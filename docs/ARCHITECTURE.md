@@ -410,15 +410,26 @@ unknown/modified SQLite catalog, non-owner-only files, stale/replayed
 capabilities, revoked credentials, expired challenges/requests/receipts, and
 missing configured purpose all fail closed. One receipt and audit record commit
 before response; response-loss retries return the exact encrypted stored receipt
-without re-signing or extending expiry. Approval SQLite schema v2 adds exact
-v1→v2 catalog-verified migration, encrypted local capability custody,
-idempotent Core request bindings, and hashed bounded claim-code state.
+without re-signing or extending expiry. Approval SQLite schema v3 preserves the
+exact v1→v2 migration and adds an exact v2→v3 catalog/checksum-verified migration.
+Version 2 adds encrypted local capability custody, idempotent Core request
+bindings, and hashed bounded claim-code state. Version 3 adds persistent one-use
+Core→Approval broker-proof replay custody keyed by derived key identity and a
+SHA-256 nonce hash; raw broker nonces and runtime credentials are not stored.
 
 Core services remain receipt-only consumers through
 `IndependentApprovalVerifier`. An optional, disabled-by-default broker surface
 lets a configured Core create/status exact requests and retrieve an already
-issued receipt over runtime-credential-authenticated HTTPS. It cannot approve,
-sign, or bypass WebAuthn. Core-created browser capabilities remain encrypted in
+issued receipt over runtime-credential-authenticated HTTPS. Every internal POST
+also carries a domain-separated HMAC-SHA256 proof derived from that runtime
+credential. The fixed proof binds exact method, route path, canonical wire-body
+digest, Approval origin audience, route purpose, key identity, random 32-byte
+nonce, issue time, and expiry. Approval verifies the complete proof and commits
+one-use replay custody before any route action. Response-loss retries use a fresh
+broker nonce while preserving the separate business idempotency key. Mixed
+Bearer-only/signed versions fail closed and Core plus Approval must upgrade
+together. This broker cannot approve, sign a human receipt, or bypass WebAuthn.
+Core-created browser capabilities remain encrypted in
 the approval service store; `agentnet approval pending|watch|open` discovers
 and opens them on an owner-controlled browser without printing or transporting
 the URL. Default commands use the system browser. Explicit server-bootstrap

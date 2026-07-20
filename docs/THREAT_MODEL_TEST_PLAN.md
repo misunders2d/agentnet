@@ -243,6 +243,9 @@ Current hermetic tests:
 - `tests/identity/test_enrollment.py`
 - `tests/identity/test_oidc_enrollment.py`
 - `tests/approval/test_webauthn_service.py`
+- `tests/approval/test_internal_broker.py`
+- `tests/approval/test_internal_client.py`
+- `tests/approval/test_approval_store_migration.py`
 - `tests/approval/test_approval_http.py`
 - `tests/approval/test_approval_cli.py`
 - `tests/identity/test_credential_rotation.py`
@@ -260,6 +263,10 @@ method/URI/audience/domain/jti, key epochs, refresh rotation, recovery, device
 loss, and offline revocation. Attack mix-up, code/OOB substitution, reused
 challenges, duplicate JSON, oversized streaming bodies, copied identifiers,
 stolen capabilities/tokens, sibling/cross-domain replay, response loss,
+Core→Approval Bearer-only downgrade, duplicate/ambiguous proof headers,
+method/path/body/audience/purpose/key substitution, stale/future proof,
+sequential/concurrent/restart replay, replay-store/migration failure, and
+fresh-nonce retry with unchanged business idempotency. Also attack
 schema/key tamper, stale sign count, revoked credentials, harness automation
 of approval, headless no-TTY refusal before begin/materialization, private URL
 absence from normal output/errors, control-byte rejection, partial terminal

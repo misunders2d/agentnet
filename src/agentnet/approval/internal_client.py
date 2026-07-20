@@ -7,6 +7,13 @@ from typing import Any
 
 import httpx
 
+from agentnet.approval.internal_broker import (
+    INTERNAL_BROKER_PROOF_HEADER,
+    INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_RETRIEVE,
+    INTERNAL_BROKER_PURPOSE_STATUS,
+    build_internal_broker_proof,
+)
 from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.operations.config import ApprovalServiceClientConfig
 from agentnet.security.signatures import b64url_encode, canonical_json
@@ -52,17 +59,34 @@ class ApprovalServiceClient:
             raise GateBlocked("approval_service", "approval service credential is unavailable")
         self.config = config
         self._credential = credential
+        self._audience = config.origin.rstrip("/")
         self._client = httpx.Client(
-            base_url=config.origin.rstrip("/"),
+            base_url=self._audience,
             timeout=config.request_timeout_seconds,
             follow_redirects=False,
             trust_env=False,
             transport=transport,
         )
 
-    def _post(self, path: str, body: dict[str, Any], *, expected: set[int]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        body: dict[str, Any],
+        *,
+        purpose: str,
+        expected: set[int],
+    ) -> dict[str, Any]:
+        raw_body = canonical_json(body)
         headers = {
             "Authorization": f"Bearer {self._credential}",
+            INTERNAL_BROKER_PROOF_HEADER: build_internal_broker_proof(
+                credential=self._credential,
+                audience=self._audience,
+                method="POST",
+                path=path,
+                purpose=purpose,
+                raw_body=raw_body,
+            ),
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Cache-Control": "no-store",
@@ -71,7 +95,7 @@ class ApprovalServiceClient:
             with self._client.stream(
                 "POST",
                 path,
-                content=canonical_json(body),
+                content=raw_body,
                 headers=headers,
             ) as response:
                 if response.is_redirect or response.status_code not in expected:
@@ -109,6 +133,7 @@ class ApprovalServiceClient:
                 "canonical_transaction_b64": b64url_encode(canonical_transaction),
                 "transaction_digest": transaction_digest,
             },
+            purpose=INTERNAL_BROKER_PURPOSE_CREATE,
             expected={200, 201},
         )
 
@@ -120,6 +145,7 @@ class ApprovalServiceClient:
                 "request_id": request_id,
                 "transaction_digest": transaction_digest,
             },
+            purpose=INTERNAL_BROKER_PURPOSE_STATUS,
             expected={200},
         )
 
@@ -144,6 +170,7 @@ class ApprovalServiceClient:
                 "transaction_digest": transaction_digest,
                 "idempotency_key": idempotency_key,
             },
+            purpose=INTERNAL_BROKER_PURPOSE_RETRIEVE,
             expected={200},
         )
         receipt = result.get("receipt")

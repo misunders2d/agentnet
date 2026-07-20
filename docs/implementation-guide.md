@@ -154,6 +154,14 @@ agentnet approval provision \
 agentnet approval status --config /etc/agentnet-approval/config.json
 ```
 
+Core and Approval internal POSTs require both the runtime Bearer and the signed
+one-use broker proof introduced with ApprovalStore schema v3. Upgrade Core and
+Approval from the same immutable package together; there is deliberately no
+Bearer-only mixed-version compatibility mode. Approval migrates exact v1/v2
+stores atomically before startup, and any catalog/history/replay-store
+uncertainty keeps internal routes denied. A transport retry creates a fresh
+broker nonce while retaining the original business idempotency key.
+
 The provision result prints only core trust material: verifier ID, approver
 identity, public receipt-signing key, allowed purposes, and signer key ID.
 Install that public trust in each core's existing
