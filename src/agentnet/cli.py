@@ -27,6 +27,11 @@ from google.protobuf.json_format import MessageToDict
 from starlette.applications import Starlette
 
 from agentnet import __version__
+from agentnet._terminal_handoff import (
+    TerminalHandoffError,
+    handoff_private_url,
+    require_private_terminal,
+)
 from agentnet.approval.cli_commands import configure_approval_parser
 from agentnet.audit.service import AuditService
 from agentnet.authorization import (
@@ -1277,13 +1282,39 @@ def _guided_success_output(
     }
 
 
+def _require_private_terminal_or_exit() -> None:
+    try:
+        require_private_terminal()
+    except TerminalHandoffError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _handoff_guided_authorization(url: str, *, browser: str) -> None:
+    if browser == "system":
+        if not webbrowser.open(url, new=1):
+            raise SystemExit(
+                "system browser could not be opened; guided join state is retained"
+            )
+        return
+    if browser != "terminal":
+        raise SystemExit("guided join browser mode is invalid")
+    try:
+        handoff_private_url(
+            url,
+            purpose="owner OIDC enrollment",
+            require_ack=True,
+        )
+    except TerminalHandoffError as exc:
+        raise SystemExit(str(exc)) from None
+
+
 def command_join_guided(args: argparse.Namespace) -> int:
     """Run resumable browser OIDC and Core-brokered independent approval."""
 
     state_path = Path(os.path.abspath(args.state))
     identity_path = Path(os.path.abspath(args.identity))
     server = _canonical_server_origin(args.server)
-    browser_opened = False
+    authorization_url_disclosed = False
     if os.path.lexists(state_path):
         pending = _guided_join_state(state_path)
         if pending.get("schema") == "agentnet.guided-join-complete.v1":
@@ -1367,6 +1398,8 @@ def command_join_guided(args: argparse.Namespace) -> int:
         if key.public_pem != pending["public_key_pem"]:
             raise SystemExit("guided join private key no longer matches pending state")
     else:
+        if args.browser == "terminal":
+            _require_private_terminal_or_exit()
         key_path = (
             Path(os.path.abspath(args.private_key))
             if args.private_key
@@ -1403,9 +1436,11 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "challenge": None,
         }
         _write_owner_json(state_path, pending)
-        if not webbrowser.open(str(authorization["authorization_url"]), new=1):
-            raise SystemExit("system browser could not be opened; guided join state is retained")
-        browser_opened = True
+        _handoff_guided_authorization(
+            str(authorization["authorization_url"]),
+            browser=args.browser,
+        )
+        authorization_url_disclosed = True
 
     challenge_value = pending.get("challenge")
     if challenge_value is None:
@@ -1440,12 +1475,14 @@ def command_join_guided(args: argparse.Namespace) -> int:
                 break
             if status not in {"authorization_pending", "slow_down"}:
                 raise SystemExit(f"guided enrollment stopped in terminal state: {status}")
-            if status == "authorization_pending" and not browser_opened:
-                if not webbrowser.open(str(authorization["authorization_url"]), new=1):
-                    raise SystemExit(
-                        "system browser could not be opened; guided join state is retained"
-                    )
-                browser_opened = True
+            if status == "authorization_pending" and not authorization_url_disclosed:
+                if args.browser == "terminal":
+                    _require_private_terminal_or_exit()
+                _handoff_guided_authorization(
+                    str(authorization["authorization_url"]),
+                    browser=args.browser,
+                )
+                authorization_url_disclosed = True
             time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
     challenge, decoded = _validate_guided_challenge(challenge_value)
@@ -3359,6 +3396,12 @@ def build_parser() -> argparse.ArgumentParser:
     join_guided.add_argument("--state", default=".agentnet/guided-join.json")
     join_guided.add_argument("--private-key")
     join_guided.add_argument("--identity", default=".agentnet/identity.json")
+    join_guided.add_argument(
+        "--browser",
+        choices=("system", "terminal"),
+        default="system",
+        help="open locally or disclose only through the private controlling terminal",
+    )
     join_guided.add_argument("--timeout", type=int, choices=range(30, 601), default=300)
     join_guided.set_defaults(func=command_join_guided)
     join_begin = join_commands.add_parser("begin", help="start exact OIDC/device enrollment")

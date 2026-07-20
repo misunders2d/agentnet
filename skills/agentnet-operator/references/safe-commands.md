@@ -193,15 +193,20 @@ agentnet join guided \
   --harness pi \
   --name server-agent-1 \
   --state .agentnet/guided-join.json \
-  --identity .agentnet/server-agent-identity.json
+  --identity .agentnet/server-agent-identity.json \
+  --browser terminal
 agentnet server-agent activate \
   --config agentnet.json \
   --identity .agentnet/server-agent-identity.json
 agentnet serve --config agentnet.json
 ```
 
-`join guided` opens the system browser and prompts only for the human claim
-code. It must finish as `enrolled_identity_only` and
+Default `join guided` opens the system browser. This server-bootstrap example
+uses explicit `--browser terminal`: AgentNet verifies private POSIX `/dev/tty`
+and discloses the HTTPS URL only there for manual opening on the owner laptop.
+Never record or relay that URL. Missing TTY, control bytes, partial writes, and
+unsupported platforms fail closed with pending state retained. Both modes
+prompt only for the human claim code and must finish as `enrolled_identity_only` and
 `first_message_blocked_explicit_authority_required`. The expert manual
 `join begin`/`join complete` commands remain compatible but require explicit
 local challenge/receipt handling and are not the fresh-laptop workflow:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentnet import cli
+from agentnet._terminal_handoff import TerminalHandoffError
 from agentnet.approval import cli_commands as approval_cli
 from agentnet.approval.config import MANDATORY_APPROVAL_PURPOSES, load_approval_service_config
 from agentnet.errors import ValidationError
@@ -179,6 +180,145 @@ def test_pending_open_and_watch_keep_approval_capability_local(
     assert json.loads(watch_output)["opened"] is True
     assert "agcap1." not in watch_output
     assert opened == [secret_url, secret_url]
+
+
+def test_pending_open_and_watch_support_private_terminal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pending = {
+        "request_id": "request-terminal",
+        "approver_principal_id": "security-owner",
+        "domain_id": "corp.example",
+        "approval_purpose": "identity.enrollment.approve",
+        "transaction_digest": "b" * 64,
+        "delivery_mode": "core_claim_code",
+        "openable_locally": True,
+        "created_at": 1_800_000_000,
+        "expires_at": 1_800_000_300,
+    }
+    secret_url = "https://approval.corp.example/approval#token=agcap1.PRIVATE"
+    terminal_checks: list[bool] = []
+    handoffs: list[tuple[str, str, bool]] = []
+    materialized: list[str] = []
+
+    class FakeStore:
+        def close(self) -> None:
+            return None
+
+    class FakeService:
+        def pending_requests(self) -> list[dict[str, object]]:
+            return [pending]
+
+        def local_approval_url(self, request_id: str) -> str:
+            materialized.append(request_id)
+            return secret_url
+
+    monkeypatch.setattr(
+        approval_cli,
+        "_open_service",
+        lambda _path: (SimpleNamespace(), FakeStore(), FakeService()),
+    )
+    monkeypatch.setattr(
+        approval_cli,
+        "require_private_terminal",
+        lambda: terminal_checks.append(True),
+    )
+    monkeypatch.setattr(
+        approval_cli,
+        "handoff_private_url",
+        lambda url, *, purpose, require_ack: handoffs.append(
+            (url, purpose, require_ack)
+        ),
+    )
+    monkeypatch.setattr(
+        approval_cli.webbrowser,
+        "open",
+        lambda *_args, **_kwargs: pytest.fail("terminal mode must not open system browser"),
+    )
+
+    assert (
+        cli.main(
+            [
+                "approval",
+                "open",
+                "--config",
+                "/private/config.json",
+                "--request-id",
+                "request-terminal",
+                "--browser",
+                "terminal",
+            ]
+        )
+        == 0
+    )
+    open_output = capsys.readouterr().out
+    assert secret_url not in open_output
+
+    assert (
+        cli.main(
+            [
+                "approval",
+                "watch",
+                "--config",
+                "/private/config.json",
+                "--open",
+                "--browser",
+                "terminal",
+                "--once",
+            ]
+        )
+        == 0
+    )
+    watch_output = capsys.readouterr().out
+    assert secret_url not in watch_output
+    assert terminal_checks == [True, True]
+    assert materialized == ["request-terminal", "request-terminal"]
+    assert handoffs == [
+        (secret_url, "local approval", True),
+        (secret_url, "local approval", False),
+    ]
+
+
+def test_private_terminal_mode_refuses_missing_tty_before_approval_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable() -> None:
+        raise TerminalHandoffError("private controlling terminal is unavailable")
+
+    monkeypatch.setattr(approval_cli, "require_private_terminal", unavailable)
+    monkeypatch.setattr(
+        approval_cli,
+        "_open_service",
+        lambda _path: pytest.fail("no TTY must fail before approval service access"),
+    )
+
+    with pytest.raises(SystemExit, match="private controlling terminal is unavailable"):
+        cli.main(
+            [
+                "approval",
+                "open",
+                "--config",
+                "/private/config.json",
+                "--request-id",
+                "request-terminal",
+                "--browser",
+                "terminal",
+            ]
+        )
+    with pytest.raises(SystemExit, match="private controlling terminal is unavailable"):
+        cli.main(
+            [
+                "approval",
+                "watch",
+                "--config",
+                "/private/config.json",
+                "--open",
+                "--browser",
+                "terminal",
+                "--once",
+            ]
+        )
 
 
 def test_approval_config_rejects_duplicate_json_keys_before_parsing(tmp_path: Path) -> None:

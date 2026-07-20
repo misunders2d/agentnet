@@ -19,6 +19,11 @@ from urllib.parse import urlsplit
 import uvicorn
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentnet._terminal_handoff import (
+    TerminalHandoffError,
+    handoff_private_url,
+    require_private_terminal,
+)
 from agentnet.approval.config import (
     ApprovalServiceApproverConfig,
     ApprovalServiceConfig,
@@ -316,15 +321,39 @@ def command_approval_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def _require_private_terminal_or_exit() -> None:
+    try:
+        require_private_terminal()
+    except TerminalHandoffError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _open_private_approval_url(url: str, *, browser: str, require_ack: bool) -> None:
+    if browser == "system":
+        if not webbrowser.open(url, new=2):
+            raise SystemExit("approval browser could not be opened locally")
+        return
+    if browser != "terminal":
+        raise SystemExit("approval browser mode is invalid")
+    try:
+        handoff_private_url(
+            url,
+            purpose="local approval",
+            require_ack=require_ack,
+        )
+    except TerminalHandoffError as exc:
+        raise SystemExit(str(exc)) from None
+
+
 def command_approval_open(args: argparse.Namespace) -> int:
+    if args.browser == "terminal":
+        _require_private_terminal_or_exit()
     _config, store, service = _open_service(Path(args.config))
     try:
         url = service.local_approval_url(args.request_id)
     finally:
         store.close()
-    opened = bool(webbrowser.open(url, new=2))
-    if not opened:
-        raise SystemExit("approval browser could not be opened locally")
+    _open_private_approval_url(url, browser=args.browser, require_ack=True)
     print(
         json.dumps(
             {
@@ -341,6 +370,8 @@ def command_approval_open(args: argparse.Namespace) -> int:
 def command_approval_watch(args: argparse.Namespace) -> int:
     if not 0.25 <= args.interval <= 60.0:
         raise SystemExit("approval watch interval must be between 0.25 and 60 seconds")
+    if args.open and args.browser == "terminal":
+        _require_private_terminal_or_exit()
     _config, store, service = _open_service(Path(args.config))
     observed: set[str] = set()
     try:
@@ -352,9 +383,12 @@ def command_approval_watch(args: argparse.Namespace) -> int:
                 opened = False
                 if args.open and bool(request["openable_locally"]):
                     url = service.local_approval_url(request_id)
-                    opened = bool(webbrowser.open(url, new=2))
-                    if not opened:
-                        raise SystemExit("approval browser could not be opened locally")
+                    _open_private_approval_url(
+                        url,
+                        browser=args.browser,
+                        require_ack=False,
+                    )
+                    opened = True
                 print(
                     json.dumps(
                         {
@@ -463,6 +497,12 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     )
     open_request.add_argument("--config", default=".agentnet-approval/config.json")
     open_request.add_argument("--request-id", required=True)
+    open_request.add_argument(
+        "--browser",
+        choices=("system", "terminal"),
+        default="system",
+        help="open locally or disclose only through the private controlling terminal",
+    )
     open_request.set_defaults(func=command_approval_open)
 
     watch = sub.add_parser(
@@ -472,6 +512,12 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     watch.add_argument("--config", default=".agentnet-approval/config.json")
     watch.add_argument("--interval", type=float, default=2.0)
     watch.add_argument("--open", action="store_true")
+    watch.add_argument(
+        "--browser",
+        choices=("system", "terminal"),
+        default="system",
+        help="open locally or disclose only through the private controlling terminal",
+    )
     watch.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
     watch.set_defaults(func=command_approval_watch)
 

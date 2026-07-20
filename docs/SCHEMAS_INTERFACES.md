@@ -166,6 +166,13 @@ returns the encrypted result; a crash after enrollment commit reconstructs the
 same deterministic harness/credential binding from authoritative rows.
 Enrollment creates no entitlement.
 
+`join guided`, `approval open`, and `approval watch --open` expose an additive
+`--browser system|terminal` presentation option. `system` remains the default.
+`terminal` is POSIX-only, opens and verifies `/dev/tty`, accepts printable-ASCII
+HTTPS URLs without userinfo, writes one flushed framed block, and returns only
+sanitized failures. Browser mode is not stored in continuation, identity,
+approval, or audit schemas and changes no route or authority contract.
+
 ## Relationship wire and storage contract
 
 Authenticated product routes use strict Pydantic bodies (`extra="forbid"`) and

@@ -207,7 +207,7 @@ substituting the local synthetic profile.
 
 ### Independent approval component
 
-Unreleased source includes `agentnet approval`: a separately runnable,
+AgentNet includes `agentnet approval`: a separately runnable,
 loopback-bound WebAuthn-UV ceremony service using pinned `webauthn==3.0.0`.
 It has strict owner-only config/key custody, encrypted versioned SQLite state,
 one-time fragment capabilities, bounded no-store browser/API routes, exact
@@ -218,11 +218,15 @@ WebAuthn-approved human claim code. Approval URLs stay encrypted on approval
 host and open only through `agentnet approval pending|watch|open`. This grants
 no authority during provisioning and does not let Core approve or sign.
 
-Unreleased source also adds `agentnet join guided`: one resumable command opens
+AgentNet also includes `agentnet join guided`: one resumable command opens
 the system browser without printing its authorization URL, polls Core with an
 owner-only opaque continuation, prompts only for the short-lived human claim
 code, proves the locally retained candidate key, and writes an owner-only
-identity profile. Core retrieves the signed receipt directly from the approval
+identity profile. For an owner-operated headless POSIX server with a private
+controlling terminal, explicit `--browser terminal` writes the untrusted HTTPS
+authorization URL only to verified `/dev/tty`; control bytes, missing TTYs,
+partial writes, and unsupported platforms fail closed while resumable state is
+retained. Fresh-laptop behavior remains the default system browser. Core retrieves the signed receipt directly from the approval
 service; the candidate never receives it. Completion retries converge after
 response loss. Enrollment remains identity-only and reports
 `first_message_blocked_explicit_authority_required` until an administrator
@@ -256,11 +260,11 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.8`. This branch prepares the next guided-enrollment candidate; it is not
-published until Sergey performs the separate npm publication step. The
-candidate preserves `0.1.8` confidential OIDC and adds versioned approval-host
-broker state, Core continuation polling, direct receipt retrieval, response-loss
-recovery, and the resumable `join guided` CLI. The repository contains a broad
+`0.1.15`. This branch prepares the next headless-enrollment repair candidate;
+it is not published until Sergey performs the separate npm publication step.
+The candidate preserves `0.1.15` OIDC/WebAuthn/claim-code semantics and adds an
+explicit private-controlling-terminal browser handoff without a new service,
+schema, relay, or authority path. The repository contains a broad
 executable local kernel and adversarial test suite, but it does **not** claim
 production certification or a completed live cross-host ceremony.
 

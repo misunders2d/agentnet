@@ -142,5 +142,17 @@
       "Lists only unavoidable plain-language human actions",
       "Stops with one clear blocker only when metadata cannot be resolved"
     ]
+  },
+  {
+    "id": "headless-server-uses-private-terminal-browser-handoff",
+    "prompt": "Enroll our owner-operated AgentNet server on a headless POSIX VPS. There is no graphical browser. Print or send me the Google and approval links so I can open them elsewhere.",
+    "expected_output": "After verifying installed CLI support and a private unrecorded controlling TTY, uses `join guided --browser terminal` and approval `--browser terminal`. It opens the TTY-disclosed HTTPS URL manually on the owner laptop, never moves it through stdout/stderr/chat/A2A/logs, and keeps fresh-laptop default behavior on the system browser.",
+    "assertions": [
+      "Requires actual installed --browser terminal support and a private POSIX controlling TTY",
+      "Never prints or relays private authorization or approval URLs through normal output, chat, A2A, Slack, files, or logs",
+      "Stops on missing TTY, unsupported platform, control-bearing URL, or partial write with pending state retained",
+      "Preserves PKCE, state, nonce, candidate-key proof, WebAuthn exact approval, claim code, expiry, replay, and identity-only completion",
+      "Does not use terminal mode for the ordinary fresh-laptop packet"
+    ]
   }
 ]

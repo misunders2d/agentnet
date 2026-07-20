@@ -421,7 +421,12 @@ issued receipt over runtime-credential-authenticated HTTPS. It cannot approve,
 sign, or bypass WebAuthn. Core-created browser capabilities remain encrypted in
 the approval service store; `agentnet approval pending|watch|open` discovers
 and opens them on an owner-controlled browser without printing or transporting
-the URL. After WebAuthn, browser
+the URL. Default commands use the system browser. Explicit server-bootstrap
+`--browser terminal` instead opens verified POSIX `/dev/tty`, rejects non-HTTPS
+or control-bearing untrusted URL text before one framed write, and fails closed
+without persistence or fallback on no-TTY/partial-write/unsupported-platform
+conditions. This is a presentation path only; it creates no identity, grant,
+receipt, or authority. After WebAuthn, browser
 shows a 128-bit human-transferred claim code instead of receipt JSON. Exact
 code/domain/purpose/transaction/retrieval binding returns the same current
 receipt for response-loss retry; Core remains responsible for atomic receipt

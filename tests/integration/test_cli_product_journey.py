@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from agentnet._terminal_handoff import TerminalHandoffError
 from agentnet.cli import _authority_command, _write_private_config, build_parser
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import public_key_thumbprint
@@ -60,6 +61,8 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "codex",
             "--name",
             "Laptop",
+            "--browser",
+            "terminal",
         ]
     ).func.__name__ == "command_join_guided"
     assert parser.parse_args(
@@ -394,6 +397,203 @@ def test_guided_join_is_resumable_private_and_identity_only(
     identity.unlink()
     with pytest.raises(SystemExit, match="owner-only|identity file"):
         args.func(args)
+
+
+def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id="corp.example",
+        principal_id="person-terminal",
+        harness_id="harness-terminal",
+        credential_id="credential-terminal",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    authorization_url = "https://accounts.example/authorize?state=private-terminal"
+    transaction = json.dumps(
+        {
+            "challenge_id": "challenge-guided-terminal-0001",
+            "nonce": "n" * 43,
+            "schema": "agentnet.enrollment.challenge.v1",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    key_id: str | None = None
+    first_paths: list[str] = []
+    resume_paths: list[str] = []
+    terminal_checks: list[bool] = []
+    handoffs: list[tuple[str, str, bool]] = []
+
+    def first_request(*, server, method, path, body, timeout=10.0):
+        nonlocal key_id
+        first_paths.append(path)
+        if path.endswith("/begin"):
+            key_id = public_key_thumbprint(str(body["public_key_pem"]))
+            return {
+                "transaction_id": "oidc-transaction-guided-terminal-0001",
+                "authorization_url": authorization_url,
+                "state": "s" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "c" * 43,
+            }
+        return {
+            "status": "denied",
+            "interval_seconds": 2,
+            "expires_at": int(time.time()) + 300,
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", first_request)
+    monkeypatch.setattr(
+        "agentnet.cli.require_private_terminal",
+        lambda: terminal_checks.append(True),
+    )
+    monkeypatch.setattr(
+        "agentnet.cli.handoff_private_url",
+        lambda url, *, purpose, require_ack: handoffs.append(
+            (url, purpose, require_ack)
+        ),
+    )
+    monkeypatch.setattr(
+        "agentnet.cli.webbrowser.open",
+        lambda *_args, **_kwargs: pytest.fail("terminal mode must not open system browser"),
+    )
+    monkeypatch.setattr("agentnet.cli.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "agentnet.cli.getpass.getpass",
+        lambda _prompt: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+    )
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "terminal",
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="terminal state: denied"):
+        args.func(args)
+    first_output = capsys.readouterr()
+    assert authorization_url not in first_output.out + first_output.err
+    assert first_paths == [
+        "/v1/enrollment/oidc/begin",
+        "/v1/enrollment/oidc/poll",
+    ]
+    assert state.exists()
+    assert not identity.exists()
+
+    poll_count = 0
+
+    def resume_request(*, server, method, path, body, timeout=10.0):
+        nonlocal poll_count
+        resume_paths.append(path)
+        assert not path.endswith("/begin")
+        if path.endswith("/poll"):
+            poll_count += 1
+            if poll_count == 1:
+                return {
+                    "status": "authorization_pending",
+                    "interval_seconds": 2,
+                    "expires_at": int(time.time()) + 300,
+                }
+            return {
+                "status": "approval_pending",
+                "interval_seconds": 2,
+                "expires_at": int(time.time()) + 300,
+                "challenge_id": "challenge-guided-terminal-0001",
+                "nonce": "n" * 43,
+                "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+            }
+        assert path.endswith("/complete")
+        return {
+            "principal_id": actor.principal_id,
+            "harness_id": actor.harness_id,
+            "credential_id": actor.credential_id,
+            "key_id": key_id,
+            "credential_epoch": 1,
+            "harness_status": "active",
+            "actor": actor.model_dump(mode="json"),
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", resume_request)
+    assert args.func(args) == 0
+    resumed_output = capsys.readouterr()
+    result = json.loads(resumed_output.out)
+    assert result["status"] == "enrolled_identity_only"
+    assert authorization_url not in resumed_output.out + resumed_output.err
+    assert resume_paths == [
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/complete",
+    ]
+    assert terminal_checks == [True, True]
+    assert handoffs == [
+        (authorization_url, "owner OIDC enrollment", True),
+        (authorization_url, "owner OIDC enrollment", True),
+    ]
+
+
+def test_guided_join_terminal_mode_requires_tty_before_begin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "guided.json"
+    identity = tmp_path / "identity.json"
+    monkeypatch.setattr(
+        "agentnet.cli.require_private_terminal",
+        lambda: (_ for _ in ()).throw(
+            TerminalHandoffError("private controlling terminal is unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("no TTY must fail before enrollment begin"),
+    )
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "terminal",
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="private controlling terminal is unavailable"):
+        args.func(args)
+    assert not state.exists()
+    assert not state.with_suffix(".key.pem").exists()
+    assert not identity.exists()
 
 
 def test_cli_authority_command_signs_every_revision_and_mutation_field() -> None:

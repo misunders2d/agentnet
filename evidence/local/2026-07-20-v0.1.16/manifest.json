@@ -1,0 +1,46 @@
+{
+  "run_id": "2026-07-20-v0.1.16",
+  "evaluated_at": "2026-07-20T12:49:23+00:00",
+  "scope": "v0_1_16_headless_enrollment_handoff_repair_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "bf51c0a858728d00508bcc2427a6662c3c5e5668d3ef45a8af7b7da339feaf56",
+  "prior_runtime_evidence": "evidence/local/2026-07-19-v0.1.15/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-19-v0.1.15/manifest.json",
+  "change_boundary": "Adds an explicit private-controlling-terminal browser presentation path for owner-operated headless POSIX server enrollment and approval. Existing HTTPS OIDC callback, PKCE S256, state, nonce, continuation token, candidate-key proof of possession, WebAuthn exact-transaction approval, 128-bit claim code, expiry, replay, idempotency, identity-only enrollment, default fresh-laptop system-browser behavior, existing A2A, and zero implicit authority remain unchanged. No new service, schema, relay, grant, company data, production readiness, or cutover is authorized or claimed.",
+  "commands": [
+    {
+      "command": "Codex scout and OAuth source research; writer/DeepSeek critic convergence; DeepSeek constitution review of the actual patch",
+      "result": "PASS/converged after printable-ASCII HTTPS validation, os.isatty fd verification, no-retry partial-write handling, framed watch output, explicit browser-mode guards, and additional EOF/userinfo/non-HTTPS/port tests"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/cli/test_terminal_handoff.py tests/integration/test_cli_product_journey.py tests/approval/test_approval_cli.py tests/integration/test_enrollment_http.py tests/identity/test_oidc_enrollment.py",
+      "result": "64 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q",
+      "result": "1142 passed, 15 expected host/PostgreSQL skips; 0 failed"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 uv builds",
+      "result": "byte-identical 0.1.16 sdist and wheel archives"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS; source, installed generation 1, and repacked generation 2 each reported 1063 passed and 15 expected host/PostgreSQL skips; package check, release verifier, and recursive packed gate passed"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-20-v0.1.16/artifacts/agentnet-0.1.16.tar.gz",
+      "sha256": "2dae149315683ac20e33a938874f54638d51e186952e469564f954306fe035fc"
+    },
+    {
+      "path": "evidence/local/2026-07-20-v0.1.16/artifacts/agentnet-0.1.16-py3-none-any.whl",
+      "sha256": "fca56026b16e5eaa725879bb05781e6ddc80d1d7c579c4f59156fc6a4f4b879b"
+    }
+  ]
+}

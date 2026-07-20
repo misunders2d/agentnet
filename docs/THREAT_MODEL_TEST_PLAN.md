@@ -120,7 +120,7 @@ The following are cross-cutting property assertions, not merely examples:
 | `B04` Clean worker ↔ host and inherited workspace | Project instructions, hooks, plugins, filesystem, process, secret, IPC, DNS/network escape | Exact clean launch manifest and deny-by-default sandbox. | Gate 3; `tests/host/test_worker_escape.py` |
 | `B05` Clean worker ↔ model-egress broker | Credential theft, generic proxy use, origin/budget smuggling | Worker-bound short capability, allowlisted model/origin, fixed framed inference, no vendor credential in worker. | Gates 3 and 14 |
 | `B06` Supervisor ↔ corporate edge/core | Payload identity, token replay, wrong audience/domain, stale epoch | Exact human/guest plus harness or scoped workload actor from DPoP/mTLS context. | Gates 6–8 and 19 |
-| `B07` OIDC/WebAuthn/OOB ↔ enrollment authority | Mix-up, substitution, agent automation, same-device false independence | Exact transaction binding, phishing-resistant fresh authentication, one-time independent approval. | Gates 6, 17, 19 |
+| `B07` OIDC/WebAuthn/OOB ↔ enrollment authority | Mix-up, substitution, agent automation, same-device false independence, private-URL leakage, terminal-control injection | Exact transaction binding, phishing-resistant fresh authentication, one-time independent approval, system-browser default, and explicit verified private-TTY handoff that rejects control bytes and partial writes. | Gates 6, 17, 19 |
 | `B08` Core PEP ↔ PDP/entity snapshot | Missing/stale/incoherent revisions, diagnostics, positive harness authority | One coherent revision; missing or inconsistent state denies; human is sole positive source. | Gate 8 |
 | `B09` Core transaction ↔ PostgreSQL/outbox | Response loss, partial commit, stale read, split-brain writer | Accepted state, idempotency, recipient rows, audit intent, and outbox share one authoritative commit. | Gates 9, 10, 16 |
 | `B10` PostgreSQL manifest ↔ artifact bytes | Orphan, object swap, wrong version, cross-class dedup leak | No artifact acceptance/access without verified immutable object version plus authoritative manifest. | Gates 9 and 13 |
@@ -260,8 +260,10 @@ method/URI/audience/domain/jti, key epochs, refresh rotation, recovery, device
 loss, and offline revocation. Attack mix-up, code/OOB substitution, reused
 challenges, duplicate JSON, oversized streaming bodies, copied identifiers,
 stolen capabilities/tokens, sibling/cross-domain replay, response loss,
-schema/key tamper, stale sign count, revoked credentials, and harness automation
-of approval. Hermetic WebAuthn seams prove logic only; real workforce IdP,
+schema/key tamper, stale sign count, revoked credentials, harness automation
+of approval, headless no-TTY refusal before begin/materialization, private URL
+absence from normal output/errors, control-byte rejection, partial terminal
+writes without retry, and resume without a second enrollment begin. Hermetic WebAuthn seams prove logic only; real workforce IdP,
 authenticator, independent channel/host/device/OS account/TLS administration,
 platform custody, and owner-approved ceremony remain required.
 

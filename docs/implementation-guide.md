@@ -205,8 +205,11 @@ cannot approve or sign. Approval capability stays encrypted on approval host:
 ```bash
 agentnet approval pending --config /etc/agentnet-approval/config.json
 agentnet approval watch --config /etc/agentnet-approval/config.json --open
+# owner-operated headless POSIX host with a private, unrecorded controlling TTY
+agentnet approval watch --config /etc/agentnet-approval/config.json --open --browser terminal
 # or open one known local request without printing its URL
 agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID
+agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID --browser terminal
 ```
 
 After WebAuthn, Core mode shows only a 128-bit one-time claim code. It expires
@@ -215,8 +218,8 @@ both enrollee and approver, the owner reads it in the approval UI and types it
 directly into the fresh laptop's masked prompt; no extra person, host, Slack/A2A
 relay, or second report channel is required. Exact retries return the same
 current receipt to Core. Candidate never receives receipt or approval
-URL. Unreleased guided-enrollment source composes this broker with hash-only
-Core continuation state and `agentnet join guided`. Core stages the exact
+URL. Guided enrollment composes this broker with hash-only Core continuation
+state and `agentnet join guided`. Core stages the exact
 request outside its database transaction, retrieves the receipt without
 consuming it, and leaves `EnrollmentService.complete()` as the sole atomic
 receipt/challenge consumer. A crash after that commit reconstructs the exact
@@ -303,17 +306,23 @@ agentnet join guided \
   --harness pi \
   --name server-agent-1 \
   --state .agentnet/guided-join.json \
-  --identity .agentnet/server-agent-identity.json
+  --identity .agentnet/server-agent-identity.json \
+  --browser terminal
 agentnet server-agent activate \
   --config agentnet.json \
   --identity .agentnet/server-agent-identity.json
 agentnet serve --config agentnet.json
 ```
 
-The guided command opens the system browser without printing the authorization
-URL, stores candidate key/state as owner-only files, polls only Core, and asks
-the human only for the short-lived claim code shown after WebAuthn UV on the
-owner-controlled approval device. It never accepts or writes a receipt file. On success it replaces pending
+The guided command defaults to the system browser without printing the
+authorization URL. The explicit server-only `--browser terminal` mode requires
+a private controlling POSIX TTY and writes the HTTPS URL only to verified
+`/dev/tty` for manual opening on the owner-controlled laptop browser. It rejects
+control bytes and userinfo, never falls back to stdout/stderr/chat/A2A, and
+retains pending state after missing-TTY or write failure. Both modes store
+candidate key/state as owner-only files, poll only Core, and ask the human only
+for the short-lived claim code shown after WebAuthn UV on the owner-controlled
+approval device. It never accepts or writes a receipt file. On success it replaces pending
 state with a minimal completion marker and reports zero granted authority.
 `join begin`/`join complete` remain available only as the compatible expert
 manual ceremony.

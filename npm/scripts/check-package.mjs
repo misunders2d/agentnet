@@ -30,7 +30,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-19-v0.1.15/artifacts/RETENTION.md",
+  "evidence/local/2026-07-20-v0.1.16/artifacts/RETENTION.md",
   "skills/**/*.md",
 ];
 for (const relative of requiredPublishedFiles) {
@@ -169,6 +169,7 @@ const expectedOnboardingEvalIds = [
   "fresh-laptop-messaging-authority-blocked",
   "fresh-laptop-never-requires-infisical",
   "fresh-laptop-one-consolidated-setup-approval",
+  "headless-server-uses-private-terminal-browser-handoff",
   "hub-generates-public-onboarding-packet",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",

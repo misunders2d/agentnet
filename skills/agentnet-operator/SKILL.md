@@ -56,8 +56,12 @@ For a later installed release whose actual `agentnet join --help` exposes
 `join guided`, use only that product flow for a nontechnical fresh laptop. It
 opens the system browser without printing the authorization URL, keeps
 continuation/challenge/key state owner-only, and prompts only for the short-lived
-human claim code. Success means `enrolled_identity_only`, not messaging
-readiness. Stop at `first_message_blocked_explicit_authority_required` until an
+human claim code. For one owner-operated headless POSIX server only, when the
+installed help exposes it and a private unrecorded controlling TTY is active,
+use explicit `--browser terminal`; open the TTY-disclosed URL manually on the
+owner laptop. Never move that URL through chat/A2A/logs or use terminal mode for
+the ordinary fresh-laptop packet. Success means `enrolled_identity_only`, not
+messaging readiness. Stop at `first_message_blocked_explicit_authority_required` until an
 authorized administrator issues exact `message.send` plus required
 recipient/read entitlements; never turn enrollment into implicit authority.
 
