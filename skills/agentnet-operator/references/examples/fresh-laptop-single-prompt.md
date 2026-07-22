@@ -4,18 +4,21 @@ This file is the canonical reusable template for the one public prompt an author
 
 Required sender placeholders:
 
-`<AUTHORIZED_HUMAN>`, `<BLANK_LAPTOP_DISPLAY_NAME>`, `<HARNESS_KIND>`, `<AGENTNET_DOMAIN>`, `<CORE_HTTPS_ORIGIN>`, `<APPROVAL_HTTPS_ORIGIN>`, `<OIDC_ISSUER>`, `<OIDC_CALLBACK>`, `<NPM_PACKAGE>`, `<AGENTNET_VERSION>`, `<NPM_INTEGRITY>`, `<NODE_MIN_VERSION>`, `<UV_MIN_VERSION>`, `<TEST_RECIPIENT>`, `<C0_TEST_MESSAGE>`, `<C0_IDEMPOTENCY_KEY>`, `<RETENTION_ABORT_POLICY>`, `<HUMAN_REPORT_CHANNEL>`.
+`<ONBOARDING_MODE>`, `<AUTHORIZED_HUMAN>`, `<BLANK_LAPTOP_DISPLAY_NAME>`, `<HARNESS_KIND>`, `<AGENTNET_DOMAIN>`, `<CORE_HTTPS_ORIGIN>`, `<APPROVAL_HTTPS_ORIGIN>`, `<OIDC_ISSUER>`, `<OIDC_CALLBACK>`, `<NPM_PACKAGE>`, `<AGENTNET_VERSION>`, `<NPM_INTEGRITY>`, `<NODE_MIN_VERSION>`, `<UV_MIN_VERSION>`, `<RETENTION_ABORT_POLICY>`, `<HUMAN_REPORT_CHANNEL>`.
+
+`<ONBOARDING_MODE>` must resolve to exactly `identity_only` or `c0_pilot`. The sender selects `c0_pilot` only after that exact installed release and deployment pass the complete C0 gate; otherwise select `identity_only`.
 
 Validation before issuance:
 
 - Core, approval, issuer, and callback are exact canonical HTTPS values.
 - npm integrity matches the pinned public package/version.
-- the selected release ships guided join, signed server-side entitlement issuance, authority inventory, mailbox acknowledgement, and this canonical packet;
+- the selected release ships guided identity-only join and this canonical packet;
+- for mode `c0_pilot` only, the selected release also ships fixed `BootstrapGrantPlan` with atomic ten-entitlement plus guard commit, dedicated selector-free C0 service, no-model responder, seven-fact verifier, and exact cleanup;
+- the selected mode's exact source, packed generations, platform checks, and security/constitution/skill-design gates passed; repository-only or documentation-only support is insufficient;
 - Core, PostgreSQL, and approval are healthy; default colocation uses distinct OS identities, credentials, storage roots, and loopback services and reports `independent_boundary_proven=false`;
 - an owner-controlled WebAuthn passkey is registered and the owner can use the approval UI from the current laptop;
-- the server-side administrator and C0 recipient are ready;
-- C0 text is approved plain ASCII, 1–128 characters, without controls or secrets;
-- the idempotency key is a unique public value containing no secret or identity data.
+- for mode `c0_pilot` only, the dedicated owner-harness responder passed `--check` and is already running under the exact owner identity before this packet is issued;
+- existing A2A remains active and unchanged.
 
 The ordinary default requires no extra approval host, extra person, Infisical or other named secret manager, Slack/A2A claim-code relay, second report channel, or per-command setup approvals. Separately administered approval hosting is optional high assurance only.
 
@@ -25,6 +28,7 @@ AgentNet blank-laptop onboarding — exact public packet
 You are the generic agent running on the blank laptop named <BLANK_LAPTOP_DISPLAY_NAME>. This entire packet is the only prompt <AUTHORIZED_HUMAN> will paste. Complete every safe automated step yourself. Ask the human only for the unavoidable actions explicitly numbered below. Never ask for another command packet, hostname, URL, callback, hash, identifier, config value, credential, or secret.
 
 Approved public facts
+- Mode: <ONBOARDING_MODE>
 - Human: <AUTHORIZED_HUMAN>
 - Laptop: <BLANK_LAPTOP_DISPLAY_NAME>
 - Harness: <HARNESS_KIND>
@@ -35,25 +39,26 @@ Approved public facts
 - Exact OIDC callback: <OIDC_CALLBACK>
 - Public package: <NPM_PACKAGE>@<AGENTNET_VERSION>
 - Expected npm integrity: <NPM_INTEGRITY>
-- Test recipient: <TEST_RECIPIENT>
 - Public completion channel: <HUMAN_REPORT_CHANNEL>
 
-Human actions — complete list
+Human actions — complete list for selected mode
 1. This one paste.
 2. Approve an official Node.js or uv installer only if a required prerequisite is missing.
 3. Complete Google sign-in in the system browser after verifying the account, issuer, Core, domain, and callback shown below.
 4. On the current owner laptop, review the exact AgentNet enrollment transaction and approve it with the registered passkey.
-5. Read the one-time code shown by the approval UI and type it into this fresh laptop's masked AgentNet prompt.
+5. Read the enrollment one-time code shown by the approval UI and type it into this fresh laptop's masked AgentNet prompt.
+6. Mode `c0_pilot` only: on the current owner laptop, review the separate fixed C0 plan summary—exact two harnesses, five communication powers, five matching revoke powers, one-hour ceiling—and approve it with the registered passkey.
+7. Mode `c0_pilot` only: read the C0-plan one-time code shown by the approval UI and type it into this fresh laptop's masked AgentNet prompt.
 
-No other human setup, command entry, device, person, secret manager, identifier relay, or approval is part of this flow.
+For mode `identity_only`, actions 6–7 do not apply and must not be requested. No other human setup, command entry, device, person, secret manager, identifier relay, or approval is part of this flow.
 
 Safety rules
 - This is an isolated nonproduction C0 pilot. Use no company, personal, credential, production, file, task, tool, budget, or business-effect data.
-- Installation creates code only. Enrollment creates identity only. Messaging authority is a separate server-side audited operation under the frozen pilot plan.
+- Installation creates code only. Enrollment creates identity only. Mode `identity_only` stops after Phase 3. Mode `c0_pilot` uses one separate exact WebAuthn-approved plan; never assemble authority with generic entitlement issuance, three independent grants, or the legacy founder ceremony.
 - Preserve existing A2A and every existing communication system unchanged.
 - Use system browsers only; never an embedded webview.
 - Never expose a private key, token, capability/private URL, OAuth callback data, signed receipt, cookie, identity profile, private path, private payload, claim code, or raw command output in chat, Slack, A2A, prompts, logs, screenshots, repositories, USB, QR, or support reports.
-- The owner moves only the 128-bit one-time code directly from the approval UI on the current laptop into this laptop's masked prompt. It expires after five minutes and allows at most five failed attempts. No relay channel or second person is required.
+- The owner moves only each 128-bit one-time code directly from the approval UI on the current laptop into this laptop's masked prompt. Each expires after five minutes and allows at most five failed attempts. No relay channel or second person is required.
 - Stop on an unresolved placeholder, unsupported OS/CPU, version/integrity mismatch, unexpected account/domain/origin/callback, non-HTTPS endpoint, request for private material, missing command surface, unexpected authority, or server health failure. Report only the bounded public blocker.
 
 Phase 1 — prerequisites
@@ -84,12 +89,8 @@ Phase 2 — verify and install
 
    agentnet --version
    agentnet join guided --help
-   agentnet authority inventory --help
-   agentnet message send --help
-   agentnet message inbox --help
-   agentnet message acknowledge --help
 
-5. Continue only if the version is <AGENTNET_VERSION> and every required command/flag exists. Stop if guided join requests a manual challenge, approval receipt, key file, or private artifact transfer.
+5. Continue only if the version is <AGENTNET_VERSION> and the guided-join command/flags exist. Stop if guided join requests a manual challenge, approval receipt, key file, or private artifact transfer.
 
 Phase 3 — guided identity enrollment
 1. Run exactly:
@@ -107,53 +108,61 @@ Phase 3 — guided identity enrollment
    - authority_granted false
    - first_message_status first_message_blocked_explicit_authority_required
 
-Phase 4 — separate server-side C0 authority
-1. Do not report or relay principal/harness IDs. The sender/server operator obtains the exact identifiers from authenticated Core enrollment state, never from the human or this public report.
-2. Wait while the preapproved server-side administrator issues these three grants individually through AgentNet's signed, policy-revision-fenced, audited entitlement path:
-   - message.send on direct
-   - mailbox.read on this laptop's harness
-   - mailbox.acknowledge on this laptop's harness
-   Three separate issuance records are expected; do not describe them as one atomic batch. Failure of any issuance leaves messaging blocked until the administrator verifies and completes exactly the missing grant without broadening scope.
-3. Poll only with:
+Phase 4 — selected-mode boundary and optional bounded C0 round trip
+1. Do not report or relay principal/harness IDs. They remain inside authenticated Core state.
+2. For mode `identity_only`, do not run any bootstrap-plan, C0, message, inbox, acknowledgement, authority inventory, or entitlement command. Continue directly to Phase 5 with `first_message_blocked_explicit_authority_required`.
+3. For mode `c0_pilot` only, verify the installed release exposes exactly:
 
-   agentnet authority inventory --identity ".agentnet/identity.json"
+   agentnet bootstrap-plan begin --help
+   agentnet bootstrap-plan status --help
+   agentnet bootstrap-plan complete --help
+   agentnet c0-pilot start --help
+   agentnet c0-pilot status --help
+   agentnet c0-pilot complete --help
 
-4. Continue only when inventory proves exactly those current grants and no broader authority. Otherwise report `waiting_for_explicit_authority`; never invent success or ask the human to copy identifiers.
+   Stop at `first_message_blocked_explicit_authority_required` if any surface is absent or accepts a plan, peer, direction, payload, event, acknowledgement, digest, receipt, entitlement, or use-count selector.
+4. Begin the fixed plan using only local owner-protected state:
 
-Phase 5 — harmless C0 round trip
-1. Using your own file-writing capability, not a shell-quoting trick, create `agentnet-c0-test-message.json` containing exactly:
+   agentnet bootstrap-plan begin --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-   {"text": "<C0_TEST_MESSAGE>"}
+5. Request human action 6. The owner opens only the stable public approval page already shown by AgentNet, verifies the exact fixed C0 summary and expiry, then WebAuthn-approves it. Never expose or relay the approval URL, request ID, digest, receipt, or harness IDs.
+6. Poll the same state safely:
 
-2. Verify one object and one text field only. Send:
+   agentnet bootstrap-plan status --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-   agentnet message send --identity ".agentnet/identity.json" --recipient "<TEST_RECIPIENT>" --classification C0 --idempotency-key "<C0_IDEMPOTENCY_KEY>" --payload "agentnet-c0-test-message.json"
+   Continue only for `approval_ready` plus `enter_claim_code_in_masked_local_tty`. `rejected`, `canceled`, `expired`, or `invalidated` is terminal.
+7. Run:
 
-3. Treat signed submission, durable custody, recipient acknowledgement, reply, retrieval, and local acknowledgement as separate facts. Transport success is not completion.
-4. Read mailbox pages with:
+   agentnet bootstrap-plan complete --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-   agentnet message inbox --identity ".agentnet/identity.json" --after 0 --limit 50
+   Request human action 7 only at its masked prompt. Verify output is `prepared_unusable`, `authority_granted: false`, and `communication_usable: false`.
+8. Start the fixed proof:
 
-   Continue only with the greatest returned cursor when another page is needed.
-5. When the exact reply is durably stored locally, use its locally returned event ID and envelope digest:
+   agentnet c0-pilot start --identity ".agentnet/identity.json"
+   agentnet c0-pilot status --identity ".agentnet/identity.json"
 
-   agentnet message acknowledge "[[EVENT_ID_FROM_LOCAL_INBOX]]" --envelope-digest "[[ENVELOPE_DIGEST_FROM_LOCAL_INBOX]]" --identity ".agentnet/identity.json"
+   `waiting_owner` is resumable. Poll status with bounded delay until `waiting_fresh`; do not inspect a generic inbox or contact the owner responder directly. `expired` or `invalidated` is terminal.
+9. Only at `waiting_fresh`, run:
 
-6. If reply is absent, report waiting. Never expose payload, identity, receipt, or claim-code data.
+   agentnet c0-pilot complete --identity ".agentnet/identity.json"
 
-Phase 6 — recovery and final report
+   Success requires exactly `COMPLETED_C0_ROUND_TRIP`. Never infer success from request/reply transport acceptance, prose, ACK, status echo, or partial facts. AgentNet must already have revoked exactly the five communication powers.
+10. Do not run `agentnet admin entitlement issue`, the legacy founder ceremony, authority inventory, generic message send, inbox, or acknowledgement commands for this packet.
+
+Phase 5 — recovery and final report
 - Apply this local-state policy: <RETENTION_ABORT_POLICY>
-- Duplicate paste, restart, timeout, browser cancellation, code expiry, and response loss must resume the same state without a second identity or duplicate message.
+- Duplicate paste, restart, timeout, browser cancellation, code expiry, and response loss must resume the same guided-join state and, for mode `c0_pilot`, the same bootstrap-plan/C0 attempt state without a second identity or duplicate event.
 - Return only:
 
-  AgentNet blank-laptop test
+  AgentNet blank-laptop onboarding
+  mode: <ONBOARDING_MODE>
   human: <AUTHORIZED_HUMAN>
   laptop: <BLANK_LAPTOP_DISPLAY_NAME>
   domain: <AGENTNET_DOMAIN>
   package: <NPM_PACKAGE>@<AGENTNET_VERSION>
   identity: enrolled_identity_only | blocked | aborted
-  messaging: waiting_for_explicit_authority | completed_c0_round_trip | blocked | aborted
+  messaging: first_message_blocked_explicit_authority_required | COMPLETED_C0_ROUND_TRIP | waiting_owner | waiting_fresh | expired | invalidated | blocked
   public_blocker: none | <short public reason>
 
-Do not include the claim code, principal/harness IDs, secrets, private state, paths, screenshots, or raw output.
+Do not include any claim code, principal/harness IDs, secrets, private state, paths, screenshots, raw output, event IDs, envelope digests, receipts, or payloads.
 ```

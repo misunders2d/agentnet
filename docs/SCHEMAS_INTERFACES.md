@@ -61,16 +61,16 @@ unique approvers. Configured purposes must collectively cover all six mandatory
 approval consumers, and every approver must cover enrollment. Signer private
 keys remain file references; load verifies each key's configured thumbprint.
 
-The approval SQLite catalog is version 3 and is checked on every open against
+The approval SQLite catalog is version 4 and is checked on every open against
 both exact `sqlite_master` objects, stored catalog SHA-256, and immutable
-migration names/checksums. The default
-self-hosted profile may run this service on the existing Core server under a
-distinct OS identity, credential, storage root, and loopback listener, while
-retaining `independent_boundary_proven=false`. Separate administration is the
-optional high-assurance profile. Existing exact v1 or v2 stores upgrade under `BEGIN IMMEDIATE` only after
-source metadata/catalog and applicable migration-history verification. The
-atomic chain is v1→v2→v3 or v2→v3; failed or conflicting migration rolls back.
-It contains:
+migration names/checksums. The default self-hosted profile may run this service
+on the existing Core server under a distinct OS identity, credential, storage
+root, and loopback listener, while retaining
+`independent_boundary_proven=false`. Separate administration is the optional
+high-assurance profile. Existing exact v1, v2, or v3 stores upgrade under
+`BEGIN IMMEDIATE` only after source metadata/catalog and applicable
+migration-history verification. The atomic chain ends at v4; failed or
+conflicting migration rolls back. It contains:
 
 - `approval_webauthn_credentials`: exact approver/domain/user handle, public key,
   sign count, device/back-up metadata, and active/revoked lifecycle;
@@ -78,12 +78,21 @@ It contains:
   challenge, bounded attempts, expiry, and consumption;
 - `approval_requests`: approver/domain/purpose, encrypted canonical transaction,
   exact digest, encrypted challenge, state, active fingerprint, attempts,
-  delivery mode, approval-host-only encrypted browser capability, and expiry;
+  delivery mode, approval-host-only encrypted browser capability, exact pending
+  expiry, cumulative claim-code failure/rotation budgets, and the exact owner
+  browser session bound to an assertion challenge;
 - `approval_request_idempotency`: exact Core request key/digest binding;
 - `approval_claim_codes`: request-bound claim-code hash, five-attempt bound,
   expiry, and exact retrieval-digest retry binding;
 - `approval_issued_receipts`: one row per request, exact credential,
   authentication/issuance/expiry times, encrypted receipt, and receipt digest;
+- `approval_owner_bindings`, `approval_oidc_login_transactions`, and
+  `approval_browser_sessions`: pinned owner OIDC identity, callback claim/consume
+  lifecycle, hashed browser sessions, encrypted CSRF state, rotation/revocation,
+  and exact RP/origin/verifier bindings;
+- `approval_registration_budgets` and `approval_registration_ceremonies`:
+  owner-wide cumulative attempt/rotation limits and isolated per-tab WebAuthn
+  registration state;
 - `approval_store_migrations`: exact ordered approval-store migration names and checksums;
 - `approval_internal_broker_replay`: derived key identity, nonce SHA-256, exact
   request bindings, issue/expiry, and committed consumption time; never the raw
@@ -96,17 +105,25 @@ SQLite uses WAL, `synchronous=FULL`, foreign keys, bounded busy timeout, and
 purpose-specific AAD. Expiry cleanup commits before stale-request denial so
 expiration and audit evidence survive the failed request.
 
-Browser/API routes are isolated from core routes:
+Browser/API routes are isolated from Core routes and selected by exact profile.
+Stable owner-OIDC profiles mount only stable routes; explicit lab profiles mount
+only legacy capability routes. The three internal broker routes mount only when
+both the runtime credential and stable owner-OIDC session service exist; a
+fragment-based legacy profile gets no broker surface.
 
 | Route | Input/effect |
 |---|---|
-| `GET /approval` / `GET /approval.js` | no-store CSP-constrained UI; capability read from fragment then removed |
-| `POST /v1/approval/registration/options` | one bounded token; rotates encrypted challenge and returns UV-required creation options |
-| `POST /v1/approval/registration/verify` | exact token and WebAuthn credential; stores verified credential or commits generic denial |
-| `POST /v1/approval/requests/options` | exact token; returns exact transaction display plus UV-required assertion options |
-| `POST /v1/approval/requests/verify` | literal `approved=true` plus assertion; direct mode returns stored receipt, Core mode returns only a human claim code |
-| `POST /v1/approval/requests/reject` | exact token; terminal human rejection, no receipt |
-| `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; exact idempotent Core request; never returns approval URL |
+| `GET /approval` / `GET /approval.js` | no-store CSP-constrained UI; stable mode uses authenticated owner session, lab mode reads then removes fragment capability |
+| `GET /v1/approval/owner/session` | stable preauth/session state; preauth cookie is Secure/HttpOnly/SameSite=Lax for the cross-site OIDC callback, while authenticated session and CSRF cookies remain SameSite=Strict |
+| `POST /v1/approval/owner/oidc/start` / `GET .../callback` | exact preauth+CSRF+PKCE/state/nonce login; callback atomically claims then consumes one transaction and rotates to a pinned owner session |
+| `POST /v1/approval/owner/registration/begin` / `.../complete` | session-bound, isolated WebAuthn UV registration with cumulative owner budgets |
+| `GET /v1/approval/owner/requests` | exact owner/domain pending and approved-unretrieved requests; no capability, receipt, transaction, or claim code |
+| `POST /v1/approval/owner/requests/options` | exact owner session/request selection; server resolves encrypted capability and returns a purpose-specific bounded summary plus session-bound assertion options |
+| `POST /v1/approval/owner/requests/complete` / `.../reject` | exact session+CSRF request action; completion requires assertion challenge bound to that active session |
+| `POST /v1/approval/owner/requests/regenerate-code` | rotates only a current, unretrieved, nonterminal code within cumulative limits and receipt expiry |
+| `POST /v1/approval/registration/options` / `.../verify` | lab-only fragment registration flow |
+| `POST /v1/approval/requests/options` / `.../verify` / `.../reject` | lab-only exact fragment request flow |
+| `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; exact idempotent Core request with challenge-bound expiry; never returns approval URL |
 | `POST /v1/approval/internal/requests/status` | runtime Bearer plus signed one-use broker proof; request/digest status |
 | `POST /v1/approval/internal/receipts/retrieve` | runtime Bearer plus signed one-use broker proof and exact claim code/domain/purpose/digest binding; retryable receipt retrieval, not claim-code consumption |
 
@@ -169,10 +186,36 @@ disabled, serializes each internal body once as canonical JSON, creates a fresh
 broker proof per attempt, and rejects duplicate-key, non-object, oversized, or
 wrong-status response JSON.
 
-Schema migration 3 adds `oidc_enrollment_continuations`. It stores only a
+Core schema migration 3 adds `oidc_enrollment_continuations`. It stores only a
 SHA-256 continuation hash, bounded poll state, encrypted callback challenge,
 exact approval request ID/digest/expiry, completion request digest, and encrypted
-completion response. The public routes are:
+completion response. Core migration 4 adds the bounded C0 bootstrap-plan
+contract: `bootstrap_grant_plans`, `bootstrap_grant_plan_items`,
+`c0_plan_guards`, `c0_plan_guard_entitlements`, `c0_pilot_attempts`, and
+`c0_pilot_facts`. The plan binds one exact principal, two distinct enrolled
+harnesses and credential epochs, policy/revocation epochs, one-use profile,
+expiry, idempotency digest, and encrypted committed result. Its ten deterministic
+items are exactly five communication entitlements plus five entitlement-specific
+revoke powers; plan and guard state commits all ten or none.
+
+Persisted guard state is `pending | active | revoked | expired | invalidated`.
+Successful exact cleanup transitions `active` to `revoked`; identity-set drift
+terminalizes it as `invalidated` and fails an active attempt. Neither terminal
+state can return to `pending` or `active`. Persisted attempt state is `active |
+evidence_complete | communication_revoked | failed | expired`;
+`evidence_complete` exists only inside the final atomic transaction before the
+same transaction records exact cleanup and `communication_revoked`. `c0_pilot_facts` permits exactly:
+`request_durable_custody`, `request_retrieved`,
+`request_recipient_acknowledged`, `reply_sent`, `reply_durable_custody`,
+`reply_retrieved`, and `reply_final_acknowledged`. Each row binds its typed
+issuer kind, optional exact issuer harness, event/receipt/envelope evidence, and
+canonical evidence JSON. Completion also revalidates the authoritative event and
+receipt rows; fact rows alone are not a completion oracle. The only public
+result fields are schema plus one sanitized status:
+`prepared_unusable | waiting_owner | waiting_fresh | expired | invalidated |
+COMPLETED_C0_ROUND_TRIP`.
+
+The guided-enrollment public routes are:
 
 | Route | Input/effect |
 |---|---|
@@ -180,6 +223,22 @@ completion response. The public routes are:
 | `GET /v1/enrollment/oidc/callback` | exact state/code; stores challenge atomically and returns safe HTML unless explicit JSON compatibility is requested |
 | `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling and Core-side approval staging |
 | `POST /v1/enrollment/oidc/complete` | continuation, human claim code, and candidate PoP; Core retrieves receipt and atomically consumes enrollment challenge |
+
+The signed selector-free C0 routes are:
+
+| Route | Exact request/effect |
+|---|---|
+| `POST /v1/c0-pilot/start` | body is only `agentnet.c0-pilot.start.v1`; exact fresh actor starts or reconstructs the fixed request phase |
+| `POST /v1/c0-pilot/respond` | body is only `agentnet.c0-pilot.respond.v1`; exact owner actor performs the no-model request ACK/fixed reply phase |
+| `POST /v1/c0-pilot/complete` | body is only `agentnet.c0-pilot.complete.v1`; exact fresh actor verifies reply ACK plus seven facts and atomically cleans up five communication powers |
+| `POST /v1/c0-pilot/status` | body is only `agentnet.c0-pilot.status.v1`; either exact planned actor receives one sanitized stage after current-binding checks |
+
+Bodies are canonical JSON with duplicate keys, unknown fields, non-finite values,
+and caller selectors rejected. Every response is non-cacheable. Generic integrity
+conflicts are non-retryable; only typed transaction races return retryable 409.
+CLI exposes only `agentnet c0-pilot start|status|complete`; the owner side runs
+through `agentnet supervisor-run --c0-pilot-responder` and the internal respond
+route. Neither surface prints protected identifiers or evidence.
 
 Receipt bytes never appear in candidate responses. Core reserves an exact
 completion digest only after PoP and claim-code retrieval succeed. Exact retry
@@ -275,11 +334,13 @@ Schema migration 2 adds `task_payload_releases`, one row per
 `supervisor_executions`. It binds release request and authorization digests,
 local queue, TaskGrant and policy-decision IDs, intent/payload/envelope digests,
 policy/credential/domain epochs, authorization expiry, release time, and one
-unique receipt ID. Migration 3 is the guided-enrollment continuation table
-described above. SQLite permits only the exact N/N-1 v2→v3 upgrade in one
-transaction; PostgreSQL applies the same contiguous checksum-bound catalog.
-Unknown, future, prototype, altered, partial, noncontiguous, or v1-at-v3 state
-fails closed. Immutable migrations 1 and 2 remain unchanged.
+unique receipt ID. Migration 3 is the guided-enrollment continuation table described above;
+migration 4 is the bounded C0 bootstrap-plan contract. SQLite permits only the
+exact N/N-1 v3→v4 Core upgrade in one transaction; PostgreSQL requires the same
+contiguous checksums plus an exact live table/column/default/constraint/index
+catalog before v3 migration, after migration, and on v4 open. Unknown, future, prototype, altered, partial,
+noncontiguous, or unsupported pre-v3 Core state fails closed. Immutable
+migrations 1 through 3 remain unchanged.
 
 A successful nonduplicate response is HTTP 201; exact retry is HTTP 200.
 Successful responses are `Cache-Control: no-store` and `Pragma: no-cache`.
@@ -384,18 +445,21 @@ precede backfill/verification and contraction. Revocation/security state never
 rolls back. Unsupported events remain queued or receive a typed rejection;
 intermediaries never strip unknown signed fields.
 
-AgentNet's clean first-release storage schema is version 1 and already includes
-the response-obligation tables. SQLite and PostgreSQL initialize the same
-complete schema from the single checksum-bound baseline. The relationship governance and
-policy-exception tables are part of the first schema, not a retrofit. Startup
-fails closed on a missing or altered migration, table, index,
-trigger/constraint, or unsupported version.
+AgentNet's immutable first-release baseline is migration 1 and already includes
+the response-obligation, relationship-governance, and policy-exception tables.
+The current Core schema is v4: migration 2 adds protected task-payload release,
+migration 3 adds guided OIDC enrollment continuation, and migration 4 adds the
+bounded C0 bootstrap-plan contract. Fresh SQLite and PostgreSQL stores initialize
+the same complete v4 catalog. Startup fails closed on a missing or altered
+migration, table, index, trigger/constraint, noncontiguous history, future
+version, or unsupported older version.
 
 No pre-release or differently named database is accepted as an authority
 source, and no unilateral relationship can be converted into consent. Import
-requires a reviewed non-authority export into a fresh v1 store followed by fresh
-exact bilateral approval. Rollback restores only an exact verified v1 backup;
-it cannot infer, preserve, or reactivate authority from unsupported bytes.
+requires a reviewed non-authority export into a fresh current store followed by
+fresh exact bilateral approval. Rollback may restore only an exact verified,
+current-compatible backup; it cannot downgrade schema metadata or infer,
+preserve, or reactivate authority from unsupported bytes.
 
 ## Provenance and conflict interfaces
 

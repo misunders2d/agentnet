@@ -10,6 +10,7 @@ from agentnet.components.registry import BASELINE_COMPONENTS
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
+from agentnet.http_api import create_app
 from agentnet.operations.config import (
     ApprovalServiceClientConfig,
     BackupSealKeyConfig,
@@ -182,7 +183,7 @@ def _confidential_oidc_config(
                 public_key_pem=approver_key.public_pem,
                 allowed_purposes=frozenset(
                     {
-                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.bootstrap_plan.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
@@ -220,7 +221,8 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
     monkeypatch,
 ) -> None:
     approval = ApprovalServiceClientConfig(
-        origin="https://approval.example",
+        origin="https://approval-internal.example",
+        public_origin="https://approval.example",
         service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
         approver_principal_id="security-owner",
     )
@@ -238,7 +240,8 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
     )
     exported = config.redacted_export()
     assert exported["oidc_enrollment"]["approval_service"] == {
-        "origin": "https://approval.example",
+        "origin": "https://approval-internal.example",
+        "public_origin": "https://approval.example",
         "service_credential_env": "AGENTNET_TEST_APPROVAL_CORE_TOKEN",
         "approver_principal_id": "security-owner",
         "request_timeout_seconds": 5.0,
@@ -252,6 +255,15 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
     core = CommunicationCore(config, store)
     try:
         assert core.approval_service_client is not None
+        assert core.bootstrap_plan_service is not None
+        assert core.bootstrap_plan_service.public_approval_url == "https://approval.example/approval"
+        paths = {route.path for route in create_app(core).routes}
+        assert {
+            "/v1/bootstrap-plan/begin",
+            "/v1/bootstrap-plan/status",
+            "/v1/bootstrap-plan/complete",
+        } <= paths
+        assert all(not path.startswith("/v1/authority-bootstrap") for path in paths)
         rendered = repr(core.approval_service_client) + json.dumps(
             config.redacted_export(), sort_keys=True
         )
@@ -268,6 +280,21 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
         with pytest.raises(ValidationError, match="approval service origin"):
             ApprovalServiceClientConfig(
                 origin=origin,
+                public_origin="https://approval.example",
+                service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+                approver_principal_id="security-owner",
+            )
+
+    for public_origin in (
+        "http://approval.example",
+        "https://user@approval.example",
+        "https://approval.example/path",
+        "https://APPROVAL.example",
+    ):
+        with pytest.raises(ValidationError, match="public approval origin"):
+            ApprovalServiceClientConfig(
+                origin="https://approval-internal.example",
+                public_origin=public_origin,
                 service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
                 approver_principal_id="security-owner",
             )
@@ -345,7 +372,7 @@ def test_same_ordinary_server_can_bootstrap_only_through_exact_oidc_and_independ
                 public_key_pem=approver_key.public_pem,
                 allowed_purposes=frozenset(
                     {
-                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.bootstrap_plan.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
@@ -442,7 +469,7 @@ def test_private_oidc_config_requires_explicit_canonical_network_origin_and_jwk_
                 public_key_pem=approver_key.public_pem,
                 allowed_purposes=frozenset(
                     {
-                        "authorization.entitlement.bootstrap.approve",
+                        "authorization.bootstrap_plan.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",

@@ -7,6 +7,7 @@ import json
 import ssl
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -414,16 +415,23 @@ def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
     )
 
     class ApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
+
+        def __init__(self) -> None:
+            self.requested_expires_at: int | None = None
+
         def create_request(self, **kwargs):
+            self.requested_expires_at = kwargs["request_expires_at"]
             return {
                 "request_id": "approval-request-guided-0001",
                 "state": "pending",
                 "transaction_digest": kwargs["transaction_digest"],
-                "expires_at": oidc_stack.clock() + 60,
+                "expires_at": kwargs["request_expires_at"],
                 "duplicate": False,
             }
 
-    oidc_stack.coordinator.approval_client = ApprovalClient()
+    approval_client = ApprovalClient()
+    oidc_stack.coordinator.approval_client = approval_client
     oidc_stack.clock.value += 4
     ready = oidc_stack.coordinator.poll_continuation(
         transaction_id=authorization.transaction_id,
@@ -433,6 +441,40 @@ def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
     assert ready.challenge_id == challenge.challenge_id
     assert ready.nonce == challenge.nonce
     assert base64.b64decode(ready.canonical_transaction_b64 or "") == challenge.canonical_transaction
+    assert ready.approval_url == "https://approval.corp.example/approval"
+    assert approval_client.requested_expires_at == challenge.expires_at
+    assert ready.expires_at == challenge.expires_at
+
+
+def test_same_oidc_principal_enrolls_two_exact_sibling_harnesses_identity_only(
+    oidc_stack: OIDCStack,
+) -> None:
+    owner_key = P256KeyPair.generate()
+    owner_authorization = oidc_stack.begin(owner_key, name="Owner laptop")
+    owner_challenge = oidc_stack.coordinator.complete_authorization(
+        state=owner_authorization.state,
+        code="code-owner-laptop",
+    )
+    owner = oidc_stack.complete_binding(owner_key, owner_challenge)
+
+    oidc_stack.clock.value += 1
+    fresh_key = P256KeyPair.generate()
+    fresh_authorization = oidc_stack.begin(fresh_key, name="Fresh laptop")
+    fresh_challenge = oidc_stack.coordinator.complete_authorization(
+        state=fresh_authorization.state,
+        code="code-fresh-laptop",
+    )
+    fresh = oidc_stack.complete_binding(fresh_key, fresh_challenge)
+
+    assert owner.principal_id == fresh.principal_id
+    assert owner.harness_id != fresh.harness_id
+    assert owner.credential_id != fresh.credential_id
+    assert owner.key_id == owner_key.thumbprint
+    assert fresh.key_id == fresh_key.thumbprint
+    assert owner.credential_epoch == fresh.credential_epoch == 1
+    assert oidc_stack.store.fetch_one("SELECT COUNT(*) AS n FROM principals")["n"] == 1
+    assert oidc_stack.store.fetch_one("SELECT COUNT(*) AS n FROM harnesses")["n"] == 2
+    assert oidc_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 0
 
 
 def test_guided_completion_brokers_receipt_and_recovers_response_loss(
@@ -448,6 +490,7 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
     claim_code = "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
 
     class ApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
         retrievals = 0
         available = True
 
@@ -456,7 +499,7 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
                 "request_id": "approval-request-guided-0002",
                 "state": "pending",
                 "transaction_digest": kwargs["transaction_digest"],
-                "expires_at": oidc_stack.clock() + 60,
+                "expires_at": kwargs["request_expires_at"],
                 "duplicate": False,
             }
 
@@ -573,6 +616,7 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
     correct_code = "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
 
     class ApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
         retrievals = 0
 
         def create_request(self, **kwargs):
@@ -580,7 +624,7 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
                 "request_id": "approval-request-guided-0003",
                 "state": "pending",
                 "transaction_digest": kwargs["transaction_digest"],
-                "expires_at": oidc_stack.clock() + 60,
+                "expires_at": kwargs["request_expires_at"],
                 "duplicate": False,
             }
 

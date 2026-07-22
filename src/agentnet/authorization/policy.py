@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentnet.authorization.bootstrap_plan import C0_REQUIRED_FACTS
 from agentnet.authorization.decision import AuthorizationDecision, DecisionRecorder
 from agentnet.authorization.evidence import (
     IssuanceAuthority,
@@ -127,6 +129,24 @@ class AuthorizationRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     eligibility: DenyOnlyEligibility = Field(default_factory=DenyOnlyEligibility)
     grant_use: GrantUse | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class C0GuardedOperation:
+    """Core-created exact context for one S5 operation.
+
+    Generic request models cannot carry this type.  Only the C0 service calls
+    the internal transaction method that consumes it.
+    """
+
+    attempt_id: str
+    operation_scope: str
+    peer_harness_id: str | None
+    classification: Classification
+    payload_digest: str | None = None
+    event_id: str | None = None
+    envelope_digest: str | None = None
+    causal_parent_event_id: str | None = None
 
 
 def validate_actor_state(
@@ -474,10 +494,15 @@ class PolicyEngine:
     ) -> tuple[str | None, str]:
         rows = connection.execute(
             """
-            SELECT * FROM entitlements
-             WHERE domain_id=? AND principal_id=? AND action=?
-               AND resource_pattern IN (?, '*')
-             ORDER BY CASE WHEN resource_pattern=? THEN 0 ELSE 1 END, entitlement_id
+            SELECT e.* FROM entitlements AS e
+             WHERE e.domain_id=? AND e.principal_id=? AND e.action=?
+               AND e.resource_pattern IN (?, '*')
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM bootstrap_grant_plan_items AS i
+                    WHERE i.entitlement_id=e.entitlement_id
+               )
+             ORDER BY CASE WHEN e.resource_pattern=? THEN 0 ELSE 1 END, e.entitlement_id
             """,
             (domain_id, principal_id, action, resource, resource),
         ).fetchall()
@@ -494,6 +519,367 @@ class PolicyEngine:
         if any(int(row["revision"]) != revision for row in rows):
             return None, "stale_positive_entitlement"
         return None, "no_current_positive_entitlement"
+
+    def _record_c0_decision(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        actor: VerifiedActor,
+        action: str,
+        resource: str,
+        policy_revision: int,
+        context: C0GuardedOperation | dict[str, Any],
+        entitlement_id: str | None,
+        allowed: bool,
+        reason: str,
+        when: datetime,
+    ) -> AuthorizationDecision:
+        value = (
+            {
+                "attempt_id": context.attempt_id,
+                "operation_scope": context.operation_scope,
+                "peer_harness_id": context.peer_harness_id,
+                "classification": context.classification.value,
+                "payload_digest": context.payload_digest,
+                "event_id": context.event_id,
+                "envelope_digest": context.envelope_digest,
+                "causal_parent_event_id": context.causal_parent_event_id,
+            }
+            if isinstance(context, C0GuardedOperation)
+            else context
+        )
+        return self.recorder.record(
+            connection,
+            AuthorizationDecision(
+                occurred_at=when,
+                actor=actor,
+                action=action,
+                resource={"id": resource},
+                context={
+                    "c0_guard": value,
+                    "entitlement_id": entitlement_id,
+                    "positive_authority_id": actor.positive_authority_id,
+                },
+                allowed=allowed,
+                reason=reason,
+                policy_revision=policy_revision,
+            ),
+        )
+
+    def _require_c0_operation_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        actor: VerifiedActor,
+        action: str,
+        resource: str,
+        context: C0GuardedOperation,
+        when: datetime,
+    ) -> AuthorizationDecision:
+        """Authorize one exact S5 operation; generic policy never sees this path."""
+
+        now = epoch_seconds(when)
+        domain = connection.execute(
+            "SELECT policy_revision FROM domains WHERE domain_id=?",
+            (actor.domain_id,),
+        ).fetchone()
+        revision = 0 if domain is None else int(domain["policy_revision"])
+        denial, revision = validate_actor_state(
+            connection,
+            actor=actor,
+            expected_policy_revision=revision,
+            when=when,
+        )
+        if denial is None and self.attenuation_policy is not None:
+            denial = self.attenuation_policy.denial_reason(actor.binding_assurance)
+        row = None
+        if denial is None and actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS:
+            rows = connection.execute(
+                """SELECT e.entitlement_id,e.revision,e.domain_id AS entitlement_domain_id,
+                          e.principal_id AS entitlement_principal_id,
+                          e.expires_at AS entitlement_expires_at,e.revoked_at,
+                          i.item_kind,g.*,g.expires_at AS guard_expires_at,
+                          a.state AS attempt_state,b.operation_scope,
+                          b.actor_harness_id,b.peer_harness_id,
+                          d.revocation_epoch AS current_revocation_epoch
+                     FROM c0_pilot_attempts a
+                     JOIN c0_plan_guards g ON g.guard_id=a.guard_id
+                     JOIN domains d ON d.domain_id=g.domain_id
+                     JOIN c0_plan_guard_entitlements b ON b.guard_id=g.guard_id
+                     JOIN entitlements e ON e.entitlement_id=b.entitlement_id
+                     JOIN bootstrap_grant_plan_items i ON i.entitlement_id=e.entitlement_id
+                    WHERE a.attempt_id=? AND b.operation_scope=?
+                      AND e.action=? AND e.resource_pattern=?""",
+                (context.attempt_id, context.operation_scope, action, resource),
+            ).fetchall()
+            if len(rows) == 1:
+                row = rows[0]
+            else:
+                denial = "c0_guard_context_mismatch"
+        elif denial is None:
+            denial = "actor_kind_has_no_positive_authority"
+
+        expected: dict[str, tuple[str, str | None, str, str, str | None]] = {}
+        if row is not None:
+            expected = {
+                "fresh_to_owner_send": (
+                    str(row["fresh_harness_id"]), str(row["owner_harness_id"]),
+                    "message.send", "direct", str(row["request_payload_digest"]),
+                ),
+                "owner_to_fresh_send": (
+                    str(row["owner_harness_id"]), str(row["fresh_harness_id"]),
+                    "message.send", "direct", str(row["reply_payload_digest"]),
+                ),
+                "owner_mailbox_read": (
+                    str(row["owner_harness_id"]), None, "mailbox.read",
+                    str(row["owner_harness_id"]), None,
+                ),
+                "owner_mailbox_acknowledge": (
+                    str(row["owner_harness_id"]), None, "mailbox.acknowledge",
+                    str(row["owner_harness_id"]), None,
+                ),
+                "fresh_mailbox_read": (
+                    str(row["fresh_harness_id"]), None, "mailbox.read",
+                    str(row["fresh_harness_id"]), None,
+                ),
+                "fresh_mailbox_acknowledge": (
+                    str(row["fresh_harness_id"]), None, "mailbox.acknowledge",
+                    str(row["fresh_harness_id"]), None,
+                ),
+            }
+            binding = expected.get(context.operation_scope)
+            if binding is None:
+                denial = "c0_guard_context_mismatch"
+            else:
+                expected_actor, expected_peer, expected_action, expected_resource, expected_payload = binding
+                checks = (
+                    row["item_kind"] == "communication",
+                    row["entitlement_domain_id"] == actor.domain_id,
+                    row["entitlement_principal_id"] == actor.principal_id,
+                    row["state"] == "active",
+                    row["attempt_state"] == "active",
+                    row["domain_id"] == actor.domain_id,
+                    row["principal_id"] == actor.principal_id,
+                    row["actor_harness_id"] == expected_actor == actor.harness_id,
+                    row["peer_harness_id"] == expected_peer == context.peer_harness_id,
+                    action == expected_action,
+                    resource == expected_resource,
+                    context.classification is Classification.C0_PUBLIC,
+                    row["classification"] == "C0",
+                    int(row["policy_revision"]) == revision == int(row["revision"]),
+                    int(row["domain_revocation_epoch"]) == int(row["current_revocation_epoch"]),
+                    row["revoked_at"] is None,
+                    row["entitlement_expires_at"] is not None
+                    and int(row["entitlement_expires_at"]) > now,
+                    int(row["guard_expires_at"]) > now,
+                    actor.credential_epoch
+                    == (
+                        int(row["owner_credential_epoch"])
+                        if actor.harness_id == row["owner_harness_id"]
+                        else int(row["fresh_credential_epoch"])
+                    ),
+                    context.payload_digest == expected_payload,
+                )
+                if not all(checks):
+                    denial = "c0_guard_context_mismatch"
+                if denial is None and context.operation_scope.endswith("send"):
+                    direction = (
+                        "request"
+                        if context.operation_scope == "fresh_to_owner_send"
+                        else "reply"
+                    )
+                    expected_event_id = str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"agentnet:c0-event:{context.attempt_id}:{direction}",
+                        )
+                    )
+                    if context.event_id != expected_event_id:
+                        denial = "c0_guard_context_mismatch"
+                    remaining_column = (
+                        "request_remaining_uses"
+                        if context.operation_scope == "fresh_to_owner_send"
+                        else "reply_remaining_uses"
+                    )
+                    if int(row[remaining_column]) != 1:
+                        denial = "c0_guard_use_unavailable"
+                if denial is None and context.operation_scope == "owner_to_fresh_send":
+                    parent = connection.execute(
+                        """SELECT event_id FROM c0_pilot_facts
+                             WHERE attempt_id=? AND fact_kind='request_durable_custody'""",
+                        (context.attempt_id,),
+                    ).fetchone()
+                    if parent is None or context.causal_parent_event_id != parent["event_id"]:
+                        denial = "c0_guard_context_mismatch"
+                if denial is None and not context.operation_scope.endswith("send"):
+                    fact_kind = (
+                        "request_durable_custody"
+                        if context.operation_scope.startswith("owner_")
+                        else "reply_durable_custody"
+                    )
+                    fact = connection.execute(
+                        """SELECT event_id,envelope_digest FROM c0_pilot_facts
+                             WHERE attempt_id=? AND fact_kind=?""",
+                        (context.attempt_id, fact_kind),
+                    ).fetchone()
+                    if (
+                        fact is None
+                        or context.event_id != fact["event_id"]
+                        or context.envelope_digest != fact["envelope_digest"]
+                    ):
+                        denial = "c0_guard_context_mismatch"
+
+        allowed = denial is None and row is not None
+        decision = self._record_c0_decision(
+            connection,
+            actor=actor,
+            action=action,
+            resource=resource,
+            policy_revision=revision,
+            context=context,
+            entitlement_id=None if row is None else str(row["entitlement_id"]),
+            allowed=allowed,
+            reason=(
+                "authorized_by_exact_c0_guard_and_human_entitlement"
+                if allowed else denial or "c0_guard_context_mismatch"
+            ),
+            when=when,
+        )
+        if not decision.allowed:
+            raise AuthorizationError(decision.reason)
+        return decision
+
+    def _require_c0_cleanup_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        actor: VerifiedActor,
+        attempt_id: str,
+        when: datetime,
+    ) -> tuple[tuple[str, int], ...]:
+        """Authorize exact five-target cleanup after complete typed evidence."""
+
+        now = epoch_seconds(when)
+        domain = connection.execute(
+            "SELECT policy_revision FROM domains WHERE domain_id=?",
+            (actor.domain_id,),
+        ).fetchone()
+        revision = 0 if domain is None else int(domain["policy_revision"])
+        denial, revision = validate_actor_state(
+            connection,
+            actor=actor,
+            expected_policy_revision=revision,
+            when=when,
+        )
+        attempt = connection.execute(
+            """SELECT a.state AS attempt_state,g.*,d.revocation_epoch AS current_revocation_epoch
+                 FROM c0_pilot_attempts a JOIN c0_plan_guards g ON g.guard_id=a.guard_id
+                 JOIN domains d ON d.domain_id=g.domain_id
+                WHERE a.attempt_id=?""",
+            (attempt_id,),
+        ).fetchone()
+        if (
+            denial is not None
+            or attempt is None
+            or actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+            or actor.harness_id != attempt["fresh_harness_id"]
+            or actor.principal_id != attempt["principal_id"]
+            or attempt["attempt_state"] != "evidence_complete"
+            or attempt["state"] != "active"
+            or int(attempt["expires_at"]) <= now
+            or int(attempt["policy_revision"]) != revision
+            or int(attempt["domain_revocation_epoch"]) != int(attempt["current_revocation_epoch"])
+        ):
+            raise AuthorizationError(denial or "c0_cleanup_context_mismatch")
+        fact_rows = connection.execute(
+            "SELECT fact_kind FROM c0_pilot_facts WHERE attempt_id=?",
+            (attempt_id,),
+        ).fetchall()
+        if {str(row["fact_kind"]) for row in fact_rows} != set(C0_REQUIRED_FACTS):
+            raise AuthorizationError("c0_cleanup_evidence_incomplete")
+        rows = connection.execute(
+            """SELECT c.item_ordinal,c.entitlement_id AS target_entitlement_id,
+                      c.action AS target_action,c.resource_pattern AS target_resource,
+                      c.expires_at AS target_item_expires_at,
+                      te.action AS target_entitlement_action,
+                      te.resource_pattern AS target_entitlement_resource,
+                      te.domain_id AS target_domain_id,te.principal_id AS target_principal_id,
+                      te.expires_at AS target_entitlement_expires_at,
+                      te.revoked_at AS target_revoked_at,
+                      c.item_kind AS target_kind,r.entitlement_id AS revoke_entitlement_id,
+                      r.action AS revoke_action,r.resource_pattern AS revoke_resource,
+                      r.target_entitlement_id AS revoke_target_entitlement_id,
+                      r.expires_at AS revoke_item_expires_at,
+                      re.action AS revoke_entitlement_action,
+                      re.resource_pattern AS revoke_entitlement_resource,
+                      re.domain_id AS revoke_domain_id,re.principal_id AS revoke_principal_id,
+                      re.revoked_at AS revoke_revoked_at,
+                      re.expires_at AS revoke_expires_at,re.revision AS revoke_revision,
+                      te.revision AS target_revision
+                 FROM c0_pilot_attempts a
+                 JOIN bootstrap_grant_plan_items c ON c.plan_id=a.plan_id
+                 JOIN entitlements te ON te.entitlement_id=c.entitlement_id
+                 JOIN bootstrap_grant_plan_items r
+                   ON r.plan_id=c.plan_id AND r.item_ordinal=c.item_ordinal+5
+                 JOIN entitlements re ON re.entitlement_id=r.entitlement_id
+                WHERE a.attempt_id=? AND c.item_ordinal BETWEEN 1 AND 5
+                ORDER BY c.item_ordinal""",
+            (attempt_id,),
+        ).fetchall()
+        if len(rows) != 5:
+            raise AuthorizationError("c0_cleanup_context_mismatch")
+        targets: list[tuple[str, int]] = []
+        expected_targets = (
+            ("message.send", "direct"),
+            ("mailbox.read", str(attempt["owner_harness_id"])),
+            ("mailbox.acknowledge", str(attempt["owner_harness_id"])),
+            ("mailbox.read", str(attempt["fresh_harness_id"])),
+            ("mailbox.acknowledge", str(attempt["fresh_harness_id"])),
+        )
+        for row, expected_target in zip(rows, expected_targets, strict=True):
+            resource = f"entitlement:{row['target_entitlement_id']}"
+            valid = (
+                row["target_kind"] == "communication"
+                and (row["target_action"], row["target_resource"]) == expected_target
+                and row["target_entitlement_action"] == row["target_action"]
+                and row["target_entitlement_resource"] == row["target_resource"]
+                and row["target_domain_id"] == actor.domain_id
+                and row["target_principal_id"] == actor.principal_id
+                and row["revoke_action"] == "authorization.entitlement.revoke"
+                and row["revoke_resource"] == resource
+                and row["revoke_entitlement_action"] == row["revoke_action"]
+                and row["revoke_entitlement_resource"] == resource
+                and row["revoke_domain_id"] == actor.domain_id
+                and row["revoke_principal_id"] == actor.principal_id
+                and row["revoke_target_entitlement_id"] == row["target_entitlement_id"]
+                and row["revoke_revoked_at"] is None
+                and int(row["revoke_item_expires_at"]) == int(row["revoke_expires_at"])
+                and int(row["revoke_expires_at"]) > now
+                and int(row["revoke_revision"]) == revision
+                and row["target_revoked_at"] is None
+                and int(row["target_item_expires_at"])
+                == int(row["target_entitlement_expires_at"])
+                and int(row["target_entitlement_expires_at"]) > now
+                and int(row["target_revision"]) == revision
+            )
+            decision = self._record_c0_decision(
+                connection,
+                actor=actor,
+                action="authorization.entitlement.revoke",
+                resource=resource,
+                policy_revision=revision,
+                context={"attempt_id": attempt_id, "operation_scope": "exact_cleanup"},
+                entitlement_id=str(row["revoke_entitlement_id"]),
+                allowed=valid,
+                reason=("authorized_by_exact_c0_cleanup_entitlement" if valid else "c0_cleanup_context_mismatch"),
+                when=when,
+            )
+            if not decision.allowed:
+                raise AuthorizationError(decision.reason)
+            targets.append((str(row["target_entitlement_id"]), revision))
+        if len({target for target, _revision in targets}) != 5:
+            raise AuthorizationError("c0_cleanup_context_mismatch")
+        return tuple(targets)
 
     def _decide_in_transaction(
         self,

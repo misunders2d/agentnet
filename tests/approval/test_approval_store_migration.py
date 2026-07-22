@@ -11,6 +11,7 @@ import agentnet.approval.store as store_module
 from agentnet.approval.store import (
     APPROVAL_STORE_SCHEMA_V1,
     APPROVAL_STORE_SCHEMA_V2,
+    APPROVAL_STORE_SCHEMA_V3,
     APPROVAL_STORE_SCHEMA_VERSION,
     ApprovalStore,
     expected_catalog,
@@ -96,6 +97,47 @@ def _v2_database(tmp_path: Path) -> Path:
     return path
 
 
+def _v3_database(tmp_path: Path) -> Path:
+    root = tmp_path / "approval-v3"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    path = root / "approval.sqlite3"
+    path.touch(mode=0o600)
+    path.chmod(0o600)
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        connection.executescript("BEGIN IMMEDIATE;\n" + APPROVAL_STORE_SCHEMA_V3)
+        connection.executemany(
+            "INSERT INTO approval_store_meta(key,value) VALUES(?,?)",
+            (
+                ("schema_version", "3"),
+                ("schema_catalog_sha256", expected_catalog_digest(3)),
+            ),
+        )
+        connection.executemany(
+            """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
+               VALUES(?,?,?,?)""",
+            (
+                (
+                    2,
+                    store_module._APPROVAL_STORE_MIGRATION_V2_NAME,
+                    store_module._APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
+                    1_800_000_000,
+                ),
+                (
+                    3,
+                    store_module._APPROVAL_STORE_MIGRATION_V3_NAME,
+                    store_module._APPROVAL_STORE_MIGRATION_V3_CHECKSUM,
+                    1_800_000_001,
+                ),
+            ),
+        )
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+    return path
+
+
 def _metadata(path: Path) -> dict[str, str]:
     connection = sqlite3.connect(path)
     try:
@@ -109,7 +151,7 @@ def _metadata(path: Path) -> dict[str, str]:
         connection.close()
 
 
-def test_clean_initialize_creates_exact_v3_catalog(tmp_path: Path) -> None:
+def test_clean_initialize_creates_exact_v4_catalog(tmp_path: Path) -> None:
     path = _v1_database(tmp_path)
     path.unlink()
     path.touch(mode=0o600)
@@ -122,13 +164,21 @@ def test_clean_initialize_creates_exact_v3_catalog(tmp_path: Path) -> None:
             for row in store.fetch_all(
                 "SELECT version FROM approval_store_migrations ORDER BY version"
             )
-        ] == [2, 3]
+        ] == [2, 3, 4]
         assert store.fetch_one(
             "SELECT COUNT(*) AS n FROM approval_claim_codes"
         )["n"] == 0
         assert store.fetch_one(
             "SELECT COUNT(*) AS n FROM approval_internal_broker_replay"
         )["n"] == 0
+        for table in (
+            "approval_owner_bindings",
+            "approval_oidc_login_transactions",
+            "approval_browser_sessions",
+            "approval_registration_budgets",
+            "approval_registration_ceremonies",
+        ):
+            assert store.fetch_one(f"SELECT COUNT(*) AS n FROM {table}")["n"] == 0
     finally:
         store.close()
 
@@ -137,7 +187,7 @@ def test_v1_database_migrates_atomically_and_preserves_existing_request(tmp_path
     path = _v1_database(tmp_path, with_request=True)
     store = ApprovalStore(path, LocalEnvelopeCipher(b"r" * 32))
     try:
-        assert store.readiness()["schema_version"] == 3
+        assert store.readiness()["schema_version"] == 4
         row = store.fetch_one(
             "SELECT delivery_mode,capability_encrypted FROM approval_requests WHERE request_id=?",
             ("request-1",),
@@ -152,7 +202,7 @@ def test_v1_database_migrates_atomically_and_preserves_existing_request(tmp_path
             for row in store.fetch_all(
                 "SELECT version FROM approval_store_migrations ORDER BY version"
             )
-        ] == [2, 3]
+        ] == [2, 3, 4]
     finally:
         store.close()
 
@@ -204,7 +254,7 @@ def test_failed_v1_migration_rolls_back_every_schema_change(
     migrated.close()
 
 
-def test_concurrent_v1_open_converges_on_one_v3_catalog(tmp_path: Path) -> None:
+def test_concurrent_v1_open_converges_on_one_v4_catalog(tmp_path: Path) -> None:
     path = _v1_database(tmp_path)
 
     def open_and_check() -> int:
@@ -216,15 +266,15 @@ def test_concurrent_v1_open_converges_on_one_v3_catalog(tmp_path: Path) -> None:
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         versions = list(pool.map(lambda _index: open_and_check(), range(2)))
-    assert versions == [3, 3]
-    assert _metadata(path)["schema_version"] == "3"
+    assert versions == [4, 4]
+    assert _metadata(path)["schema_version"] == "4"
 
 
-def test_v2_database_migrates_atomically_to_v3(tmp_path: Path) -> None:
+def test_v2_database_migrates_atomically_to_v4(tmp_path: Path) -> None:
     path = _v2_database(tmp_path)
     store = ApprovalStore(path, LocalEnvelopeCipher(b"r" * 32))
     try:
-        assert store.readiness()["schema_version"] == 3
+        assert store.readiness()["schema_version"] == 4
         assert store.fetch_one(
             "SELECT COUNT(*) AS n FROM approval_internal_broker_replay"
         )["n"] == 0
@@ -233,9 +283,50 @@ def test_v2_database_migrates_atomically_to_v3(tmp_path: Path) -> None:
             for row in store.fetch_all(
                 "SELECT version FROM approval_store_migrations ORDER BY version"
             )
-        ] == [2, 3]
+        ] == [2, 3, 4]
     finally:
         store.close()
+
+
+def test_v3_database_migrates_atomically_to_v4(tmp_path: Path) -> None:
+    path = _v3_database(tmp_path)
+    store = ApprovalStore(path, LocalEnvelopeCipher(b"r" * 32))
+    try:
+        assert store.readiness()["schema_version"] == 4
+        assert [
+            int(row["version"])
+            for row in store.fetch_all(
+                "SELECT version FROM approval_store_migrations ORDER BY version"
+            )
+        ] == [2, 3, 4]
+        columns = {
+            str(row["name"])
+            for row in store.fetch_all("PRAGMA table_info(approval_requests)")
+        }
+        assert {"claim_code_failed_attempts_total", "claim_code_rotations"} <= columns
+    finally:
+        store.close()
+
+
+def test_failed_v3_migration_rolls_back_v4_schema_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _v3_database(tmp_path)
+    original = store_module._APPROVAL_STORE_MIGRATION_V4_STATEMENTS
+    monkeypatch.setattr(
+        store_module,
+        "_APPROVAL_STORE_MIGRATION_V4_STATEMENTS",
+        (original[0], "CREATE TABLE broken_migration("),
+    )
+    with pytest.raises(GateBlocked, match="migration failed"):
+        ApprovalStore(path, LocalEnvelopeCipher(b"r" * 32))
+    assert _metadata(path)["schema_version"] == "3"
+    connection = sqlite3.connect(path)
+    try:
+        assert store_module._catalog(connection) == expected_catalog(3)
+    finally:
+        connection.close()
 
 
 def test_failed_v2_migration_rolls_back_v3_schema_change(

@@ -115,6 +115,16 @@ destructive, restart, privilege-expanding, or high-risk scope. AgentNet resolves
 hostnames, callbacks, package integrity, and configuration metadata rather than
 asking the human for technical values.
 
+The ordinary C0 profile requires the bounded
+`authorization.bootstrap_plan.approve` purpose. It does not mount or advertise
+the legacy wildcard founder ceremony. Bootstrap-plan approval binds one exact
+server-resolved guided harness pair and one purpose-specific browser summary;
+the plan commit prepares only the exact five communication plus five matching
+revoke entitlements behind a `pending` guard. The dedicated signed C0 service is
+the only runtime path that may activate or consume them. Generic policy,
+messaging, mailbox, and administrative revocation paths deny all plan-issued
+entitlements.
+
 Under the dedicated approval-service OS identity, create an owner-only approver
 specification:
 
@@ -126,7 +136,7 @@ specification:
       "authority_kind": "human",
       "domain_id": "corp.example",
       "allowed_purposes": [
-        "authorization.entitlement.bootstrap.approve",
+        "authorization.bootstrap_plan.approve",
         "authorization.elevation.approve",
         "identity.credential.recover.approve",
         "identity.enrollment.approve",
@@ -150,6 +160,7 @@ agentnet approval provision \
   --rp-id approval.corp.example \
   --verifier-id approval.corp.example \
   --approvers /root/agentnet-approval-approvers.json \
+  --owner-oidc-config /root/agentnet-approval-owner-oidc.json \
   --internal-core-credential-env AGENTNET_APPROVAL_CORE_TOKEN
 agentnet approval status --config /etc/agentnet-approval/config.json
 ```
@@ -157,8 +168,8 @@ agentnet approval status --config /etc/agentnet-approval/config.json
 Core and Approval internal POSTs require both the runtime Bearer and the signed
 one-use broker proof introduced with ApprovalStore schema v3. Upgrade Core and
 Approval from the same immutable package together; there is deliberately no
-Bearer-only mixed-version compatibility mode. Approval migrates exact v1/v2
-stores atomically before startup, and any catalog/history/replay-store
+Bearer-only mixed-version compatibility mode. Approval migrates exact v1/v2/v3
+stores atomically to v4 before startup, and any catalog/history/replay-store
 uncertainty keeps internal routes denied. A transport retry creates a fresh
 broker nonce while retaining the original business idempotency key.
 
@@ -172,8 +183,7 @@ or browser capability into an agent host.
 credentialed HTTPS reverse-proxy role in front without changing the exact
 configured origin/RP ID; keep access logs free of bodies. The proxy may share
 the existing server in the default profile or use separate administration in
-the optional high-assurance profile. The one-time capability is in the
-URL fragment and is removed by browser JavaScript before API calls:
+the optional high-assurance profile:
 
 ```bash
 agentnet approval serve \
@@ -184,41 +194,53 @@ agentnet approval register-begin \
   --approver security-owner
 ```
 
-Open the registration URL on the owner's browser/device, outside the enrolling
-harness, and register a phishing-resistant authenticator with user verification. Then a
-host administrator creates one request from an owner-only canonical JSON
-transaction file:
+`register-begin` prints only the stable public `/approval` entrypoint. The owner
+opens that page, signs in with the exact preapproved OIDC account, and registers
+a phishing-resistant passkey with user verification. OIDC uses Authorization
+Code + PKCE/state/nonce. The service permanently pins the resulting owner
+binding, rotates server-side browser sessions, and binds each WebAuthn challenge
+to the exact active session plus configured RP ID, origin, and verifier ID. The
+preauth cookie is Secure, HttpOnly, `__Host-`, and `SameSite=Lax` so the browser
+can return from a cross-site IdP; authenticated session and CSRF cookies remain
+`SameSite=Strict`.
+Concurrent tabs retain independent OIDC state; a replacement session receives a
+fresh challenge and the old session fails closed.
 
-```bash
-agentnet approval request-create \
-  --config /etc/agentnet-approval/config.json \
-  --approver security-owner \
-  --purpose identity.enrollment.approve \
-  --transaction /root/exact-enrollment-transaction.json
-```
-
-The browser displays exact canonical JSON, purpose, domain, SHA-256 digest, and
-expiry before the explicit approval button invokes WebAuthn UV. Legacy manual
-requests return one existing-format signed receipt. Response-loss retry with the
-same capability returns those exact stored bytes while current and while the
-credential remains active; it never re-signs or extends expiry.
+In the ordinary owner-OIDC profile, only the signed internal Core broker may
+create approval requests. Stable browser APIs resolve encrypted request
+capabilities inside Approval after exact owner principal/domain/session checks;
+they never return a capability or receipt. The page shows a bounded human
+summary, invokes WebAuthn UV, and displays the short-lived one-time code. Code
+regeneration requires the current code to remain unexpired, unretrieved, and
+below per-code and cumulative limits; it cannot revive an expired code merely
+because the receipt remains current. The legacy `request-create` and
+fragment-capability browser flow remain available
+only in explicit lab profiles without owner OIDC; do not use that compatibility
+path for the ordinary onboarding journey.
 
 For product-brokered requests, configure only the runtime environment-variable
 **name** above; inject one high-entropy secret separately into approval service
 and Core runtimes. Never put its value in JSON, command arguments, logs, or
 support messages. Broker routes are absent when the reference is unset. Core
 can create/status an exact request and retrieve an already-issued receipt, but
-cannot approve or sign. Approval capability stays encrypted on approval host:
+cannot approve or sign. Approval capability stays encrypted on approval host. In a stable owner-OIDC
+profile, `pending` and `watch` emit only content-free counts; `watch --open`
+opens the public `/approval` page once when work appears. The browser lists and
+selects exact requests only after owner authentication. Neither command emits
+request IDs, purpose, digest, capability, canonical transaction, or receipt:
 
 ```bash
 agentnet approval pending --config /etc/agentnet-approval/config.json
 agentnet approval watch --config /etc/agentnet-approval/config.json --open
 # owner-operated headless POSIX host with a private, unrecorded controlling TTY
 agentnet approval watch --config /etc/agentnet-approval/config.json --open --browser terminal
-# or open one known local request without printing its URL
-agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID
-agentnet approval open --config /etc/agentnet-approval/config.json --request-id REQUEST_ID --browser terminal
 ```
+
+Explicit lab profiles without owner OIDC retain `request-create`, request IDs,
+`approval open --request-id`, and fragment-capability URLs for compatibility.
+Those commands are not part of ordinary onboarding. Stable profiles reject
+manual request creation and make `approval open --request-id` open only the
+public `/approval` page without resolving or printing the supplied request ID.
 
 After WebAuthn, Core mode shows only a 128-bit one-time claim code. It expires
 after five minutes and allows at most five failed attempts. When the owner is
@@ -337,34 +359,44 @@ manual ceremony.
 
 Fresh-laptop enrollment remains identity-only. A remote administrator must
 never request or copy the beneficiary identity file/private key merely to issue
-messaging authority. When the installed CLI exposes
-`--beneficiary-principal-id`, use the owner-approved principal ID and issue each
-exact entitlement independently through the same signed, audited administration
-path:
+messaging authority. The generic `agentnet admin entitlement issue` command and
+legacy founder ceremony are **not** an approved fallback for the ordinary C0
+pilot: they cannot bind the exact harness pair, C0 payloads, event lineage,
+mailbox ownership, use counts, and immediate five-entitlement cleanup required
+by `docs/ZERO_STATE_C0_PILOT.md`.
+
+The current repository candidate implements the fixed `BootstrapGrantPlan` and
+C0 service, but published `0.1.18` does not. Never issue a live packet merely
+from branch documentation: verify the installed release's actual CLI, package
+evidence, deployment, and C0 gate first. When those checks pass, the exact
+operator sequence is:
 
 ```bash
-agentnet admin entitlement issue \
-  --identity .agentnet/admin-identity.json \
-  --beneficiary-principal-id principal-fresh-laptop \
-  --action message.send \
-  --resource direct \
-  --policy-revision 1 \
-  --reason 'authorize isolated C0 direct-message test'
-agentnet admin entitlement issue \
-  --identity .agentnet/admin-identity.json \
-  --beneficiary-principal-id principal-fresh-laptop \
-  --action mailbox.read \
-  --resource harness-fresh-laptop \
-  --policy-revision 1 \
-  --reason 'authorize isolated C0 mailbox read'
-agentnet admin entitlement issue \
-  --identity .agentnet/admin-identity.json \
-  --beneficiary-principal-id principal-fresh-laptop \
-  --action mailbox.acknowledge \
-  --resource harness-fresh-laptop \
-  --policy-revision 1 \
-  --reason 'authorize isolated C0 mailbox acknowledgement'
+# Owner laptop: validate then run the dedicated no-model responder.
+agentnet supervisor-run --config agentnet-supervisor.json \
+  --c0-pilot-responder --check
+agentnet supervisor-run --config agentnet-supervisor.json \
+  --c0-pilot-responder
+
+# Fresh laptop, only after exact WebAuthn-approved plan commit.
+agentnet c0-pilot start --identity .agentnet/identity.json
+agentnet c0-pilot status --identity .agentnet/identity.json
+agentnet c0-pilot complete --identity .agentnet/identity.json
 ```
+
+No command accepts plan, peer, direction, payload, event, acknowledgement,
+digest, entitlement, or use-count selectors. Public output is schema plus one
+sanitized stage. `waiting_owner` means the request has local recipient custody;
+`waiting_fresh` means the owner retrieved/acknowledged the exact request and the
+fixed correlated reply has local recipient custody. Only
+`COMPLETED_C0_ROUND_TRIP` means all seven typed facts and exact five-power cleanup
+committed. `invalidated` is terminal identity-set drift, not a retry prompt.
+Transport ACK/prose/status alone never proves completion.
+
+Use no company or personal data. The responder invokes no model, semantic
+worker, task, file, effect, tool, or A2A subsystem. The proof remains
+same-principal, two-harness and `accepted_local`; it does not prove
+distinct-principal policy or production durability.
 
 The beneficiary-principal path never opens beneficiary private state. Core still
 rejects a missing, inactive, non-human, or cross-domain principal and stale
@@ -682,13 +714,17 @@ reconciliation evidence tracked by the release gates.
 AgentNet has no supported prototype/pre-release database format. Immutable
 migration 1 is the complete first-release schema and retains checksum
 `c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f`.
-Current unreleased source adds contiguous migration 2 only for durable protected
-payload-release receipts. Fresh SQLite creates schema v2. An existing SQLite
-store upgrades only when metadata, every migration record/checksum, and the
-entire v1 object catalog match exactly; the v1→v2 change commits atomically or
-rolls back without partial objects. PostgreSQL applies the same contiguous
-checksum-bound catalog. Unknown, missing, altered, prototype, noncontiguous,
-future, or unsupported older state fails closed before use.
+Current unreleased Core schema v4 adds durable protected payload-release
+receipts in migration 2, guided OIDC enrollment continuation in migration 3,
+and the bounded C0 bootstrap-plan contract in migration 4. Fresh SQLite and
+PostgreSQL stores create schema v4. An existing SQLite store upgrades only when
+metadata, every migration record/checksum, and the entire N/N-1 v3 object
+catalog match exactly; the v3→v4 change commits atomically or rolls back without
+partial objects. PostgreSQL verifies contiguous checksums and the complete live
+table, column type/null/default, constraint-definition, and non-constraint-index
+catalog before v3 migration, after migration, and on every v4 open.
+Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
+older state fails closed before use.
 
 Do not edit version metadata or infer authority from unilateral/prototype
 records. Transition from exploratory data requires reviewed export of

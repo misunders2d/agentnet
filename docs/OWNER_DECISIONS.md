@@ -53,10 +53,20 @@ usability and threat-model tradeoff:
 - AgentNet requires secure runtime injection but no named secret manager.
   Infisical and equivalent products are optional mechanisms, never onboarding
   prerequisites.
+- For the isolated same-principal C0 pilot only, the owner approved one
+  purpose-specific WebAuthn transaction with a one-hour ceiling. It may prepare
+  exactly five communication entitlements plus five entitlement-specific revoke
+  powers for the exact owner/fresh harness pair. The dedicated verifier must
+  immediately revoke the five communication powers after all seven facts commit;
+  identity-set drift permanently invalidates the guard. This bounded pilot
+  instruction is not general elevation, relationship, messaging-administration,
+  task, file, room, federation, A2A, server-agent, or wildcard authority.
 
 This decision does not approve production certification, the optional
 independent-administration tier, high-impact/break-glass elevation, company
-content, federation, C3, or unrelated PD/ORG decisions.
+content, federation, C3, or unrelated PD/ORG decisions. It also does not convert
+the repository candidate into O-tier policy evidence, authorize a live
+ceremony/deployment, or close PD-004/005/009.
 
 ## ORG-006 relationship lifecycle policy — unapproved
 
@@ -65,10 +75,11 @@ Proposals have zero authority; normal activation verifies exact current
 subordinate human/guest-owner consent; policy exceptions and administrative
 revocation require distinct exact signed actions; renewal, expiry, subject
 exit, and races are revision-fenced. Immutable first-release storage schema v1
-contains the bilateral authority model; current unreleased migration 2 adds only
-protected payload-release receipts and does not alter relationship authority.
-Unsupported pre-release stores are rejected and no unilateral edge is converted
-into consent.
+contains the bilateral authority model; current unreleased Core migrations 2
+through 4 add protected payload-release receipts, guided OIDC enrollment
+continuation, and the bounded C0 bootstrap-plan contract without altering or
+retrofitting relationship authority. Unsupported pre-release or pre-N/N-1
+stores are rejected and no unilateral edge is converted into consent.
 
 An accountable owner must still record:
 

@@ -87,6 +87,27 @@ class AgentNetSupervisorCoreClient:
             raise ValidationError("local supervisor result authorization is invalid")
         return value
 
+    @staticmethod
+    def _c0_result(value: Any) -> dict[str, str]:
+        allowed = {
+            "prepared_unusable", "waiting_owner", "waiting_fresh", "expired", "invalidated",
+            "COMPLETED_C0_ROUND_TRIP",
+        }
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema", "status"}
+            or value.get("schema") != "agentnet.c0-pilot.result.v1"
+            or value.get("status") not in allowed
+        ):
+            raise ValidationError("C0 pilot response schema is invalid")
+        return {"schema": str(value["schema"]), "status": str(value["status"])}
+
+    def c0_pilot_respond(self) -> dict[str, str]:
+        return self._c0_result(self._value(self.client.c0_pilot_respond()))
+
+    def c0_pilot_status(self) -> dict[str, str]:
+        return self._c0_result(self._value(self.client.c0_pilot_status()))
+
     def reconcile(self, *, after_cursor: int, limit: int) -> list[dict[str, Any]]:
         if after_cursor < 0 or not 1 <= limit <= 100:
             raise ValidationError("supervisor mailbox cursor or limit is invalid")

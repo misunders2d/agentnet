@@ -9,6 +9,7 @@ from agentnet.storage.a2a_schema import A2A_SCHEMA
 from agentnet.storage.artifact_lifecycle_schema import ARTIFACT_LIFECYCLE_SCHEMA
 from agentnet.storage.artifact_quota_schema import ARTIFACT_QUOTA_SCHEMA
 from agentnet.storage.authority_bootstrap_schema import AUTHORITY_BOOTSTRAP_SCHEMA
+from agentnet.storage.bootstrap_plan_schema import BOOTSTRAP_PLAN_SCHEMA
 from agentnet.storage.credential_recovery_schema import CREDENTIAL_RECOVERY_SCHEMA
 from agentnet.storage.effect_lifecycle_schema import EFFECT_LIFECYCLE_SCHEMA
 from agentnet.storage.guided_enrollment_schema import GUIDED_ENROLLMENT_SCHEMA
@@ -123,6 +124,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         3,
         "guided_oidc_enrollment_continuation",
         GUIDED_ENROLLMENT_SCHEMA.replace(" INTEGER", " BIGINT"),
+    ),
+    Migration(
+        4,
+        "bounded_c0_bootstrap_plan",
+        BOOTSTRAP_PLAN_SCHEMA.replace(" INTEGER", " BIGINT"),
     ),
 )
 

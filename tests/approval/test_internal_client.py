@@ -14,13 +14,14 @@ from agentnet.approval.internal_broker import (
     verify_internal_broker_proof,
 )
 from agentnet.approval.internal_client import ApprovalServiceClient
-from agentnet.errors import AuthenticationError
+from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.operations.config import ApprovalServiceClientConfig
 
 
 def _config() -> ApprovalServiceClientConfig:
     return ApprovalServiceClientConfig(
         origin="https://approval.corp.example",
+        public_origin="https://approval-public.corp.example",
         service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
         approver_principal_id="security-owner",
     )
@@ -53,24 +54,46 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
         proofs.append(proof)
         body = json.loads(request.content)
         observed.append((request.url.path, body))
+        transaction_digest = hashlib.sha256(b"{}").hexdigest()
         if request.url.path.endswith("/requests/status"):
-            return httpx.Response(200, json={"state": "issued"})
-        if request.url.path.endswith("/receipts/retrieve"):
             return httpx.Response(
                 200,
                 json={
-                    "receipt": {
-                        "schema": "agentnet.independent-approval.receipt.v1",
-                        "opaque": "signed",
-                    }
+                    "schema": "agentnet.approval.internal-request-status-result.v1",
+                    "request_id": "request-1",
+                    "state": "issued",
+                    "transaction_digest": transaction_digest,
+                    "expires_at": 1_800_000_300,
+                },
+            )
+        if request.url.path.endswith("/receipts/retrieve"):
+            receipt = {
+                "schema": "agentnet.independent-approval.receipt.v1",
+                "opaque": "signed",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "schema": "agentnet.approval.internal-receipt-retrieve-result.v1",
+                    "request_id": "request-1",
+                    "receipt": receipt,
+                    "receipt_digest": hashlib.sha256(
+                        json.dumps(
+                            receipt, sort_keys=True, separators=(",", ":")
+                        ).encode("utf-8")
+                    ).hexdigest(),
                 },
             )
         return httpx.Response(
             201,
             json={
+                "schema": "agentnet.approval.internal-request-created.v1",
                 "request_id": "request-1",
                 "state": "pending",
-                "transaction_digest": hashlib.sha256(b"{}").hexdigest(),
+                "approval_purpose": "identity.enrollment.approve",
+                "transaction_digest": transaction_digest,
+                "expires_at": 1_800_000_300,
+                "duplicate": False,
             },
         )
 
@@ -87,6 +110,7 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
             approval_purpose="identity.enrollment.approve",
             canonical_transaction=b"{}",
             transaction_digest=transaction_digest,
+            request_expires_at=1_800_000_300,
         )
         assert created["request_id"] == "request-1"
         assert client.request_status(
@@ -127,9 +151,13 @@ def test_internal_client_uses_fresh_proof_for_same_business_retry() -> None:
         return httpx.Response(
             200,
             json={
+                "schema": "agentnet.approval.internal-request-created.v1",
                 "request_id": "request-1",
                 "state": "pending",
-                "transaction_digest": "a" * 64,
+                "approval_purpose": "identity.enrollment.approve",
+                "transaction_digest": hashlib.sha256(b"{}").hexdigest(),
+                "expires_at": 1_800_000_300,
+                "duplicate": True,
             },
         )
 
@@ -146,6 +174,7 @@ def test_internal_client_uses_fresh_proof_for_same_business_retry() -> None:
                 approval_purpose="identity.enrollment.approve",
                 canonical_transaction=b"{}",
                 transaction_digest=hashlib.sha256(b"{}").hexdigest(),
+                request_expires_at=1_800_000_300,
             )
     finally:
         client.close()
@@ -169,6 +198,61 @@ def test_internal_client_rejects_redirect_and_duplicate_json() -> None:
                 client.request_status(request_id="request-1", transaction_digest="a" * 64)
         finally:
             client.close()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {
+            "schema": "agentnet.approval.internal-request-status-result.v1",
+            "request_id": "request-1",
+            "state": "unknown",
+            "transaction_digest": "a" * 64,
+            "expires_at": 1_800_000_300,
+        },
+        {
+            "schema": "agentnet.approval.internal-request-status-result.v1",
+            "request_id": "different-request",
+            "state": "issued",
+            "transaction_digest": "a" * 64,
+            "expires_at": 1_800_000_300,
+        },
+        {
+            "schema": "agentnet.approval.internal-request-status-result.v1",
+            "request_id": "request-1",
+            "state": "issued",
+            "transaction_digest": "a" * 64,
+            "expires_at": 1_800_000_300,
+            "private_detail": "must-be-rejected",
+        },
+    ],
+)
+def test_internal_client_rejects_non_exact_status_response(response) -> None:
+    client = ApprovalServiceClient(
+        _config(),
+        "S" * 43,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=response)),
+    )
+    try:
+        with pytest.raises(AuthenticationError, match="approval service response"):
+            client.request_status(request_id="request-1", transaction_digest="a" * 64)
+    finally:
+        client.close()
+
+
+def test_internal_client_maps_service_unavailable_to_retryable_gate() -> None:
+    client = ApprovalServiceClient(
+        _config(),
+        "S" * 43,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(503, json={"error": "request_unavailable"})
+        ),
+    )
+    try:
+        with pytest.raises(GateBlocked, match="approval service is unavailable"):
+            client.request_status(request_id="request-1", transaction_digest="a" * 64)
+    finally:
+        client.close()
 
 
 def test_internal_client_rejects_short_runtime_secret() -> None:

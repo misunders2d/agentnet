@@ -142,7 +142,7 @@ controls.
 
 ## Product surfaces
 
-- **CLI** for network creation, enrollment, invitations, founder authority,
+- **CLI** for network creation, enrollment, invitations, bounded bootstrap plans,
   messaging, obligations, bounded artifact quarantine/download, governance,
   recovery, incident response, backup, and verification.
 - **HTTP API** for authenticated network operations and administration.
@@ -209,28 +209,30 @@ substituting the local synthetic profile.
 
 AgentNet includes `agentnet approval`: a separately runnable,
 loopback-bound WebAuthn-UV ceremony service using pinned `webauthn==3.0.0`.
-It has strict owner-only config/key custody, encrypted versioned SQLite state,
-one-time fragment capabilities, bounded no-store browser/API routes, exact
-transaction display, stable signed-receipt retry, expiry/audit, and credential
-revocation. Optional disabled-by-default broker routes let an authenticated
-Core create/status requests and retrieve only already-issued receipts after a
-WebAuthn-approved human claim code. Approval URLs stay encrypted on approval
-host and open only through `agentnet approval pending|watch|open`. This grants
-no authority during provisioning and does not let Core approve or sign.
+The ordinary profile pins one preapproved owner through OIDC Authorization Code
++ PKCE, rotates server-side `__Host-` browser sessions, and serves registration
+and request review only at the stable public `/approval` path. Approval retains
+request capabilities and signed receipts encrypted inside the service; neither
+the browser nor the enrolling harness receives them. Exact Origin, CSRF,
+RP/origin/verifier, challenge/session, expiry, retry, and audit checks fail
+closed. Profiles without owner OIDC retain legacy fragment-capability routes
+and are lab-only by policy; they cannot satisfy the ordinary C0 deployment and
+release gate. Signed broker routes let authenticated Core create/status
+exact requests and retrieve only already-issued receipts after a WebAuthn-
+approved one-time human code. Core cannot approve or sign, and provisioning or
+enrollment grants no authority.
 
-AgentNet also includes `agentnet join guided`: one resumable command opens
-the system browser without printing its authorization URL, polls Core with an
-owner-only opaque continuation, prompts only for the short-lived human claim
-code, proves the locally retained candidate key, and writes an owner-only
-identity profile. For an owner-operated headless POSIX server with a private
-controlling terminal, explicit `--browser terminal` writes the untrusted HTTPS
-authorization URL only to verified `/dev/tty`; control bytes, missing TTYs,
+AgentNet also includes `agentnet join guided`: one resumable command opens the
+candidate OIDC page and stable owner Approval page without printing either URL,
+polls Core with an owner-only opaque continuation, prompts for the short-lived
+human code only through a private masked local terminal, proves the locally
+retained candidate key, and writes an owner-only identity profile. Explicit
+`--browser terminal` uses verified `/dev/tty`; control bytes, missing TTYs,
 partial writes, and unsupported platforms fail closed while resumable state is
-retained. Fresh-laptop behavior remains the default system browser. Core retrieves the signed receipt directly from the approval
-service; the candidate never receives it. Completion retries converge after
-response loss. Enrollment remains identity-only and reports
-`first_message_blocked_explicit_authority_required` until an administrator
-issues exact messaging entitlements.
+retained. Core retrieves the signed receipt directly; the candidate never
+receives it. Completion retries converge after response loss. Human/model
+success output omits identity IDs and reports only identity-only completion,
+local save status, zero authority, and the bounded-authority next step.
 
 This software component is not proof of independence. Production enrollment,
 recovery, elevation, revocation, or relationship consent still requires a real
@@ -259,14 +261,33 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation; latest published package is
-`0.1.15`. This branch prepares the next headless-enrollment repair candidate;
-it is not published until Sergey performs the separate npm publication step.
-The candidate preserves `0.1.15` OIDC/WebAuthn/claim-code semantics and adds an
-explicit private-controlling-terminal browser handoff without a new service,
-schema, relay, or authority path. The repository contains a broad
-executable local kernel and adversarial test suite, but it does **not** claim
-production certification or a completed live cross-host ceremony.
+AgentNet is an early public implementation; the latest published package is
+`0.1.18`. This branch contains the uncommitted `0.1.19` S0–S9 release
+candidate for the approved zero-state C0 architecture; it is not published and
+cannot be published until the remaining plan, release, and owner gates pass and
+Sergey performs the separate npm publication step. The candidate adds Core and
+Approval schema v4, stable owner OIDC/session/WebAuthn ceremonies, hardened
+guided identity-only enrollment, one atomic bounded `BootstrapGrantPlan`, and a
+dedicated selector-free C0 service. That service activates only the exact
+same-principal owner/fresh harness pair, records the seven approved facts across
+three atomic phases, runs a no-model owner responder, revokes exactly the five
+communication entitlements at success, and persistently invalidates the guard
+if the approved active harness or credential set drifts. Generic policy paths
+cannot consume bootstrap-plan authority. Public output exposes only sanitized
+stages or `COMPLETED_C0_ROUND_TRIP`.
+
+This is repository H/L evidence, not a shipped or live C0 result. The published
+`0.1.18` package remains identity-only for this journey. The candidate source
+suite reports `1346 passed, 15 expected host/PostgreSQL skips`; `agentnet verify`
+and each of two recursively packed npm generations report `1267 passed, 15
+expected skips`. Exact installed harness probe/lifecycle checks report `18
+passed`; release-manifest, package, and two-generation packed checks pass.
+Mutation-authorized PostgreSQL, real Google/passkey/two-laptop proof, final
+candidate review, real-host candidate CI, deployment, publication, production
+certification, and A2A cutover remain unproven or separately gated. The
+repository contains a broad executable local kernel and adversarial test suite,
+but it does **not** claim production certification or a completed live
+cross-host ceremony.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

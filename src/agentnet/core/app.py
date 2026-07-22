@@ -18,6 +18,11 @@ from agentnet.artifacts.scanner import ScannerTrustPolicy
 from agentnet.attention.policy import AttentionService
 from agentnet.automation import AutomationCharterService
 from agentnet.audit.service import AuditService
+from agentnet.authorization.bootstrap_plan_service import (
+    BootstrapPlanService,
+    ExactBootstrapHarnessResolver,
+)
+from agentnet.authorization.c0_pilot_service import C0PilotService
 from agentnet.authorization.elevation import ElevationService
 from agentnet.authorization.grants import GrantUse
 from agentnet.authorization.evidence import IssuanceAuthority, SignedAuthorityCommand
@@ -348,6 +353,8 @@ class CommunicationCore:
         self.conversations.artifact_binding_validator = self.artifacts.require_released_binding
         self.oidc_enrollment: OIDCEnrollmentCoordinator | None = None
         self.approval_service_client: ApprovalServiceClient | None = None
+        self.bootstrap_plan_service: BootstrapPlanService | None = None
+        self.c0_pilot_service: C0PilotService | None = None
         self.internal_invitation_oidc: InternalInvitationOIDCCoordinator | None = None
         self.internal_invitations: InternalInvitationService | None = None
         if config.oidc_enrollment is not None:
@@ -393,6 +400,25 @@ class CommunicationCore:
                 self.approval_service_client = ApprovalServiceClient(
                     oidc.approval_service,
                     credential,
+                )
+                self.bootstrap_plan_service = BootstrapPlanService(
+                    store,
+                    self.approval_service_client,
+                    self.approval_verifier,
+                    resolver=ExactBootstrapHarnessResolver(
+                        store,
+                        self.approval_verifier,
+                    ),
+                    public_approval_url=(
+                        oidc.approval_service.public_origin.rstrip("/") + "/approval"
+                    ),
+                    clock=lambda: int(time.time()),
+                )
+                self.c0_pilot_service = C0PilotService(
+                    store,
+                    self.policy,
+                    self.mailboxes,
+                    clock=lambda: int(time.time()),
                 )
             self.oidc_enrollment = OIDCEnrollmentCoordinator(
                 store,
@@ -801,6 +827,27 @@ class CommunicationCore:
             raise
         self.telemetry.increment("policy_result", outcome="ok")
         return decision
+
+    def _require_c0_runtime(self) -> C0PilotService:
+        self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
+        if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+            self._require_enrolled_server_agent_binding()
+        self.outage.require_low_risk_continuity()
+        if self.c0_pilot_service is None:
+            raise GateBlocked("c0_pilot", "bounded C0 pilot service is not configured")
+        return self.c0_pilot_service
+
+    def c0_pilot_start(self, *, actor: VerifiedActor) -> dict[str, str]:
+        return self._require_c0_runtime().start(actor=actor)
+
+    def c0_pilot_respond(self, *, actor: VerifiedActor) -> dict[str, str]:
+        return self._require_c0_runtime().respond(actor=actor)
+
+    def c0_pilot_complete(self, *, actor: VerifiedActor) -> dict[str, str]:
+        return self._require_c0_runtime().complete(actor=actor)
+
+    def c0_pilot_status(self, *, actor: VerifiedActor) -> dict[str, str]:
+        return self._require_c0_runtime().status(actor=actor)
 
     def begin_version_rollout(
         self,

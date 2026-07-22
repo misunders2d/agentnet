@@ -149,6 +149,30 @@ class AgentNetClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def c0_pilot_start(self) -> httpx.Response:
+        return self.request(
+            "POST", "/v1/c0-pilot/start",
+            json_body={"schema": "agentnet.c0-pilot.start.v1"},
+        )
+
+    def c0_pilot_respond(self) -> httpx.Response:
+        return self.request(
+            "POST", "/v1/c0-pilot/respond",
+            json_body={"schema": "agentnet.c0-pilot.respond.v1"},
+        )
+
+    def c0_pilot_complete(self) -> httpx.Response:
+        return self.request(
+            "POST", "/v1/c0-pilot/complete",
+            json_body={"schema": "agentnet.c0-pilot.complete.v1"},
+        )
+
+    def c0_pilot_status(self) -> httpx.Response:
+        return self.request(
+            "POST", "/v1/c0-pilot/status",
+            json_body={"schema": "agentnet.c0-pilot.status.v1"},
+        )
+
     def request_bytes(
         self,
         method: str,

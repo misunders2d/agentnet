@@ -22,7 +22,7 @@ from agentnet.security.signatures import P256KeyPair
 
 PURPOSES = frozenset(
     {
-        "authorization.entitlement.bootstrap.approve",
+        "authorization.bootstrap_plan.approve",
         "authorization.elevation.approve",
         "identity.credential.recover.approve",
         "identity.enrollment.approve",

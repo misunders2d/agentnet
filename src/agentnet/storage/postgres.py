@@ -25,6 +25,7 @@ from agentnet.errors import GateBlocked, IdempotencyConflict, ReplayError, Valid
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import canonical_json
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, Migration
+from agentnet.storage.postgres_catalog import require_exact_postgres_catalog
 
 
 MIGRATION_LOCK_ID = 0x41474E544D494752  # "AGNTMIGR", inside PostgreSQL signed-bigint range.
@@ -114,7 +115,124 @@ def validate_applied_migrations(
             raise GateBlocked("schema_future", "database schema is newer than this extension")
         if row["name"] != expected.name or row["checksum"] != expected.checksum:
             raise GateBlocked("schema_tamper", f"PostgreSQL migration {version} checksum/name mismatch")
-    return versions[-1] if versions else 0
+    current = versions[-1] if versions else 0
+    minimum_supported = migrations[-1].version - 1
+    if current and current < minimum_supported:
+        raise GateBlocked(
+            "schema_migration_window",
+            "PostgreSQL schema is outside the exact N/N-1 migration window",
+        )
+    return current
+
+
+_S4_TABLES = frozenset(
+    {
+        "bootstrap_grant_plans",
+        "c0_plan_guards",
+        "bootstrap_grant_plan_items",
+        "c0_plan_guard_entitlements",
+        "c0_pilot_attempts",
+        "c0_pilot_facts",
+    }
+)
+_S4_INDEX_COLUMNS = {
+    "idx_bootstrap_grant_plans_active": (
+        "bootstrap_grant_plans",
+        ("domain_id", "principal_id", "profile", "state", "authority_expires_at"),
+    ),
+    "idx_c0_plan_guards_active": (
+        "c0_plan_guards",
+        ("domain_id", "principal_id", "state", "expires_at"),
+    ),
+    "idx_bootstrap_plan_items_entitlement": (
+        "bootstrap_grant_plan_items",
+        ("entitlement_id", "plan_id"),
+    ),
+    "idx_c0_guard_entitlements_lookup": (
+        "c0_plan_guard_entitlements",
+        ("entitlement_id", "guard_id"),
+    ),
+    "idx_c0_pilot_attempts_state": ("c0_pilot_attempts", ("state", "expires_at")),
+    "idx_c0_pilot_facts_event": ("c0_pilot_facts", ("event_id", "attempt_id")),
+}
+_S4_CONSTRAINT_COUNTS = {
+    "bootstrap_grant_plans": (22, 6, 7, 1),
+    "c0_plan_guards": (14, 5, 1, 1),
+    "bootstrap_grant_plan_items": (5, 2, 3, 1),
+    "c0_plan_guard_entitlements": (1, 4, 0, 1),
+    "c0_pilot_attempts": (5, 2, 4, 1),
+    "c0_pilot_facts": (5, 2, 0, 1),
+}
+
+
+def require_s4_postgres_catalog(connection: Any) -> None:
+    """Fail closed unless the live PostgreSQL S4 catalog matches the released shape."""
+
+    relations = connection.execute(
+        """SELECT relation.relname AS name,relation.relkind AS kind
+             FROM pg_catalog.pg_class relation
+             JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+            WHERE namespace.nspname=current_schema() AND relation.relname=ANY(%s)
+            ORDER BY relation.relname""",
+        (sorted(_S4_TABLES | frozenset(_S4_INDEX_COLUMNS)),),
+    ).fetchall()
+    expected_relations = {
+        **{name: "r" for name in _S4_TABLES},
+        **{name: "i" for name in _S4_INDEX_COLUMNS},
+    }
+    actual_relations = {str(row["name"]): str(row["kind"]) for row in relations}
+    if actual_relations != expected_relations:
+        raise GateBlocked("schema_s4_catalog", "PostgreSQL S4 relation catalog is not exact")
+
+    constraint_rows = connection.execute(
+        """SELECT relation.relname AS table_name,
+                  COUNT(*) FILTER (WHERE constraint.contype='c') AS check_count,
+                  COUNT(*) FILTER (WHERE constraint.contype='f') AS foreign_count,
+                  COUNT(*) FILTER (WHERE constraint.contype='u') AS unique_count,
+                  COUNT(*) FILTER (WHERE constraint.contype='p') AS primary_count
+             FROM pg_catalog.pg_class relation
+             JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+             LEFT JOIN pg_catalog.pg_constraint constraint ON constraint.conrelid=relation.oid
+            WHERE namespace.nspname=current_schema() AND relation.relname=ANY(%s)
+            GROUP BY relation.relname ORDER BY relation.relname""",
+        (sorted(_S4_TABLES),),
+    ).fetchall()
+    actual_constraints = {
+        str(row["table_name"]): (
+            int(row["check_count"]),
+            int(row["foreign_count"]),
+            int(row["unique_count"]),
+            int(row["primary_count"]),
+        )
+        for row in constraint_rows
+    }
+    if actual_constraints != _S4_CONSTRAINT_COUNTS:
+        raise GateBlocked("schema_s4_constraints", "PostgreSQL S4 constraints are not exact")
+
+    index_rows = connection.execute(
+        """SELECT index_relation.relname AS index_name,table_relation.relname AS table_name,
+                  ARRAY_AGG(attribute.attname ORDER BY key_column.ordinality) AS columns
+             FROM pg_catalog.pg_index index_catalog
+             JOIN pg_catalog.pg_class index_relation ON index_relation.oid=index_catalog.indexrelid
+             JOIN pg_catalog.pg_class table_relation ON table_relation.oid=index_catalog.indrelid
+             JOIN pg_catalog.pg_namespace namespace ON namespace.oid=table_relation.relnamespace
+             JOIN LATERAL UNNEST(index_catalog.indkey) WITH ORDINALITY AS key_column(attnum,ordinality)
+               ON TRUE
+             JOIN pg_catalog.pg_attribute attribute
+               ON attribute.attrelid=table_relation.oid AND attribute.attnum=key_column.attnum
+            WHERE namespace.nspname=current_schema() AND index_relation.relname=ANY(%s)
+            GROUP BY index_relation.relname,table_relation.relname ORDER BY index_relation.relname""",
+        (sorted(_S4_INDEX_COLUMNS),),
+    ).fetchall()
+    actual_indexes = {
+        str(row["index_name"]): (
+            str(row["table_name"]),
+            tuple(str(column) for column in row["columns"]),
+        )
+        for row in index_rows
+    }
+    if actual_indexes != _S4_INDEX_COLUMNS:
+        raise GateBlocked("schema_s4_indexes", "PostgreSQL S4 indexes are not exact")
 
 
 def apply_postgres_migrations(connection: Any) -> int:
@@ -164,6 +282,12 @@ def apply_postgres_migrations(connection: Any) -> int:
                     "schema_migration_history",
                     "an empty PostgreSQL migration catalog is not a released schema",
                 )
+            if current == CURRENT_SCHEMA_VERSION - 1 and relation_names & _S4_TABLES:
+                raise GateBlocked(
+                    "schema_s4_partial",
+                    "PostgreSQL v3 contains unsupported partial S4 relations",
+                )
+            require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:current])
         else:
             connection.execute(
                 """
@@ -190,6 +314,8 @@ def apply_postgres_migrations(connection: Any) -> int:
                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
             (str(CURRENT_SCHEMA_VERSION),),
         )
+        require_exact_postgres_catalog(connection, migrations=MIGRATIONS)
+        require_s4_postgres_catalog(connection)
     return CURRENT_SCHEMA_VERSION
 
 
@@ -206,6 +332,8 @@ def require_current_postgres_schema(connection: Any) -> None:
         raise GateBlocked("schema_missing", "PostgreSQL schema metadata is unavailable") from exc
     if current != CURRENT_SCHEMA_VERSION or metadata is None or int(metadata["value"]) != CURRENT_SCHEMA_VERSION:
         raise GateBlocked("schema_version", "PostgreSQL schema is not at the exact runtime version")
+    require_exact_postgres_catalog(connection, migrations=MIGRATIONS)
+    require_s4_postgres_catalog(connection)
 
 
 @dataclass(frozen=True, slots=True)

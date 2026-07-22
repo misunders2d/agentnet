@@ -47,6 +47,29 @@ def test_private_url_is_written_only_to_controlling_terminal(
     assert secret_url not in captured.out + captured.err
 
 
+def test_stable_owner_approval_url_uses_private_controlling_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    terminal = _FakeTerminal("\n")
+    monkeypatch.setattr(
+        "agentnet._terminal_handoff._open_controlling_terminal",
+        lambda: terminal,
+    )
+    approval_url = "https://approval.example/approval"
+
+    handoff_private_url(
+        approval_url,
+        purpose="stable owner approval",
+        require_ack=True,
+    )
+
+    captured = capsys.readouterr()
+    assert approval_url in terminal.getvalue()
+    assert "STABLE OWNER APPROVAL" in terminal.getvalue()
+    assert approval_url not in captured.out + captured.err
+
+
 def test_private_terminal_requirement_fails_closed_without_tty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -30,8 +30,9 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-20-v0.1.18/artifacts/RETENTION.md",
+  "evidence/local/2026-07-22-v0.1.19/artifacts/RETENTION.md",
   "skills/**/*.md",
+  "tests/fixtures/**/*.json",
 ];
 for (const relative of requiredPublishedFiles) {
   if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
@@ -126,16 +127,18 @@ const onboardingExampleText = readFileSync(
 );
 for (const required of [
   "AgentNet blank-laptop onboarding — exact public packet",
-  "message.send on direct",
-  "mailbox.read on this laptop's harness",
-  "mailbox.acknowledge on this laptop's harness",
+  "<ONBOARDING_MODE>",
+  "mode `identity_only`",
+  "mode `c0_pilot`",
+  "first_message_blocked_explicit_authority_required",
+  "BootstrapGrantPlan",
+  "Do not run `agentnet admin entitlement issue`",
   "No other human setup",
   "no extra approval host",
   "No relay channel or second person is required",
   "Do not report or relay principal/harness IDs",
   "Infisical or other named secret manager",
   "per-command setup approvals",
-  "Three separate issuance records are expected",
   "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value",
 ]) {
   if (!onboardingExampleText.includes(required)) fail(`fresh-laptop prompt example is missing: ${required}`);
@@ -150,6 +153,8 @@ for (const forbidden of [
   "<PRINCIPAL_ID_REPORTING_APPROVED>",
   "<MESSAGING_TEST_IN_SCOPE>",
   "server-side onboarding orchestrator",
+  "Three separate issuance records are expected",
+  "server-side administrator issues these three grants",
 ]) {
   if (onboardingExampleText.includes(forbidden)) fail(`fresh-laptop prompt example contains forbidden or obsolete content: ${forbidden}`);
 }
@@ -160,6 +165,9 @@ const onboardingEvals = JSON.parse(
   readFileSync(path.join(root, "skills/agentnet-operator/evals/evals.json"), "utf8"),
 );
 const expectedOnboardingEvalIds = [
+  "c0-binding-invalidation-is-terminal",
+  "c0-fixed-commands-and-cleanup-only",
+  "c0-success-requires-approved-seven-fact-sequence",
   "fresh-agent-receives-bootstrap-packet",
   "fresh-laptop-canonical-single-prompt-is-mandatory",
   "fresh-laptop-claim-code-channel-is-approved",
@@ -169,8 +177,12 @@ const expectedOnboardingEvalIds = [
   "fresh-laptop-messaging-authority-blocked",
   "fresh-laptop-never-requires-infisical",
   "fresh-laptop-one-consolidated-setup-approval",
+  "fresh-laptop-rejects-invalid-onboarding-mode",
+  "fresh-laptop-rejects-three-grant-c0-fallback",
   "headless-server-uses-private-terminal-browser-handoff",
   "hub-generates-public-onboarding-packet",
+  "identity-only-mode-skips-c0-phase",
+  "repository-candidate-does-not-unblock-installed-release",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",
 ];

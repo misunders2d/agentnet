@@ -28,6 +28,12 @@ class ConflictError(ExtensionError):
     http_status = 409
 
 
+class RetryableConflictError(ConflictError):
+    """A transactional race that the same exact request may safely retry."""
+
+    code = "retryable_conflict"
+
+
 class ValidationError(ExtensionError):
     code = "invalid_request"
     http_status = 422

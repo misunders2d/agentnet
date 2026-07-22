@@ -11,7 +11,7 @@ node --version
 uv --version
 ```
 
-The npm/Pi launcher supports Linux, requires Node.js 22.19 or newer, requires `uv` 0.11.28 or newer, and selects CPython 3.13.13.
+The npm/Pi launcher supports Linux, macOS, and Windows local profiles, requires Node.js 22.19 or newer, requires `uv` 0.11.28 or newer, and selects CPython 3.13.13. Production deployment remains Linux-first.
 
 ## Install examples
 
@@ -231,8 +231,52 @@ or capability and does not restart anything. These commands do not themselves
 prove HA, PITR, KMS custody, independent enrollment approval, or production
 certification.
 
-After the exact recipient has durably stored inbox bytes and dedup state, record
-recipient custody with the event ID and envelope digest returned by `inbox`:
+## Release-gated fixed C0 pilot
+
+Use this section only after verifying the installed release and its C0 release
+evidence. Published `0.1.18` does not qualify. On the exact owner laptop:
+
+```bash
+agentnet supervisor-run --config agentnet-supervisor.json \
+  --c0-pilot-responder --check
+agentnet supervisor-run --config agentnet-supervisor.json \
+  --c0-pilot-responder
+```
+
+On the exact fresh laptop after identity-only enrollment:
+
+```bash
+agentnet bootstrap-plan begin \
+  --identity .agentnet/identity.json \
+  --state .agentnet/bootstrap-plan-state.json
+agentnet bootstrap-plan status \
+  --identity .agentnet/identity.json \
+  --state .agentnet/bootstrap-plan-state.json
+agentnet bootstrap-plan complete \
+  --identity .agentnet/identity.json \
+  --state .agentnet/bootstrap-plan-state.json
+agentnet c0-pilot start --identity .agentnet/identity.json
+agentnet c0-pilot status --identity .agentnet/identity.json
+agentnet c0-pilot complete --identity .agentnet/identity.json
+```
+
+`bootstrap-plan complete` alone returns `prepared_unusable`; it grants no generic
+communication authority. The fixed C0 service internally activates the guard.
+Do not add selectors or replace this sequence with generic message, inbox, ACK,
+authority inventory, or entitlement commands. `waiting_owner` and
+`waiting_fresh` are resumable; `expired` and `invalidated` are terminal. Only
+`COMPLETED_C0_ROUND_TRIP` proves the exact seven facts and atomic cleanup of five
+communication powers. The proof remains same-principal and `accepted_local`.
+
+## Generic mailbox acknowledgement — never use for fixed C0
+
+This generic example is outside the release-gated fixed C0 packet. Never use it
+to select, retrieve, acknowledge, repair, or prove a fixed C0 event; the
+dedicated C0 service owns those choices and facts.
+
+For separately authorized non-C0 operations, after the exact recipient has
+durably stored inbox bytes and dedup state, record recipient custody with the
+event ID and envelope digest returned by `inbox`:
 
 ```bash
 agentnet message inbox --identity .agentnet/recipient-identity.json

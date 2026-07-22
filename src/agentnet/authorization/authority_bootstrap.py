@@ -1,12 +1,10 @@
-"""Independent, first-positive-authority bootstrap ceremony.
+"""Retained direct-construction coverage for the unmounted legacy founder path.
 
-This is the sole production path that can create authority before a domain has
-an authority issuer.  It deliberately does not call the ordinary entitlement
-API: that API requires the very entitlement being bootstrapped.  Instead, an
-exact freshly enrolled OIDC human/harness obtains a short-lived challenge and
-an independently operated WebAuthn verifier signs the complete candidate root
-transaction.  Receipt consumption, singleton claiming, entitlement insertion,
-challenge consumption, and audit all commit together.
+Ordinary AgentNet applications do not mount this wildcard first-authority
+ceremony. The supported zero-state C0 profile uses the fixed bounded
+``BootstrapGrantPlan`` path instead. This module remains only for explicit
+legacy/lab compatibility and negative migration coverage; importing it does not
+grant authority or make it a production composition path.
 """
 
 from __future__ import annotations

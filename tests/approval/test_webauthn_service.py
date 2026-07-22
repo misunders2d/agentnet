@@ -16,7 +16,7 @@ from agentnet.approval.config import (
 from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
 from agentnet.approval.store import ApprovalStore
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
-from agentnet.errors import AuthenticationError, ConflictError, GateBlocked
+from agentnet.errors import AuthenticationError, ConflictError, GateBlocked, ValidationError
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair, b64url_encode, canonical_json
 
@@ -27,6 +27,35 @@ PURPOSE = "identity.enrollment.approve"
 
 def _token(url: str) -> str:
     return parse_qs(urlsplit(url).fragment)["token"][0]
+
+
+def _approval_transaction(marker: str = "Owner laptop") -> bytes:
+    return canonical_json(
+        {
+            "candidate_key": {
+                "algorithm": "ES256/P-256",
+                "thumbprint": "synthetic-candidate-thumbprint",
+            },
+            "challenge_id": "synthetic-enrollment-challenge",
+            "domain_id": "corp.example",
+            "expires_at": NOW + 300,
+            "harness": {
+                "binding_assurance": "os_bound",
+                "display_name": marker,
+                "kind": "pi",
+                "requested_class": "protected_business",
+            },
+            "human": {
+                "oidc_issuer": "https://idp.example.test",
+                "oidc_subject": "synthetic-owner-subject",
+                "verified_email": "owner@example.test",
+            },
+            "issued_at": NOW,
+            "nonce": "synthetic-enrollment-nonce",
+            "purpose": "human_harness_credential_binding",
+            "schema": "agentnet.enrollment.challenge.v1",
+        }
+    )
 
 
 def _stack(tmp_path: Path):
@@ -66,6 +95,47 @@ def _stack(tmp_path: Path):
     store = ApprovalStore(database, cipher, initialize=True)
     service = WebAuthnApprovalService(config, store, cipher, clock=lambda: NOW)
     return SimpleNamespace(config=config, store=store, service=service, signer=signer)
+
+
+def _owner_session(stack, *, session_hash: str = "a" * 64) -> str:
+    with stack.store.transaction() as connection:
+        connection.execute(
+            """INSERT OR IGNORE INTO approval_owner_bindings(
+                   binding_id,domain_id,approver_principal_id,oidc_issuer,oidc_subject,
+                   verified_email,pin_source,status,pinned_at
+               ) VALUES(?,?,?,?,?,?,?,'active',?)""",
+            (
+                "owner-binding-1",
+                "corp.example",
+                "security-owner",
+                "https://accounts.example",
+                "owner-subject",
+                "owner@corp.example",
+                "exact_subject",
+                NOW,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO approval_browser_sessions(
+                   session_hash,owner_binding_id,csrf_secret_encrypted,rp_id,public_origin,
+                   verifier_id,created_at,authenticated_at,expires_at
+               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                session_hash,
+                "owner-binding-1",
+                stack.service.cipher.encrypt_json(
+                    {"csrf_token": "c" * 32},
+                    purpose=f"approval-owner-csrf:{session_hash}",
+                ),
+                stack.config.rp_id,
+                stack.config.public_origin,
+                stack.config.verifier_id,
+                NOW,
+                NOW,
+                NOW + 600,
+            ),
+        )
+    return session_hash
 
 
 def _register(stack, monkeypatch: pytest.MonkeyPatch) -> str:
@@ -140,6 +210,176 @@ def test_store_rejects_schema_metadata_tamper_on_reopen(tmp_path: Path) -> None:
         ApprovalStore(path, cipher)
 
 
+def test_owner_bound_request_methods_keep_capability_inside_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        _register(stack, monkeypatch)
+        owner_session_hash = _owner_session(stack)
+        transaction = _approval_transaction()
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+        )
+        actionable = stack.service.actionable_requests_for_owner(
+            principal_id="security-owner",
+            domain_id="corp.example",
+        )
+        assert actionable[0]["request_id"] == created.identifier
+        assert actionable[0]["state"] == "pending"
+        options = stack.service.request_options_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            owner_session_hash=owner_session_hash,
+        )
+        assert options["canonical_transaction_text"] == transaction.decode()
+        old_challenge = options["publicKey"]["challenge"]
+        with stack.store.transaction() as connection:
+            connection.execute(
+                """UPDATE approval_browser_sessions
+                      SET revoked_at=?,revocation_reason='rotated'
+                    WHERE session_hash=?""",
+                (NOW, owner_session_hash),
+            )
+        replacement_session_hash = _owner_session(stack, session_hash="b" * 64)
+        replacement_options = stack.service.request_options_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            owner_session_hash=replacement_session_hash,
+        )
+        assert replacement_options["publicKey"]["challenge"] != old_challenge
+
+        database = stack.config.database_path
+        cipher = stack.service.cipher
+        stack.store.close()
+        stack.store = ApprovalStore(database, cipher)
+        stack.service = WebAuthnApprovalService(
+            stack.config,
+            stack.store,
+            cipher,
+            clock=lambda: NOW,
+        )
+
+        with pytest.raises(AuthenticationError, match="approval request denied"):
+            stack.service.approve_request_for_owner(
+                request_id=created.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+                credential={"id": b64url_encode(b"credential-1")},
+                owner_session_hash=owner_session_hash,
+            )
+        with pytest.raises(AuthenticationError, match="approval request denied"):
+            stack.service.request_options_for_owner(
+                request_id=created.identifier,
+                principal_id="other-owner",
+                domain_id="corp.example",
+                owner_session_hash=replacement_session_hash,
+            )
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+        issued = stack.service.approve_request_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            credential={"id": b64url_encode(b"credential-1")},
+            owner_session_hash=replacement_session_hash,
+        )
+        assert issued["schema"] == "agentnet.approval.claim-code.v1"
+        assert "token" not in issued and "receipt" not in issued
+        duplicate = stack.service.approve_request_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            credential={},
+            owner_session_hash=replacement_session_hash,
+        )
+        assert duplicate["schema"] == "agentnet.approval.claim-code-status.v1"
+        assert "claim_code" not in duplicate
+        assert stack.service.actionable_requests_for_owner(
+            principal_id="security-owner",
+            domain_id="corp.example",
+        )[0]["state"] == "issued"
+    finally:
+        stack.store.close()
+
+
+def test_issued_code_recovery_survives_pending_request_expiry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        _register(stack, monkeypatch)
+        owner_session_hash = _owner_session(stack)
+        transaction = _approval_transaction()
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+        )
+        approve_at = created.expires_at - 1
+        stack.service.request_options_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            owner_session_hash=owner_session_hash,
+            now=approve_at,
+        )
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+        stack.service.approve_request_for_owner(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            credential={"id": b64url_encode(b"credential-1")},
+            owner_session_hash=owner_session_hash,
+            now=approve_at,
+        )
+
+        after_pending_expiry = created.expires_at + 1
+        actionable = stack.service.actionable_requests_for_owner(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            now=after_pending_expiry,
+        )
+        assert [(item["request_id"], item["state"]) for item in actionable] == [
+            (created.identifier, "issued")
+        ]
+        rotated = stack.service.regenerate_claim_code(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+            owner_session_hash=owner_session_hash,
+            now=after_pending_expiry,
+        )
+        assert rotated["schema"] == "agentnet.approval.claim-code.v1"
+    finally:
+        stack.store.close()
+
+
 def test_registration_approval_receipt_and_response_loss_are_exact_and_single(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -147,13 +387,7 @@ def test_registration_approval_receipt_and_response_loss_are_exact_and_single(
     stack = _stack(tmp_path)
     try:
         credential_id = _register(stack, monkeypatch)
-        transaction = canonical_json(
-            {
-                "schema": "agentnet.test-approval-transaction.v1",
-                "domain_id": "corp.example",
-                "beneficiary": "harness-1",
-            }
-        )
+        transaction = _approval_transaction()
         created = stack.service.create_request(
             principal_id="security-owner",
             approval_purpose=PURPOSE,
@@ -287,9 +521,7 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
     stack = _stack(tmp_path)
     try:
         credential_id = _register(stack, monkeypatch)
-        transaction = canonical_json(
-            {"schema": "agentnet.test-core-retrieval.v1", "domain_id": "corp.example"}
-        )
+        transaction = _approval_transaction("Core retrieval laptop")
         created = stack.service.create_request(
             principal_id="security-owner",
             domain_id="corp.example",
@@ -297,6 +529,7 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
             canonical_transaction=transaction,
             delivery_mode="core_claim_code",
             idempotency_key="core:enrollment:test-request-1",
+            request_expires_at=NOW + 200,
         )
         duplicate = stack.service.create_request(
             principal_id="security-owner",
@@ -305,6 +538,7 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
             canonical_transaction=transaction,
             delivery_mode="core_claim_code",
             idempotency_key="core:enrollment:test-request-1",
+            request_expires_at=NOW + 200,
         )
         assert duplicate.identifier == created.identifier
         assert duplicate.duplicate is True
@@ -313,15 +547,37 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
                 principal_id="security-owner",
                 domain_id="corp.example",
                 approval_purpose=PURPOSE,
-                canonical_transaction=canonical_json(
-                    {"schema": "agentnet.changed.v1", "domain_id": "corp.example"}
-                ),
+                canonical_transaction=_approval_transaction("Changed laptop"),
                 delivery_mode="core_claim_code",
                 idempotency_key="core:enrollment:test-request-1",
+                request_expires_at=NOW + 200,
+            )
+        with pytest.raises(ConflictError, match="idempotency conflict"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=transaction,
+                delivery_mode="core_claim_code",
+                idempotency_key="core:enrollment:test-request-1",
+                request_expires_at=NOW + 201,
+            )
+        with pytest.raises(ValidationError, match="expiry is invalid"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=transaction,
+                delivery_mode="core_claim_code",
+                idempotency_key="core:enrollment:too-long",
+                request_expires_at=NOW + stack.config.request_ttl_seconds + 1,
             )
 
         token = _token(created.url)
-        stack.service.request_options(token)
+        first_options = stack.service.request_options(token)
+        second_options = stack.service.request_options(token)
+        assert second_options["publicKey"]["challenge"] == first_options["publicKey"]["challenge"]
+        assert second_options["challenge_expires_at"] == first_options["challenge_expires_at"]
         monkeypatch.setattr(
             "agentnet.approval.webauthn_uv.verify_authentication_response",
             lambda **_kwargs: SimpleNamespace(
@@ -339,6 +595,18 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
         )
         assert result["schema"] == "agentnet.approval.claim-code.v1"
         claim_code = result["claim_code"]
+        duplicate_approval = stack.service.approve_request(token, {}, approved=True)
+        assert duplicate_approval == {
+            "schema": "agentnet.approval.claim-code-status.v1",
+            "request_id": created.identifier,
+            "issued": True,
+            "expires_at": result["expires_at"],
+        }
+        request_row = stack.store.fetch_one(
+            "SELECT claim_code_rotations FROM approval_requests WHERE request_id=?",
+            (created.identifier,),
+        )
+        assert request_row is not None and request_row["claim_code_rotations"] == 1
         assert claim_code not in str(
             stack.store.fetch_one(
                 "SELECT claim_code_hash FROM approval_claim_codes WHERE request_id=?",
@@ -382,6 +650,157 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
         stack.store.close()
 
 
+def test_explicit_claim_code_regeneration_preserves_cumulative_failure_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        credential_id = _register(stack, monkeypatch)
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=_approval_transaction("Regeneration laptop"),
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:regeneration-1",
+        )
+        token = _token(created.url)
+        stack.service.request_options(token)
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+        first = stack.service.approve_request(
+            token,
+            {"id": credential_id},
+            approved=True,
+        )
+        for suffix in range(4):
+            wrong = f"0000-0000-0000-0000-0000-0000-0000-000{suffix}"
+            with pytest.raises(AuthenticationError, match="denied"):
+                stack.service.retrieve_core_receipt(
+                    request_id=created.identifier,
+                    claim_code=wrong,
+                    domain_id="corp.example",
+                    approval_purpose=PURPOSE,
+                    transaction_digest=created.transaction_digest or "",
+                    retrieval_digest="d" * 64,
+                )
+        rotated = stack.service.regenerate_claim_code(
+            request_id=created.identifier,
+            principal_id="security-owner",
+            domain_id="corp.example",
+        )
+        assert rotated["claim_code"] != first["claim_code"]
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.retrieve_core_receipt(
+                request_id=created.identifier,
+                claim_code=first["claim_code"],
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                transaction_digest=created.transaction_digest or "",
+                retrieval_digest="d" * 64,
+            )
+        request_row = stack.store.fetch_one(
+            """SELECT claim_code_rotations,claim_code_failed_attempts_total
+                 FROM approval_requests WHERE request_id=?""",
+            (created.identifier,),
+        )
+        assert request_row is not None
+        assert request_row["claim_code_rotations"] == 2
+        assert request_row["claim_code_failed_attempts_total"] == 5
+        receipt = stack.service.retrieve_core_receipt(
+            request_id=created.identifier,
+            claim_code=rotated["claim_code"],
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            transaction_digest=created.transaction_digest or "",
+            retrieval_digest="d" * 64,
+        )
+        assert receipt["schema"] == "agentnet.independent-approval.receipt.v1"
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.regenerate_claim_code(
+                request_id=created.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+            )
+    finally:
+        stack.store.close()
+
+
+def test_claim_code_regeneration_rejects_expired_or_terminal_current_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        credential_id = _register(stack, monkeypatch)
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+
+        def issue(schema: str):
+            created = stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=_approval_transaction(schema),
+                delivery_mode="core_claim_code",
+                idempotency_key=f"core:enrollment:{schema}",
+            )
+            token = _token(created.url)
+            stack.service.request_options(token)
+            result = stack.service.approve_request(
+                token,
+                {"id": credential_id},
+                approved=True,
+            )
+            return created, result
+
+        expired, expired_code = issue("agentnet.expired-code.v1")
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.regenerate_claim_code(
+                request_id=expired.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+                now=expired_code["expires_at"],
+            )
+
+        terminal, _terminal_code = issue("agentnet.terminal-code.v1")
+        for suffix in range(5):
+            with pytest.raises(AuthenticationError, match="denied"):
+                stack.service.retrieve_core_receipt(
+                    request_id=terminal.identifier,
+                    claim_code=f"0000-0000-0000-0000-0000-0000-0000-000{suffix}",
+                    domain_id="corp.example",
+                    approval_purpose=PURPOSE,
+                    transaction_digest=terminal.transaction_digest or "",
+                    retrieval_digest="e" * 64,
+                )
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.regenerate_claim_code(
+                request_id=terminal.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+            )
+    finally:
+        stack.store.close()
+
+
 def test_duplicate_active_request_wrong_token_reject_and_credential_revocation_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -389,7 +808,7 @@ def test_duplicate_active_request_wrong_token_reject_and_credential_revocation_f
     stack = _stack(tmp_path)
     try:
         credential_id = _register(stack, monkeypatch)
-        transaction = canonical_json({"schema": "agentnet.test.v1", "domain_id": "corp.example"})
+        transaction = _approval_transaction("Response loss laptop")
         created = stack.service.create_request(
             principal_id="security-owner",
             approval_purpose=PURPOSE,
@@ -425,9 +844,7 @@ def test_failed_webauthn_attempt_clears_challenge_and_commits_denial_audit(
         created = stack.service.create_request(
             principal_id="security-owner",
             approval_purpose=PURPOSE,
-            canonical_transaction=canonical_json(
-                {"schema": "agentnet.test.v1", "domain_id": "corp.example"}
-            ),
+            canonical_transaction=_approval_transaction("Failed WebAuthn laptop"),
         )
         token = _token(created.url)
         stack.service.request_options(token)
@@ -475,7 +892,7 @@ def test_request_and_issued_receipt_expiry_are_audited_once(
         pending = stack.service.create_request(
             principal_id="security-owner",
             approval_purpose=PURPOSE,
-            canonical_transaction=canonical_json({"schema": "agentnet.pending.v1"}),
+            canonical_transaction=_approval_transaction("Pending laptop"),
         )
         with pytest.raises(AuthenticationError, match="denied"):
             stack.service.request_options(
@@ -495,7 +912,7 @@ def test_request_and_issued_receipt_expiry_are_audited_once(
         issued = stack.service.create_request(
             principal_id="security-owner",
             approval_purpose=PURPOSE,
-            canonical_transaction=canonical_json({"schema": "agentnet.issued.v1"}),
+            canonical_transaction=_approval_transaction("Issued laptop"),
             now=NOW,
         )
         token = _token(issued.url)

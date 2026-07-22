@@ -2,15 +2,30 @@
 
 Date: 2026-07-13
 
-## Sealed baseline and current implementation handoff
+## Sealed baseline and dated implementation handoff
 
 - Concept: `specification.md`
 - Sealed-audit SHA-256: `6f253942e8590e2524697ee41232f58a9c18b0f4cfca8fb15a327963554557a3`
-- Current implementation-handoff SHA-256: `73c8415622f3b328159e67ce84dfebe79bdee5df15f9923f4e2b9768eb8d1a8d`
+- 2026-07-13 implementation-handoff SHA-256: `73c8415622f3b328159e67ce84dfebe79bdee5df15f9923f4e2b9768eb8d1a8d`
 - Requirements baseline: `requirements.md`
-- Current requirements SHA-256: `7f61f1ad1038997279a767864c444e1f79105bc5e3768bc31b1e7ffa1e72f8e3`
+- 2026-07-13 requirements-handoff SHA-256: `7f61f1ad1038997279a767864c444e1f79105bc5e3768bc31b1e7ffa1e72f8e3`
 
-The concept remained byte-for-byte frozen throughout the sealed audits. The current files retain the exact 85 stable requirement IDs but are no longer the sealed bytes. After those audits, the owner supplied normative assignment, self-hosting, and reuse clarifications, and implementation passes added explicitly labeled evidence/status annotations for bilateral relationship consent, immutable first-release schema v1 plus contiguous protected-release migration 2, completed local ORG-005 adjudication, recipient-owned protected task payload release, and the ORG-006 owner blocker. These additions have local executable review evidence; they have not received a new independent sealed concept audit.
+These hashes identify the dated sealed/handoff snapshots; they are not hashes
+of the current uncommitted worktree or a current independent verification.
+
+The concept remained byte-for-byte frozen throughout the sealed audits. Current
+files retain the exact 85 stable requirement IDs but are no longer sealed bytes.
+After those audits, the owner supplied normative assignment, self-hosting, and
+reuse clarifications. Later implementation passes added explicitly labeled
+status annotations for bilateral relationship consent, immutable governance
+baseline schema v1 plus current contiguous Core migrations 2–4, separate
+Approval schema v4, completed local ORG-005 adjudication, recipient-owned
+protected task payload release, the ORG-006 owner blocker, and current S0–S9
+zero-state C0 plan, activation, proof, persistent invalidation, cleanup,
+release-candidate packaging, and evidence/skill mechanics. Their
+cited local checks are implementation evidence,
+not a new independent sealed concept audit, release certificate, or production
+claim.
 
 ## Consensus result
 

@@ -2,7 +2,7 @@
 name: agentnet-operator
 description: Safely install, initialize, enroll, verify, configure, operate, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, enrollment or authority, Pi bindings, or server-agent deployment.
 license: Apache-2.0
-compatibility: Bundled AgentNet npm/Pi package on Linux; follow the installed release's exact Node.js, uv, and Python requirements.
+compatibility: Bundled AgentNet npm/Pi package on Linux, macOS, and Windows local profiles; production deployment remains Linux-first. Follow the installed release's exact Node.js, uv, and Python requirements.
 ---
 
 # AgentNet Operator
@@ -43,12 +43,31 @@ scope or a new destructive, restart, privilege-expanding, or high-risk action.
 
 The same shared skill serves two roles:
 
-- **Sender/Hub/current manager:** give the human one self-contained, public, copyable bootstrap packet through an authenticated human channel. Do not try to contact the unconnected laptop as an agent.
-- **Fresh-laptop agent:** when the human pastes that packet, guide them step by step from prerequisites and exact public package installation through enrollment and the first verified AgentNet-native message. Explain where each command runs, expected safe output, and exact stop conditions.
+- **Sender/current manager/ordinary server agent:** give the human one self-contained, public, copyable bootstrap packet through an authenticated human channel. Do not try to contact the unconnected laptop as an agent.
+- **Fresh-laptop agent:** when the human pastes that packet, guide them step by step from prerequisites and exact public package installation through the maximum phase the installed release safely supports. Enrollment always ends identity-only. A first AgentNet-native message is eligible only when that exact installed release ships and has passed the complete bounded-plan/responder/verifier gate. Explain where each command runs, expected safe output, and exact stop conditions.
 
-Before producing or following a live packet, read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and its [canonical single-paste example](references/examples/fresh-laptop-single-prompt.md). Resolve and verify every required placeholder in the example from approved public metadata, then issue the resulting packet unchanged rather than splitting, handcrafting, shortening, or paraphrasing it. Any unresolved required placeholder blocks issuance. `SKILL.md` contains routing only; the canonical prompt belongs exclusively in the example file. Verify the installed release actually ships every selected phase. The packet must cover the exact public installation source/version, OS/CPU/Node/`uv` prerequisites, install verification, guided join, system-browser Google OIDC, WebAuthn human approval, identity-only completion, separate exact messaging authority when in scope, C0 verification, expected outputs, and safe recovery. Sender/Hub resolves package integrity, origins, callbacks, administrator/recipient metadata, and runtime identifiers; do not interrogate the human for them.
+Before producing or following a live packet, read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and its [canonical single-paste example](references/examples/fresh-laptop-single-prompt.md). Resolve and verify every required placeholder in the example from approved public metadata, then issue the resulting packet unchanged rather than splitting, handcrafting, shortening, or paraphrasing it. Any unresolved required placeholder blocks issuance. `SKILL.md` contains routing only; the canonical prompt belongs exclusively in the example file. Verify the installed release actually ships every selected phase. The packet must cover the exact public installation source/version, OS/CPU/Node/`uv` prerequisites, install verification, guided join, system-browser Google OIDC, WebAuthn human approval, identity-only completion, expected outputs, and safe recovery. Include C0 authority and verification only after the installed release proves the complete fixed `BootstrapGrantPlan`, deterministic responder, and seven-fact verifier. Until then, the canonical packet stops identity-only; never substitute generic entitlement issuance. Sender or ordinary server agent resolves package integrity, origins, callbacks, administrator/recipient metadata, and runtime identifiers; do not interrogate the human for them.
 
 Keep public instructions separate from local/private material. Private keys, join state, callback codes or challenges, identity profiles, approval capabilities, signed approval receipts, tokens, and secret values never belong in Slack, A2A, chat, prompts, logs, repositories, or the copied bootstrap packet.
+
+### Release-gated bounded C0 phase
+
+When the installed release exposes `bootstrap-plan begin|status|complete`,
+`c0-pilot start|status|complete`, and `supervisor-run --c0-pilot-responder`,
+read the C0 sections of the onboarding reference and canonical example before
+proceeding. The owner responder must already run under the exact owner identity.
+The fresh harness may then request the fixed plan, the owner WebAuthn-approves
+its purpose-specific summary, and the fresh harness enters only the second
+short-lived code through its masked TTY.
+
+Call only the fixed commands; never use generic message, inbox, ACK, authority
+inventory, or entitlement mutation commands for this pilot. The C0 commands
+accept no peer, plan, payload, event, receipt, digest, entitlement, or use-count
+selectors. `waiting_owner` and `waiting_fresh` are resumable stages;
+`invalidated` and `expired` are terminal. Report success only for
+`COMPLETED_C0_ROUND_TRIP`, after the service verifies seven facts and atomically
+revokes exactly five communication powers. Never expose protected evidence or
+promote `accepted_local` to production durability.
 
 If the installed release lacks a product-owned secure handoff for any private enrollment artifact—especially the signed approval receipt—report **blocked: product component not yet shipped** and stop before `join begin`. Do not invent Slack/A2A transfer, copy/paste, USB/QR choreography, custom glue, or a one-click link. AgentNet `0.1.8` has `join begin`/`join complete` but no supported possession-bound approval-receipt handoff, so fresh cross-host enrollment is blocked on that release.
 
@@ -60,10 +79,12 @@ human claim code. For one owner-operated headless POSIX server only, when the
 installed help exposes it and a private unrecorded controlling TTY is active,
 use explicit `--browser terminal`; open the TTY-disclosed URL manually on the
 owner laptop. Never move that URL through chat/A2A/logs or use terminal mode for
-the ordinary fresh-laptop packet. Success means `enrolled_identity_only`, not
-messaging readiness. Stop at `first_message_blocked_explicit_authority_required` until an
-authorized administrator issues exact `message.send` plus required
-recipient/read entitlements; never turn enrollment into implicit authority.
+the ordinary fresh-laptop packet. Success means `enrolled_identity_only`, not messaging readiness. Stop at
+`first_message_blocked_explicit_authority_required` unless the installed
+release's complete bounded C0 gate is verified and the canonical packet selects
+that phase. Generic `authorization.entitlement.issue`, the legacy founder
+ceremony, or three independent grants are not substitutes; never turn enrollment
+into implicit or partially assembled authority.
 
 ## Start with read-only checks
 

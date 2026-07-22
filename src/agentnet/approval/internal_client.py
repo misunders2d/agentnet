@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 from typing import Any
 
 import httpx
@@ -25,6 +27,26 @@ def _reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
         if key in value:
             raise ValueError("duplicate JSON key")
         value[key] = item
+    return value
+
+
+_APPROVAL_STATES = frozenset({"pending", "issued", "rejected", "expired"})
+
+
+def _require_exact_keys(value: dict[str, Any], expected: frozenset[str]) -> None:
+    if set(value) != expected:
+        raise AuthenticationError("approval service response denied")
+
+
+def _require_identifier(value: object) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 256:
+        raise AuthenticationError("approval service response denied")
+    return value
+
+
+def _require_positive_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AuthenticationError("approval service response denied")
     return value
 
 
@@ -98,6 +120,8 @@ class ApprovalServiceClient:
                 content=raw_body,
                 headers=headers,
             ) as response:
+                if response.status_code == 503:
+                    raise GateBlocked("approval_service", "approval service is unavailable")
                 if response.is_redirect or response.status_code not in expected:
                     raise AuthenticationError("approval service request denied")
                 chunks: list[bytes] = []
@@ -107,7 +131,7 @@ class ApprovalServiceClient:
                     if size > self.config.maximum_response_bytes:
                         raise AuthenticationError("approval service response denied")
                     chunks.append(chunk)
-        except AuthenticationError:
+        except (AuthenticationError, GateBlocked):
             raise
         except httpx.HTTPError as exc:
             raise GateBlocked("approval_service", "approval service is unavailable") from exc
@@ -121,8 +145,9 @@ class ApprovalServiceClient:
         approval_purpose: str,
         canonical_transaction: bytes,
         transaction_digest: str,
+        request_expires_at: int,
     ) -> dict[str, Any]:
-        return self._post(
+        result = self._post(
             "/v1/approval/internal/requests",
             {
                 "schema": "agentnet.approval.internal-request-create.v1",
@@ -132,13 +157,40 @@ class ApprovalServiceClient:
                 "approval_purpose": approval_purpose,
                 "canonical_transaction_b64": b64url_encode(canonical_transaction),
                 "transaction_digest": transaction_digest,
+                "request_expires_at": request_expires_at,
             },
             purpose=INTERNAL_BROKER_PURPOSE_CREATE,
             expected={200, 201},
         )
+        _require_exact_keys(
+            result,
+            frozenset(
+                {
+                    "schema",
+                    "request_id",
+                    "state",
+                    "approval_purpose",
+                    "transaction_digest",
+                    "expires_at",
+                    "duplicate",
+                }
+            ),
+        )
+        if (
+            result.get("schema") != "agentnet.approval.internal-request-created.v1"
+            or result.get("state") not in _APPROVAL_STATES
+            or result.get("approval_purpose") != approval_purpose
+            or not isinstance(result.get("transaction_digest"), str)
+            or not secrets.compare_digest(str(result["transaction_digest"]), transaction_digest)
+            or _require_positive_int(result.get("expires_at")) != request_expires_at
+            or type(result.get("duplicate")) is not bool
+        ):
+            raise AuthenticationError("approval service response denied")
+        _require_identifier(result.get("request_id"))
+        return result
 
     def request_status(self, *, request_id: str, transaction_digest: str) -> dict[str, Any]:
-        return self._post(
+        result = self._post(
             "/v1/approval/internal/requests/status",
             {
                 "schema": "agentnet.approval.internal-request-status.v1",
@@ -148,6 +200,20 @@ class ApprovalServiceClient:
             purpose=INTERNAL_BROKER_PURPOSE_STATUS,
             expected={200},
         )
+        _require_exact_keys(
+            result,
+            frozenset({"schema", "request_id", "state", "transaction_digest", "expires_at"}),
+        )
+        if (
+            result.get("schema") != "agentnet.approval.internal-request-status-result.v1"
+            or result.get("request_id") != request_id
+            or result.get("state") not in _APPROVAL_STATES
+            or not isinstance(result.get("transaction_digest"), str)
+            or not secrets.compare_digest(str(result["transaction_digest"]), transaction_digest)
+        ):
+            raise AuthenticationError("approval service response denied")
+        _require_positive_int(result.get("expires_at"))
+        return result
 
     def retrieve_receipt(
         self,
@@ -173,8 +239,22 @@ class ApprovalServiceClient:
             purpose=INTERNAL_BROKER_PURPOSE_RETRIEVE,
             expected={200},
         )
+        _require_exact_keys(
+            result,
+            frozenset({"schema", "request_id", "receipt", "receipt_digest"}),
+        )
         receipt = result.get("receipt")
-        if not isinstance(receipt, dict):
+        receipt_digest = result.get("receipt_digest")
+        if (
+            result.get("schema") != "agentnet.approval.internal-receipt-retrieve-result.v1"
+            or result.get("request_id") != request_id
+            or not isinstance(receipt, dict)
+            or not isinstance(receipt_digest, str)
+            or not secrets.compare_digest(
+                receipt_digest,
+                hashlib.sha256(canonical_json(receipt)).hexdigest(),
+            )
+        ):
             raise AuthenticationError("approval service response denied")
         return receipt
 

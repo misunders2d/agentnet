@@ -48,7 +48,7 @@ from agentnet.identity.enrollment import (
     VerifiedOIDCIdentity,
 )
 from agentnet.operations.config import OIDCTokenEndpointAuthMethod, RuntimeProfile
-from agentnet.security.signatures import verify_signature
+from agentnet.security.signatures import canonical_json, verify_signature
 
 
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -331,6 +331,7 @@ class OIDCPollResult:
     challenge_id: str | None = None
     nonce: str | None = None
     canonical_transaction_b64: str | None = None
+    approval_url: str | None = None
 
 
 class OIDCProvider:
@@ -829,8 +830,17 @@ class OIDCEnrollmentCoordinator:
                     str(challenge_value["canonical_transaction_b64"]).encode("ascii"),
                     validate=True,
                 )
+                canonical_value = json.loads(canonical)
+                challenge_expires_at = canonical_value["expires_at"]
             except Exception as exc:
                 raise AuthenticationError("OIDC enrollment continuation is unavailable") from exc
+            if (
+                not isinstance(canonical_value, dict)
+                or canonical_json(canonical_value) != canonical
+                or type(challenge_expires_at) is not int
+                or not now < challenge_expires_at <= expires_at
+            ):
+                raise AuthenticationError("OIDC enrollment continuation is unavailable")
             transaction_digest = hashlib.sha256(canonical).hexdigest()
             identity = self.store.fetch_one(
                 "SELECT domain_id FROM oidc_enrollment_transactions WHERE transaction_id=?",
@@ -844,6 +854,7 @@ class OIDCEnrollmentCoordinator:
                 approval_purpose="identity.enrollment.approve",
                 canonical_transaction=canonical,
                 transaction_digest=transaction_digest,
+                request_expires_at=challenge_expires_at,
             )
             request_id = created.get("request_id")
             response_digest = created.get("transaction_digest")
@@ -853,7 +864,7 @@ class OIDCEnrollmentCoordinator:
                 or not 16 <= len(request_id) <= 128
                 or response_digest != transaction_digest
                 or not isinstance(request_expires_at, int)
-                or not now < request_expires_at <= expires_at
+                or request_expires_at != challenge_expires_at
             ):
                 raise AuthenticationError("approval service response denied")
             with self.store.transaction() as connection:
@@ -894,6 +905,13 @@ class OIDCEnrollmentCoordinator:
                     or current["approval_transaction_digest"] != transaction_digest
                 ):
                     raise ReplayError("OIDC approval staging conflicted")
+        approval_config = getattr(self.approval_client, "config", None)
+        approval_origin = getattr(approval_config, "origin", None)
+        if not isinstance(approval_origin, str) or not approval_origin.startswith("https://"):
+            raise GateBlocked(
+                "guided_enrollment_unavailable",
+                "guided enrollment approval entrypoint is unavailable",
+            )
         return OIDCPollResult(
             "approval_pending",
             interval,
@@ -901,6 +919,7 @@ class OIDCEnrollmentCoordinator:
             challenge_id=str(challenge_value["challenge_id"]),
             nonce=str(challenge_value["nonce"]),
             canonical_transaction_b64=str(challenge_value["canonical_transaction_b64"]),
+            approval_url=f"{approval_origin.rstrip('/')}/approval",
         )
 
     def complete_guided_enrollment(
@@ -1379,9 +1398,15 @@ class OIDCEnrollmentCoordinator:
                 )
                 continuation = connection.execute(
                     """UPDATE oidc_enrollment_continuations
-                          SET status='callback_ready',challenge_encrypted=?,updated_at=?
+                          SET status='callback_ready',challenge_encrypted=?,updated_at=?,
+                              expires_at=?
                         WHERE transaction_id=? AND status='awaiting_oidc'""",
-                    (challenge_encrypted, now, current["transaction_id"]),
+                    (
+                        challenge_encrypted,
+                        now,
+                        challenge.expires_at,
+                        current["transaction_id"],
+                    ),
                 )
                 if continuation.rowcount != 1:
                     raise ReplayError("OIDC enrollment continuation is no longer current")

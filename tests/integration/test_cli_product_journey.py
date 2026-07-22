@@ -316,6 +316,7 @@ def test_guided_join_is_resumable_private_and_identity_only(
                 "challenge_id": "challenge-guided-cli-0001",
                 "nonce": "n" * 43,
                 "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+                "approval_url": "https://approval.corp.example/approval",
             }
         assert path.endswith("/complete")
         assert body["claim_code"] == "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
@@ -331,7 +332,16 @@ def test_guided_join_is_resumable_private_and_identity_only(
         }
 
     monkeypatch.setattr("agentnet.cli._public_json_request", fake_request)
-    monkeypatch.setattr("agentnet.cli.webbrowser.open", lambda *_args, **_kwargs: True)
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "agentnet.cli.webbrowser.open",
+        lambda url, **_kwargs: opened.append(url) or True,
+    )
+    terminal_checks: list[bool] = []
+    monkeypatch.setattr(
+        "agentnet.cli.require_private_terminal",
+        lambda: terminal_checks.append(True),
+    )
     monkeypatch.setattr(
         "agentnet.cli.getpass.getpass",
         lambda _prompt: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
@@ -363,10 +373,21 @@ def test_guided_join_is_resumable_private_and_identity_only(
         "first_message_blocked_explicit_authority_required"
     )
     assert result["next"] == (
-        "an authorized administrator must explicitly grant message.send on direct, "
-        "mailbox.read on harness-1, and mailbox.acknowledge on "
-        "harness-1 before the first test message"
+        "continue only with an explicitly approved bounded authority plan"
     )
+    assert result["identity_saved_locally"] is True
+    for forbidden in (
+        actor.domain_id,
+        actor.principal_id,
+        actor.harness_id,
+        actor.credential_id,
+    ):
+        assert forbidden not in output.out + output.err
+    assert opened == [
+        "https://accounts.example/authorize?state=private",
+        "https://approval.corp.example/approval",
+    ]
+    assert terminal_checks == [True]
     private_values = (
         "https://accounts.example/authorize",
         "c" * 43,
@@ -522,6 +543,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
                 "challenge_id": "challenge-guided-terminal-0001",
                 "nonce": "n" * 43,
                 "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+                "approval_url": "https://approval.corp.example/approval",
             }
         assert path.endswith("/complete")
         return {
@@ -545,10 +567,11 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
         "/v1/enrollment/oidc/poll",
         "/v1/enrollment/oidc/complete",
     ]
-    assert terminal_checks == [True, True]
+    assert terminal_checks == [True, True, True]
     assert handoffs == [
         (authorization_url, "owner OIDC enrollment", True),
         (authorization_url, "owner OIDC enrollment", True),
+        ("https://approval.corp.example/approval", "stable owner approval", True),
     ]
 
 

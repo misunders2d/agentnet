@@ -38,8 +38,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-20-v0.1.18/artifacts/RETENTION.md",
+        "evidence/local/2026-07-22-v0.1.19/artifacts/RETENTION.md",
         "skills/**/*.md",
+        "tests/fixtures/**/*.json",
     } <= set(package["files"])
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
     assert package["scripts"]["check"].endswith("&& npm run check:packed")
@@ -105,7 +106,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "Public package installation",
         "System-browser Google OIDC",
         "WebAuthn human approval",
-        "Connection and first-message verification",
+        "Fixed C0 round-trip verification",
         "AgentNet `0.1.8` fails this gate",
         "blocked: product component not yet shipped",
         "references/examples/fresh-laptop-single-prompt.md",
@@ -119,6 +120,7 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
     ).read_text(encoding="utf-8")
     assert "AgentNet blank-laptop onboarding — exact public packet" in example
     for placeholder in (
+        "<ONBOARDING_MODE>",
         "<AUTHORIZED_HUMAN>",
         "<BLANK_LAPTOP_DISPLAY_NAME>",
         "<HARNESS_KIND>",
@@ -132,18 +134,15 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "<NPM_INTEGRITY>",
         "<NODE_MIN_VERSION>",
         "<UV_MIN_VERSION>",
-        "<TEST_RECIPIENT>",
-        "<C0_TEST_MESSAGE>",
-        "<C0_IDEMPOTENCY_KEY>",
         "<RETENTION_ABORT_POLICY>",
         "<HUMAN_REPORT_CHANNEL>",
     ):
         assert placeholder in example
     for forbidden in ("BEGIN PRIVATE KEY", "agcap1.", "Authorization: Bearer"):
         assert forbidden not in example
-    assert "message.send on direct" in example
-    assert "mailbox.read on this laptop's harness" in example
-    assert "mailbox.acknowledge on this laptop's harness" in example
+    assert "first_message_blocked_explicit_authority_required" in example
+    assert "atomic ten-entitlement plus guard commit" in example
+    assert "never assemble authority with generic entitlement issuance" in example
     assert "No other human setup" in example
     assert "no extra approval host" in example
     assert "No relay channel or second person is required" in example
@@ -177,6 +176,13 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "fresh-laptop-one-consolidated-setup-approval",
         "fresh-laptop-human-never-supplies-technical-metadata",
         "headless-server-uses-private-terminal-browser-handoff",
+        "fresh-laptop-rejects-three-grant-c0-fallback",
+        "c0-success-requires-approved-seven-fact-sequence",
+        "repository-candidate-does-not-unblock-installed-release",
+        "c0-binding-invalidation-is-terminal",
+        "c0-fixed-commands-and-cleanup-only",
+        "identity-only-mode-skips-c0-phase",
+        "fresh-laptop-rejects-invalid-onboarding-mode",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
@@ -263,7 +269,8 @@ def test_ordinary_onboarding_stays_one_server_one_owner_one_prompt() -> None:
     assert "No relay channel or second person is required" in prompt
     assert "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value" in prompt
     assert "per-command setup approvals" in prompt
-    assert "Three separate issuance records are expected" in prompt
+    assert "never assemble authority with generic entitlement issuance, three independent grants" in prompt
+    assert "Three separate issuance records are expected" not in prompt
     assert "server-side onboarding orchestrator" not in prompt
     for obsolete in (
         "<APPROVER_NAME>",
@@ -283,78 +290,44 @@ def test_fresh_laptop_prompt_uses_the_shipped_cli_surface() -> None:
         / "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md"
     ).read_text(encoding="utf-8")
     parser = build_parser()
-    commands = (
-        (
-            [
-                "join",
-                "guided",
-                "--server",
-                "https://agentnet.example",
-                "--domain",
-                "corp.example",
-                "--harness",
-                "pi",
-                "--name",
-                "Fresh laptop",
-                "--state",
-                ".agentnet/guided-join.json",
-                "--identity",
-                ".agentnet/identity.json",
-                "--timeout",
-                "600",
-            ],
-            "agentnet join guided",
-        ),
-        (
-            ["authority", "inventory", "--identity", ".agentnet/identity.json"],
-            "agentnet authority inventory",
-        ),
-        (
-            [
-                "message",
-                "send",
-                "--identity",
-                ".agentnet/identity.json",
-                "--recipient",
-                "test-recipient",
-                "--classification",
-                "C0",
-                "--idempotency-key",
-                "fresh-laptop-c0-0001",
-                "--payload",
-                "agentnet-c0-test-message.json",
-            ],
-            "agentnet message send",
-        ),
-        (
-            [
-                "message",
-                "inbox",
-                "--identity",
-                ".agentnet/identity.json",
-                "--after",
-                "0",
-                "--limit",
-                "50",
-            ],
-            "agentnet message inbox",
-        ),
-        (
-            [
-                "message",
-                "acknowledge",
-                "event-1",
-                "--envelope-digest",
-                "a" * 64,
-                "--identity",
-                ".agentnet/identity.json",
-            ],
-            "agentnet message acknowledge",
-        ),
-    )
-    for arguments, prompt_fragment in commands:
+    guided_arguments = [
+        "join",
+        "guided",
+        "--server",
+        "https://agentnet.example",
+        "--domain",
+        "corp.example",
+        "--harness",
+        "pi",
+        "--name",
+        "Fresh laptop",
+        "--state",
+        ".agentnet/guided-join.json",
+        "--identity",
+        ".agentnet/identity.json",
+        "--timeout",
+        "600",
+    ]
+    parser.parse_args(guided_arguments)
+    for arguments in (
+        ["bootstrap-plan", "begin", "--identity", ".agentnet/identity.json", "--state", ".agentnet/bootstrap-plan-state.json"],
+        ["bootstrap-plan", "status", "--identity", ".agentnet/identity.json", "--state", ".agentnet/bootstrap-plan-state.json"],
+        ["bootstrap-plan", "complete", "--identity", ".agentnet/identity.json", "--state", ".agentnet/bootstrap-plan-state.json"],
+        ["c0-pilot", "start", "--identity", ".agentnet/identity.json"],
+        ["c0-pilot", "status", "--identity", ".agentnet/identity.json"],
+        ["c0-pilot", "complete", "--identity", ".agentnet/identity.json"],
+    ):
         parser.parse_args(arguments)
-        assert prompt_fragment in example
+    assert "agentnet join guided" in example
+    assert "agentnet bootstrap-plan begin" in example
+    assert "agentnet c0-pilot complete" in example
+    for forbidden_fragment in (
+        "agentnet authority inventory",
+        "agentnet message send",
+        "agentnet message inbox",
+        "agentnet message acknowledge",
+    ):
+        assert forbidden_fragment not in example
 
 
 def test_pi_binding_failure_explains_supervisor_activation() -> None:
@@ -459,13 +432,14 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-20-v0.1.18/artifacts/RETENTION.md",
+        "evidence/local/2026-07-22-v0.1.19/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
         "skills/agentnet-operator/references/required-communication-scope.md",
         "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
         "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
+        "tests/fixtures/bootstrap_plan_golden_vector.json",
     } <= filenames
     assert ".gitignore" not in filenames
     assert ".npmignore" not in filenames

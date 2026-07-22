@@ -266,24 +266,31 @@ message content into the foreground. Wake events still carry no authority.
 
 ## Versioned storage authority boundary
 
-Immutable schema migration 1 is the complete first-release authority model,
-including response obligations and bilateral governance. Migration 2 adds only
-protected task-payload disclosure receipts. Unreleased migration 3 adds one
-`oidc_enrollment_continuations` table for hash-only guided tokens, encrypted
-challenge/completion state, approval request binding, bounded polling, and
-response-loss idempotency. Fresh SQLite creates v3; only exact
-catalog/checksum-verified v2 stores may upgrade to v3 under the N/N-1 window.
-PostgreSQL applies the same contiguous checksum-bound catalog. The approval
-service has its own exact SQLite catalog and atomic v1→v2 migration for Core
-request idempotency, encrypted local capabilities, claim codes, and migration
-evidence; it is not Core authority storage. In the default topology it is a
-distinct OS-identity service on the existing server; optional high-assurance
-deployments place it under separate administration. Relationship authority
-still exists only in bilateral governance transactions and exact
-policy-exception records. Startup requires exact current metadata, migration
-rows/checksums, tables, indexes, constraints, and security triggers and fails
-closed on missing, altered, prototype, noncontiguous, future, or unsupported
-older state.
+Immutable Core schema migration 1 is the complete first-release authority
+model, including response obligations and bilateral governance. Migration 2
+adds protected task-payload disclosure receipts. Migration 3 adds
+`oidc_enrollment_continuations` for hash-only guided tokens, encrypted
+challenge/completion state, approval-request binding, bounded polling, and
+response-loss idempotency. Migration 4 adds the bounded same-principal C0
+bootstrap-plan, exact ten-item plan/guard mapping, pilot-attempt, and seven-fact
+evidence tables. Fresh SQLite and PostgreSQL stores create v4; the tested N/N-1
+Core path accepts only an exact catalog/checksum-verified v3 store for atomic
+v3→v4 upgrade. PostgreSQL verifies the complete live v3/v4 table, column type,
+nullability/default, constraint-definition, and non-constraint-index catalog in
+addition to the contiguous migration checksums; any mismatch fails before use.
+
+Approval owns a separate exact SQLite catalog and is not Core authority
+storage. Its v2 migration adds guided handoff custody, v3 adds signed-broker
+replay custody, and v4 adds stable owner OIDC sessions plus isolated WebAuthn
+registration/approval ceremonies. Exact verified v1, v2, or v3 Approval stores
+apply every missing migration atomically to v4; a failure rolls back the whole
+upgrade. In the default topology Approval runs under a distinct OS identity on
+the existing server; optional high-assurance deployments place it under
+separate administration. Relationship authority still exists only in bilateral
+governance transactions and exact policy-exception records. Core and Approval
+startup require exact current metadata, migration rows/checksums, tables,
+indexes, constraints, and security triggers and fail closed on missing,
+altered, prototype, noncontiguous, future, or unsupported older state.
 
 There is no conversion from a pre-release/differently named database and no
 rule inferring consent from a unilateral edge. Operator exports only reviewed
@@ -394,13 +401,24 @@ an independently administered TLS proxy exposes the exact configured HTTPS
 origin. Running it beside an agent under the same readable/control boundary is
 local mechanism testing only and cannot satisfy independence.
 
-Host-admin CLI creates one-time registration or exact-transaction requests.
-Capabilities are 32 random bytes with an `agcap1.` prefix; only SHA-256 hashes
-are stored, and browser URLs carry the capability in the fragment so it is not
-sent in the initial HTTP request. Browser JavaScript immediately removes the
-fragment, fetches bounded strict-JSON options, displays exact canonical
-transaction text, purpose, domain, digest, and expiry, then requires an explicit
-button action and WebAuthn user verification.
+Ordinary self-hosted onboarding uses one stable `/approval` origin. The owner
+starts OIDC Authorization Code + PKCE from that page, returns through one
+preauth cookie that is Secure, HttpOnly, `__Host-`, and `SameSite=Lax`, and
+rotates into authenticated owner-session and CSRF cookies that remain
+`SameSite=Strict`. Approval atomically claims then consumes the callback,
+permanently pins the preapproved issuer+subject or verified alias, and binds
+every session to the exact RP ID, public origin, verifier ID, owner principal,
+and domain. The owner registers a passkey and reviews requests without a secret
+URL. Stable request selection resolves encrypted capabilities only inside
+Approval and returns a purpose-specific bounded summary; the browser receives
+neither capability nor receipt.
+
+Profiles without owner OIDC preserve the legacy host-admin flow and are
+lab-only by policy; they cannot satisfy the ordinary C0 deployment/release gate.
+Capabilities are 32 random bytes with an `agcap1.` prefix; only SHA-256 hashes are stored, and lab
+browser URLs carry the capability in the fragment. JavaScript immediately
+removes the fragment before using the lab-only registration/request routes.
+Stable profiles do not mount those routes or serve that JavaScript.
 
 Duo Labs `webauthn==3.0.0` verifies challenge, exact origin, exact RP ID,
 credential identity, signature, user verification, and sign-count progression.
@@ -410,17 +428,23 @@ unknown/modified SQLite catalog, non-owner-only files, stale/replayed
 capabilities, revoked credentials, expired challenges/requests/receipts, and
 missing configured purpose all fail closed. One receipt and audit record commit
 before response; response-loss retries return the exact encrypted stored receipt
-without re-signing or extending expiry. Approval SQLite schema v3 preserves the
-exact v1→v2 migration and adds an exact v2→v3 catalog/checksum-verified migration.
-Version 2 adds encrypted local capability custody, idempotent Core request
-bindings, and hashed bounded claim-code state. Version 3 adds persistent one-use
-Core→Approval broker-proof replay custody keyed by derived key identity and a
-SHA-256 nonce hash; raw broker nonces and runtime credentials are not stored.
+without re-signing or extending expiry. Approval SQLite schema v4 preserves
+exact catalog/checksum-verified upgrades from v1, v2, or v3. Version 2 adds
+encrypted local capability custody, idempotent Core request bindings, and hashed
+bounded claim-code state. Version 3 adds persistent one-use Core→Approval
+broker-proof replay custody keyed by derived key identity and a SHA-256 nonce
+hash; raw broker nonces and runtime credentials are not stored. Version 4 adds
+pinned owner OIDC identity, callback transactions, RP/origin/verifier-bound
+browser sessions, isolated registration ceremonies, cumulative registration and
+claim-code budgets, and exact assertion-challenge-to-session binding.
 
 Core services remain receipt-only consumers through
 `IndependentApprovalVerifier`. An optional, disabled-by-default broker surface
-lets a configured Core create/status exact requests and retrieve an already
-issued receipt over runtime-credential-authenticated HTTPS. Every internal POST
+mounts only when both the runtime credential and stable owner-OIDC session
+service are configured; fragment-based legacy profiles cannot broker guided
+enrollment or the C0 plan. A configured Core may create/status exact requests
+and retrieve an already issued receipt over runtime-credential-authenticated
+HTTPS. Every internal POST
 also carries a domain-separated HMAC-SHA256 proof derived from that runtime
 credential. The fixed proof binds exact method, route path, canonical wire-body
 digest, Approval origin audience, route purpose, key identity, random 32-byte
@@ -429,28 +453,84 @@ one-use replay custody before any route action. Response-loss retries use a fres
 broker nonce while preserving the separate business idempotency key. Mixed
 Bearer-only/signed versions fail closed and Core plus Approval must upgrade
 together. This broker cannot approve, sign a human receipt, or bypass WebAuthn.
-Core-created browser capabilities remain encrypted in
-the approval service store; `agentnet approval pending|watch|open` discovers
-and opens them on an owner-controlled browser without printing or transporting
-the URL. Default commands use the system browser. Explicit server-bootstrap
-`--browser terminal` instead opens verified POSIX `/dev/tty`, rejects non-HTTPS
-or control-bearing untrusted URL text before one framed write, and fails closed
-without persistence or fallback on no-TTY/partial-write/unsupported-platform
-conditions. This is a presentation path only; it creates no identity, grant,
-receipt, or authority. After WebAuthn, browser
-shows a 128-bit human-transferred claim code instead of receipt JSON. Exact
+Core-created browser capabilities remain encrypted in the Approval store.
+Stable `agentnet approval pending|watch` emits only content-free counts and may
+open only public `/approval`; stable `open` never resolves or prints a request
+capability or request ID. Profiles without owner OIDC retain request IDs and
+local fragment opening for lab compatibility only. Terminal browser mode writes only the
+applicable HTTPS page to verified POSIX `/dev/tty` and fails closed without
+fallback. After WebAuthn, the stable browser shows a 128-bit human-transferred
+claim code instead of receipt JSON. Core binds request expiry exactly to the
+candidate enrollment challenge. Pending requests use that deadline; an issued
+unretrieved request uses the current claim-code/receipt lifecycle. Code
+regeneration requires the current code to remain unexpired, unretrieved, and
+below per-code and cumulative limits; it cannot revive terminal state. Exact
 code/domain/purpose/transaction/retrieval binding returns the same current
 receipt for response-loss retry; Core remains responsible for atomic receipt
-consumption. Six purposes are mandatory in configuration:
+consumption. This presentation path creates no authority and guided completion
+remains identity-only. Six purposes are mandatory in configuration:
 `identity.enrollment.approve`,
-`authorization.entitlement.bootstrap.approve`,
+`authorization.bootstrap_plan.approve`,
 `authorization.elevation.approve`,
 `identity.credential.recover.approve`,
 `identity.harness.revoke.approve`, and
-`organization.relationship.accept`. Optional purposes require explicit
-configuration. Local SQLite and mocked ceremony vectors provide H evidence
-only; real passkeys, independent host/device custody, TLS, key rotation and
-recovery drills, and PD-002/004/005/009 remain external/owner gates.
+`organization.relationship.accept`. The ordinary C0 profile does not mount or
+require the legacy wildcard founder ceremony. Its bounded bootstrap-plan path
+resolves the exact guided harness pair server-side, presents one purpose-specific
+browser summary, and may prepare only the exact five communication plus five
+matching revoke entitlements behind a `pending` guard in one atomic commit.
+Only the dedicated C0 composition below can activate and consume that authority;
+generic principal policy, messaging, mailbox, and administrative revocation
+paths always deny bootstrap-plan entitlements. Optional purposes require explicit
+configuration. Local SQLite and mocked ceremony vectors provide H evidence only;
+real passkeys, independent host/device custody, TLS, key rotation and recovery
+drills, and PD-002/004/005/009 remain external/owner gates.
+
+## Bounded same-principal C0 composition
+
+`C0PilotService` is the sole policy-enforcement and composition path for the
+fixed `ordinary-two-harness-c0:v1` proof. Signed transport supplies the actor;
+the four strict request bodies contain only their schema discriminator and no
+plan, peer, recipient, payload, event, acknowledgement, digest, entitlement, or
+use-count selector. Core resolves the committed plan and exact owner/fresh role
+from authoritative state.
+
+Every operation revalidates the domain, principal, policy revision, revocation
+epoch, exact two active same-principal harnesses, exact two approved active
+credentials, each credential epoch, caller credential, plan expiry, and guard
+state. Added active harness or credential state persistently moves
+`pending|active` to `invalidated`, fails any active attempt, and appends the
+binding-invalidation audit record; later removal cannot reactivate approved
+authority. A caller presenting a credential other than its approved role binding
+is denied before it can mutate the guard.
+
+The proof uses designated internal transaction seams on existing mailbox and
+policy services (`_accept_in_transaction`, `_acknowledge_in_transaction`, and
+the C0 guard checks) solely to keep each cross-service phase atomic. These are
+not public/caller-facing APIs and do not duplicate mailbox or policy semantics.
+
+The proof uses three atomic Core transactions:
+
+1. **Fresh start:** creates/reconstructs the deterministic attempt, activates the
+   guard, authorizes and accepts the fixed request, consumes its one use, records
+   request custody and audit, then returns `waiting_owner`.
+2. **Owner respond:** reads only the fact-linked request, acknowledges its exact
+   event/envelope, sends one fixed causally linked reply, consumes the reply use,
+   records retrieval/ACK/send/custody facts and audit, then returns
+   `waiting_fresh`.
+3. **Fresh complete:** reads and acknowledges only the fact-linked reply,
+   revalidates all seven issuer-owned facts and both authoritative encrypted
+   events/receipts, revokes exactly communication ordinals 1–5, terminalizes the
+   guard/result/audit, and returns `COMPLETED_C0_ROUND_TRIP`.
+
+Exact retries reconstruct from authoritative events, receipts, facts, uses, and
+cleanup state; prose, status echoes, transport ACKs, and fact rows alone cannot
+prove completion. Durable ambiguity/tamper is non-retryable; only typed
+compare-and-swap races are retryable. The dedicated supervisor mode
+`--c0-pilot-responder` calls only status/respond through the signed client. It
+does not construct semantic workers, models, queues, tasks, artifacts, effects,
+tools, or A2A services. Local acceptance remains `accepted_local`; no
+single-primary or HA durability promotion follows from this proof.
 
 ## Component seams
 

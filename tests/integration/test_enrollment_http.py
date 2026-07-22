@@ -54,6 +54,7 @@ class FakeCoordinator:
             canonical_transaction_b64=base64.b64encode(
                 canonical_json({"schema": "agentnet.enrollment.challenge.v1", "exact": True})
             ).decode("ascii"),
+            approval_url="https://approval.corp.example/approval",
         )
 
     def complete_guided_enrollment(self, **kwargs):

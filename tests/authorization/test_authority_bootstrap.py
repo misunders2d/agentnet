@@ -1,3 +1,5 @@
+"""Direct-construction coverage for retained unmounted legacy bootstrap only."""
+
 from __future__ import annotations
 
 import base64
@@ -466,10 +468,9 @@ def test_local_profile_or_local_approval_path_cannot_construct_service(stack) ->
         )
 
 
-def test_ordinary_app_mounts_authority_bootstrap_with_configured_oidc_verifier(
+def test_ordinary_app_never_mounts_legacy_authority_bootstrap(
     stack,
     tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import agentnet.http_api as http_api_module
 
@@ -483,22 +484,6 @@ def test_ordinary_app_mounts_authority_bootstrap_with_configured_oidc_verifier(
         ),
         stack.store,
     )
-    core.oidc_enrollment = SimpleNamespace(
-        store=stack.store,
-        enrollment=SimpleNamespace(approval_verifier=stack.verifier),
-    )
-
-    async def marker(_request):
-        return JSONResponse({"mounted": True})
-
-    monkeypatch.setattr(
-        http_api_module,
-        "create_authority_bootstrap_routes",
-        lambda mounted_core, binder: [
-            Route("/__authority_bootstrap_mounted__", marker, methods=["GET"])
-        ],
-    )
     app = http_api_module.create_app(core)
-    assert "/__authority_bootstrap_mounted__" in {
-        route.path for route in app.routes if hasattr(route, "path")
-    }
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    assert all(not path.startswith("/v1/authority-bootstrap") for path in paths)

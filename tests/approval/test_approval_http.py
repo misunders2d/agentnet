@@ -16,7 +16,7 @@ from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PURPOSE_STATUS,
     build_internal_broker_proof,
 )
-from agentnet.errors import AuthenticationError
+from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.security.signatures import b64url_encode, canonical_json
 
 
@@ -37,9 +37,114 @@ class FakeReplayStore:
         self.calls.append(dict(kwargs))
 
 
+class FakeOwnerSessions:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.provider = SimpleNamespace(
+            config=SimpleNamespace(authorization_ttl_seconds=300)
+        )
+
+    def create_preauth(self):
+        self.calls.append(("create_preauth", None))
+        return SimpleNamespace(session_token="P" * 43, csrf_token="C" * 43)
+
+    def begin_oidc_login(self, **kwargs):
+        self.calls.append(("begin_oidc_login", kwargs))
+        return SimpleNamespace(
+            authorization_url="https://idp.example/authorize?state=browser-confined",
+            expires_at=NOW + 300,
+        )
+
+    def complete_oidc_login(self, **kwargs):
+        self.calls.append(("complete_oidc_login", kwargs))
+        return SimpleNamespace(
+            session_token="S" * 43,
+            csrf_token="N" * 43,
+            expires_at=NOW + 900,
+        )
+
+    def session_status(self, session_token: str):
+        self.calls.append(("session_status", session_token))
+        if session_token != "S" * 43:
+            raise AuthenticationError("owner session denied")
+        return SimpleNamespace(
+            authenticated=True,
+            csrf_token="N" * 43,
+            expires_at=NOW + 900,
+            credential_registered=False,
+        )
+
+    def begin_registration(self, **kwargs):
+        self.calls.append(("begin_registration", kwargs))
+        return SimpleNamespace(
+            ceremony_id="ceremony-123456789",
+            expires_at=NOW + 180,
+            public_key={"challenge": "AA", "user": {"id": "AA"}},
+        )
+
+    def complete_registration(self, **kwargs):
+        self.calls.append(("complete_owner_registration", kwargs))
+        return {
+            "schema": "agentnet.approval.owner-registration-result.v1",
+            "registered": True,
+        }
+
+    def pending_approvals(self, **kwargs):
+        self.calls.append(("pending_approvals", kwargs))
+        return [
+            {
+                "request_id": "request-123456789",
+                "approval_purpose": "identity.enrollment.approve",
+                "state": "pending",
+                "created_at": NOW,
+                "expires_at": NOW + 300,
+            }
+        ]
+
+    def begin_approval(self, **kwargs):
+        self.calls.append(("begin_approval", kwargs))
+        return {
+            "schema": "agentnet.approval.owner-request-options.v1",
+            "request_id": kwargs["request_id"],
+            "expires_at": NOW + 300,
+            "challenge_expires_at": NOW + 180,
+            "summary": {
+                "title": "Enroll a laptop identity",
+                "statements": ["Authority granted: none"],
+                "advanced_digest": "a" * 64,
+            },
+            "publicKey": {"challenge": "AA", "allowCredentials": []},
+        }
+
+    def complete_approval(self, **kwargs):
+        self.calls.append(("complete_approval", kwargs))
+        return {
+            "schema": "agentnet.approval.owner-request-result.v1",
+            "approved": True,
+            "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+            "claim_code_expires_at": NOW + 300,
+        }
+
+    def reject_approval(self, **kwargs):
+        self.calls.append(("reject_approval", kwargs))
+        return {
+            "schema": "agentnet.approval.owner-request-rejection.v1",
+            "rejected": True,
+        }
+
+    def regenerate_approval_code(self, **kwargs):
+        self.calls.append(("regenerate_approval_code", kwargs))
+        return self.complete_approval(**kwargs, credential={})
+
+
 class FakeApprovalService:
-    def __init__(self, *, max_body: int = 4096) -> None:
-        self.config = SimpleNamespace(max_http_body_bytes=max_body)
+    def __init__(self, *, max_body: int = 4096, owner_sessions=None) -> None:
+        self.config = SimpleNamespace(
+            max_http_body_bytes=max_body,
+            public_origin="https://approval.corp.example",
+            owner_oidc=SimpleNamespace() if owner_sessions is not None else None,
+        )
+        self.owner_sessions = owner_sessions
         self.calls: list[tuple[str, object]] = []
 
     def registration_options(self, token: str):
@@ -69,9 +174,22 @@ class FakeApprovalService:
         return {"status": "rejected"}
 
 
-def test_browser_page_uses_fragment_cleanup_external_script_and_security_headers() -> None:
+def test_owner_oidc_app_requires_matching_owner_session_service() -> None:
+    service = FakeApprovalService()
+    service.config.owner_oidc = SimpleNamespace()
+    with pytest.raises(ValueError, match="owner OIDC requires owner session service"):
+        create_approval_app(service)
+
+    service = FakeApprovalService(owner_sessions=FakeOwnerSessions())
+    service.config.owner_oidc = None
+    with pytest.raises(ValueError, match="owner session service requires owner OIDC"):
+        create_approval_app(service)
+
+
+def test_browser_page_uses_stable_owner_session_without_fragment_capability() -> None:
     async def exercise() -> None:
-        app = create_approval_app(FakeApprovalService())
+        owner = FakeOwnerSessions()
+        app = create_approval_app(FakeApprovalService(owner_sessions=owner))
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
             base_url="https://approval.corp.example",
@@ -84,13 +202,204 @@ def test_browser_page_uses_fragment_cleanup_external_script_and_security_headers
             for name, value in SECURITY_HEADERS.items():
                 assert page.headers[name] == value
             script = await client.get("/approval.js")
-            assert "history.replaceState" in script.text
+            for forbidden in (
+                "location.hash",
+                "fragment.get('token')",
+                "history.replaceState",
+                "agcap1.",
+            ):
+                assert forbidden not in script.text
             assert "navigator.credentials.create" in script.text
+            assert "/v1/approval/owner/session" in script.text
+            assert "/v1/approval/owner/oidc/start" in script.text
+            assert "/v1/approval/owner/registration/begin" in script.text
+            assert "/v1/approval/owner/requests/options" in script.text
             assert "navigator.credentials.get" in script.text
-            assert "options.delivery_mode === 'core_claim_code'" in script.text
-            assert "result.claim_code" in script.text
-            assert "Enter this one-time code into the fresh laptop AgentNet prompt." in script.text
-            assert "Send this one-time code through the authenticated human channel." not in script.text
+            assert "One-time approval code" in page.text
+            assert script.headers["cache-control"] == "no-store"
+
+            initial = await client.get("/v1/approval/owner/session")
+            assert initial.status_code == 200
+            assert initial.json() == {
+                "schema": "agentnet.approval.owner-session-status.v1",
+                "authenticated": False,
+                "csrf_token": "C" * 43,
+            }
+            set_cookies = initial.headers.get_list("set-cookie")
+            cookies = "\n".join(set_cookies)
+            preauth_cookie = next(
+                value
+                for value in set_cookies
+                if value.startswith("__Host-agentnet-approval-preauth=")
+            )
+            csrf_cookie = next(
+                value
+                for value in set_cookies
+                if value.startswith("__Host-agentnet-approval-csrf=")
+            )
+            assert "Secure" in preauth_cookie and "HttpOnly" in preauth_cookie
+            assert "SameSite=lax" in preauth_cookie
+            assert "Secure" in csrf_cookie and "HttpOnly" not in csrf_cookie
+            assert "SameSite=strict" in csrf_cookie
+
+            missing_origin = await client.post(
+                "/v1/approval/owner/oidc/start",
+                json={
+                    "schema": "agentnet.approval.owner-oidc-start.v1",
+                    "csrf_token": "C" * 43,
+                },
+            )
+            assert missing_origin.status_code == 400
+
+            started = await client.post(
+                "/v1/approval/owner/oidc/start",
+                headers={"Origin": "https://approval.corp.example"},
+                json={
+                    "schema": "agentnet.approval.owner-oidc-start.v1",
+                    "csrf_token": "C" * 43,
+                },
+            )
+            assert started.status_code == 200
+            assert started.json()["authorization_url"].startswith("https://idp.example/")
+
+            extra_query = await client.get(
+                "/v1/approval/owner/oidc/callback",
+                params={
+                    "state": "T" * 43,
+                    "code": "authorization-code",
+                    "unexpected": "value",
+                },
+                follow_redirects=False,
+            )
+            assert extra_query.status_code == 400
+
+            callback = await client.get(
+                "/v1/approval/owner/oidc/callback",
+                params={"state": "T" * 43, "code": "authorization-code"},
+                follow_redirects=False,
+            )
+            assert callback.status_code == 303
+            assert callback.headers["location"] == "/approval"
+            callback_cookies = "\n".join(callback.headers.get_list("set-cookie"))
+            assert "__Host-agentnet-approval=" in callback_cookies
+            assert "HttpOnly" in callback_cookies
+            assert "__Host-agentnet-approval-preauth=\"\"" in callback_cookies
+
+            status = await client.get("/v1/approval/owner/session")
+            assert status.status_code == 200
+            assert status.json()["authenticated"] is True
+            assert status.json()["credential_registered"] is False
+
+            wrong_origin = await client.post(
+                "/v1/approval/owner/registration/begin",
+                headers={"Origin": "https://attacker.example"},
+                json={
+                    "schema": "agentnet.approval.owner-registration-begin.v1",
+                    "csrf_token": "N" * 43,
+                },
+            )
+            assert wrong_origin.status_code == 400
+
+            begun = await client.post(
+                "/v1/approval/owner/registration/begin",
+                headers={"Origin": "https://approval.corp.example"},
+                json={
+                    "schema": "agentnet.approval.owner-registration-begin.v1",
+                    "csrf_token": "N" * 43,
+                },
+            )
+            assert begun.status_code == 200
+            assert begun.json()["ceremony_id"] == "ceremony-123456789"
+
+            completed = await client.post(
+                "/v1/approval/owner/registration/complete",
+                headers={"Origin": "https://approval.corp.example"},
+                json={
+                    "schema": "agentnet.approval.owner-registration-complete.v1",
+                    "csrf_token": "N" * 43,
+                    "ceremony_id": "ceremony-123456789",
+                    "credential": {"id": "credential"},
+                },
+            )
+            assert completed.status_code == 200
+            assert completed.json()["registered"] is True
+
+            pending = await client.get("/v1/approval/owner/requests")
+            assert pending.status_code == 200
+            assert pending.json()["requests"][0]["state"] == "pending"
+
+            owner_options = await client.post(
+                "/v1/approval/owner/requests/options",
+                headers={"Origin": "https://approval.corp.example"},
+                json={
+                    "schema": "agentnet.approval.owner-request-select.v1",
+                    "csrf_token": "N" * 43,
+                    "request_id": "request-123456789",
+                },
+            )
+            assert owner_options.status_code == 200
+            assert owner_options.json()["summary"]["title"] == "Enroll a laptop identity"
+            assert "canonical_transaction_text" not in owner_options.text
+
+            owner_completed = await client.post(
+                "/v1/approval/owner/requests/complete",
+                headers={"Origin": "https://approval.corp.example"},
+                json={
+                    "schema": "agentnet.approval.owner-request-complete.v1",
+                    "csrf_token": "N" * 43,
+                    "request_id": "request-123456789",
+                    "credential": {"id": "credential"},
+                },
+            )
+            assert owner_completed.status_code == 200
+            assert owner_completed.json()["approved"] is True
+            assert owner_completed.json()["claim_code"].startswith("AAAA-")
+
+            wrong_owner_origin = await client.post(
+                "/v1/approval/owner/requests/reject",
+                headers={"Origin": "https://attacker.example"},
+                json={
+                    "schema": "agentnet.approval.owner-request-select.v1",
+                    "csrf_token": "N" * 43,
+                    "request_id": "request-123456789",
+                },
+            )
+            assert wrong_owner_origin.status_code == 400
+
+            for legacy_path in (
+                "/v1/approval/registration/options",
+                "/v1/approval/requests/options",
+                "/v1/approval/requests/verify",
+                "/v1/approval/requests/reject",
+            ):
+                legacy = await client.post(legacy_path, json={"token": TOKEN})
+                assert legacy.status_code == 404
+
+    asyncio.run(exercise())
+
+
+def test_lab_browser_page_preserves_legacy_fragment_ceremony() -> None:
+    async def exercise() -> None:
+        app = create_approval_app(FakeApprovalService())
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="https://approval.corp.example",
+        ) as client:
+            page = await client.get("/approval")
+            script = await client.get("/approval.js")
+            assert page.status_code == script.status_code == 200
+            assert "AgentNet Independent Approval" in page.text
+            for expected in (
+                "location.hash",
+                "fragment.get('token')",
+                "history.replaceState",
+                "/v1/approval/registration/options",
+                "/v1/approval/requests/options",
+                "/v1/approval/requests/verify",
+                "/v1/approval/requests/reject",
+            ):
+                assert expected in script.text
+            assert "/v1/approval/owner/session" not in script.text
             assert script.headers["cache-control"] == "no-store"
 
     asyncio.run(exercise())
@@ -139,7 +448,9 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 max_http_body_bytes=4096,
                 internal_core_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
                 public_origin="https://approval.corp.example",
+                owner_oidc=object(),
             )
+            self.owner_sessions = object()
             self.clock = lambda: NOW
             self.store = FakeReplayStore()
 
@@ -154,6 +465,8 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             )
 
         def request_status(self, **kwargs):
+            if getattr(self, "failure", None) is not None:
+                raise self.failure
             self.calls.append(("request_status", kwargs))
             return {
                 "schema": "agentnet.approval.internal-request-status-result.v1",
@@ -182,6 +495,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             "approval_purpose": "identity.enrollment.approve",
             "canonical_transaction_b64": b64url_encode(canonical),
             "transaction_digest": digest,
+            "request_expires_at": 1_800_000_300,
         }
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
@@ -238,6 +552,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 headers=create_headers,
             )
             assert created.status_code == 201
+            assert service.calls[0][1]["request_expires_at"] == 1_800_000_300
             created_text = created.text
             assert "approval_url" not in created_text
             assert "agcap1." not in created_text
@@ -366,12 +681,39 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             assert malformed.status_code == 400
             assert len(service.store.calls) == 4
 
+            for nonce, failure in (
+                (b"u" * 32, GateBlocked("approval_store", "private outage detail")),
+                (b"x" * 32, RuntimeError("private exception detail")),
+            ):
+                service.failure = failure
+                unavailable = await client.post(
+                    status_path,
+                    content=canonical_json(status_body),
+                    headers=signed_headers(
+                        status_path,
+                        INTERNAL_BROKER_PURPOSE_STATUS,
+                        status_body,
+                        nonce=nonce,
+                    ),
+                )
+                assert unavailable.status_code == 503
+                assert unavailable.json() == {"error": "request_unavailable"}
+                assert "private" not in unavailable.text
+
     asyncio.run(exercise())
 
 
-def test_internal_routes_are_absent_without_runtime_reference() -> None:
+@pytest.mark.parametrize("runtime_reference", (None, "AGENTNET_TEST_APPROVAL_CORE_TOKEN"))
+def test_internal_routes_require_both_runtime_reference_and_stable_owner_profile(
+    runtime_reference: str | None,
+) -> None:
+    class LegacyService(FakeApprovalService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config.internal_core_credential_env = runtime_reference
+
     async def exercise() -> None:
-        app = create_approval_app(FakeApprovalService())
+        app = create_approval_app(LegacyService())
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
             base_url="https://approval.corp.example",

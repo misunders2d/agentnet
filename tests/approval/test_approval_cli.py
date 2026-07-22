@@ -96,6 +96,84 @@ def test_approval_provision_outputs_only_public_trust_and_refuses_overwrite(
         assert forbidden not in status_text
 
 
+def test_provision_wires_reference_only_owner_oidc_and_open_service(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    private = _private_dir(tmp_path / "private")
+    spec = private / "approvers.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "approvers": [
+                    {
+                        "principal_id": "security-owner",
+                        "authority_kind": "human",
+                        "domain_id": "corp.example",
+                        "allowed_purposes": sorted(MANDATORY_APPROVAL_PURPOSES),
+                        "oidc_issuer": "https://idp.example",
+                        "oidc_subject": "owner-subject",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec.chmod(0o600)
+    owner_oidc = private / "owner-oidc.json"
+    owner_oidc.write_text(
+        json.dumps(
+            {
+                "issuer": "https://idp.example",
+                "client_id": "agentnet-approval",
+                "redirect_uri": (
+                    "https://approval.corp.example/v1/approval/owner/oidc/callback"
+                ),
+                "allowed_endpoint_origins": ["https://idp.example"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner_oidc.chmod(0o600)
+    config_path = private / "config.json"
+    data_dir = tmp_path / "approval-data"
+    assert (
+        cli.main(
+            [
+                "approval",
+                "provision",
+                "--config",
+                str(config_path),
+                "--data-dir",
+                str(data_dir),
+                "--public-origin",
+                "https://approval.corp.example",
+                "--rp-id",
+                "approval.corp.example",
+                "--verifier-id",
+                "approval.corp.example",
+                "--approvers",
+                str(spec),
+                "--owner-oidc-config",
+                str(owner_oidc),
+            ]
+        )
+        == 0
+    )
+    rendered = capsys.readouterr().out
+    assert "owner-subject" not in rendered
+    assert "client_secret" not in rendered
+    loaded = load_approval_service_config(config_path)
+    assert loaded.owner_oidc is not None
+    assert loaded.approvers[0].oidc_subject == "owner-subject"
+    _config, store, service = approval_cli._open_service(config_path)
+    try:
+        assert service.owner_sessions is not None
+        assert service.owner_sessions.approval_service is service
+    finally:
+        store.close()
+
+
 def test_pending_open_and_watch_keep_approval_capability_local(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -129,7 +207,11 @@ def test_pending_open_and_watch_keep_approval_capability_local(
     monkeypatch.setattr(
         approval_cli,
         "_open_service",
-        lambda _path: (SimpleNamespace(), FakeStore(), FakeService()),
+        lambda _path: (
+            SimpleNamespace(owner_oidc=None),
+            FakeStore(),
+            FakeService(),
+        ),
     )
     monkeypatch.setattr(
         approval_cli.webbrowser,
@@ -182,6 +264,101 @@ def test_pending_open_and_watch_keep_approval_capability_local(
     assert opened == [secret_url, secret_url]
 
 
+def test_stable_owner_cli_never_emits_or_opens_request_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected = {
+        "request_id": "request-protected",
+        "approver_principal_id": "security-owner",
+        "domain_id": "corp.example",
+        "approval_purpose": "identity.enrollment.approve",
+        "transaction_digest": "d" * 64,
+        "openable_locally": True,
+    }
+    opened: list[str] = []
+
+    class FakeStore:
+        def close(self) -> None:
+            return None
+
+    class FakeService:
+        def pending_requests(self) -> list[dict[str, object]]:
+            return [protected]
+
+        def local_approval_url(self, _request_id: str) -> str:
+            raise AssertionError("stable profile must not resolve a request capability")
+
+    config = SimpleNamespace(
+        owner_oidc=object(),
+        public_origin="https://approval.corp.example",
+    )
+    monkeypatch.setattr(
+        approval_cli,
+        "_open_service",
+        lambda _path: (config, FakeStore(), FakeService()),
+    )
+    monkeypatch.setattr(
+        approval_cli.webbrowser,
+        "open",
+        lambda url, new=0: opened.append(url) or True,
+    )
+
+    assert cli.main(["approval", "pending", "--config", "/private/config.json"]) == 0
+    pending_output = capsys.readouterr().out
+    assert json.loads(pending_output) == {
+        "schema": "agentnet.approval.stable-pending.v1",
+        "pending_count": 1,
+        "review_at_stable_owner_page": True,
+    }
+
+    assert cli.main(
+        [
+            "approval",
+            "open",
+            "--config",
+            "/private/config.json",
+            "--request-id",
+            "request-protected",
+        ]
+    ) == 0
+    open_output = capsys.readouterr().out
+    assert json.loads(open_output) == {
+        "schema": "agentnet.approval.stable-open.v1",
+        "opened": True,
+    }
+
+    assert cli.main(
+        [
+            "approval",
+            "watch",
+            "--config",
+            "/private/config.json",
+            "--open",
+            "--once",
+        ]
+    ) == 0
+    watch_output = capsys.readouterr().out
+    assert json.loads(watch_output) == {
+        "schema": "agentnet.approval.stable-pending-observed.v1",
+        "pending_count": 1,
+        "opened": True,
+    }
+    combined = pending_output + open_output + watch_output
+    for forbidden in protected.values():
+        if isinstance(forbidden, str):
+            assert forbidden not in combined
+    assert opened == [
+        "https://approval.corp.example/approval",
+        "https://approval.corp.example/approval",
+    ]
+
+    with pytest.raises(SystemExit, match="signed internal broker"):
+        approval_cli.command_approval_request_create(
+            SimpleNamespace(config="/private/config.json")
+        )
+
+
 def test_pending_open_and_watch_support_private_terminal_mode(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -217,7 +394,11 @@ def test_pending_open_and_watch_support_private_terminal_mode(
     monkeypatch.setattr(
         approval_cli,
         "_open_service",
-        lambda _path: (SimpleNamespace(), FakeStore(), FakeService()),
+        lambda _path: (
+            SimpleNamespace(owner_oidc=None),
+            FakeStore(),
+            FakeService(),
+        ),
     )
     monkeypatch.setattr(
         approval_cli,
@@ -328,6 +509,44 @@ def test_approval_config_rejects_duplicate_json_keys_before_parsing(tmp_path: Pa
     config.chmod(0o600)
     with pytest.raises(ValidationError, match="configuration is invalid"):
         load_approval_service_config(config)
+
+
+def test_register_begin_outputs_only_stable_public_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    owner = SimpleNamespace(oidc_issuer="https://idp.example")
+    config = SimpleNamespace(
+        owner_oidc=SimpleNamespace(),
+        public_origin="https://approval.corp.example",
+        approver=lambda principal_id: owner
+        if principal_id == "security-owner"
+        else pytest.fail("unexpected approver"),
+    )
+    monkeypatch.setattr(approval_cli, "load_approval_service_config", lambda _path: config)
+    assert (
+        cli.main(
+            [
+                "approval",
+                "register-begin",
+                "--config",
+                "/private/config.json",
+                "--approver",
+                "security-owner",
+            ]
+        )
+        == 0
+    )
+    rendered = capsys.readouterr().out
+    value = json.loads(rendered)
+    assert value == {
+        "schema": "agentnet.approval.stable-registration-entrypoint.v1",
+        "approval_url": "https://approval.corp.example/approval",
+        "authority_granted": False,
+    }
+    assert "agcap1." not in rendered
+    assert "#" not in rendered
+    assert "approver_principal_id" not in rendered
 
 
 def test_approval_serve_rejects_non_loopback_before_loading_config() -> None:

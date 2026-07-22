@@ -1,0 +1,58 @@
+{
+  "run_id": "2026-07-22-v0.1.19",
+  "evaluated_at": "2026-07-22T10:34:04+00:00",
+  "scope": "v0_1_19_zero_state_two_harness_c0_repository_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "7fee125d47e109cae25dd64a64b7358b03d3eb37ba79a0006c92568d1c80e6d4",
+  "prior_runtime_evidence": "evidence/local/2026-07-20-v0.1.18/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-20-v0.1.18/manifest.json",
+  "change_boundary": "Adds stable owner OIDC/session and WebAuthn-UV approval composition, hardened guided identity-only enrollment, one atomic bounded same-principal two-harness C0 BootstrapGrantPlan, a selector-free C0 policy-enforcement service, exact active harness/credential-set invalidation, seven authoritative fact/event/receipt-owner checks, a dedicated no-model responder, and exact atomic revocation of the five communication entitlements. Existing identity, Approval, messaging, mailbox, acknowledgement, delivery, storage, supervisor, and A2A systems are composed rather than replaced. No company data, broad grant, model/task/file/effect path, mutation-authorized PostgreSQL result, live ceremony, deployment, publication, production-readiness, or A2A cutover is added or claimed.",
+  "commands": [
+    {
+      "command": "mandatory agentnet-operator Step 4a skill architecture audit; bounded Claude -p architecture correction reassessment",
+      "result": "skill architecture PASS; Claude final verdict ALIGNED"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q",
+      "result": "1346 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "1267 passed; 15 expected host/PostgreSQL skips; 0 failed; release manifest verification included"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/adapters/test_launch_specs.py tests/adapters/test_installed_live_inference.py",
+      "result": "18 passed for exact installed Claude 2.1.216, Codex 0.144.6, Pi 0.81.1, and Antigravity 1.1.5 probe/deterministic lifecycles; no semantic inference"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q tests/authorization/test_c0_pilot_contract.py tests/authorization/test_bootstrap_plan_service.py tests/production/test_postgres_runtime.py -k 'c0 or s4_catalog or v3_catalog or migration_application'",
+      "result": "52 passed; 74 deselected; 0 failed"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --no-sources",
+      "result": "byte-identical 0.1.19 sdist and wheel archives"
+    },
+    {
+      "command": "npm run check:packed",
+      "result": "source to installed generation 1 to repacked generation 2 PASS; each installed generation 1267 passed and 15 expected host/PostgreSQL skips"
+    },
+    {
+      "command": "Pi loadSkillsFromDir against installed generation 1 and repacked generation 2; golden-vector fixture presence checks",
+      "result": "each generation loaded exactly one agentnet-operator skill with zero diagnostics and retained tests/fixtures/bootstrap_plan_golden_vector.json"
+    },
+    {
+      "command": "mutation-authorized local PostgreSQL attempt",
+      "result": "not executed: no disposable mutation-authorized PostgreSQL database configured; no database changed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-22-v0.1.19/artifacts/agentnet-0.1.19.tar.gz",
+      "sha256": "6e78e3631e2067084b478d397f02defa34cc74949fc49ec6c884472ab924661e"
+    },
+    {
+      "path": "evidence/local/2026-07-22-v0.1.19/artifacts/agentnet-0.1.19-py3-none-any.whl",
+      "sha256": "04c9b3c8fbfabb116634cf2c7d57b40ad4931f30e9de46a94639637408e804ed"
+    }
+  ]
+}

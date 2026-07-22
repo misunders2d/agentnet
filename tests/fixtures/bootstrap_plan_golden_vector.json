@@ -1,0 +1,626 @@
+{
+  "approval_create": {
+    "digest": "cfc0eb58739adeb11f7dd1fddb2c7ea4cff8c0929b38310c72352187a13b1f5d",
+    "idempotency_key": "core:bootstrap-plan:create:bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+    "value": {
+      "approval_purpose": "authorization.bootstrap_plan.approve",
+      "approver_principal_id": "principal-fixture-01",
+      "domain_id": "corp.example",
+      "idempotency_key": "core:bootstrap-plan:create:bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+      "schema": "agentnet.approval.core-request.v1",
+      "transaction_digest": "227bd149b88eeaeff89d9c52b1b48d34b892fba9b68a5b8f88abd75784bc8747"
+    }
+  },
+  "canonical_plan_preimage": {
+    "canonical_text": "{\"approval_expires_at\":1800000300,\"approval_purpose\":\"authorization.bootstrap_plan.approve\",\"authority_expires_at\":1800003600,\"begin_idempotency_key_sha256\":\"bfb7aa2a5fc5f0d3019742ce7a96b56ed1d7f6a20853c710a0e7947ab20e089a\",\"c0\":{\"classification\":\"C0\",\"reply_payload_digest\":\"86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375\",\"reply_payload_schema_digest\":\"6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e\",\"request_payload_digest\":\"e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51\",\"request_payload_schema_digest\":\"91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff\"},\"communication_ttl_seconds\":3600,\"domain\":{\"domain_id\":\"corp.example\",\"policy_revision\":1,\"revocation_epoch\":1},\"enrollment_evidence\":{\"fresh\":{\"approval_authenticated_at\":1799999935,\"approval_issued_at\":1799999940,\"approval_purpose\":\"identity.enrollment.approve\",\"approval_receipt_digest\":\"e06a82893267f71239e55b00cc609a776b841ddfdaca5a5e8c4cef57ed83a370\",\"approval_receipt_id\":\"approval-receipt-fresh-fixture-01\",\"approval_signer_key_id\":\"approval-signer-fixture-01\",\"approval_verifier_id\":\"approval-verifier-fixture-01\",\"candidate_key_thumbprint\":\"key-thumbprint-fresh-fixture-01\",\"enrollment_challenge_id\":\"challenge-fresh-fixture-01\",\"enrollment_consumed_at\":1799999940,\"guided_oidc\":true,\"oidc_consumed_at\":1799999940,\"oidc_issuer\":\"https://accounts.example.test\",\"oidc_subject_sha256\":\"59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff\",\"oidc_transaction_id\":\"oidc-fresh-fixture-01\",\"role\":\"fresh\",\"schema\":\"agentnet.bootstrap-plan.enrollment-evidence.v1\",\"verified_email_sha256\":\"b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f\"},\"owner\":{\"approval_authenticated_at\":1799999875,\"approval_issued_at\":1799999880,\"approval_purpose\":\"identity.enrollment.approve\",\"approval_receipt_digest\":\"f985382a20628181c72a685cd1d48b1aef9b8079bf1cf1b9c9ecf194acd1230b\",\"approval_receipt_id\":\"approval-receipt-owner-fixture-01\",\"approval_signer_key_id\":\"approval-signer-fixture-01\",\"approval_verifier_id\":\"approval-verifier-fixture-01\",\"candidate_key_thumbprint\":\"key-thumbprint-owner-fixture-01\",\"enrollment_challenge_id\":\"challenge-owner-fixture-01\",\"enrollment_consumed_at\":1799999880,\"guided_oidc\":true,\"oidc_consumed_at\":1799999880,\"oidc_issuer\":\"https://accounts.example.test\",\"oidc_subject_sha256\":\"59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff\",\"oidc_transaction_id\":\"oidc-owner-fixture-01\",\"role\":\"owner\",\"schema\":\"agentnet.bootstrap-plan.enrollment-evidence.v1\",\"verified_email_sha256\":\"b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f\"}},\"harnesses\":{\"fresh\":{\"binding_assurance\":\"os_bound\",\"credential_epoch\":1,\"credential_id\":\"9a6f7c02-6806-55a1-a328-d73d37a06c85\",\"display_name\":\"Fresh laptop\",\"harness_id\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"kind\":\"pi\"},\"owner\":{\"binding_assurance\":\"os_bound\",\"credential_epoch\":1,\"credential_id\":\"7723ab43-0f1d-5fdb-a044-ef309ef2c766\",\"display_name\":\"Owner laptop\",\"harness_id\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"kind\":\"pi\"}},\"independent_boundary_proven\":false,\"issued_at\":1800000000,\"max_uses\":1,\"principal\":{\"principal_id\":\"principal-fixture-01\"},\"profile\":\"ordinary-two-harness-c0:v1\",\"profile_version\":1,\"schema\":\"agentnet.bootstrap-plan.preimage.v1\"}",
+    "plan_digest": "bb5e5971a3e30bf91506330c5b980f06724cf57f8c38f98560d8c7d68c273b99",
+    "value": {
+      "approval_expires_at": 1800000300,
+      "approval_purpose": "authorization.bootstrap_plan.approve",
+      "authority_expires_at": 1800003600,
+      "begin_idempotency_key_sha256": "bfb7aa2a5fc5f0d3019742ce7a96b56ed1d7f6a20853c710a0e7947ab20e089a",
+      "c0": {
+        "classification": "C0",
+        "reply_payload_digest": "86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375",
+        "reply_payload_schema_digest": "6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e",
+        "request_payload_digest": "e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51",
+        "request_payload_schema_digest": "91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff"
+      },
+      "communication_ttl_seconds": 3600,
+      "domain": {
+        "domain_id": "corp.example",
+        "policy_revision": 1,
+        "revocation_epoch": 1
+      },
+      "enrollment_evidence": {
+        "fresh": {
+          "approval_authenticated_at": 1799999935,
+          "approval_issued_at": 1799999940,
+          "approval_purpose": "identity.enrollment.approve",
+          "approval_receipt_digest": "e06a82893267f71239e55b00cc609a776b841ddfdaca5a5e8c4cef57ed83a370",
+          "approval_receipt_id": "approval-receipt-fresh-fixture-01",
+          "approval_signer_key_id": "approval-signer-fixture-01",
+          "approval_verifier_id": "approval-verifier-fixture-01",
+          "candidate_key_thumbprint": "key-thumbprint-fresh-fixture-01",
+          "enrollment_challenge_id": "challenge-fresh-fixture-01",
+          "enrollment_consumed_at": 1799999940,
+          "guided_oidc": true,
+          "oidc_consumed_at": 1799999940,
+          "oidc_issuer": "https://accounts.example.test",
+          "oidc_subject_sha256": "59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff",
+          "oidc_transaction_id": "oidc-fresh-fixture-01",
+          "role": "fresh",
+          "schema": "agentnet.bootstrap-plan.enrollment-evidence.v1",
+          "verified_email_sha256": "b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f"
+        },
+        "owner": {
+          "approval_authenticated_at": 1799999875,
+          "approval_issued_at": 1799999880,
+          "approval_purpose": "identity.enrollment.approve",
+          "approval_receipt_digest": "f985382a20628181c72a685cd1d48b1aef9b8079bf1cf1b9c9ecf194acd1230b",
+          "approval_receipt_id": "approval-receipt-owner-fixture-01",
+          "approval_signer_key_id": "approval-signer-fixture-01",
+          "approval_verifier_id": "approval-verifier-fixture-01",
+          "candidate_key_thumbprint": "key-thumbprint-owner-fixture-01",
+          "enrollment_challenge_id": "challenge-owner-fixture-01",
+          "enrollment_consumed_at": 1799999880,
+          "guided_oidc": true,
+          "oidc_consumed_at": 1799999880,
+          "oidc_issuer": "https://accounts.example.test",
+          "oidc_subject_sha256": "59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff",
+          "oidc_transaction_id": "oidc-owner-fixture-01",
+          "role": "owner",
+          "schema": "agentnet.bootstrap-plan.enrollment-evidence.v1",
+          "verified_email_sha256": "b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f"
+        }
+      },
+      "harnesses": {
+        "fresh": {
+          "binding_assurance": "os_bound",
+          "credential_epoch": 1,
+          "credential_id": "9a6f7c02-6806-55a1-a328-d73d37a06c85",
+          "display_name": "Fresh laptop",
+          "harness_id": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+          "kind": "pi"
+        },
+        "owner": {
+          "binding_assurance": "os_bound",
+          "credential_epoch": 1,
+          "credential_id": "7723ab43-0f1d-5fdb-a044-ef309ef2c766",
+          "display_name": "Owner laptop",
+          "harness_id": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+          "kind": "pi"
+        }
+      },
+      "independent_boundary_proven": false,
+      "issued_at": 1800000000,
+      "max_uses": 1,
+      "principal": {
+        "principal_id": "principal-fixture-01"
+      },
+      "profile": "ordinary-two-harness-c0:v1",
+      "profile_version": 1,
+      "schema": "agentnet.bootstrap-plan.preimage.v1"
+    }
+  },
+  "completion_reservation": {
+    "digest": "d0bd3ec3b4c328d63d649806f99ca75ff8ad2bfadae3b3bec8d3ac5d3f4abb47",
+    "value": {
+      "approval_purpose": "authorization.bootstrap_plan.approve",
+      "approval_request_id": "approval-request-fixture-01",
+      "begin_idempotency_key_sha256": "bfb7aa2a5fc5f0d3019742ce7a96b56ed1d7f6a20853c710a0e7947ab20e089a",
+      "completion_idempotency_key_sha256": "ae2768650226f5d4c0f2e9488c2dcd21e4a70529ac94f70af79d920dd234dd91",
+      "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+      "schema": "agentnet.bootstrap-plan.completion-reservation.v1",
+      "transaction_digest": "227bd149b88eeaeff89d9c52b1b48d34b892fba9b68a5b8f88abd75784bc8747"
+    }
+  },
+  "derived_ids": {
+    "entitlement_ids": [
+      "ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE",
+      "ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8",
+      "ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s",
+      "ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I",
+      "ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI",
+      "ent1_IljxAARLOUtvl_9vFSCWiVxim-gFuNIEhKjI9dLbmr4",
+      "ent1_3eACopenqhm3GxnKm3sGawlDQZYivMrWt4bfIAr_w8c",
+      "ent1_T84CfNJqtgSkTyLdSihI5Fcr2aaBTDmfvWPHE12RRWc",
+      "ent1_8SqSy53P47kCTuisTxSQtxZK63RlzpxQTU5kQElbrdE",
+      "ent1_39cLu9cKBrajJvUjlA82vtShIaNoQ2YFUbNVlyUB2SM"
+    ],
+    "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+    "item_ids": [
+      "bpi1_uXggp33MJDIKGpcIEkbkUSLfpnPuKtXsTNszXctl7Ik",
+      "bpi1_aSM4nc4BAgNe7kkyGj2oEwOzyzP6t9MBvmITJdXnuzI",
+      "bpi1_YHEfget3pAPhwt0e1e7BdzPDoJku1ImProjyMuXBwhQ",
+      "bpi1_UjPmaTAgIwLrE0jubnLr3BTCUMVFvj0gRI5CE4bH9fc",
+      "bpi1_YoBf03t5dWuOg3jnX1i7DhOdlWIU43tvDSC12mm_6NE",
+      "bpi1_T4GSxm2o0XEVGFbZEScQXAzfy3bD5kq3CAn_zMStbME",
+      "bpi1_YpKAujLTm4yt453NMQ7nqgZWNXAOXjw77aOwQZQ9Edg",
+      "bpi1_mOqn1NuZlMbdTzKQnw2w8seMpdioP3gVXhil518XUno",
+      "bpi1_k09VOcRR8EyMXgYnukARzshUOcz3luD9Ev3IrMimhGs",
+      "bpi1_JveVDhKcu9v98x21Y4YR7EJo97O3aJCj7QZ1WEL-lGw"
+    ],
+    "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U"
+  },
+  "final_approval_transaction": {
+    "canonical_text": "{\"approval_purpose\":\"authorization.bootstrap_plan.approve\",\"canonical_plan_preimage\":{\"approval_expires_at\":1800000300,\"approval_purpose\":\"authorization.bootstrap_plan.approve\",\"authority_expires_at\":1800003600,\"begin_idempotency_key_sha256\":\"bfb7aa2a5fc5f0d3019742ce7a96b56ed1d7f6a20853c710a0e7947ab20e089a\",\"c0\":{\"classification\":\"C0\",\"reply_payload_digest\":\"86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375\",\"reply_payload_schema_digest\":\"6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e\",\"request_payload_digest\":\"e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51\",\"request_payload_schema_digest\":\"91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff\"},\"communication_ttl_seconds\":3600,\"domain\":{\"domain_id\":\"corp.example\",\"policy_revision\":1,\"revocation_epoch\":1},\"enrollment_evidence\":{\"fresh\":{\"approval_authenticated_at\":1799999935,\"approval_issued_at\":1799999940,\"approval_purpose\":\"identity.enrollment.approve\",\"approval_receipt_digest\":\"e06a82893267f71239e55b00cc609a776b841ddfdaca5a5e8c4cef57ed83a370\",\"approval_receipt_id\":\"approval-receipt-fresh-fixture-01\",\"approval_signer_key_id\":\"approval-signer-fixture-01\",\"approval_verifier_id\":\"approval-verifier-fixture-01\",\"candidate_key_thumbprint\":\"key-thumbprint-fresh-fixture-01\",\"enrollment_challenge_id\":\"challenge-fresh-fixture-01\",\"enrollment_consumed_at\":1799999940,\"guided_oidc\":true,\"oidc_consumed_at\":1799999940,\"oidc_issuer\":\"https://accounts.example.test\",\"oidc_subject_sha256\":\"59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff\",\"oidc_transaction_id\":\"oidc-fresh-fixture-01\",\"role\":\"fresh\",\"schema\":\"agentnet.bootstrap-plan.enrollment-evidence.v1\",\"verified_email_sha256\":\"b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f\"},\"owner\":{\"approval_authenticated_at\":1799999875,\"approval_issued_at\":1799999880,\"approval_purpose\":\"identity.enrollment.approve\",\"approval_receipt_digest\":\"f985382a20628181c72a685cd1d48b1aef9b8079bf1cf1b9c9ecf194acd1230b\",\"approval_receipt_id\":\"approval-receipt-owner-fixture-01\",\"approval_signer_key_id\":\"approval-signer-fixture-01\",\"approval_verifier_id\":\"approval-verifier-fixture-01\",\"candidate_key_thumbprint\":\"key-thumbprint-owner-fixture-01\",\"enrollment_challenge_id\":\"challenge-owner-fixture-01\",\"enrollment_consumed_at\":1799999880,\"guided_oidc\":true,\"oidc_consumed_at\":1799999880,\"oidc_issuer\":\"https://accounts.example.test\",\"oidc_subject_sha256\":\"59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff\",\"oidc_transaction_id\":\"oidc-owner-fixture-01\",\"role\":\"owner\",\"schema\":\"agentnet.bootstrap-plan.enrollment-evidence.v1\",\"verified_email_sha256\":\"b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f\"}},\"harnesses\":{\"fresh\":{\"binding_assurance\":\"os_bound\",\"credential_epoch\":1,\"credential_id\":\"9a6f7c02-6806-55a1-a328-d73d37a06c85\",\"display_name\":\"Fresh laptop\",\"harness_id\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"kind\":\"pi\"},\"owner\":{\"binding_assurance\":\"os_bound\",\"credential_epoch\":1,\"credential_id\":\"7723ab43-0f1d-5fdb-a044-ef309ef2c766\",\"display_name\":\"Owner laptop\",\"harness_id\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"kind\":\"pi\"}},\"independent_boundary_proven\":false,\"issued_at\":1800000000,\"max_uses\":1,\"principal\":{\"principal_id\":\"principal-fixture-01\"},\"profile\":\"ordinary-two-harness-c0:v1\",\"profile_version\":1,\"schema\":\"agentnet.bootstrap-plan.preimage.v1\"},\"entitlement_count\":10,\"guard\":{\"classification\":\"C0\",\"fresh_harness_id\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"owner_harness_id\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"reply_payload\":{\"message\":\"AgentNet C0 pilot reply: fixed harmless transport check.\",\"profile\":\"ordinary-two-harness-c0:v1\",\"role\":\"reply\",\"schema\":\"agentnet.c0-pilot.reply-payload.v1\"},\"reply_payload_digest\":\"86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375\",\"reply_payload_schema\":{\"$id\":\"agentnet.c0-pilot.reply-payload.v1\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"message\":{\"const\":\"AgentNet C0 pilot reply: fixed harmless transport check.\"},\"profile\":{\"const\":\"ordinary-two-harness-c0:v1\"},\"role\":{\"const\":\"reply\"},\"schema\":{\"const\":\"agentnet.c0-pilot.reply-payload.v1\"}},\"required\":[\"schema\",\"profile\",\"role\",\"message\"],\"type\":\"object\"},\"reply_payload_schema_digest\":\"6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e\",\"reply_remaining_uses\":1,\"request_payload\":{\"message\":\"AgentNet C0 pilot request: fixed harmless transport check.\",\"profile\":\"ordinary-two-harness-c0:v1\",\"role\":\"request\",\"schema\":\"agentnet.c0-pilot.request-payload.v1\"},\"request_payload_digest\":\"e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51\",\"request_payload_schema\":{\"$id\":\"agentnet.c0-pilot.request-payload.v1\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"message\":{\"const\":\"AgentNet C0 pilot request: fixed harmless transport check.\"},\"profile\":{\"const\":\"ordinary-two-harness-c0:v1\"},\"role\":{\"const\":\"request\"},\"schema\":{\"const\":\"agentnet.c0-pilot.request-payload.v1\"}},\"required\":[\"schema\",\"profile\",\"role\",\"message\"],\"type\":\"object\"},\"request_payload_schema_digest\":\"91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff\",\"request_remaining_uses\":1,\"schema\":\"agentnet.c0-plan-guard.v1\",\"state_at_commit\":\"pending\"},\"item_count\":10,\"items\":[{\"action\":\"message.send\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"message.send\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"direct\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_uXggp33MJDIKGpcIEkbkUSLfpnPuKtXsTNszXctl7Ik\",\"item_kind\":\"communication\",\"item_ordinal\":1,\"operation_scopes\":[\"fresh_to_owner_send\",\"owner_to_fresh_send\"],\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"direct\",\"revision\":1},{\"action\":\"mailbox.read\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"mailbox.read\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_aSM4nc4BAgNe7kkyGj2oEwOzyzP6t9MBvmITJdXnuzI\",\"item_kind\":\"communication\",\"item_ordinal\":2,\"operation_scopes\":[\"owner_mailbox_read\"],\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"revision\":1},{\"action\":\"mailbox.acknowledge\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"mailbox.acknowledge\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_YHEfget3pAPhwt0e1e7BdzPDoJku1ImProjyMuXBwhQ\",\"item_kind\":\"communication\",\"item_ordinal\":3,\"operation_scopes\":[\"owner_mailbox_acknowledge\"],\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"5c824edf-5e09-54c9-8469-729b80c85bd1\",\"revision\":1},{\"action\":\"mailbox.read\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"mailbox.read\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_UjPmaTAgIwLrE0jubnLr3BTCUMVFvj0gRI5CE4bH9fc\",\"item_kind\":\"communication\",\"item_ordinal\":4,\"operation_scopes\":[\"fresh_mailbox_read\"],\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"revision\":1},{\"action\":\"mailbox.acknowledge\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"mailbox.acknowledge\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_YoBf03t5dWuOg3jnX1i7DhOdlWIU43tvDSC12mm_6NE\",\"item_kind\":\"communication\",\"item_ordinal\":5,\"operation_scopes\":[\"fresh_mailbox_acknowledge\"],\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"ba6a5356-3a7c-59cc-bbde-e3753f47c173\",\"revision\":1},{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_IljxAARLOUtvl_9vFSCWiVxim-gFuNIEhKjI9dLbmr4\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_T4GSxm2o0XEVGFbZEScQXAzfy3bD5kq3CAn_zMStbME\",\"item_kind\":\"exact_revoke\",\"item_ordinal\":6,\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE\",\"revision\":1,\"target_communication_ordinal\":1,\"target_entitlement_id\":\"ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE\"},{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_3eACopenqhm3GxnKm3sGawlDQZYivMrWt4bfIAr_w8c\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_YpKAujLTm4yt453NMQ7nqgZWNXAOXjw77aOwQZQ9Edg\",\"item_kind\":\"exact_revoke\",\"item_ordinal\":7,\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8\",\"revision\":1,\"target_communication_ordinal\":2,\"target_entitlement_id\":\"ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8\"},{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_T84CfNJqtgSkTyLdSihI5Fcr2aaBTDmfvWPHE12RRWc\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_mOqn1NuZlMbdTzKQnw2w8seMpdioP3gVXhil518XUno\",\"item_kind\":\"exact_revoke\",\"item_ordinal\":8,\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s\",\"revision\":1,\"target_communication_ordinal\":3,\"target_entitlement_id\":\"ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s\"},{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_8SqSy53P47kCTuisTxSQtxZK63RlzpxQTU5kQElbrdE\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_k09VOcRR8EyMXgYnukARzshUOcz3luD9Ev3IrMimhGs\",\"item_kind\":\"exact_revoke\",\"item_ordinal\":9,\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I\",\"revision\":1,\"target_communication_ordinal\":4,\"target_entitlement_id\":\"ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I\"},{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement\":{\"action\":\"authorization.entitlement.revoke\",\"domain_id\":\"corp.example\",\"entitlement_id\":\"ent1_39cLu9cKBrajJvUjlA82vtShIaNoQ2YFUbNVlyUB2SM\",\"expires_at\":1800003600,\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI\",\"revision\":1,\"revoked_at\":null},\"expires_at\":1800003600,\"guard_id\":\"c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4\",\"item_id\":\"bpi1_JveVDhKcu9v98x21Y4YR7EJo97O3aJCj7QZ1WEL-lGw\",\"item_kind\":\"exact_revoke\",\"item_ordinal\":10,\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"principal_id\":\"principal-fixture-01\",\"resource_pattern\":\"entitlement:ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI\",\"revision\":1,\"target_communication_ordinal\":5,\"target_entitlement_id\":\"ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI\"}],\"plan_digest\":\"bb5e5971a3e30bf91506330c5b980f06724cf57f8c38f98560d8c7d68c273b99\",\"plan_id\":\"bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U\",\"schema\":\"agentnet.bootstrap-plan.transaction.v1\"}",
+    "transaction_digest": "227bd149b88eeaeff89d9c52b1b48d34b892fba9b68a5b8f88abd75784bc8747",
+    "value": {
+      "approval_purpose": "authorization.bootstrap_plan.approve",
+      "canonical_plan_preimage": {
+        "approval_expires_at": 1800000300,
+        "approval_purpose": "authorization.bootstrap_plan.approve",
+        "authority_expires_at": 1800003600,
+        "begin_idempotency_key_sha256": "bfb7aa2a5fc5f0d3019742ce7a96b56ed1d7f6a20853c710a0e7947ab20e089a",
+        "c0": {
+          "classification": "C0",
+          "reply_payload_digest": "86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375",
+          "reply_payload_schema_digest": "6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e",
+          "request_payload_digest": "e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51",
+          "request_payload_schema_digest": "91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff"
+        },
+        "communication_ttl_seconds": 3600,
+        "domain": {
+          "domain_id": "corp.example",
+          "policy_revision": 1,
+          "revocation_epoch": 1
+        },
+        "enrollment_evidence": {
+          "fresh": {
+            "approval_authenticated_at": 1799999935,
+            "approval_issued_at": 1799999940,
+            "approval_purpose": "identity.enrollment.approve",
+            "approval_receipt_digest": "e06a82893267f71239e55b00cc609a776b841ddfdaca5a5e8c4cef57ed83a370",
+            "approval_receipt_id": "approval-receipt-fresh-fixture-01",
+            "approval_signer_key_id": "approval-signer-fixture-01",
+            "approval_verifier_id": "approval-verifier-fixture-01",
+            "candidate_key_thumbprint": "key-thumbprint-fresh-fixture-01",
+            "enrollment_challenge_id": "challenge-fresh-fixture-01",
+            "enrollment_consumed_at": 1799999940,
+            "guided_oidc": true,
+            "oidc_consumed_at": 1799999940,
+            "oidc_issuer": "https://accounts.example.test",
+            "oidc_subject_sha256": "59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff",
+            "oidc_transaction_id": "oidc-fresh-fixture-01",
+            "role": "fresh",
+            "schema": "agentnet.bootstrap-plan.enrollment-evidence.v1",
+            "verified_email_sha256": "b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f"
+          },
+          "owner": {
+            "approval_authenticated_at": 1799999875,
+            "approval_issued_at": 1799999880,
+            "approval_purpose": "identity.enrollment.approve",
+            "approval_receipt_digest": "f985382a20628181c72a685cd1d48b1aef9b8079bf1cf1b9c9ecf194acd1230b",
+            "approval_receipt_id": "approval-receipt-owner-fixture-01",
+            "approval_signer_key_id": "approval-signer-fixture-01",
+            "approval_verifier_id": "approval-verifier-fixture-01",
+            "candidate_key_thumbprint": "key-thumbprint-owner-fixture-01",
+            "enrollment_challenge_id": "challenge-owner-fixture-01",
+            "enrollment_consumed_at": 1799999880,
+            "guided_oidc": true,
+            "oidc_consumed_at": 1799999880,
+            "oidc_issuer": "https://accounts.example.test",
+            "oidc_subject_sha256": "59ceb73b958fcf762a0e708b8c74ce51e755b5526c17f75f64054e1d5cea84ff",
+            "oidc_transaction_id": "oidc-owner-fixture-01",
+            "role": "owner",
+            "schema": "agentnet.bootstrap-plan.enrollment-evidence.v1",
+            "verified_email_sha256": "b2096dbc5111b6305225657ffdfab205aaff1dfb30d71805aea56922b2cbb24f"
+          }
+        },
+        "harnesses": {
+          "fresh": {
+            "binding_assurance": "os_bound",
+            "credential_epoch": 1,
+            "credential_id": "9a6f7c02-6806-55a1-a328-d73d37a06c85",
+            "display_name": "Fresh laptop",
+            "harness_id": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+            "kind": "pi"
+          },
+          "owner": {
+            "binding_assurance": "os_bound",
+            "credential_epoch": 1,
+            "credential_id": "7723ab43-0f1d-5fdb-a044-ef309ef2c766",
+            "display_name": "Owner laptop",
+            "harness_id": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+            "kind": "pi"
+          }
+        },
+        "independent_boundary_proven": false,
+        "issued_at": 1800000000,
+        "max_uses": 1,
+        "principal": {
+          "principal_id": "principal-fixture-01"
+        },
+        "profile": "ordinary-two-harness-c0:v1",
+        "profile_version": 1,
+        "schema": "agentnet.bootstrap-plan.preimage.v1"
+      },
+      "entitlement_count": 10,
+      "guard": {
+        "classification": "C0",
+        "fresh_harness_id": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+        "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+        "owner_harness_id": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+        "reply_payload": {
+          "message": "AgentNet C0 pilot reply: fixed harmless transport check.",
+          "profile": "ordinary-two-harness-c0:v1",
+          "role": "reply",
+          "schema": "agentnet.c0-pilot.reply-payload.v1"
+        },
+        "reply_payload_digest": "86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375",
+        "reply_payload_schema": {
+          "$id": "agentnet.c0-pilot.reply-payload.v1",
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "const": "AgentNet C0 pilot reply: fixed harmless transport check."
+            },
+            "profile": {
+              "const": "ordinary-two-harness-c0:v1"
+            },
+            "role": {
+              "const": "reply"
+            },
+            "schema": {
+              "const": "agentnet.c0-pilot.reply-payload.v1"
+            }
+          },
+          "required": [
+            "schema",
+            "profile",
+            "role",
+            "message"
+          ],
+          "type": "object"
+        },
+        "reply_payload_schema_digest": "6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e",
+        "reply_remaining_uses": 1,
+        "request_payload": {
+          "message": "AgentNet C0 pilot request: fixed harmless transport check.",
+          "profile": "ordinary-two-harness-c0:v1",
+          "role": "request",
+          "schema": "agentnet.c0-pilot.request-payload.v1"
+        },
+        "request_payload_digest": "e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51",
+        "request_payload_schema": {
+          "$id": "agentnet.c0-pilot.request-payload.v1",
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "const": "AgentNet C0 pilot request: fixed harmless transport check."
+            },
+            "profile": {
+              "const": "ordinary-two-harness-c0:v1"
+            },
+            "role": {
+              "const": "request"
+            },
+            "schema": {
+              "const": "agentnet.c0-pilot.request-payload.v1"
+            }
+          },
+          "required": [
+            "schema",
+            "profile",
+            "role",
+            "message"
+          ],
+          "type": "object"
+        },
+        "request_payload_schema_digest": "91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff",
+        "request_remaining_uses": 1,
+        "schema": "agentnet.c0-plan-guard.v1",
+        "state_at_commit": "pending"
+      },
+      "item_count": 10,
+      "items": [
+        {
+          "action": "message.send",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "message.send",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "direct",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_uXggp33MJDIKGpcIEkbkUSLfpnPuKtXsTNszXctl7Ik",
+          "item_kind": "communication",
+          "item_ordinal": 1,
+          "operation_scopes": [
+            "fresh_to_owner_send",
+            "owner_to_fresh_send"
+          ],
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "direct",
+          "revision": 1
+        },
+        {
+          "action": "mailbox.read",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "mailbox.read",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_aSM4nc4BAgNe7kkyGj2oEwOzyzP6t9MBvmITJdXnuzI",
+          "item_kind": "communication",
+          "item_ordinal": 2,
+          "operation_scopes": [
+            "owner_mailbox_read"
+          ],
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+          "revision": 1
+        },
+        {
+          "action": "mailbox.acknowledge",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "mailbox.acknowledge",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_YHEfget3pAPhwt0e1e7BdzPDoJku1ImProjyMuXBwhQ",
+          "item_kind": "communication",
+          "item_ordinal": 3,
+          "operation_scopes": [
+            "owner_mailbox_acknowledge"
+          ],
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+          "revision": 1
+        },
+        {
+          "action": "mailbox.read",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "mailbox.read",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_UjPmaTAgIwLrE0jubnLr3BTCUMVFvj0gRI5CE4bH9fc",
+          "item_kind": "communication",
+          "item_ordinal": 4,
+          "operation_scopes": [
+            "fresh_mailbox_read"
+          ],
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+          "revision": 1
+        },
+        {
+          "action": "mailbox.acknowledge",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "mailbox.acknowledge",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_YoBf03t5dWuOg3jnX1i7DhOdlWIU43tvDSC12mm_6NE",
+          "item_kind": "communication",
+          "item_ordinal": 5,
+          "operation_scopes": [
+            "fresh_mailbox_acknowledge"
+          ],
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+          "revision": 1
+        },
+        {
+          "action": "authorization.entitlement.revoke",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "authorization.entitlement.revoke",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_IljxAARLOUtvl_9vFSCWiVxim-gFuNIEhKjI9dLbmr4",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "entitlement:ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_T4GSxm2o0XEVGFbZEScQXAzfy3bD5kq3CAn_zMStbME",
+          "item_kind": "exact_revoke",
+          "item_ordinal": 6,
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "entitlement:ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE",
+          "revision": 1,
+          "target_communication_ordinal": 1,
+          "target_entitlement_id": "ent1_K8CpOlvugEH1Kuielkdfdm24ptZ_xKbe4cLHUw1tbDE"
+        },
+        {
+          "action": "authorization.entitlement.revoke",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "authorization.entitlement.revoke",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_3eACopenqhm3GxnKm3sGawlDQZYivMrWt4bfIAr_w8c",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "entitlement:ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_YpKAujLTm4yt453NMQ7nqgZWNXAOXjw77aOwQZQ9Edg",
+          "item_kind": "exact_revoke",
+          "item_ordinal": 7,
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "entitlement:ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8",
+          "revision": 1,
+          "target_communication_ordinal": 2,
+          "target_entitlement_id": "ent1_ro1uNLkRztja9VLonlEeKF45F5drZqHRWj52oaMAWR8"
+        },
+        {
+          "action": "authorization.entitlement.revoke",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "authorization.entitlement.revoke",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_T84CfNJqtgSkTyLdSihI5Fcr2aaBTDmfvWPHE12RRWc",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "entitlement:ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_mOqn1NuZlMbdTzKQnw2w8seMpdioP3gVXhil518XUno",
+          "item_kind": "exact_revoke",
+          "item_ordinal": 8,
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "entitlement:ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s",
+          "revision": 1,
+          "target_communication_ordinal": 3,
+          "target_entitlement_id": "ent1_DaZp3xb7pBBmqXcUiIVeD_Y6dKw2USzP4XW2PMJ156s"
+        },
+        {
+          "action": "authorization.entitlement.revoke",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "authorization.entitlement.revoke",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_8SqSy53P47kCTuisTxSQtxZK63RlzpxQTU5kQElbrdE",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "entitlement:ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_k09VOcRR8EyMXgYnukARzshUOcz3luD9Ev3IrMimhGs",
+          "item_kind": "exact_revoke",
+          "item_ordinal": 9,
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "entitlement:ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I",
+          "revision": 1,
+          "target_communication_ordinal": 4,
+          "target_entitlement_id": "ent1_tQv9CcRwz6SMKZDxk1flbAwIPJmLMWMX3To6Xv3q74I"
+        },
+        {
+          "action": "authorization.entitlement.revoke",
+          "domain_id": "corp.example",
+          "entitlement": {
+            "action": "authorization.entitlement.revoke",
+            "domain_id": "corp.example",
+            "entitlement_id": "ent1_39cLu9cKBrajJvUjlA82vtShIaNoQ2YFUbNVlyUB2SM",
+            "expires_at": 1800003600,
+            "principal_id": "principal-fixture-01",
+            "resource_pattern": "entitlement:ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI",
+            "revision": 1,
+            "revoked_at": null
+          },
+          "expires_at": 1800003600,
+          "guard_id": "c0g1_0LePCNGe8vYER1MybWpmyJTuK21i5gDnmuDMIR0uXB4",
+          "item_id": "bpi1_JveVDhKcu9v98x21Y4YR7EJo97O3aJCj7QZ1WEL-lGw",
+          "item_kind": "exact_revoke",
+          "item_ordinal": 10,
+          "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+          "principal_id": "principal-fixture-01",
+          "resource_pattern": "entitlement:ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI",
+          "revision": 1,
+          "target_communication_ordinal": 5,
+          "target_entitlement_id": "ent1_mkLH8yGeA4b0EiEZcjiNtJe1BhU1A9BA0Wx3lSyJRNI"
+        }
+      ],
+      "plan_digest": "bb5e5971a3e30bf91506330c5b980f06724cf57f8c38f98560d8c7d68c273b99",
+      "plan_id": "bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U",
+      "schema": "agentnet.bootstrap-plan.transaction.v1"
+    }
+  },
+  "fixture": {
+    "approval_expires_at": 1800000300,
+    "approval_request_id": "approval-request-fixture-01",
+    "authority_expires_at": 1800003600,
+    "begin_idempotency_key": "fixture-bootstrap-begin-key-0001",
+    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+    "completion_idempotency_key": "fixture-bootstrap-complete-key-0001",
+    "domain_id": "corp.example",
+    "fresh_harness_id": "ba6a5356-3a7c-59cc-bbde-e3753f47c173",
+    "issued_at": 1800000000,
+    "owner_harness_id": "5c824edf-5e09-54c9-8469-729b80c85bd1",
+    "principal_id": "principal-fixture-01"
+  },
+  "reply_payload": {
+    "canonical_text": "{\"message\":\"AgentNet C0 pilot reply: fixed harmless transport check.\",\"profile\":\"ordinary-two-harness-c0:v1\",\"role\":\"reply\",\"schema\":\"agentnet.c0-pilot.reply-payload.v1\"}",
+    "digest": "86e073696c6ee3178a0179451a098bc196aa41cc140ba7a90dc5740d1231b375"
+  },
+  "reply_payload_schema": {
+    "canonical_text": "{\"$id\":\"agentnet.c0-pilot.reply-payload.v1\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"message\":{\"const\":\"AgentNet C0 pilot reply: fixed harmless transport check.\"},\"profile\":{\"const\":\"ordinary-two-harness-c0:v1\"},\"role\":{\"const\":\"reply\"},\"schema\":{\"const\":\"agentnet.c0-pilot.reply-payload.v1\"}},\"required\":[\"schema\",\"profile\",\"role\",\"message\"],\"type\":\"object\"}",
+    "digest": "6a0969399f318112c858377201db67feabb921b5c2b06a9720f3b5a4007a8a1e"
+  },
+  "request_payload": {
+    "canonical_text": "{\"message\":\"AgentNet C0 pilot request: fixed harmless transport check.\",\"profile\":\"ordinary-two-harness-c0:v1\",\"role\":\"request\",\"schema\":\"agentnet.c0-pilot.request-payload.v1\"}",
+    "digest": "e6b90e2d1ebedeb72f8273c32e45e3d738775d0cfdaca1553ab95470d2a3bf51"
+  },
+  "request_payload_schema": {
+    "canonical_text": "{\"$id\":\"agentnet.c0-pilot.request-payload.v1\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"message\":{\"const\":\"AgentNet C0 pilot request: fixed harmless transport check.\"},\"profile\":{\"const\":\"ordinary-two-harness-c0:v1\"},\"role\":{\"const\":\"request\"},\"schema\":{\"const\":\"agentnet.c0-pilot.request-payload.v1\"}},\"required\":[\"schema\",\"profile\",\"role\",\"message\"],\"type\":\"object\"}",
+    "digest": "91fe1a66e24f09fc2060f2801560a01e449aa380425561be002bc2640ff3e5ff"
+  },
+  "retrieval": {
+    "digest": "2a2eb6e1fb88a1f55b5acc716cababe5dc193a73fa643d67d6dcf11b06d91c27",
+    "idempotency_key": "core:bootstrap-plan:retrieve:bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U:d0bd3ec3b4c328d63d649806f99ca75ff8ad2bfadae3b3bec8d3ac5d3f4abb47:ed95b92e4e7b3df4df703461db469cdb7f757967eb29d7698e3b66d6e1d50142",
+    "normalized_code_digest": "ed95b92e4e7b3df4df703461db469cdb7f757967eb29d7698e3b66d6e1d50142",
+    "value": {
+      "approval_purpose": "authorization.bootstrap_plan.approve",
+      "claim_code_sha256": "ed95b92e4e7b3df4df703461db469cdb7f757967eb29d7698e3b66d6e1d50142",
+      "domain_id": "corp.example",
+      "idempotency_key": "core:bootstrap-plan:retrieve:bp1_eUFLN2QUuK7FOZXUw2LVEgUis7K2whJDsH1hlb2Mo2U:d0bd3ec3b4c328d63d649806f99ca75ff8ad2bfadae3b3bec8d3ac5d3f4abb47:ed95b92e4e7b3df4df703461db469cdb7f757967eb29d7698e3b66d6e1d50142",
+      "request_id": "approval-request-fixture-01",
+      "schema": "agentnet.approval.internal-receipt-retrieve.v1",
+      "transaction_digest": "227bd149b88eeaeff89d9c52b1b48d34b892fba9b68a5b8f88abd75784bc8747"
+    }
+  },
+  "schema": "agentnet.bootstrap-plan.golden-vector.v1"
+}

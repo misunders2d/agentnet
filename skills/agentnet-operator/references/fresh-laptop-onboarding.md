@@ -16,7 +16,7 @@ Do not assume AgentNet, A2A, Pi extensions, Node.js, `uv`, a secret manager, pri
 
 An authorized administrator or ordinary enrolled server agent gives the laptop human one self-contained **public bootstrap packet** through an authenticated human channel. The human pastes it once into the new agent.
 
-The unconnected laptop has no agent inbox. Hub cannot message it directly. A2A is not a bootstrap dependency, enrollment transport, identity proof, or fallback private-artifact channel.
+The unconnected laptop has no agent inbox. No ordinary server agent or A2A peer can message it directly. A2A is not a bootstrap dependency, enrollment transport, identity proof, or fallback private-artifact channel.
 
 The packet contains public instructions only. It never contains private keys, secret values, join state, OAuth callback data, approval capabilities, signed approval receipts, bearer credentials, cookies, identity profiles, or private host paths.
 
@@ -46,13 +46,13 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 ### Administrator
 
 - grants no authority during enrollment;
-- after identity-only enrollment, obtains the new principal and harness identifiers only through an owner-approved identity-reporting path;
-- issues exact current entitlements through the signed, audited administration path;
-- does not request or load the new laptop's identity file or private key.
+- after identity-only enrollment, obtains the exact principal and two harness bindings only through authenticated Core state;
+- may initiate C0 authority only when the installed release ships the fixed, one-use, WebAuthn-approved `BootstrapGrantPlan` that atomically commits five communication and five exact-revoke entitlements plus the deny-only guard;
+- never assembles the pilot with generic entitlement issuance, three independent grants, the legacy founder ceremony, or the beneficiary identity file/private key.
 
 ## Shared-skill roles
 
-### Sender, Hub, or current manager
+### Sender, current manager, or ordinary server agent
 
 1. Resolve and verify the intended human, laptop/harness name, domain, Core, approval service, OIDC values, exact release, approver, test recipient, package integrity, and C0 scope from approved server/package metadata. Do not ask the human for hostnames, callbacks, hashes, identifiers, or configuration values.
 2. Verify the release's public package metadata, OS/CPU/Node/`uv` support, integrity, and actual CLI surface.
@@ -72,10 +72,11 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 
 ## Required bootstrap packet
 
-A valid packet covers every selected phase below. Missing phases block issuance.
+A valid packet selects exactly `identity_only` or `c0_pilot` and covers every phase required by that mode. Missing phases block issuance.
 
 ### 1. Scope and safety
 
+- exact selected mode: `identity_only` or release-gated `c0_pilot`;
 - intended human and laptop/harness display name;
 - exact AgentNet domain, canonical HTTPS Core, approval, issuer, and callback origins;
 - installation-is-code-only and enrollment-is-identity-only statements;
@@ -113,28 +114,43 @@ A valid packet covers every selected phase below. Missing phases block issuance.
 - the owner transfers only the short-lived code directly to the fresh laptop's masked prompt;
 - receipt, capability, URL, key, identity, and continuation state never move between machines or enter a human channel.
 
-### 6. Separate messaging authority
+### 6. Separate bounded C0 authority
 
-C0 messaging is allowed only when the installed release exposes a safe administrator path that accepts a public principal identifier without loading the beneficiary's private identity state. Required entitlements are exactly:
+Mode `identity_only` ends after guided enrollment and reports `first_message_blocked_explicit_authority_required`; it requests no C0 approval or second code and runs no C0 command. Enrollment never grants messaging authority. C0 may continue only when the installed release exposes the approved fixed `BootstrapGrantPlan` profile and all of its runtime guards. Core—not the browser, prompt, or caller—resolves the same principal's exact owner/fresh harness pair, credentials, epochs, five communication entitlements, five entitlement-specific revoke powers, C0 payloads, event lineage, mailbox ownership, expiry, and one-use limits. One WebAuthn-approved transaction commits all ten entitlement rows plus matching plan/guard records or none.
 
-- `message.send` on `direct`;
-- `mailbox.read` on the new laptop's own harness ID;
-- `mailbox.acknowledge` on the new laptop's own harness ID.
+Generic `agentnet admin entitlement issue`, principal-ID grant issuance, three-grant assembly, the legacy founder ceremony, wildcards, and partial repair are forbidden fallbacks for this pilot. If the installed release lacks the complete bounded-plan path, report `first_message_blocked_explicit_authority_required` and stop identity-only.
 
-`recipient authority` is not an AgentNet entitlement. Enrollment never grants any of these.
+For a release that passes that gate, the owner first validates and runs only
+`agentnet supervisor-run --config agentnet-supervisor.json
+--c0-pilot-responder`. The fresh harness uses only
+`agentnet bootstrap-plan begin|status|complete` with its local identity/state,
+then `agentnet c0-pilot start|status|complete` with its local identity. The owner
+reviews the fixed five-communication/five-exact-revoke WebAuthn summary and the
+fresh human enters only its second short-lived claim code through the masked
+local prompt. No caller selects a plan, peer, direction, payload, event,
+acknowledgement, digest, receipt, entitlement, or use count.
 
-The recorded ordinary PD-001/PD-002 defaults keep principal/harness identifiers inside authenticated Core/Manager authority operations and permit direct owner transfer of the claim code between approval UI and masked prompt. The human does not relay identifiers or approve three separate grant commands. An authorized server-side administrator may issue the three exact grants under the frozen onboarding plan; inventory must still prove them before messaging.
+`waiting_owner` and `waiting_fresh` are resumable sanitized stages. `expired`
+and `invalidated` are terminal; added active same-principal harness/credential
+state permanently invalidates the guard and later removal cannot revive it.
+Only `COMPLETED_C0_ROUND_TRIP` proves all seven issuer-owned facts plus exact
+five-communication-power cleanup. Transport ACK, prose, status, or a stored fact
+row alone never proves completion.
 
-### 7. Connection and first-message verification
+The recorded ordinary PD-001/PD-002 defaults permit direct owner transfer of only the short-lived claim code between approval UI and masked prompt. Principal/harness identifiers remain inside authenticated Core operations; the human relays none.
 
-- agent writes the approved JSON payload through its file-writing capability, not a platform-specific shell-quoting trick;
-- exact signed submission;
-- durable custody;
-- recipient acknowledgement;
-- reply;
-- exact retrieval;
-- acknowledgement of the retrieved envelope;
-- each fact remains distinct and existing A2A remains unchanged.
+### 7. Fixed C0 round-trip verification
+
+This section applies only to selected mode `c0_pilot`. The dedicated C0 service
+owns both fixed harmless payloads, recipients, event selection, acknowledgement
+targets, digests, receipts, lineage, and use counts. The fresh agent uses only
+`agentnet c0-pilot start|status|complete`; it writes no message file and invokes
+no generic message, inbox, acknowledgement, or entitlement command.
+
+Success requires request custody, owner retrieval, owner exact acknowledgement,
+fixed causal reply, reply custody, fresh retrieval, and final exact
+acknowledgement as seven distinct issuer-owned facts. Existing A2A remains
+unchanged.
 
 ### 8. Recovery and reporting
 
@@ -163,7 +179,7 @@ A release passes the identity-only gate only when `agentnet join guided`:
 - resumes safely after timeout or response loss;
 - returns `enrolled_identity_only`, `authority_granted: false`, and `first_message_blocked_explicit_authority_required`.
 
-A release passes the C0 gate only when it additionally lets an authorized administrator issue entitlements by public principal ID without possessing the beneficiary identity file/private key, and the real Core/approval/recipient infrastructure is proven.
+A release passes the C0 gate only when it additionally ships the fixed atomic `BootstrapGrantPlan`, purpose-specific WebAuthn summary, deny-only runtime guard, deterministic owner-harness responder, exact seven-fact verifier, and immediate communication-entitlement cleanup. Generic principal-ID entitlement issuance does not pass this gate. Real Core/Approval/PostgreSQL/two-harness infrastructure must also be proven.
 
 AgentNet `0.1.8` fails this gate:
 
@@ -177,4 +193,4 @@ For `0.1.8`, report **blocked: product component not yet shipped** and stop befo
 
 Identity-only pilot success requires one paste, a fresh laptop unable to read or automate the approval authenticator, real workforce OIDC, real WebAuthn UV, no leaked private state, safe idempotent rerun, and no implicit authority. Default server colocation retains `independent_boundary_proven=false`; separate approval hosting is optional high assurance.
 
-Full C0 success additionally requires exact principal-ID-based entitlement issuance, safe inventory confirmation, C0 submission, custody, recipient acknowledgement, reply, retrieval, and envelope acknowledgement as distinct facts. A mock/local run or transport ACK is not this proof.
+Full C0 success additionally requires one committed fixed `BootstrapGrantPlan`, exact guard confirmation, original durable custody, owner retrieval, owner acknowledgement, correlated reply send, reply durable custody, fresh retrieval, and final acknowledgement as the seven approved facts. A mock/local run, generic grant assembly, or transport ACK is not this proof.

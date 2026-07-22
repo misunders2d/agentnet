@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentnet.errors import GateBlocked, ValidationError
+from agentnet.operations.config import OIDCTokenEndpointAuthMethod
 from agentnet.security.signatures import P256KeyPair
 
 
@@ -28,9 +29,66 @@ def _reject_nonfinite(_value: str) -> object:
     raise ValueError("non-finite JSON number")
 
 
+class ApprovalOwnerOIDCConfig(BaseModel):
+    """Non-secret exact provider policy for stable owner-browser authentication."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    issuer: str = Field(min_length=8, max_length=512)
+    client_id: str = Field(min_length=1, max_length=512)
+    redirect_uri: str = Field(min_length=8, max_length=2_048)
+    audience: str | None = Field(default=None, min_length=1, max_length=512)
+    token_endpoint_auth_method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.NONE
+    client_secret_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{2,127}$")
+    allowed_endpoint_origins: tuple[str, ...] = Field(default=(), max_length=32)
+    allowed_private_endpoint_cidrs: tuple[str, ...] = Field(default=(), max_length=64)
+    pinned_endpoint_addresses: tuple[str, ...] = Field(default=(), max_length=128)
+    allowed_signing_algorithms: tuple[Literal["RS256", "ES256"], ...] = ("RS256",)
+    pinned_jwk_thumbprints: dict[str, str] = Field(default_factory=dict)
+    authorization_ttl_seconds: int = Field(default=300, ge=60, le=600)
+    maximum_id_token_age_seconds: int = Field(default=300, ge=30, le=900)
+    allowed_clock_skew_seconds: int = Field(default=30, ge=0, le=120)
+    http_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+
+    @model_validator(mode="after")
+    def exact_provider(self) -> "ApprovalOwnerOIDCConfig":
+        try:
+            issuer = urlsplit(self.issuer)
+            issuer_port = issuer.port
+        except ValueError as exc:
+            raise ValueError("owner OIDC issuer is invalid") from exc
+        if (
+            issuer.scheme != "https"
+            or not issuer.hostname
+            or issuer.username is not None
+            or issuer.password is not None
+            or issuer.query
+            or issuer.fragment
+            or self.issuer.endswith("/")
+            or issuer_port not in {None, 443}
+        ):
+            raise ValueError("owner OIDC issuer must be one canonical HTTPS issuer")
+        confidential = self.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE
+        if confidential != (self.client_secret_env is not None):
+            raise ValueError("owner OIDC client-secret environment policy is inconsistent")
+        if not self.allowed_signing_algorithms or len(set(self.allowed_signing_algorithms)) != len(
+            self.allowed_signing_algorithms
+        ):
+            raise ValueError("owner OIDC signing algorithms must be unique and non-empty")
+        if len(self.pinned_jwk_thumbprints) > 128 or any(
+            not key_id
+            or len(key_id) > 512
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for key_id, digest in self.pinned_jwk_thumbprints.items()
+        ):
+            raise ValueError("owner OIDC JWK pins must be lowercase SHA-256 digests")
+        return self
+
+
 MANDATORY_APPROVAL_PURPOSES = frozenset(
     {
-        "authorization.entitlement.bootstrap.approve",
+        "authorization.bootstrap_plan.approve",
         "authorization.elevation.approve",
         "identity.credential.recover.approve",
         "identity.enrollment.approve",
@@ -51,12 +109,42 @@ class ApprovalServiceApproverConfig(BaseModel):
     signer_key_id: str = Field(min_length=16, max_length=256)
     signer_private_key_path: Path
     allowed_purposes: frozenset[str] = Field(min_length=1, max_length=32)
+    oidc_issuer: str | None = Field(default=None, min_length=8, max_length=512)
+    oidc_subject: str | None = Field(default=None, min_length=1, max_length=512)
+    verified_email_alias: str | None = Field(default=None, min_length=3, max_length=320)
 
     @model_validator(mode="after")
     def validate_approver(self) -> "ApprovalServiceApproverConfig":
         path = self.signer_private_key_path
         if not path.is_absolute() or ".." in path.parts:
             raise ValueError("approval signer path must be an absolute canonical reference")
+        oidc_values_present = any(
+            value is not None
+            for value in (self.oidc_issuer, self.oidc_subject, self.verified_email_alias)
+        )
+        if oidc_values_present and (
+            self.oidc_issuer is None
+            or (self.oidc_subject is None) == (self.verified_email_alias is None)
+        ):
+            raise ValueError(
+                "approval owner must configure exact subject or verified-email alias under one issuer"
+            )
+        if self.verified_email_alias is not None:
+            normalized = self.verified_email_alias.strip().casefold()
+            local, separator, domain = normalized.partition("@")
+            try:
+                normalized.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ValueError("approval owner verified-email alias must be normalized") from exc
+            if (
+                separator != "@"
+                or not local
+                or not domain
+                or "@" in domain
+                or normalized != self.verified_email_alias
+                or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in normalized)
+            ):
+                raise ValueError("approval owner verified-email alias must be normalized")
         if any(
             not purpose
             or len(purpose) > 256
@@ -91,6 +179,7 @@ class ApprovalServiceConfig(BaseModel):
         default=None,
         pattern=r"^[A-Z_][A-Z0-9_]{0,127}$",
     )
+    owner_oidc: ApprovalOwnerOIDCConfig | None = None
     approvers: tuple[ApprovalServiceApproverConfig, ...] = Field(min_length=1, max_length=32)
 
     @model_validator(mode="after")
@@ -121,6 +210,17 @@ class ApprovalServiceConfig(BaseModel):
             raise ValueError("approval RP ID must equal the exact public-origin hostname")
         if self.challenge_ttl_seconds > self.request_ttl_seconds:
             raise ValueError("approval challenge TTL cannot exceed request TTL")
+        if self.owner_oidc is not None:
+            expected_callback = f"{self.public_origin.rstrip('/')}/v1/approval/owner/oidc/callback"
+            if self.owner_oidc.redirect_uri != expected_callback:
+                raise ValueError("owner OIDC redirect URI must equal the stable Approval callback")
+            configured_issuers = {
+                item.oidc_issuer for item in self.approvers if item.oidc_issuer is not None
+            }
+            if configured_issuers != {self.owner_oidc.issuer}:
+                raise ValueError("every stable owner binding must use the configured OIDC issuer")
+        elif any(item.oidc_issuer is not None for item in self.approvers):
+            raise ValueError("approval owner OIDC bindings require owner_oidc provider configuration")
 
         paths = (self.data_dir, self.database_path, self.record_key_path)
         if any(not path.is_absolute() or ".." in path.parts for path in paths):
@@ -227,6 +327,7 @@ def load_approval_service_config(path: Path) -> ApprovalServiceConfig:
 
 
 __all__ = [
+    "ApprovalOwnerOIDCConfig",
     "ApprovalServiceApproverConfig",
     "ApprovalServiceConfig",
     "MANDATORY_APPROVAL_PURPOSES",

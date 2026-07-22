@@ -35,6 +35,7 @@ from agentnet.organization.conflicts import (
 from agentnet.protocol.models import Classification, DeliveryFact, EventType
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair
+from agentnet.storage.bootstrap_plan_schema import BOOTSTRAP_PLAN_SCHEMA
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, validate_migration_catalog
 from agentnet.storage.relationship_governance_schema import (
     RELATIONSHIP_GOVERNANCE_REQUIRED_INDEXES,
@@ -51,9 +52,15 @@ from agentnet.storage.post_audit_schema import (
 from agentnet.storage.postgres import (
     PostgreSQLStore,
     apply_postgres_migrations,
+    require_s4_postgres_catalog,
     translate_qmark_sql,
     validate_applied_migrations,
     validate_postgres_recovery_dsn,
+)
+from agentnet.storage.postgres_catalog import (
+    expected_catalog,
+    normalize_catalog_sql,
+    require_exact_postgres_catalog,
 )
 from agentnet.storage.recovery import probe_filesystem_artifact_recovery
 from agentnet.storage.sqlite import SQLiteStore
@@ -73,15 +80,16 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_numbered_migration_catalog_preserves_prior_versions_and_adds_guided_enrollment(
+def test_numbered_migration_catalog_preserves_prior_versions_and_adds_c0_bootstrap_plan(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 3
+    assert CURRENT_SCHEMA_VERSION == 4
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
         (2, "protected_task_payload_release"),
         (3, "guided_oidc_enrollment_continuation"),
+        (4, "bounded_c0_bootstrap_plan"),
     ]
     assert (
         MIGRATIONS[0].checksum
@@ -239,6 +247,19 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
         v1.close()
 
 
+def _drop_v4_bootstrap_plan_schema(connection: sqlite3.Connection) -> None:
+    for table in (
+        "c0_pilot_facts",
+        "c0_pilot_attempts",
+        "c0_plan_guard_entitlements",
+        "bootstrap_grant_plan_items",
+        "c0_plan_guards",
+        "bootstrap_grant_plans",
+    ):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("DELETE FROM installed_migration_catalog WHERE version=4")
+
+
 def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
     store = SQLiteStore(path, LocalEnvelopeCipher(key))
     try:
@@ -251,6 +272,7 @@ def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
 
     v2 = sqlite3.connect(path)
     try:
+        _drop_v4_bootstrap_plan_schema(v2)
         v2.execute("DROP INDEX idx_oidc_continuation_status_expiry")
         v2.execute("DROP TABLE oidc_enrollment_continuations")
         v2.execute("DELETE FROM installed_migration_catalog WHERE version=3")
@@ -263,31 +285,53 @@ def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
         v2.close()
 
 
-def test_sqlite_exact_v1_database_is_outside_n_minus_one_window(tmp_path: Path) -> None:
-    path = tmp_path / "v1-rejected.sqlite3"
+def _make_exact_v3_sqlite(path: Path, *, key: bytes) -> None:
+    store = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('preserved-sentinel','exact-v3-data')"
+            )
+    finally:
+        store.close()
+
+    v3 = sqlite3.connect(path)
+    try:
+        _drop_v4_bootstrap_plan_schema(v3)
+        v3.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
+        v3.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
+        v3.execute("UPDATE metadata SET value='3' WHERE key='schema_version'")
+        v3.executescript(RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA)
+        v3.commit()
+    finally:
+        v3.close()
+
+
+def test_sqlite_exact_v2_database_is_outside_n_minus_one_window(tmp_path: Path) -> None:
+    path = tmp_path / "v2-rejected.sqlite3"
     key = b"u" * 32
-    _make_exact_v1_sqlite(path, key=key)
+    _make_exact_v2_sqlite(path, key=key)
     before = _sqlite_logical_snapshot(path)
     with pytest.raises(GateBlocked, match="N/N-1 migration window"):
         SQLiteStore(path, LocalEnvelopeCipher(key))
     assert _sqlite_logical_snapshot(path) == before
 
 
-def test_sqlite_exact_v2_database_upgrades_to_v3_without_data_loss(
+def test_sqlite_exact_v3_database_upgrades_to_v4_without_data_loss(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "v2-upgrade.sqlite3"
+    path = tmp_path / "v3-upgrade.sqlite3"
     key = b"u" * 32
-    _make_exact_v2_sqlite(path, key=key)
+    _make_exact_v3_sqlite(path, key=key)
 
     upgraded = SQLiteStore(path, LocalEnvelopeCipher(key))
     try:
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "3"
+        )["value"] == "4"
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='preserved-sentinel'"
-        )["value"] == "exact-v2-data"
+        )["value"] == "exact-v3-data"
         assert [tuple(row) for row in upgraded.fetch_all(
             "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
         )] == [
@@ -301,18 +345,18 @@ def test_sqlite_exact_v2_database_upgrades_to_v3_without_data_loss(
         upgraded.close()
 
 
-def test_sqlite_v2_to_v3_migration_failure_rolls_back_without_partial_schema(
+def test_sqlite_v3_to_v4_migration_failure_rolls_back_without_partial_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "v2-upgrade-rollback.sqlite3"
+    path = tmp_path / "v3-upgrade-rollback.sqlite3"
     key = b"v" * 32
-    _make_exact_v2_sqlite(path, key=key)
+    _make_exact_v3_sqlite(path, key=key)
     before = _sqlite_logical_snapshot(path)
     monkeypatch.setitem(
         __import__("agentnet.storage.sqlite", fromlist=["_SQLITE_MIGRATION_SQL"])
         ._SQLITE_MIGRATION_SQL,
-        3,
+        4,
         "CREATE TABLE migration_partial(value TEXT); SELECT missing_function();",
     )
 
@@ -327,10 +371,10 @@ def test_sqlite_v2_to_v3_migration_failure_rolls_back_without_partial_schema(
         ).fetchone() is None
         assert raw.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()[0] == "2"
+        ).fetchone()[0] == "3"
         assert raw.execute(
             "SELECT COUNT(*) FROM installed_migration_catalog"
-        ).fetchone()[0] == 2
+        ).fetchone()[0] == 3
     finally:
         raw.close()
 
@@ -574,8 +618,20 @@ def test_qmark_translation_ignores_exact_quoted_literals() -> None:
 
 def test_migration_history_rejects_gaps_future_and_checksum_tamper() -> None:
     first = MIGRATIONS[0]
-    applied_prefix = [{"version": 1, "name": first.name, "checksum": first.checksum}]
-    assert validate_applied_migrations(applied_prefix) == 1
+    applied_v1 = [{"version": 1, "name": first.name, "checksum": first.checksum}]
+    applied_v2 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:2]
+    ]
+    applied_v3 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:3]
+    ]
+    with pytest.raises(GateBlocked, match="N/N-1 migration window"):
+        validate_applied_migrations(applied_v1)
+    with pytest.raises(GateBlocked, match="N/N-1 migration window"):
+        validate_applied_migrations(applied_v2)
+    assert validate_applied_migrations(applied_v3) == CURRENT_SCHEMA_VERSION - 1
     complete = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS
@@ -598,6 +654,212 @@ def test_migration_history_rejects_gaps_future_and_checksum_tamper() -> None:
         )
     with pytest.raises(GateBlocked, match="checksum"):
         validate_applied_migrations([{"version": 1, "name": first.name, "checksum": "0" * 64}])
+
+
+class _ExactCatalogConnection:
+    def __init__(
+        self,
+        *,
+        omit_column: tuple[str, str] | None = None,
+        wrong_sequence: bool = False,
+        wrong_fk_schema: bool = False,
+    ):
+        self.spec = expected_catalog(MIGRATIONS)
+        self.omit_column = omit_column
+        self.wrong_sequence = wrong_sequence
+        self.wrong_fk_schema = wrong_fk_schema
+
+    def execute(self, query, _parameters=()):
+        sql = str(query)
+        if "relation.relkind IN ('r','p','v','m','f')" in sql:
+            return _Cursor(
+                {"table_name": table_name, "kind": "r"}
+                for table_name in sorted(self.spec.tables)
+            )
+        if "pg_catalog.pg_attribute attribute" in sql:
+            rows = []
+            for column in self.spec.columns:
+                if (column.table_name, column.column_name) == self.omit_column:
+                    continue
+                sequence_name = None
+                sequence_targets = None
+                default_value = column.default_value
+                if isinstance(default_value, str) and default_value.startswith("sequence:"):
+                    sequence_name = default_value.removeprefix("sequence:")
+                    qualified = f"public.{sequence_name}"
+                    target = "public.wrong_sequence" if self.wrong_sequence else qualified
+                    sequence_targets = [target]
+                    default_value = f"nextval('{target}'::regclass)"
+                rows.append(
+                    {
+                        "table_name": column.table_name,
+                        "column_name": column.column_name,
+                        "data_type": column.data_type,
+                        "not_null": column.not_null,
+                        "current_schema_name": "public",
+                        "default_value": default_value,
+                        "owned_sequence": f"public.{sequence_name}" if sequence_name else None,
+                        "sequence_targets": sequence_targets,
+                    }
+                )
+            return _Cursor(rows)
+        if "pg_catalog.pg_get_constraintdef" in sql:
+            return _Cursor(
+                {
+                    "table_name": table_name,
+                    "constraint_type": "f" if definition.startswith("foreignkey(") else "c",
+                    "current_schema_name": "public",
+                    "referenced_schema": (
+                        "other" if self.wrong_fk_schema and definition.startswith("foreignkey(") else "public"
+                    ),
+                    "definition": definition,
+                }
+                for table_name, definition in self.spec.constraints
+            )
+        if "pg_catalog.pg_get_indexdef" in sql:
+            return _Cursor(
+                {"index_name": index_name, "definition": definition}
+                for index_name, definition in self.spec.indexes
+            )
+        raise AssertionError(f"unexpected exact-catalog query: {sql[:100]}")
+
+
+def test_postgres_catalog_normalization_preserves_semantics_across_pg_rendering() -> None:
+    assert normalize_catalog_sql("CHECK (status IN ('C0','C1'))") == normalize_catalog_sql(
+        "CHECK ((status = ANY (ARRAY['C0'::text, 'C1'::text])))"
+    )
+    assert normalize_catalog_sql("CHECK (state NOT IN ('failed','canceled'))") == normalize_catalog_sql(
+        "CHECK ((state <> ALL (ARRAY['failed'::text, 'canceled'::text])))"
+    )
+    assert normalize_catalog_sql(
+        "FOREIGN KEY (plan_id) REFERENCES bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
+    ) == normalize_catalog_sql(
+        "FOREIGN KEY (plan_id) REFERENCES public.bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
+    )
+    assert normalize_catalog_sql(
+        "CREATE INDEX idx ON c0_pilot_facts(event_id,attempt_id)"
+    ) == normalize_catalog_sql(
+        "CREATE INDEX idx ON public.c0_pilot_facts USING btree (event_id, attempt_id)"
+    )
+
+
+def test_postgres_full_v4_catalog_checks_every_table_column_constraint_and_index() -> None:
+    spec_v3 = expected_catalog(MIGRATIONS[:3])
+    spec_v4 = expected_catalog(MIGRATIONS)
+    assert len(spec_v3.tables) == 94
+    assert len(spec_v4.tables) == 100
+    assert len(spec_v4.columns) > len(spec_v3.columns)
+    assert len(spec_v4.constraints) > len(spec_v3.constraints)
+    assert len(spec_v4.indexes) > len(spec_v3.indexes)
+
+    require_exact_postgres_catalog(_ExactCatalogConnection(), migrations=MIGRATIONS)
+    with pytest.raises(GateBlocked, match="column catalog"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(omit_column=("bootstrap_grant_plans", "plan_id")),
+            migrations=MIGRATIONS,
+        )
+    with pytest.raises(GateBlocked, match="sequence default"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(wrong_sequence=True), migrations=MIGRATIONS
+        )
+    with pytest.raises(GateBlocked, match="FK target schema"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(wrong_fk_schema=True), migrations=MIGRATIONS
+        )
+
+
+class _S4CatalogConnection:
+    tables = (
+        "bootstrap_grant_plans",
+        "c0_plan_guards",
+        "bootstrap_grant_plan_items",
+        "c0_plan_guard_entitlements",
+        "c0_pilot_attempts",
+        "c0_pilot_facts",
+    )
+    indexes = {
+        "idx_bootstrap_grant_plans_active": (
+            "bootstrap_grant_plans",
+            ("domain_id", "principal_id", "profile", "state", "authority_expires_at"),
+        ),
+        "idx_c0_plan_guards_active": (
+            "c0_plan_guards",
+            ("domain_id", "principal_id", "state", "expires_at"),
+        ),
+        "idx_bootstrap_plan_items_entitlement": (
+            "bootstrap_grant_plan_items",
+            ("entitlement_id", "plan_id"),
+        ),
+        "idx_c0_guard_entitlements_lookup": (
+            "c0_plan_guard_entitlements",
+            ("entitlement_id", "guard_id"),
+        ),
+        "idx_c0_pilot_attempts_state": ("c0_pilot_attempts", ("state", "expires_at")),
+        "idx_c0_pilot_facts_event": ("c0_pilot_facts", ("event_id", "attempt_id")),
+    }
+    constraints = {
+        "bootstrap_grant_plans": (22, 6, 7, 1),
+        "c0_plan_guards": (14, 5, 1, 1),
+        "bootstrap_grant_plan_items": (5, 2, 3, 1),
+        "c0_plan_guard_entitlements": (1, 4, 0, 1),
+        "c0_pilot_attempts": (5, 2, 4, 1),
+        "c0_pilot_facts": (5, 2, 0, 1),
+    }
+
+    def __init__(self, *, omit_relation: str | None = None, alter_constraints: str | None = None):
+        self.omit_relation = omit_relation
+        self.alter_constraints = alter_constraints
+
+    def execute(self, query, _parameters=()):
+        sql = str(query)
+        if "ARRAY_AGG(attribute.attname" in sql:
+            return _Cursor(
+                {
+                    "index_name": name,
+                    "table_name": table,
+                    "columns": list(columns),
+                }
+                for name, (table, columns) in self.indexes.items()
+            )
+        if "COUNT(*) FILTER" in sql:
+            rows = []
+            for table, counts in self.constraints.items():
+                check, foreign, unique, primary = counts
+                if table == self.alter_constraints:
+                    check -= 1
+                rows.append(
+                    {
+                        "table_name": table,
+                        "check_count": check,
+                        "foreign_count": foreign,
+                        "unique_count": unique,
+                        "primary_count": primary,
+                    }
+                )
+            return _Cursor(rows)
+        relations = [
+            *({"name": table, "kind": "r"} for table in self.tables),
+            *({"name": index, "kind": "i"} for index in self.indexes),
+        ]
+        return _Cursor(row for row in relations if row["name"] != self.omit_relation)
+
+
+def test_postgres_s4_catalog_requires_exact_relations_constraints_and_indexes() -> None:
+    for index_name, (table_name, columns) in _S4CatalogConnection.indexes.items():
+        expected_ddl = (
+            f"CREATE INDEX IF NOT EXISTS {index_name}\n"
+            f"    ON {table_name}({','.join(columns)});"
+        )
+        assert expected_ddl in BOOTSTRAP_PLAN_SCHEMA
+    require_s4_postgres_catalog(_S4CatalogConnection())
+    with pytest.raises(GateBlocked, match="relation catalog"):
+        require_s4_postgres_catalog(
+            _S4CatalogConnection(omit_relation="idx_c0_pilot_facts_event")
+        )
+    with pytest.raises(GateBlocked, match="constraints"):
+        require_s4_postgres_catalog(
+            _S4CatalogConnection(alter_constraints="bootstrap_grant_plans")
+        )
 
 
 def test_recovery_dsn_requires_distinct_hosts_read_write_selection_and_no_password() -> None:
@@ -653,11 +915,12 @@ class _Transaction:
 
 
 class _MigrationConnection:
-    def __init__(self, *, relations=()):
+    def __init__(self, *, relations=(), applied=()):
         self.statements: list[tuple[str, tuple[object, ...]]] = []
         self.entered = 0
         self.exited = 0
         self.relations = list(relations)
+        self.applied = list(applied)
 
     def transaction(self):
         return _Transaction(self)
@@ -667,11 +930,73 @@ class _MigrationConnection:
         if "FROM pg_catalog.pg_class relation" in str(query):
             return _Cursor(self.relations)
         if "SELECT version,name,checksum FROM schema_migrations" in str(query):
-            return _Cursor()
+            return _Cursor(self.applied)
         return _Cursor()
 
 
-def test_migration_application_is_one_crash_atomic_transaction() -> None:
+def test_postgres_v3_rejects_partial_s4_catalog_before_migration() -> None:
+    applied_v3 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:3]
+    ]
+    connection = _MigrationConnection(
+        relations=(
+            {"name": "schema_migrations", "kind": "r"},
+            {"name": "bootstrap_grant_plans", "kind": "r"},
+        ),
+        applied=applied_v3,
+    )
+
+    with pytest.raises(GateBlocked, match="partial S4"):
+        apply_postgres_migrations(connection)
+    assert not any(
+        parameters and parameters[0] == CURRENT_SCHEMA_VERSION
+        for statement, parameters in connection.statements
+        if statement.startswith("INSERT INTO schema_migrations")
+    )
+
+
+def test_postgres_v3_catalog_is_verified_before_and_after_v4_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applied_v3 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:3]
+    ]
+    connection = _MigrationConnection(
+        relations=({"name": "schema_migrations", "kind": "r"},),
+        applied=applied_v3,
+    )
+    verified_versions: list[int] = []
+    monkeypatch.setattr(
+        "agentnet.storage.postgres.require_exact_postgres_catalog",
+        lambda _connection, *, migrations: verified_versions.append(len(migrations)),
+    )
+    monkeypatch.setattr(
+        "agentnet.storage.postgres.require_s4_postgres_catalog",
+        lambda _connection: None,
+    )
+
+    assert apply_postgres_migrations(connection) == CURRENT_SCHEMA_VERSION
+    assert verified_versions == [3, 4]
+    assert [
+        parameters[0]
+        for statement, parameters in connection.statements
+        if statement.startswith("INSERT INTO schema_migrations")
+    ] == [4]
+
+
+def test_migration_application_is_one_crash_atomic_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "agentnet.storage.postgres.require_exact_postgres_catalog",
+        lambda _connection, *, migrations: None,
+    )
+    monkeypatch.setattr(
+        "agentnet.storage.postgres.require_s4_postgres_catalog",
+        lambda _connection: None,
+    )
     connection = _MigrationConnection()
     assert apply_postgres_migrations(connection) == CURRENT_SCHEMA_VERSION
     assert (connection.entered, connection.exited) == (1, 1)

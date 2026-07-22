@@ -63,6 +63,55 @@ The default-profile adversarial verification pass must cover:
 - Core compromise simulations proving the assurance label never upgrades to
   independent administration.
 
+### 2.2 Bounded C0 authority and proof matrix
+
+The same-principal/two-harness C0 lane is a narrow local mechanism test, not a
+new authority source or production certification. Its affected stable IDs are
+`ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-007`,
+`COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`, `UX-002`, `SEC-003`,
+`SEC-005`, and `SEC-006`. Every case below must preserve the higher-level
+requirements rather than treating pilot success as family-level completion.
+
+Required H/L adversarial cases:
+
+- Approval internal broker routes mount only with both the runtime credential
+  and stable owner-OIDC session service; fragment-based legacy profiles cannot
+  broker guided enrollment or a bootstrap plan;
+- generic policy, message, mailbox, ACK, and administrative revoke paths cannot
+  consume any plan-issued communication or cleanup entitlement;
+- request bodies reject peer, plan, recipient, direction, classification,
+  payload, event, digest, receipt, acknowledgement, entitlement, and use-count
+  selectors before protected use;
+- exact domain/principal/policy/revocation and the exact two active harnesses,
+  two active credentials, credential IDs, and credential epochs are rechecked at
+  every phase; an authoritative added active harness or credential permanently
+  invalidates the guard, while an unverified caller-selected credential cannot
+  mutate it;
+- request and reply use independent deterministic keys, fixed harmless C0
+  payloads, exact recipients, exact sender attribution, and one causal parent;
+- duplicate, concurrent, crash-before-commit, response-loss, restart, audit
+  outage, expiry, and cleanup-killpoint tests converge to one event per direction
+  and zero or five communication revocations;
+- all seven fact rows retain their exact issuer, event, receipt, envelope, and
+  canonical evidence binding; terminal replay revalidates both encrypted events,
+  recipient rows, custody receipts and accepting-boundary owners,
+  acknowledgement receipts and exact harness owners, causal lineage, remaining
+  uses, and cleanup state;
+- stale/tampered actor, recipient, payload, event digest, envelope, receipt owner,
+  mailbox presence, fact JSON, receipt, use count, entitlement, guard, attempt,
+  or stored success blocks terminal success;
+- only compare-and-swap races are retryable; ambiguity, tamper, stale authority,
+  and durable inconsistency remain non-retryable;
+- the owner responder constructs no semantic worker, model, general background
+  queue, task, artifact, file, effect, tool, company-data, or A2A subsystem;
+- public HTTP/CLI/supervisor output contains only sanitized stages, `invalidated`,
+  or `COMPLETED_C0_ROUND_TRIP` and never protected identifiers/evidence.
+
+Required external proof remains open: real workforce OIDC, real passkey, exact
+two-laptop key custody, deployed TLS/Core/Approval/PostgreSQL behavior, failure
+and restart across hosts, and production durability. Until then custody is
+`accepted_local`; no gate or live C0 claim is promoted.
+
 ## 3. Assets and adversaries
 
 ### 3.1 Protected assets

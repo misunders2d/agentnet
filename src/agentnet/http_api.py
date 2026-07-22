@@ -18,7 +18,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.approval.service import IndependentApprovalVerifier
-from agentnet.authority_bootstrap_http import create_authority_bootstrap_routes
+from agentnet.bootstrap_plan_http import create_bootstrap_plan_routes
+from agentnet.c0_pilot_http import create_c0_pilot_routes
 from agentnet.bindings.composition import (
     LocalBindingService,
     create_local_binding_service,
@@ -587,7 +588,15 @@ def create_app(core: CommunicationCore) -> Starlette:
                     recovery_coordinator=recovery_coordinator,
                 )
             )
-            routes.extend(create_authority_bootstrap_routes(core, _body_and_actor))
+            if core.bootstrap_plan_service is not None:
+                routes.extend(
+                    create_bootstrap_plan_routes(
+                        core,
+                        _body_and_actor,
+                        service=core.bootstrap_plan_service,
+                    )
+                )
+                routes.extend(create_c0_pilot_routes(core, _body_and_actor))
             routes.extend(
                 create_identity_admin_routes(
                     core,

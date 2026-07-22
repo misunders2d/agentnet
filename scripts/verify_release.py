@@ -33,15 +33,15 @@ MANIFEST_PATH = ROOT / "RELEASE_MANIFEST.json"
 EXPECTED_SOURCES = {
     "concept": (
         "docs/specification.md",
-        "6dc966ff67326af986cd31d2fb750554f22431905127f7bfdc2c32d47d420e03",
+        "a0b5463446684ee46b4885cc483dc6bf77762705732c5c13603741fd69de3938",
     ),
     "requirements": (
         "docs/requirements.md",
-        "fcbc5ab536b78966a4a0e67ed0e7123cb522062a925453a2233be4473c99a152",
+        "45d996a658c80428e84a60f863e0c204335d06800b46d2146915dc7897feb0da",
     ),
     "final_verification": (
         "docs/final-verification.md",
-        "dac5fd9cb17f8e303b0baf9abb9dace93585c6643dadbbb09221816821b04529",
+        "3b4a2b09c7197eeccfc40b2f5b970031f175f0bab1739408588f9029631151c4",
     ),
 }
 
@@ -180,6 +180,7 @@ EXPECTED_SDIST_ONLY_INCLUDE = (
     "docs/RELEASE_MANIFEST.md",
     "docs/SCHEMAS_INTERFACES.md",
     "docs/THREAT_MODEL_TEST_PLAN.md",
+    "docs/ZERO_STATE_C0_PILOT.md",
     "docs/final-verification.md",
     "docs/implementation-guide.md",
     "docs/requirements.md",
@@ -303,7 +304,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
 
 
 def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
-    base = "evidence/local/2026-07-20-v0.1.18/artifacts"
+    base = "evidence/local/2026-07-22-v0.1.19/artifacts"
     ignore_path = root / base / ".gitignore"
     retention_path = root / base / "RETENTION.md"
     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
@@ -317,8 +318,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
     if ignore_path.is_file() and ignore_path.read_text(encoding="utf-8") != expected_ignore:
         failures.append("final package artifact ignore policy does not retain its archives")
     expected_paths = {
-        f"{base}/agentnet-0.1.18.tar.gz",
-        f"{base}/agentnet-0.1.18-py3-none-any.whl",
+        f"{base}/agentnet-0.1.19.tar.gz",
+        f"{base}/agentnet-0.1.19-py3-none-any.whl",
     }
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         failures.append("final package evidence must contain exactly the sdist and wheel")
@@ -371,8 +372,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
             names = set(listed_names)
             if len(names) != len(listed_names):
                 failures.append("wheel contains duplicate archive member names")
-            dist_info = "agentnet-0.1.18.dist-info"
-            shared = "agentnet-0.1.18.data/data/share/agentnet"
+            dist_info = "agentnet-0.1.19.dist-info"
+            shared = "agentnet-0.1.19.data/data/share/agentnet"
             expected_payloads = dict(source_files)
             expected_payloads.update(
                 {
@@ -427,7 +428,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
                 wheel_metadata = archive.read(metadata_name)
                 if (
                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
-                    or b"\nVersion: 0.1.18\n" not in b"\n" + wheel_metadata
+                    or b"\nVersion: 0.1.19\n" not in b"\n" + wheel_metadata
                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
                 ):
                     failures.append("wheel core metadata differs from the release identity/runtime")
@@ -454,7 +455,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
         failures.append(f"final wheel is unreadable or malformed: {exc}")
 
     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
-    prefix = "agentnet-0.1.18/"
+    prefix = "agentnet-0.1.19/"
     try:
         with tarfile.open(sdist_path, mode="r:gz") as archive:
             all_members = archive.getmembers()
@@ -942,12 +943,12 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     ):
         failures.append("final clean-install status does not preserve the local blocked-release boundary")
     package_evidence = _load_json(
-        root / "evidence/local/2026-07-20-v0.1.18/manifest.json",
+        root / "evidence/local/2026-07-22-v0.1.19/manifest.json",
         failures,
-        "0.1.18 package evidence manifest",
+        "0.1.19 package evidence manifest",
     )
     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
-        failures.append("0.1.18 package evidence is not bound to the current source tree")
+        failures.append("0.1.19 package evidence is not bound to the current source tree")
     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
 

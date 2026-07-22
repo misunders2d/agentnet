@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import secrets
 import stat
 import subprocess
 import sys
@@ -40,6 +41,12 @@ from agentnet.authorization import (
     PolicyEngine,
     SignedAuthorityCommand,
 )
+from agentnet.authorization.bootstrap_plan import (
+    BootstrapPlanBeginResult,
+    BootstrapPlanCompleteResult,
+    BootstrapPlanStatusResult,
+)
+from agentnet.authorization.c0_pilot import C0PilotResult
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
@@ -115,6 +122,7 @@ from agentnet.supervisor.live_gate import (
 from agentnet.supervisor.daemon import (
     load_supervisor_config,
     redacted_supervisor_status,
+    run_c0_pilot_responder_daemon,
     run_supervisor_daemon,
 )
 
@@ -1065,8 +1073,11 @@ def command_network_create(args: argparse.Namespace) -> int:
                     + str(path)
                     + " --identity .agentnet/server-agent-identity.json",
                     "agentnet serve --config " + str(path),
-                    "agentnet founder begin --identity <founder-identity.json>",
-                    "enroll at least two independent recovery administrators before the initial root expires",
+                    (
+                        "after exactly two guided same-principal harnesses enroll, run agentnet "
+                        "bootstrap-plan begin --identity <fresh-identity.json>"
+                    ),
+                    "the fixed C0 service alone activates the pending guard after exact plan approval",
                 ],
             },
             indent=2,
@@ -1213,6 +1224,28 @@ def _validate_guided_authorization(value: object) -> dict[str, object]:
     return value
 
 
+def _validate_stable_approval_url(value: object) -> str:
+    if not isinstance(value, str):
+        raise SystemExit("guided enrollment approval entrypoint is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise SystemExit("guided enrollment approval entrypoint is invalid") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/approval"
+        or parsed.query
+        or parsed.fragment
+        or (port is not None and not 1 <= port <= 65_535)
+    ):
+        raise SystemExit("guided enrollment approval entrypoint is invalid")
+    return value
+
+
 def _validate_guided_challenge(value: object) -> tuple[dict[str, object], dict[str, object]]:
     if not isinstance(value, dict) or set(value) != {
         "challenge_id",
@@ -1263,22 +1296,14 @@ def _guided_success_output(
     actor: VerifiedActor,
     idempotent_repeat: bool,
 ) -> dict[str, object]:
+    _ = identity_path, actor
     return {
         "status": "enrolled_identity_only",
         "idempotent_repeat": idempotent_repeat,
-        "identity": str(identity_path),
-        "domain_id": actor.domain_id,
-        "principal_id": actor.principal_id,
-        "harness_id": actor.harness_id,
-        "credential_id": actor.credential_id,
-        "binding_assurance": actor.binding_assurance,
+        "identity_saved_locally": True,
         "authority_granted": False,
         "first_message_status": "first_message_blocked_explicit_authority_required",
-        "next": (
-            "an authorized administrator must explicitly grant message.send on direct, "
-            f"mailbox.read on {actor.harness_id}, and mailbox.acknowledge on "
-            f"{actor.harness_id} before the first test message"
-        ),
+        "next": "continue only with an explicitly approved bounded authority plan",
     }
 
 
@@ -1289,7 +1314,12 @@ def _require_private_terminal_or_exit() -> None:
         raise SystemExit(str(exc)) from None
 
 
-def _handoff_guided_authorization(url: str, *, browser: str) -> None:
+def _handoff_guided_authorization(
+    url: str,
+    *,
+    browser: str,
+    purpose: str = "owner OIDC enrollment",
+) -> None:
     if browser == "system":
         if not webbrowser.open(url, new=1):
             raise SystemExit(
@@ -1301,7 +1331,7 @@ def _handoff_guided_authorization(url: str, *, browser: str) -> None:
     try:
         handoff_private_url(
             url,
-            purpose="owner OIDC enrollment",
+            purpose=purpose,
             require_ack=True,
         )
     except TerminalHandoffError as exc:
@@ -1380,6 +1410,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "public_key_pem",
             "authorization",
             "challenge",
+            "approval_url",
         }
         if set(pending) != expected or pending.get("schema") != "agentnet.guided-join.v1":
             raise SystemExit("guided join state does not match the exact schema")
@@ -1434,6 +1465,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "public_key_pem": key.public_pem,
             "authorization": authorization,
             "challenge": None,
+            "approval_url": None,
         }
         _write_owner_json(state_path, pending)
         _handoff_guided_authorization(
@@ -1471,6 +1503,9 @@ def command_join_guided(args: argparse.Namespace) -> int:
                 }
                 _validate_guided_challenge(challenge_value)
                 pending["challenge"] = challenge_value
+                pending["approval_url"] = _validate_stable_approval_url(
+                    polled.get("approval_url")
+                )
                 _write_private_config(state_path, pending, force=True)
                 break
             if status not in {"authorization_pending", "slow_down"}:
@@ -1486,6 +1521,13 @@ def command_join_guided(args: argparse.Namespace) -> int:
             time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
     challenge, decoded = _validate_guided_challenge(challenge_value)
+    approval_url = _validate_stable_approval_url(pending.get("approval_url"))
+    _handoff_guided_authorization(
+        approval_url,
+        browser=args.browser,
+        purpose="stable owner approval",
+    )
+    _require_private_terminal_or_exit()
     print(
         "Google sign-in received. Complete independent WebAuthn approval, then enter "
         "the displayed one-time code.",
@@ -1670,7 +1712,10 @@ def command_join_complete(args: argparse.Namespace) -> int:
                     "ordinary client devices may now reconnect with this exact identity",
                     "for an always-on config, run agentnet server-agent activate --config agentnet.json --identity "
                     + str(identity_path),
-                    "after server-agent activation, start the service and run agentnet founder begin if applicable",
+                    (
+                        "after server-agent activation and exact second guided enrollment, run "
+                        "agentnet bootstrap-plan begin from the fresh identity"
+                    ),
                 ],
             },
             indent=2,
@@ -1991,30 +2036,121 @@ def command_invitation_revoke(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_founder_begin(args: argparse.Namespace) -> int:
+_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA = "agentnet.bootstrap-plan-cli-state.v1"
+_BOOTSTRAP_PLAN_CLI_STATE_KEYS = frozenset(
+    {"schema", "begin_idempotency_key", "completion_idempotency_key"}
+)
+
+
+def _validate_bootstrap_plan_cli_state(value: dict[str, object]) -> dict[str, str]:
+    if set(value) != _BOOTSTRAP_PLAN_CLI_STATE_KEYS:
+        raise SystemExit("bootstrap plan state does not match the exact schema")
+    if value.get("schema") != _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA:
+        raise SystemExit("bootstrap plan state does not match the exact schema")
+    for key in ("begin_idempotency_key", "completion_idempotency_key"):
+        item = value.get(key)
+        if not isinstance(item, str) or not 16 <= len(item) <= 256:
+            raise SystemExit("bootstrap plan state does not match the exact schema")
+    return {key: str(value[key]) for key in _BOOTSTRAP_PLAN_CLI_STATE_KEYS}
+
+
+def _load_bootstrap_plan_cli_state(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    try:
+        value = json.loads(_owner_only_file(resolved, label="bootstrap plan state"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("bootstrap plan state is not readable JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("bootstrap plan state does not match the exact schema")
+    return _validate_bootstrap_plan_cli_state(value)
+
+
+def _load_or_create_bootstrap_plan_cli_state(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    if os.path.lexists(resolved):
+        return _load_bootstrap_plan_cli_state(resolved)
+    value = {
+        "schema": _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
+        "begin_idempotency_key": secrets.token_urlsafe(32),
+        "completion_idempotency_key": secrets.token_urlsafe(32),
+    }
+    _write_owner_json(resolved, value, force=False)
+    return _validate_bootstrap_plan_cli_state(value)
+
+
+def _require_public_approval_url(value: str | None) -> None:
+    if value is None:
+        return
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/approval"
+        or parsed.query
+        or parsed.fragment
+        or value != f"https://{parsed.netloc}/approval"
+    ):
+        raise SystemExit("bootstrap plan response is invalid")
+
+
+def _bootstrap_plan_result(response, *, expected_status: int, model):
+    if response.status_code != expected_status:
+        raise SystemExit(
+            f"bootstrap plan request was rejected with HTTP {response.status_code}"
+        )
+    try:
+        raw = response.json()
+    except Exception as exc:
+        raise SystemExit("bootstrap plan response is invalid") from exc
+    models = model if isinstance(model, tuple) else (model,)
+    result = None
+    for candidate in models:
+        try:
+            result = candidate.model_validate(raw)
+            break
+        except Exception:
+            continue
+    if result is None:
+        raise SystemExit("bootstrap plan response is invalid")
+    if hasattr(result, "approval_url"):
+        _require_public_approval_url(result.approval_url)
+    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _c0_pilot_cli_result(response, *, expected_status: int) -> dict[str, str]:
+    if response.status_code != expected_status:
+        raise SystemExit(f"C0 pilot request was rejected with HTTP {response.status_code}")
+    try:
+        result = C0PilotResult.model_validate(response.json())
+    except Exception as exc:
+        raise SystemExit("C0 pilot response is invalid") from exc
+    value = result.model_dump(mode="json", by_alias=True)
+    if set(value) != {"schema", "status"}:
+        raise SystemExit("C0 pilot response is invalid")
+    return value
+
+
+def command_c0_pilot(args: argparse.Namespace) -> int:
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
-        response = client.request(
-            "POST",
-            "/v1/authority-bootstrap/challenges",
-            json_body={},
-        )
+        if args.c0_pilot_command == "start":
+            response = client.c0_pilot_start()
+            expected = 201
+        elif args.c0_pilot_command == "complete":
+            response = client.c0_pilot_complete()
+            expected = 200
+        elif args.c0_pilot_command == "status":
+            response = client.c0_pilot_status()
+            expected = 200
+        else:
+            raise SystemExit("unknown C0 pilot operation")
     finally:
         client.close()
-    if response.status_code != 201:
-        raise SystemExit(f"founder bootstrap begin was rejected with HTTP {response.status_code}")
-    value = response.json()
-    if not isinstance(value, dict):
-        raise SystemExit("founder bootstrap response is invalid")
-    _write_owner_json(Path(args.challenge), value, force=args.force)
     print(
         json.dumps(
-            {
-                "challenge": args.challenge,
-                "challenge_id": value.get("challenge_id"),
-                "expires_at": value.get("expires_at"),
-                "next": "obtain independent non-beneficiary approval, then run agentnet founder complete",
-            },
+            _c0_pilot_cli_result(response, expected_status=expected),
             indent=2,
             sort_keys=True,
         )
@@ -2022,48 +2158,76 @@ def command_founder_begin(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_founder_complete(args: argparse.Namespace) -> int:
-    challenge = _read_json_object(Path(args.challenge), label="founder challenge")
-    if set(challenge) != {
-        "candidate_entitlement",
-        "canonical_transaction_b64",
-        "challenge_id",
-        "expires_at",
-        "nonce",
-    }:
-        raise SystemExit("founder challenge does not match the exact schema")
-    approval = _read_json_object(Path(args.approval), label="founder independent approval")
-    client, actor, _key = _load_identity_client(Path(args.identity))
+def command_bootstrap_plan_begin(args: argparse.Namespace) -> int:
+    state = _load_or_create_bootstrap_plan_cli_state(Path(args.state))
+    client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
-            f"/v1/authority-bootstrap/challenges/{challenge['challenge_id']}/complete",
+            "/v1/bootstrap-plan/begin",
             json_body={
-                "nonce": challenge["nonce"],
-                "canonical_transaction_b64": challenge["canonical_transaction_b64"],
-                "independent_approval": approval,
+                "schema": "agentnet.bootstrap-plan.begin.v1",
+                "begin_idempotency_key": state["begin_idempotency_key"],
             },
         )
     finally:
         client.close()
-    if response.status_code != 201:
-        raise SystemExit(f"founder bootstrap completion was rejected with HTTP {response.status_code}")
-    result = response.json()
-    print(
-        json.dumps(
-            {
-                "founder_principal_id": actor.principal_id,
-                "result": result,
-                "recovery_safe": False,
-                "required_next": (
-                    "invite and enroll at least two independent administrators, then issue their exact "
-                    "recovery and revocation entitlements before the displayed root expiry"
-                ),
-            },
-            indent=2,
-            sort_keys=True,
-        )
+    result = _bootstrap_plan_result(
+        response,
+        expected_status=201,
+        model=BootstrapPlanBeginResult,
     )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
+    state = _load_bootstrap_plan_cli_state(Path(args.state))
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.request(
+            "POST",
+            "/v1/bootstrap-plan/status",
+            json_body={
+                "schema": "agentnet.bootstrap-plan.status.v1",
+                "begin_idempotency_key": state["begin_idempotency_key"],
+            },
+        )
+    finally:
+        client.close()
+    result = _bootstrap_plan_result(
+        response,
+        expected_status=200,
+        model=(BootstrapPlanStatusResult, BootstrapPlanCompleteResult),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
+    state = _load_bootstrap_plan_cli_state(Path(args.state))
+    _require_private_terminal_or_exit()
+    claim_code = getpass.getpass("One-time approval code: ").strip().upper()
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.request(
+            "POST",
+            "/v1/bootstrap-plan/complete",
+            json_body={
+                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "begin_idempotency_key": state["begin_idempotency_key"],
+                "completion_idempotency_key": state["completion_idempotency_key"],
+                "claim_code": claim_code,
+            },
+        )
+    finally:
+        client.close()
+    result = _bootstrap_plan_result(
+        response,
+        expected_status=201,
+        model=BootstrapPlanCompleteResult,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
@@ -2923,9 +3087,13 @@ def command_supervisor_run(args: argparse.Namespace) -> int:
     except ValidationError as exc:
         raise SystemExit(str(exc)) from None
     if args.check:
-        print(json.dumps(redacted_supervisor_status(config), indent=2, sort_keys=True))
+        status = redacted_supervisor_status(config)
+        if args.c0_pilot_responder:
+            status["mode"] = "c0_pilot_responder"
+        print(json.dumps(status, indent=2, sort_keys=True))
         return 0
-    print(json.dumps(run_supervisor_daemon(config), indent=2, sort_keys=True))
+    runner = run_c0_pilot_responder_daemon if args.c0_pilot_responder else run_supervisor_daemon
+    print(json.dumps(runner(config), indent=2, sort_keys=True))
     return 0
 
 
@@ -3475,21 +3643,35 @@ def build_parser() -> argparse.ArgumentParser:
     invitation_revoke.add_argument("--reason", required=True)
     invitation_revoke.set_defaults(func=command_invitation_revoke)
 
-    founder = commands.add_parser(
-        "founder",
-        help="perform the independently approved first-positive-authority ceremony",
+    bootstrap_plan = commands.add_parser(
+        "bootstrap-plan",
+        help="prepare the bounded same-principal two-harness C0 plan",
     )
-    founder_commands = founder.add_subparsers(dest="founder_command", required=True)
-    founder_begin = founder_commands.add_parser("begin")
-    founder_begin.add_argument("--identity", default=".agentnet/identity.json")
-    founder_begin.add_argument("--challenge", default=".agentnet/founder-challenge.json")
-    founder_begin.add_argument("--force", action="store_true")
-    founder_begin.set_defaults(func=command_founder_begin)
-    founder_complete = founder_commands.add_parser("complete")
-    founder_complete.add_argument("--identity", default=".agentnet/identity.json")
-    founder_complete.add_argument("--challenge", default=".agentnet/founder-challenge.json")
-    founder_complete.add_argument("--approval", required=True)
-    founder_complete.set_defaults(func=command_founder_complete)
+    bootstrap_plan_commands = bootstrap_plan.add_subparsers(
+        dest="bootstrap_plan_command",
+        required=True,
+    )
+    for name, function in (
+        ("begin", command_bootstrap_plan_begin),
+        ("status", command_bootstrap_plan_status),
+        ("complete", command_bootstrap_plan_complete),
+    ):
+        operation = bootstrap_plan_commands.add_parser(name)
+        operation.add_argument("--identity", default=".agentnet/identity.json")
+        operation.add_argument("--state", default=".agentnet/bootstrap-plan-state.json")
+        operation.set_defaults(func=function)
+
+    c0_pilot = commands.add_parser(
+        "c0-pilot",
+        help="run or inspect the fixed same-principal two-harness C0 proof",
+    )
+    c0_pilot_commands = c0_pilot.add_subparsers(
+        dest="c0_pilot_command", required=True
+    )
+    for name in ("start", "status", "complete"):
+        operation = c0_pilot_commands.add_parser(name)
+        operation.add_argument("--identity", default=".agentnet/identity.json")
+        operation.set_defaults(func=command_c0_pilot)
 
     authority = commands.add_parser(
         "authority",
@@ -3810,6 +3992,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="validate the owner-only configuration and print only non-secret fields",
+    )
+    supervisor_run.add_argument(
+        "--c0-pilot-responder",
+        action="store_true",
+        help="run only the fixed no-model owner C0 responder",
     )
     supervisor_run.set_defaults(func=command_supervisor_run)
 

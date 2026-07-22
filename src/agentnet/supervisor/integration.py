@@ -49,6 +49,10 @@ class SupervisorCoreClient(Protocol):
 
     def upload_result(self, result: Mapping[str, Any]) -> None: ...
 
+    def c0_pilot_respond(self) -> dict[str, str]: ...
+
+    def c0_pilot_status(self) -> dict[str, str]: ...
+
 
 class BackgroundHarnessIntegration:
     """Join corporate mailboxes to separately managed background processes.
@@ -87,6 +91,8 @@ class BackgroundHarnessIntegration:
         self._daemon_stops: dict[str, threading.Event] = {}
         self._daemon_threads: dict[str, threading.Thread] = {}
         self._daemon_errors: dict[str, int] = {}
+        self._c0_daemon_stops: dict[str, threading.Event] = {}
+        self._c0_daemon_threads: dict[str, threading.Thread] = {}
         self._last_daemon_error_at: dict[str, int] = {}
         self._last_daemon_error_type: dict[str, str] = {}
         self._last_cycle_at: dict[str, int] = {}
@@ -103,10 +109,71 @@ class BackgroundHarnessIntegration:
         self._runtimes[harness_id] = runtime
         self._daemon_errors[harness_id] = 0
 
+    def run_c0_pilot_responder_once(self) -> dict[str, str]:
+        """Run one deterministic owner response cycle with no worker/runtime path."""
+
+        if self.core_client is None:
+            raise ValidationError("C0 pilot responder requires an authenticated corporate client")
+        status = self.core_client.c0_pilot_status()
+        if status.get("status") == "waiting_owner":
+            return self.core_client.c0_pilot_respond()
+        return status
+
+    def start_c0_pilot_responder_daemon(self, harness_id: str) -> dict[str, str]:
+        """Start no-model C0 responder; never starts or registers a harness runtime."""
+
+        if self.core_client is None:
+            raise ValidationError("C0 pilot responder requires an authenticated corporate client")
+        current = self._c0_daemon_threads.get(harness_id)
+        if current is not None and current.is_alive():
+            return {"daemon": "running", "mode": "c0_pilot_responder"}
+        stop = threading.Event()
+        self._c0_daemon_stops[harness_id] = stop
+        thread = threading.Thread(
+            target=self._c0_pilot_responder_loop,
+            args=(harness_id, stop),
+            name=f"agentnet-c0-responder-{harness_id[:24]}",
+            daemon=True,
+        )
+        self._c0_daemon_threads[harness_id] = thread
+        thread.start()
+        return {"daemon": "running", "mode": "c0_pilot_responder"}
+
+    def _c0_pilot_responder_loop(self, harness_id: str, stop: threading.Event) -> None:
+        delay = self.reconnect_initial_seconds
+        while not stop.is_set():
+            try:
+                result = self.run_c0_pilot_responder_once()
+                self._last_cycle_at[harness_id] = int(time.time())
+                self._daemon_errors[harness_id] = 0
+                delay = self.reconnect_initial_seconds
+                if result.get("status") in {
+                    "waiting_fresh",
+                    "COMPLETED_C0_ROUND_TRIP",
+                    "expired",
+                    "invalidated",
+                }:
+                    return
+                stop.wait(self.watch_wait_seconds)
+            except Exception as exc:
+                self._daemon_errors[harness_id] = self._daemon_errors.get(harness_id, 0) + 1
+                self._last_daemon_error_at[harness_id] = int(time.time())
+                self._last_daemon_error_type[harness_id] = type(exc).__name__
+                stop.wait(delay)
+                delay = min(self.reconnect_max_seconds, delay * 2)
+
     def start(self, harness_id: str) -> dict[str, Any]:
         return asdict(self._runtime(harness_id).start())
 
     def stop(self, harness_id: str) -> None:
+        c0_stop = self._c0_daemon_stops.get(harness_id)
+        if c0_stop is not None:
+            c0_stop.set()
+        c0_thread = self._c0_daemon_threads.get(harness_id)
+        if c0_thread is not None and c0_thread is not threading.current_thread():
+            c0_thread.join(timeout=self.watch_wait_seconds + 3.0)
+            if c0_thread.is_alive():
+                raise ConflictError("C0 pilot responder did not stop within its bound")
         stop = self._daemon_stops.get(harness_id)
         if stop is not None:
             stop.set()
@@ -115,7 +182,9 @@ class BackgroundHarnessIntegration:
             thread.join(timeout=self.watch_wait_seconds + 3.0)
             if thread.is_alive():
                 raise ConflictError("authenticated mailbox watch did not stop within its bound")
-        self._runtime(harness_id).stop()
+        runtime = self._runtimes.get(harness_id)
+        if runtime is not None:
+            runtime.stop()
 
     def start_daemon(self, harness_id: str) -> dict[str, Any]:
         if self.core_client is None:
@@ -474,7 +543,7 @@ class BackgroundHarnessIntegration:
         return recovered
 
     def close(self) -> None:
-        for harness_id in tuple(self._runtimes):
+        for harness_id in set(self._runtimes) | set(self._c0_daemon_threads):
             self.stop(harness_id)
 
     def _runtime(self, harness_id: str) -> BackgroundAdapterRuntime:

@@ -34,6 +34,10 @@ from agentnet.storage.artifact_quota_schema import (
     ARTIFACT_QUOTA_SCHEMA,
     ARTIFACT_QUOTA_SCHEMA_VERSION,
 )
+from agentnet.storage.bootstrap_plan_schema import (
+    BOOTSTRAP_PLAN_SCHEMA,
+    BOOTSTRAP_PLAN_SCHEMA_VERSION,
+)
 from agentnet.storage.credential_recovery_schema import (
     CREDENTIAL_RECOVERY_SCHEMA,
     CREDENTIAL_RECOVERY_SCHEMA_VERSION,
@@ -535,10 +539,12 @@ SCHEMA_V1 = (
     + RESPONSE_OBLIGATION_SCHEMA
 )
 SCHEMA_V2 = SCHEMA_V1 + TASK_PAYLOAD_RELEASE_SCHEMA
-SCHEMA = SCHEMA_V2 + GUIDED_ENROLLMENT_SCHEMA
+SCHEMA_V3 = SCHEMA_V2 + GUIDED_ENROLLMENT_SCHEMA
+SCHEMA = SCHEMA_V3 + BOOTSTRAP_PLAN_SCHEMA
 _SQLITE_MIGRATION_SQL = {
     TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: TASK_PAYLOAD_RELEASE_SCHEMA,
     GUIDED_ENROLLMENT_SCHEMA_VERSION: GUIDED_ENROLLMENT_SCHEMA,
+    BOOTSTRAP_PLAN_SCHEMA_VERSION: BOOTSTRAP_PLAN_SCHEMA,
 }
 
 _SCHEMA_CATALOG_QUERY = (
@@ -555,14 +561,15 @@ def _schema_catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str
     )
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=5)
 def _expected_schema_catalog(
-    schema_version: int = TASK_PAYLOAD_RELEASE_SCHEMA_VERSION,
+    schema_version: int = BOOTSTRAP_PLAN_SCHEMA_VERSION,
 ) -> tuple[tuple[str, str, str, str], ...]:
     schemas = {
         1: SCHEMA_V1,
         TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: SCHEMA_V2,
-        GUIDED_ENROLLMENT_SCHEMA_VERSION: SCHEMA,
+        GUIDED_ENROLLMENT_SCHEMA_VERSION: SCHEMA_V3,
+        BOOTSTRAP_PLAN_SCHEMA_VERSION: SCHEMA,
     }
     schema = schemas.get(schema_version)
     if schema is None:

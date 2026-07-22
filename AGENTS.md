@@ -523,9 +523,9 @@ Current locally implemented organizational mechanics include:
 - typed, arrival-order-independent `conflict_pending` admission and exact
   subordinate-owner adjudication, with revision fencing, overlapping-resource
   propagation, and custody-only release/reject outcomes;
-- clean-start storage schema version 1 for SQLite and the contiguous
-  PostgreSQL migration catalog; no older unilateral relationship is inferred or
-  retrofitted as consented; and
+- immutable schema-v1 governance baseline plus the current contiguous Core v4
+  SQLite/PostgreSQL catalog and exact v3→v4 N/N-1 path; no older unilateral
+  relationship is inferred or retrofitted as consented; and
 - causal event and artifact derivation records bound to server-resolved parent
   digests, exact transformations, persistent taint, current policy, and the
   authenticated executor.

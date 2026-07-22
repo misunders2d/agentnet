@@ -17,7 +17,7 @@ from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.security.envelope import LocalEnvelopeCipher
 
 
-APPROVAL_STORE_SCHEMA_VERSION = 3
+APPROVAL_STORE_SCHEMA_VERSION = 4
 APPROVAL_STORE_SCHEMA_V1 = """
 CREATE TABLE approval_store_meta (
     key TEXT PRIMARY KEY,
@@ -164,15 +164,138 @@ APPROVAL_STORE_SCHEMA_V3 = (
     + ";\n".join(_APPROVAL_STORE_MIGRATION_V3_STATEMENTS)
     + ";\n"
 )
-# Current schema alias retained for callers that imported the original name.
-APPROVAL_STORE_SCHEMA = APPROVAL_STORE_SCHEMA_V3
 _APPROVAL_STORE_MIGRATION_V3_NAME = "signed approval broker replay custody"
 _APPROVAL_STORE_MIGRATION_V3_CHECKSUM = hashlib.sha256(
     "\n".join(_APPROVAL_STORE_MIGRATION_V3_STATEMENTS).encode("utf-8")
 ).hexdigest()
+
+_APPROVAL_STORE_MIGRATION_V4_STATEMENTS = (
+    """CREATE TABLE approval_owner_bindings (
+        binding_id TEXT PRIMARY KEY,
+        domain_id TEXT NOT NULL,
+        approver_principal_id TEXT NOT NULL,
+        oidc_issuer TEXT NOT NULL,
+        oidc_subject TEXT NOT NULL,
+        verified_email TEXT NOT NULL,
+        pin_source TEXT NOT NULL CHECK(pin_source IN ('exact_subject','verified_alias')),
+        status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+        pinned_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        revocation_reason TEXT,
+        UNIQUE(domain_id,approver_principal_id),
+        UNIQUE(domain_id,oidc_issuer,oidc_subject),
+        CHECK((status='active' AND revoked_at IS NULL) OR (status='revoked' AND revoked_at IS NOT NULL))
+    )""",
+    """CREATE INDEX idx_approval_owner_bindings_active
+       ON approval_owner_bindings(domain_id,status,pinned_at)""",
+    """CREATE TABLE approval_oidc_login_transactions (
+        login_id TEXT PRIMARY KEY,
+        preauth_session_hash TEXT NOT NULL CHECK(length(preauth_session_hash)=64),
+        preauth_csrf_hash TEXT NOT NULL CHECK(length(preauth_csrf_hash)=64),
+        completed_session_hash TEXT UNIQUE CHECK(
+            completed_session_hash IS NULL OR length(completed_session_hash)=64
+        ),
+        oidc_issuer TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        state_hash TEXT NOT NULL UNIQUE CHECK(length(state_hash)=64),
+        nonce_hash TEXT NOT NULL UNIQUE CHECK(length(nonce_hash)=64),
+        code_verifier_encrypted TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN (
+            'pending','callback_claimed','callback_consumed','failed','expired','canceled'
+        )),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL CHECK(expires_at > created_at),
+        callback_claimed_at INTEGER,
+        callback_consumed_at INTEGER,
+        owner_binding_id TEXT REFERENCES approval_owner_bindings(binding_id),
+        failure_code TEXT,
+        CHECK(
+            (state='pending' AND callback_claimed_at IS NULL
+                AND callback_consumed_at IS NULL AND completed_session_hash IS NULL)
+            OR
+            (state='callback_claimed' AND callback_claimed_at IS NOT NULL
+                AND callback_consumed_at IS NULL AND completed_session_hash IS NULL)
+            OR
+            (state='callback_consumed' AND callback_claimed_at IS NOT NULL
+                AND callback_consumed_at IS NOT NULL
+                AND completed_session_hash IS NOT NULL AND owner_binding_id IS NOT NULL)
+            OR
+            (state IN ('failed','expired','canceled'))
+        )
+    )""",
+    """CREATE INDEX idx_approval_oidc_login_expiry
+       ON approval_oidc_login_transactions(state,expires_at)""",
+    """CREATE TABLE approval_browser_sessions (
+        session_hash TEXT PRIMARY KEY CHECK(length(session_hash)=64),
+        owner_binding_id TEXT NOT NULL REFERENCES approval_owner_bindings(binding_id) ON DELETE RESTRICT,
+        csrf_secret_encrypted TEXT NOT NULL,
+        rp_id TEXT NOT NULL,
+        public_origin TEXT NOT NULL,
+        verifier_id TEXT NOT NULL,
+        rotated_from_hash TEXT UNIQUE CHECK(
+            rotated_from_hash IS NULL OR length(rotated_from_hash)=64
+        ),
+        created_at INTEGER NOT NULL,
+        authenticated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL CHECK(expires_at > authenticated_at),
+        revoked_at INTEGER,
+        revocation_reason TEXT
+    )""",
+    """CREATE INDEX idx_approval_browser_sessions_active
+       ON approval_browser_sessions(owner_binding_id,expires_at,revoked_at)""",
+    """CREATE TABLE approval_registration_budgets (
+        owner_binding_id TEXT PRIMARY KEY REFERENCES approval_owner_bindings(binding_id) ON DELETE RESTRICT,
+        failed_attempts_total INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts_total BETWEEN 0 AND 20),
+        challenge_rotations INTEGER NOT NULL DEFAULT 0 CHECK(challenge_rotations BETWEEN 0 AND 10),
+        updated_at INTEGER NOT NULL
+    )""",
+    """CREATE TABLE approval_registration_ceremonies (
+        ceremony_id TEXT PRIMARY KEY,
+        owner_binding_id TEXT NOT NULL REFERENCES approval_owner_bindings(binding_id) ON DELETE RESTRICT,
+        session_hash TEXT NOT NULL REFERENCES approval_browser_sessions(session_hash) ON DELETE RESTRICT,
+        challenge_encrypted TEXT NOT NULL,
+        challenge_hash TEXT NOT NULL UNIQUE CHECK(length(challenge_hash)=64),
+        state TEXT NOT NULL CHECK(state IN ('pending','verified','failed','expired','canceled')),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL CHECK(expires_at > created_at),
+        completed_at INTEGER,
+        failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts BETWEEN 0 AND 10),
+        CHECK(
+            (state='pending' AND completed_at IS NULL)
+            OR (state='verified' AND completed_at IS NOT NULL)
+            OR (state IN ('failed','expired','canceled'))
+        )
+    )""",
+    """CREATE INDEX idx_approval_registration_ceremonies_active
+       ON approval_registration_ceremonies(owner_binding_id,state,expires_at)""",
+    """ALTER TABLE approval_requests
+       ADD COLUMN claim_code_failed_attempts_total INTEGER NOT NULL DEFAULT 0
+       CHECK(claim_code_failed_attempts_total BETWEEN 0 AND 20)""",
+    """ALTER TABLE approval_requests
+       ADD COLUMN claim_code_rotations INTEGER NOT NULL DEFAULT 0
+       CHECK(claim_code_rotations BETWEEN 0 AND 10)""",
+    """ALTER TABLE approval_requests
+       ADD COLUMN challenge_owner_session_hash TEXT
+       REFERENCES approval_browser_sessions(session_hash) ON DELETE RESTRICT
+       CHECK(challenge_owner_session_hash IS NULL OR length(challenge_owner_session_hash)=64)""",
+)
+APPROVAL_STORE_SCHEMA_V4 = (
+    APPROVAL_STORE_SCHEMA_V3
+    + "\n"
+    + ";\n".join(_APPROVAL_STORE_MIGRATION_V4_STATEMENTS)
+    + ";\n"
+)
+# Current schema alias retained for callers that imported the original name.
+APPROVAL_STORE_SCHEMA = APPROVAL_STORE_SCHEMA_V4
+_APPROVAL_STORE_MIGRATION_V4_NAME = "stable owner session and registration ceremonies"
+_APPROVAL_STORE_MIGRATION_V4_CHECKSUM = hashlib.sha256(
+    "\n".join(_APPROVAL_STORE_MIGRATION_V4_STATEMENTS).encode("utf-8")
+).hexdigest()
 _MIGRATION_RECORDS = {
     2: (_APPROVAL_STORE_MIGRATION_V2_NAME, _APPROVAL_STORE_MIGRATION_V2_CHECKSUM),
     3: (_APPROVAL_STORE_MIGRATION_V3_NAME, _APPROVAL_STORE_MIGRATION_V3_CHECKSUM),
+    4: (_APPROVAL_STORE_MIGRATION_V4_NAME, _APPROVAL_STORE_MIGRATION_V4_CHECKSUM),
 }
 
 _CATALOG_QUERY = (
@@ -186,7 +309,7 @@ def _catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str],
     return tuple(tuple(str(value) for value in row) for row in connection.execute(_CATALOG_QUERY))
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=4)
 def expected_catalog(
     version: int = APPROVAL_STORE_SCHEMA_VERSION,
 ) -> tuple[tuple[str, str, str, str], ...]:
@@ -194,6 +317,7 @@ def expected_catalog(
         1: APPROVAL_STORE_SCHEMA_V1,
         2: APPROVAL_STORE_SCHEMA_V2,
         3: APPROVAL_STORE_SCHEMA_V3,
+        4: APPROVAL_STORE_SCHEMA_V4,
     }
     schema = schemas.get(version)
     if schema is None:
@@ -206,7 +330,7 @@ def expected_catalog(
         reference.close()
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=4)
 def expected_catalog_digest(version: int = APPROVAL_STORE_SCHEMA_VERSION) -> str:
     payload = "\n".join("\x1f".join(row) for row in expected_catalog(version)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -354,7 +478,11 @@ class ApprovalStore:
         metadata = self._read_metadata()
         if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
             return
-        if metadata not in (_expected_metadata(1), _expected_metadata(2)):
+        if metadata not in (
+            _expected_metadata(1),
+            _expected_metadata(2),
+            _expected_metadata(3),
+        ):
             raise GateBlocked("approval_store", "approval schema metadata mismatches")
 
         try:
@@ -368,50 +496,67 @@ class ApprovalStore:
             if metadata == _expected_metadata(APPROVAL_STORE_SCHEMA_VERSION):
                 self._connection.execute("COMMIT")
                 return
-            if metadata not in (_expected_metadata(1), _expected_metadata(2)):
+            if metadata not in (
+                _expected_metadata(1),
+                _expected_metadata(2),
+                _expected_metadata(3),
+            ):
                 raise GateBlocked("approval_store", "approval schema metadata mismatches")
 
-            source_version = 1 if metadata == _expected_metadata(1) else 2
+            source_version = next(
+                version
+                for version in (1, 2, 3)
+                if metadata == _expected_metadata(version)
+            )
             if _catalog(self._connection) != expected_catalog(source_version):
                 raise GateBlocked(
                     "approval_store",
                     "approval schema catalog mismatches before migration",
                 )
-            if source_version == 2:
-                _verify_migration_history(self._connection, 2)
+            if source_version >= 2:
+                _verify_migration_history(self._connection, source_version)
 
             applied_at = int(time.time())
-            if source_version == 1:
-                for statement in _APPROVAL_STORE_MIGRATION_V2_STATEMENTS:
+
+            def apply_migration(
+                version: int,
+                statements: tuple[str, ...],
+                name: str,
+                checksum: str,
+            ) -> None:
+                for statement in statements:
                     self._connection.execute(statement)
                 self._connection.execute(
                     """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
                        VALUES(?,?,?,?)""",
-                    (
-                        2,
-                        _APPROVAL_STORE_MIGRATION_V2_NAME,
-                        _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
-                        applied_at,
-                    ),
+                    (version, name, checksum, applied_at),
                 )
-                if _catalog(self._connection) != expected_catalog(2):
+                if _catalog(self._connection) != expected_catalog(version):
                     raise GateBlocked(
                         "approval_store",
-                        "approval migration did not produce the exact v2 catalog",
+                        f"approval migration did not produce the exact v{version} catalog",
                     )
-                _verify_migration_history(self._connection, 2)
+                _verify_migration_history(self._connection, version)
 
-            for statement in _APPROVAL_STORE_MIGRATION_V3_STATEMENTS:
-                self._connection.execute(statement)
-            self._connection.execute(
-                """INSERT INTO approval_store_migrations(version,name,checksum,applied_at)
-                   VALUES(?,?,?,?)""",
-                (
+            if source_version < 2:
+                apply_migration(
+                    2,
+                    _APPROVAL_STORE_MIGRATION_V2_STATEMENTS,
+                    _APPROVAL_STORE_MIGRATION_V2_NAME,
+                    _APPROVAL_STORE_MIGRATION_V2_CHECKSUM,
+                )
+            if source_version < 3:
+                apply_migration(
                     3,
+                    _APPROVAL_STORE_MIGRATION_V3_STATEMENTS,
                     _APPROVAL_STORE_MIGRATION_V3_NAME,
                     _APPROVAL_STORE_MIGRATION_V3_CHECKSUM,
-                    applied_at,
-                ),
+                )
+            apply_migration(
+                4,
+                _APPROVAL_STORE_MIGRATION_V4_STATEMENTS,
+                _APPROVAL_STORE_MIGRATION_V4_NAME,
+                _APPROVAL_STORE_MIGRATION_V4_CHECKSUM,
             )
             self._connection.executemany(
                 "UPDATE approval_store_meta SET value=? WHERE key=?",
@@ -587,6 +732,7 @@ __all__ = [
     "APPROVAL_STORE_SCHEMA_V1",
     "APPROVAL_STORE_SCHEMA_V2",
     "APPROVAL_STORE_SCHEMA_V3",
+    "APPROVAL_STORE_SCHEMA_V4",
     "APPROVAL_STORE_SCHEMA_VERSION",
     "ApprovalStore",
     "expected_catalog",

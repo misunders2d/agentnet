@@ -15,6 +15,7 @@ class TerminalHandoffError(RuntimeError):
 _ALLOWED_PURPOSES = {
     "local approval": "LOCAL APPROVAL",
     "owner OIDC enrollment": "OWNER OIDC ENROLLMENT",
+    "stable owner approval": "STABLE OWNER APPROVAL",
 }
 _MAX_PRIVATE_URL_CHARS = 8192
 

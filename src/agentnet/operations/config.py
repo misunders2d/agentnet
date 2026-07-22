@@ -359,23 +359,24 @@ class IndependentApproverConfig(BaseModel):
 
 
 class ApprovalServiceClientConfig(BaseModel):
-    """Non-secret Core client reference for independent approval broker."""
+    """Non-secret Core client and stable public Approval origins."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     origin: str = Field(min_length=8, max_length=2048)
+    public_origin: str = Field(min_length=8, max_length=2048)
     service_credential_env: str = Field(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
     approver_principal_id: str = Field(min_length=1, max_length=256)
     request_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     maximum_response_bytes: int = Field(default=262_144, ge=4096, le=1_048_576)
 
-    @model_validator(mode="after")
-    def exact_https_origin(self) -> "ApprovalServiceClientConfig":
+    @staticmethod
+    def _require_exact_origin(value: str, *, label: str) -> None:
         try:
-            parsed = urlsplit(self.origin)
+            parsed = urlsplit(value)
             port = parsed.port
         except ValueError as exc:
-            raise ValueError("approval service origin is invalid") from exc
+            raise ValueError(f"{label} is invalid") from exc
         if (
             parsed.scheme != "https"
             or not parsed.hostname
@@ -385,14 +386,19 @@ class ApprovalServiceClientConfig(BaseModel):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("approval service origin must be one exact HTTPS origin")
+            raise ValueError(f"{label} must be one exact HTTPS origin")
         hostname = parsed.hostname.lower()
         rendered = f"[{hostname}]" if ":" in hostname else hostname
         canonical = f"https://{rendered}"
         if port not in {None, 443}:
             canonical += f":{port}"
-        if self.origin.rstrip("/") != canonical:
-            raise ValueError("approval service origin must use canonical spelling")
+        if value.rstrip("/") != canonical:
+            raise ValueError(f"{label} must use canonical spelling")
+
+    @model_validator(mode="after")
+    def exact_https_origins(self) -> "ApprovalServiceClientConfig":
+        self._require_exact_origin(self.origin, label="approval service origin")
+        self._require_exact_origin(self.public_origin, label="public approval origin")
         return self
 
 
@@ -443,6 +449,20 @@ class OIDCEnrollmentConfig(BaseModel):
             self.trusted_approvers
         ):
             raise ValueError("independent approver signer identifiers must be unique")
+        if self.approval_service is not None:
+            selected = [
+                item
+                for item in self.trusted_approvers
+                if item.principal_id == self.approval_service.approver_principal_id
+            ]
+            required = {
+                "identity.enrollment.approve",
+                "authorization.bootstrap_plan.approve",
+            }
+            if len(selected) != 1 or not required <= selected[0].allowed_purposes:
+                raise ValueError(
+                    "guided Approval service approver lacks mandatory enrollment/bootstrap purposes"
+                )
         origins: list[str] = []
         for value in self.allowed_endpoint_origins:
             try:
@@ -826,7 +846,7 @@ class ExtensionConfig(BaseModel):
                 *(approver.allowed_purposes for approver in self.oidc_enrollment.trusted_approvers)
             )
             required_ceremony_purposes = {
-                "authorization.entitlement.bootstrap.approve",
+                "authorization.bootstrap_plan.approve",
                 "authorization.elevation.approve",
                 "identity.credential.recover.approve",
                 "identity.harness.revoke.approve",

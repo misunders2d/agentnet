@@ -25,15 +25,19 @@ from agentnet._terminal_handoff import (
     require_private_terminal,
 )
 from agentnet.approval.config import (
+    ApprovalOwnerOIDCConfig,
     ApprovalServiceApproverConfig,
     ApprovalServiceConfig,
     load_approval_service_config,
     require_owner_only_file,
 )
 from agentnet.approval.http import create_approval_app
+from agentnet.approval.owner_session import OwnerSessionService
 from agentnet.approval.store import ApprovalStore
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
-from agentnet.errors import ValidationError
+from agentnet.errors import GateBlocked, ValidationError
+from agentnet.identity.oidc import OIDCProvider, OIDCProviderConfig
+from agentnet.operations.config import OIDCTokenEndpointAuthMethod
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
@@ -45,6 +49,9 @@ class _ProvisionApprover(BaseModel):
     authority_kind: Literal["human", "guest"] = "human"
     domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
     allowed_purposes: frozenset[str] = Field(min_length=1, max_length=32)
+    oidc_issuer: str | None = Field(default=None, min_length=8, max_length=512)
+    oidc_subject: str | None = Field(default=None, min_length=1, max_length=512)
+    verified_email_alias: str | None = Field(default=None, min_length=3, max_length=320)
 
 
 def _reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -113,7 +120,51 @@ def _open_service(config_path: Path) -> tuple[ApprovalServiceConfig, ApprovalSto
     config = load_approval_service_config(config_path.absolute())
     cipher = LocalEnvelopeCipher.from_key_file(config.record_key_path, create=False)
     store = ApprovalStore(config.database_path, cipher)
-    return config, store, WebAuthnApprovalService(config, store, cipher)
+    service = WebAuthnApprovalService(config, store, cipher)
+    if config.owner_oidc is not None:
+        oidc = config.owner_oidc
+        client_secret: str | None = None
+        if oidc.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE:
+            client_secret = os.environ.get(oidc.client_secret_env or "", "")
+            if (
+                not client_secret
+                or len(client_secret) > 4_096
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in client_secret)
+            ):
+                store.close()
+                raise GateBlocked(
+                    "oidc_client_secret",
+                    "configured owner OIDC client secret environment variable is absent or invalid",
+                )
+        provider = OIDCProvider(
+            OIDCProviderConfig(
+                issuer=oidc.issuer,
+                client_id=oidc.client_id,
+                redirect_uri=oidc.redirect_uri,
+                audience=oidc.audience,
+                token_endpoint_auth_method=oidc.token_endpoint_auth_method,
+                client_secret=client_secret,
+                allowed_signing_algorithms=oidc.allowed_signing_algorithms,
+                pinned_jwk_thumbprints=tuple(sorted(oidc.pinned_jwk_thumbprints.items())),
+                allowed_endpoint_origins=oidc.allowed_endpoint_origins,
+                allowed_private_endpoint_cidrs=oidc.allowed_private_endpoint_cidrs,
+                pinned_endpoint_addresses=oidc.pinned_endpoint_addresses,
+                authorization_ttl_seconds=oidc.authorization_ttl_seconds,
+                maximum_id_token_age_seconds=oidc.maximum_id_token_age_seconds,
+                allowed_clock_skew_seconds=oidc.allowed_clock_skew_seconds,
+                http_timeout_seconds=oidc.http_timeout_seconds,
+            )
+        )
+        service.owner_sessions = OwnerSessionService(
+            config,
+            store,
+            cipher,
+            provider,
+            approval_service=service,
+        )
+    else:
+        service.owner_sessions = None
+    return config, store, service
 
 
 def command_approval_provision(args: argparse.Namespace) -> int:
@@ -140,6 +191,20 @@ def command_approval_provision(args: argparse.Namespace) -> int:
         raise SystemExit("approval approver specification is invalid") from exc
     if not provision_approvers:
         raise SystemExit("approval provision requires at least one approver")
+    owner_oidc: ApprovalOwnerOIDCConfig | None = None
+    if args.owner_oidc_config is not None:
+        owner_oidc_path = Path(args.owner_oidc_config).absolute()
+        owner_oidc_raw = require_owner_only_file(
+            owner_oidc_path,
+            label="approval owner OIDC specification",
+            max_bytes=262_144,
+        )
+        try:
+            owner_oidc = ApprovalOwnerOIDCConfig.model_validate(
+                _strict_json_object(owner_oidc_raw, label="approval owner OIDC specification")
+            )
+        except Exception as exc:
+            raise SystemExit("approval owner OIDC specification is invalid") from exc
 
     parent = data_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +233,9 @@ def command_approval_provision(args: argparse.Namespace) -> int:
                     signer_key_id=signer.thumbprint,
                     signer_private_key_path=final_signer_path,
                     allowed_purposes=item.allowed_purposes,
+                    oidc_issuer=item.oidc_issuer,
+                    oidc_subject=item.oidc_subject,
+                    verified_email_alias=item.verified_email_alias,
                 )
             )
             trust.append(
@@ -188,6 +256,7 @@ def command_approval_provision(args: argparse.Namespace) -> int:
             database_path=data_dir / "approval.sqlite3",
             record_key_path=data_dir / "secrets" / "records.key",
             internal_core_credential_env=args.internal_core_credential_env,
+            owner_oidc=owner_oidc,
             approvers=tuple(configured),
         )
         database = staging / "approval.sqlite3"
@@ -250,18 +319,18 @@ def command_approval_serve(args: argparse.Namespace) -> int:
 
 
 def command_approval_register_begin(args: argparse.Namespace) -> int:
-    _config, store, service = _open_service(Path(args.config))
-    try:
-        created = service.begin_registration(args.approver)
-    finally:
-        store.close()
+    config = load_approval_service_config(Path(args.config).absolute())
+    if config.owner_oidc is None:
+        raise SystemExit("stable owner registration requires owner OIDC configuration")
+    approver = config.approver(args.approver)
+    if approver.oidc_issuer is None:
+        raise SystemExit("selected approver has no stable owner OIDC binding")
     print(
         json.dumps(
             {
-                "schema": "agentnet.approval.registration-url.v1",
-                "approval_url": created.url,
-                "approver_principal_id": args.approver,
-                "expires_at": created.expires_at,
+                "schema": "agentnet.approval.stable-registration-entrypoint.v1",
+                "approval_url": f"{config.public_origin}/approval",
+                "authority_granted": False,
             },
             sort_keys=True,
         )
@@ -272,6 +341,10 @@ def command_approval_register_begin(args: argparse.Namespace) -> int:
 def command_approval_request_create(args: argparse.Namespace) -> int:
     config, store, service = _open_service(Path(args.config))
     try:
+        if config.owner_oidc is not None:
+            raise SystemExit(
+                "stable owner profiles accept requests only through the signed internal broker"
+            )
         raw = require_owner_only_file(
             Path(args.transaction).absolute(),
             label="approval canonical transaction",
@@ -304,20 +377,23 @@ def command_approval_request_create(args: argparse.Namespace) -> int:
 
 
 def command_approval_pending(args: argparse.Namespace) -> int:
-    _config, store, service = _open_service(Path(args.config))
+    config, store, service = _open_service(Path(args.config))
     try:
         requests = service.pending_requests()
     finally:
         store.close()
-    print(
-        json.dumps(
-            {
-                "schema": "agentnet.approval.pending-requests.v1",
-                "requests": requests,
-            },
-            sort_keys=True,
-        )
-    )
+    if config.owner_oidc is not None:
+        output = {
+            "schema": "agentnet.approval.stable-pending.v1",
+            "pending_count": len(requests),
+            "review_at_stable_owner_page": True,
+        }
+    else:
+        output = {
+            "schema": "agentnet.approval.pending-requests.v1",
+            "requests": requests,
+        }
+    print(json.dumps(output, sort_keys=True))
     return 0
 
 
@@ -348,22 +424,28 @@ def _open_private_approval_url(url: str, *, browser: str, require_ack: bool) -> 
 def command_approval_open(args: argparse.Namespace) -> int:
     if args.browser == "terminal":
         _require_private_terminal_or_exit()
-    _config, store, service = _open_service(Path(args.config))
+    config, store, service = _open_service(Path(args.config))
     try:
-        url = service.local_approval_url(args.request_id)
+        stable = config.owner_oidc is not None
+        url = (
+            f"{config.public_origin}/approval"
+            if stable
+            else service.local_approval_url(args.request_id)
+        )
     finally:
         store.close()
     _open_private_approval_url(url, browser=args.browser, require_ack=True)
-    print(
-        json.dumps(
-            {
-                "schema": "agentnet.approval.local-open.v1",
-                "request_id": args.request_id,
-                "opened": True,
-            },
-            sort_keys=True,
-        )
-    )
+    output = {
+        "schema": (
+            "agentnet.approval.stable-open.v1"
+            if stable
+            else "agentnet.approval.local-open.v1"
+        ),
+        "opened": True,
+    }
+    if not stable:
+        output["request_id"] = args.request_id
+    print(json.dumps(output, sort_keys=True))
     return 0
 
 
@@ -372,11 +454,42 @@ def command_approval_watch(args: argparse.Namespace) -> int:
         raise SystemExit("approval watch interval must be between 0.25 and 60 seconds")
     if args.open and args.browser == "terminal":
         _require_private_terminal_or_exit()
-    _config, store, service = _open_service(Path(args.config))
+    config, store, service = _open_service(Path(args.config))
     observed: set[str] = set()
+    stable_opened = False
+    stable_count: int | None = None
     try:
         while True:
-            for request in service.pending_requests():
+            requests = service.pending_requests()
+            if config.owner_oidc is not None:
+                count = len(requests)
+                opened = False
+                if args.open and count and not stable_opened:
+                    _open_private_approval_url(
+                        f"{config.public_origin}/approval",
+                        browser=args.browser,
+                        require_ack=False,
+                    )
+                    stable_opened = True
+                    opened = True
+                if stable_count != count or opened:
+                    print(
+                        json.dumps(
+                            {
+                                "schema": "agentnet.approval.stable-pending-observed.v1",
+                                "pending_count": count,
+                                "opened": opened,
+                            },
+                            sort_keys=True,
+                        ),
+                        flush=True,
+                    )
+                    stable_count = count
+                if args.once:
+                    return 0
+                time.sleep(args.interval)
+                continue
+            for request in requests:
                 request_id = str(request["request_id"])
                 if request_id in observed:
                     continue
@@ -462,6 +575,7 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     provision.add_argument("--rp-name", default="AgentNet Approval")
     provision.add_argument("--verifier-id", required=True)
     provision.add_argument("--approvers", required=True)
+    provision.add_argument("--owner-oidc-config")
     provision.add_argument("--internal-core-credential-env")
     provision.set_defaults(func=command_approval_provision)
 
@@ -472,7 +586,7 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     serve.add_argument("--log-level", default="info", choices=("critical", "error", "warning", "info"))
     serve.set_defaults(func=command_approval_serve)
 
-    register = sub.add_parser("register-begin", help="create one host-admin passkey-registration URL")
+    register = sub.add_parser("register-begin", help="show stable owner-authenticated passkey page")
     register.add_argument("--config", default=".agentnet-approval/config.json")
     register.add_argument("--approver", required=True)
     register.set_defaults(func=command_approval_register_begin)

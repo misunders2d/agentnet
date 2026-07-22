@@ -1,7 +1,7 @@
 # Release Manifest
 
-Snapshot: 2026-07-20
-Candidate: `agentnet 0.1.18`
+Snapshot: 2026-07-22
+Candidate: `agentnet 0.1.19`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -23,8 +23,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `7323f458e2d1a6d826137794bfb61502b8a387acf9f940c7f26b2523f52af466` |
-| `pyproject.toml` | SHA-256 `538634080998632fa614d7f08025687113b841f6085a3388859c4de08814a11f` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `c16579027d0737111400652ef9534e3c4429ef9f9de5ccbb712379f3d6443f2e` |
+| `pyproject.toml` | SHA-256 `e69c71cfae94a6adcbb62e67c44205c4bf2661757ab17c3fca7b9d09d3ac8dfd` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -149,6 +149,17 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 | `provenance` | `EXTERNAL_REQUIRED` | `false` |
 | `signature` | `EXTERNAL_REQUIRED` | `false` |
 | `installer_lifecycle` | `EXTERNAL_REQUIRED` | `false` |
+
+## Local candidate evidence
+
+The uncommitted `0.1.19` candidate has byte-identical retained Python sdist and
+wheel builds. Source tests report `1346 passed, 15 expected host/PostgreSQL
+skips`; `agentnet verify` and both recursively packed npm generations report
+`1267 passed, 15 expected skips`. Package and release-manifest verification
+pass. This is H/L package and regression evidence only. Mutation-authorized
+PostgreSQL, fresh final candidate review, real-host candidate CI, live OIDC and
+WebAuthn ceremonies, real C0 messaging, publication, deployment, and production
+certification remain absent or separately gated.
 
 ## Verification boundary
 

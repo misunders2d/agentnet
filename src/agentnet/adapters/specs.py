@@ -16,10 +16,10 @@ from agentnet.adapters.base import AdapterLaunchSpec, ExecutableProbe, HarnessKi
 
 
 PINNED_VERSIONS: dict[HarnessKind, str] = {
-    "claude": "2.1.215",
-    "codex": "0.144.5",
-    "pi": "0.80.10",
-    "antigravity": "1.1.3",
+    "claude": "2.1.216",
+    "codex": "0.144.6",
+    "pi": "0.81.1",
+    "antigravity": "1.1.5",
 }
 
 EXECUTABLE_NAMES: dict[HarnessKind, str] = {

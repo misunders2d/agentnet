@@ -72,6 +72,23 @@ def test_supervisor_run_check_validates_owner_only_config_and_redacts_secrets(
     assert "PUBLIC KEY" not in json.dumps(status)
 
 
+def test_supervisor_c0_responder_check_reports_only_explicit_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = _write_config(tmp_path)
+
+    assert main(
+        ["supervisor-run", "--config", str(config), "--check", "--c0-pilot-responder"]
+    ) == 0
+
+    status = json.loads(capsys.readouterr().out)
+    assert status["mode"] == "c0_pilot_responder"
+    assert status["schema"] == "agentnet.supervisor-daemon.config.v1"
+    assert "signing_key_path" not in status
+    assert "queue_key_path" not in status
+    assert "worker-auth.json" not in json.dumps(status)
+
+
 def test_supervisor_config_rejects_group_or_world_access(tmp_path: Path) -> None:
     config = _write_config(tmp_path, mode=0o640)
 

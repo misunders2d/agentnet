@@ -288,13 +288,14 @@ Every connection performs an authenticated profile handshake carrying protocol r
 The core supports a declared N/N-1 read/write window and an expand → migrate/backfill → verify → contract database sequence. Rollback is allowed only within the declared compatibility window and never rolls back revocation/security state. Deprecation, cache invalidation, mixed-version receipt behavior, and partially capable adapters are versioned policy.
 
 AgentNet's immutable first release starts at storage schema version 1 with one
-complete checksum-bound authority migration. Current unreleased source adds
-contiguous migration 2 only for the protected task-payload disclosure receipt.
-Fresh SQLite initializes v2 atomically; an existing SQLite store upgrades only
-from an exact metadata/catalog/checksum/object-verified v1 state and commits the
-v1→v2 migration atomically or not at all. PostgreSQL applies the same contiguous
-migration catalog. Altered, prototype, noncontiguous, future, or unsupported
-older state fails closed.
+complete checksum-bound authority migration. Current unreleased source has a
+contiguous four-migration Core catalog: migration 2 adds the protected
+task-payload disclosure receipt, migration 3 adds guided OIDC enrollment
+continuation, and migration 4 adds the bounded C0 bootstrap-plan contract. Fresh
+SQLite and PostgreSQL stores initialize v4 atomically; the declared N/N-1 Core
+path upgrades only an exact metadata/catalog/checksum/object-verified v3 store
+to v4 and commits the migration atomically or not at all. Altered, prototype,
+noncontiguous, future, or unsupported older state fails closed.
 
 No pre-release or differently named database is an authority source, and no
 conversion infers bilateral consent from a unilateral edge. Operator moving
@@ -552,11 +553,14 @@ exact command is required to revoke the new active edge. At most one exact
 directed pair is active.
 
 Immutable storage schema v1 contains these governance transactions and
-exception receipts as first-release authority objects. Current unreleased
-source adds contiguous schema migration 2 for the protected payload-release
-receipt only. Exact catalog/checksum verification precedes the one-transaction
-SQLite v1→v2 upgrade and PostgreSQL migration application. No unsupported,
-tampered, prototype, or unilateral record is converted into consent.
+exception receipts as first-release authority objects. Current unreleased Core
+schema v4 adds the protected payload-release receipt in migration 2, guided OIDC
+enrollment continuation in migration 3, and the bounded C0 bootstrap-plan
+contract in migration 4 without retrofitting relationship consent. Exact
+catalog/checksum verification precedes the current one-transaction SQLite
+v3→v4 N/N-1 upgrade and each contiguous PostgreSQL migration application. No
+unsupported, tampered, prototype, or unilateral record is converted into
+consent.
 
 The implemented conflict lifecycle binds every automatically accepted task to
 a strict typed resource/operation/access/exclusivity intent. Incompatible live
