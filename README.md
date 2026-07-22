@@ -262,33 +262,31 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.19`. It contains the approved zero-state C0 architecture, but the remote
-deployment peer reported a deterministic PostgreSQL catalog-verifier defect
-from its pre-migration preflight:
-a parameterized psycopg query also contained PostgreSQL `format('%I.%I', ...)`,
-so psycopg rejected `%I` before the read-only v3 catalog gate could execute.
-The remote deployment peer reported that no migration, restart, runtime switch,
-enrollment, authority, message, or A2A change occurred and that live Core and
-Approval remained on `0.1.18` with schema v3. This candidate's retained local
-evidence does not independently verify that remote runtime report.
+`0.1.20`. It corrected the earlier psycopg `%I` placeholder defect, but an
+independent read-only PostgreSQL 18.4 preflight found that its exact-catalog
+verifier did not reconcile PostgreSQL 18 `contype='n'` rows or structurally
+compare server-rendered CHECK and partial-index predicates. The deployment peer
+stopped before mutation and reported live Core/Approval still on `0.1.18` with
+schema v3.
 
-This branch contains the uncommitted `0.1.20` correction candidate. It replaces
-that literal-percent expression with server-side `quote_ident()` composition;
-no schema, migration checksum, identity, authority, C0, messaging, cleanup, or
-A2A semantics change. The existing C0 service still activates only the exact
-same-principal owner/fresh harness pair, records seven approved facts across
-three atomic phases, runs a no-model owner responder, revokes exactly five
-communication entitlements at success, and permanently invalidates binding
-drift. Focused PostgreSQL tests report `47 passed, 7 expected dedicated-database
-skips`; the full source suite reports `1346 passed, 15 expected host/PostgreSQL
-skips`; release/package conformance reports `32 passed`; and the release
-verifier passes. `agentnet verify` and both recursive installed npm package
-generations each report `1267 passed, 15 expected skips`; the recursive package
-gate passes. Final review, commit/tag/push, Sergey-only publication, independent
-public-artifact
-verification, fresh deployment approval, deployment, live ceremony, production
-certification, and A2A cutover remain pending or separately gated. Repository
-evidence is not a completed live cross-host journey.
+This branch contains the uncommitted `0.1.21` correction candidate. It verifies
+every PostgreSQL 18 NOT NULL constraint against the migration-derived column
+catalog and compares bounded CHECK/index predicates structurally while failing
+closed on unsupported syntax or semantic drift. Migration SQL/checksums,
+identity, authority, C0, messaging, cleanup, and A2A semantics remain unchanged.
+The C0 counterparty may be an ordinary Hub-hosted human harness; it never reuses
+Pi Hub/A2A identity or gains Hub/root privilege. Focused PostgreSQL tests report
+`78 passed, 7 expected dedicated-database skips`; the complete source suite
+reports `1377 passed, 15 expected host/PostgreSQL skips`. Hub independently
+verified candidate-v4 in a private temporary public-`0.1.20` copy, and its
+read-only live-v3 PostgreSQL 18.4 verifier passed exactly `94 tables, 1,085
+columns, 1,398 constraints, 53 indexes`; no live mutation or deployment
+occurred. The reviewer-required evidence refresh and complete release/package
+verification pass. Commit/tag/push, Sergey-only publication, independent
+public-artifact verification, fresh deployment approval, deployment,
+live ceremony, production certification, and A2A cutover remain pending or
+separately gated. Repository evidence is not a completed live cross-host
+journey.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

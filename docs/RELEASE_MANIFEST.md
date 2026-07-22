@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-22
-Candidate: `agentnet 0.1.20`
+Candidate: `agentnet 0.1.21`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -152,21 +152,23 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 
 ## Local candidate evidence
 
-Published `0.1.19` passed package verification but failed remote pre-migration
-PostgreSQL catalog preflight before any mutation because psycopg parsed a
-PostgreSQL `%I` format token as an unsupported client placeholder. Current
-uncommitted `0.1.20` replaces that expression with server-side `quote_ident()`
-composition; migration SQL/checksums and all identity, authority, C0, messaging,
-cleanup, and A2A semantics remain unchanged. Focused PostgreSQL tests report `47
-passed, 7 expected dedicated-database skips`; the full source suite reports
-`1346 passed, 15 expected host/PostgreSQL skips`; release/package conformance
-reports `32 passed`; and release-manifest verification passes. `agentnet verify`
-and both recursive installed npm package generations each report `1267 passed,
-15 expected skips`; the recursive package gate passes. Deterministic artifacts
-are retained. Final review, commit/tag/push/CI, Sergey-only publication,
-public-artifact verification,
-fresh deployment approval, live ceremony, and production certification remain
-pending or separately gated.
+Published `0.1.20` corrected the earlier psycopg `%I` defect, but independent
+read-only PostgreSQL 18.4 preflight exposed exact-catalog gaps for
+`contype='n'` NOT NULL rows and server-rendered CHECK/index predicates before
+any mutation. Current uncommitted `0.1.21` reconciles every NOT NULL row against
+migration-derived required columns and structurally compares bounded CHECK and
+partial-index predicates while rejecting unsupported syntax or semantic drift.
+Migration SQL/checksums and all identity, authority, C0, messaging, cleanup,
+and A2A semantics remain unchanged. Focused PostgreSQL tests report `78 passed,
+7 expected dedicated-database skips`; the complete source suite reports `1377
+passed, 15 expected host/PostgreSQL skips`. Hub's independent candidate-v4
+private-staging, transaction-read-only live-v3 verifier passed exactly `94
+tables, 1,085 columns, 1,398 constraints, 53 indexes`, with no live mutation or
+deployment. The reviewer-required evidence refresh and complete release/package
+verification pass. Commit/tag/push/CI, Sergey-only publication,
+public-artifact verification, fresh deployment
+approval, live ceremony, and production certification remain pending or
+separately gated.
 
 ## Verification boundary
 

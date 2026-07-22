@@ -36,7 +36,12 @@ from agentnet.protocol.models import Classification, DeliveryFact, EventType
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair
 from agentnet.storage.bootstrap_plan_schema import BOOTSTRAP_PLAN_SCHEMA
-from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, validate_migration_catalog
+from agentnet.storage.migrations import (
+    CURRENT_SCHEMA_VERSION,
+    MIGRATIONS,
+    Migration,
+    validate_migration_catalog,
+)
 from agentnet.storage.relationship_governance_schema import (
     RELATIONSHIP_GOVERNANCE_REQUIRED_INDEXES,
     RELATIONSHIP_GOVERNANCE_SCHEMA_VERSION,
@@ -663,11 +668,23 @@ class _ExactCatalogConnection:
         omit_column: tuple[str, str] | None = None,
         wrong_sequence: bool = False,
         wrong_fk_schema: bool = False,
+        not_null_tamper: str | None = None,
+        unknown_constraint_type: bool = False,
+        malformed_check: bool = False,
+        reverse_constraint_rows: bool = False,
+        wrong_table_persistence: bool = False,
+        invalid_index_state: bool = False,
     ):
         self.spec = expected_catalog(MIGRATIONS)
         self.omit_column = omit_column
         self.wrong_sequence = wrong_sequence
         self.wrong_fk_schema = wrong_fk_schema
+        self.not_null_tamper = not_null_tamper
+        self.unknown_constraint_type = unknown_constraint_type
+        self.malformed_check = malformed_check
+        self.reverse_constraint_rows = reverse_constraint_rows
+        self.wrong_table_persistence = wrong_table_persistence
+        self.invalid_index_state = invalid_index_state
 
     def execute(self, query, _parameters=()):
         sql = str(query)
@@ -677,7 +694,15 @@ class _ExactCatalogConnection:
             )
         if "relation.relkind IN ('r','p','v','m','f')" in sql:
             return _Cursor(
-                {"table_name": table_name, "kind": "r"}
+                {
+                    "table_name": table_name,
+                    "kind": "r",
+                    "persistence": (
+                        "u"
+                        if self.wrong_table_persistence and table_name == "schema_migrations"
+                        else "p"
+                    ),
+                }
                 for table_name in sorted(self.spec.tables)
             )
         if "pg_catalog.pg_attribute attribute" in sql:
@@ -708,21 +733,98 @@ class _ExactCatalogConnection:
                 )
             return _Cursor(rows)
         if "pg_catalog.pg_get_constraintdef" in sql:
-            return _Cursor(
-                {
-                    "table_name": table_name,
-                    "constraint_type": "f" if definition.startswith("foreignkey(") else "c",
-                    "current_schema_name": "public",
-                    "referenced_schema": (
-                        "other" if self.wrong_fk_schema and definition.startswith("foreignkey(") else "public"
-                    ),
-                    "definition": definition,
-                }
-                for table_name, definition in self.spec.constraints
-            )
+            rows = []
+            for constraint in self.spec.constraints:
+                table_name = constraint.table_name
+                definition = constraint.definition
+                constraint_type = constraint.constraint_type
+                if self.malformed_check and constraint_type == "c":
+                    definition = "CHECK (unsupported_function(value)=1)"
+                    self.malformed_check = False
+                rows.append(
+                    {
+                        "table_name": table_name,
+                        "constraint_type": constraint_type,
+                        "current_schema_name": "public",
+                        "referenced_relation_oid": 1 if constraint_type == "f" else 0,
+                        "referenced_schema": (
+                            "other"
+                            if self.wrong_fk_schema and constraint_type == "f"
+                            else ("public" if constraint_type == "f" else None)
+                        ),
+                        "definition": definition,
+                        "constrained_columns": [],
+                        "validated": True,
+                        "inheritance_count": 0,
+                    }
+                )
+            not_null_columns = [
+                (column.table_name, column.column_name)
+                for column in self.spec.columns
+                if column.not_null
+            ]
+            if self.not_null_tamper == "missing":
+                not_null_columns = not_null_columns[1:]
+            elif self.not_null_tamper == "extra":
+                nullable = next(column for column in self.spec.columns if not column.not_null)
+                not_null_columns.append((nullable.table_name, nullable.column_name))
+            elif self.not_null_tamper == "duplicate":
+                not_null_columns.append(not_null_columns[0])
+            for index, (table_name, column_name) in enumerate(not_null_columns):
+                constrained_columns = [column_name]
+                if self.not_null_tamper == "multi" and index == 0:
+                    constrained_columns.append("unexpected_second_column")
+                if self.not_null_tamper == "unresolved" and index == 0:
+                    constrained_columns = [None]
+                rows.append(
+                    {
+                        "table_name": table_name,
+                        "constraint_type": "n",
+                        "current_schema_name": "public",
+                        "referenced_relation_oid": (
+                            1 if self.not_null_tamper == "referenced" and index == 0 else 0
+                        ),
+                        "referenced_schema": (
+                            "public"
+                            if self.not_null_tamper == "referenced" and index == 0
+                            else None
+                        ),
+                        "definition": f"NOT NULL {column_name}",
+                        "constrained_columns": constrained_columns,
+                        "validated": not (
+                            self.not_null_tamper == "unvalidated" and index == 0
+                        ),
+                        "inheritance_count": (
+                            1 if self.not_null_tamper == "inherited" and index == 0 else 0
+                        ),
+                    }
+                )
+            if self.unknown_constraint_type:
+                rows.append(
+                    {
+                        "table_name": "schema_migrations",
+                        "constraint_type": "x",
+                        "current_schema_name": "public",
+                        "referenced_relation_oid": 0,
+                        "referenced_schema": None,
+                        "definition": "EXCLUDE USING gist (version WITH =)",
+                        "constrained_columns": ["version"],
+                        "validated": True,
+                        "inheritance_count": 0,
+                    }
+                )
+            if self.reverse_constraint_rows:
+                rows.reverse()
+            return _Cursor(rows)
         if "pg_catalog.pg_get_indexdef" in sql:
             return _Cursor(
-                {"index_name": index_name, "definition": definition}
+                {
+                    "index_name": index_name,
+                    "definition": definition,
+                    "is_valid": not self.invalid_index_state,
+                    "is_ready": True,
+                    "is_live": True,
+                }
                 for index_name, definition in self.spec.indexes
             )
         raise AssertionError(f"unexpected exact-catalog query: {sql[:100]}")
@@ -736,6 +838,16 @@ def test_postgres_catalog_normalization_preserves_semantics_across_pg_rendering(
         "CHECK ((state <> ALL (ARRAY['failed'::text, 'canceled'::text])))"
     )
     assert normalize_catalog_sql(
+        "CHECK (status='ready' OR status='degraded')"
+    ) == normalize_catalog_sql(
+        "CHECK (((status='ready') OR (status='degraded')))"
+    )
+    assert normalize_catalog_sql(
+        "CHECK (poll_count BETWEEN 0 AND 60)"
+    ) == normalize_catalog_sql(
+        "CHECK (((poll_count >= 0) AND (poll_count <= 60)))"
+    )
+    assert normalize_catalog_sql(
         "FOREIGN KEY (plan_id) REFERENCES bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
     ) == normalize_catalog_sql(
         "FOREIGN KEY (plan_id) REFERENCES public.bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
@@ -745,6 +857,76 @@ def test_postgres_catalog_normalization_preserves_semantics_across_pg_rendering(
     ) == normalize_catalog_sql(
         "CREATE INDEX idx ON public.c0_pilot_facts USING btree (event_id, attempt_id)"
     )
+    assert normalize_catalog_sql(
+        "CREATE UNIQUE INDEX idx_open ON transactions(domain_id,revision) "
+        "WHERE state IN ('proposed','active')"
+    ) == normalize_catalog_sql(
+        "CREATE UNIQUE INDEX idx_open ON public.transactions USING btree "
+        "(domain_id, revision) WHERE (state = ANY "
+        "(ARRAY['proposed'::text, 'active'::text]))"
+    )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("CHECK (a AND (b OR c))", "CHECK ((a AND b) OR c)"),
+        ("CHECK (NOT a AND b)", "CHECK (NOT (a AND b))"),
+        ("CHECK (value >= 1)", "CHECK (value > 1)"),
+        ("CHECK (state IN ('a','b'))", "CHECK (state NOT IN ('a','b'))"),
+        ("CHECK (state='ready')", "CHECK (state='READY')"),
+        ("CHECK (value BETWEEN 1 AND 10)", "CHECK (value BETWEEN 1 AND 11)"),
+        ("CHECK (value > 1)", "CHECK (value::bigint > 1)"),
+        (
+            "CREATE INDEX idx_cast ON events(value) WHERE value > 1",
+            "CREATE INDEX idx_cast ON events(value) WHERE value::bigint > 1",
+        ),
+    ],
+)
+def test_postgres_catalog_normalization_preserves_semantic_differences(
+    left: str,
+    right: str,
+) -> None:
+    assert normalize_catalog_sql(left) != normalize_catalog_sql(right)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "ALTER TABLE synthetic ADD COLUMN extra TEXT;",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT DEFAULT 'unsafe');",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT COLLATE \"C\");",
+        "CREATE TABLE IF NOT EXISTS synthetic (CONSTRAINT named UNIQUE(value), value TEXT);",
+        "CREATE TABLE IF NOT EXISTS synthetic (value UUID);",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT, EXCLUDE USING gist (value WITH =));",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT, PRIMARY KEY(value) DEFERRABLE);",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT, UNIQUE(value) DEFERRABLE);",
+        "CREATE TABLE IF NOT EXISTS synthetic (value TEXT, FOREIGN KEY(value) REFERENCES parent(value) ON UPDATE CASCADE);",
+        "INSERT INTO unrelated_table(value) VALUES ('unexpected');",
+        "UPDATE unrelated_table SET value='unexpected';",
+    ],
+)
+def test_postgres_expected_catalog_rejects_unsupported_migration_ddl(sql: str) -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        expected_catalog((Migration(1, "unsupported", sql),))
+
+
+def test_postgres_expected_catalog_marks_table_primary_key_columns_not_null() -> None:
+    migration = Migration(
+        1,
+        "synthetic_composite_primary_key",
+        """CREATE TABLE IF NOT EXISTS synthetic (
+            left_id TEXT,
+            right_id BIGINT,
+            PRIMARY KEY(left_id,right_id)
+        );""",
+    )
+    spec = expected_catalog((migration,))
+    assert {
+        (column.table_name, column.column_name)
+        for column in spec.columns
+        if column.not_null
+    } >= {("synthetic", "left_id"), ("synthetic", "right_id")}
 
 
 def test_postgres_full_v4_catalog_checks_every_table_column_constraint_and_index() -> None:
@@ -770,6 +952,58 @@ def test_postgres_full_v4_catalog_checks_every_table_column_constraint_and_index
         require_exact_postgres_catalog(
             _ExactCatalogConnection(wrong_fk_schema=True), migrations=MIGRATIONS
         )
+    with pytest.raises(GateBlocked, match="table catalog"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(wrong_table_persistence=True), migrations=MIGRATIONS
+        )
+    with pytest.raises(GateBlocked, match="index state"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(invalid_index_state=True), migrations=MIGRATIONS
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing",
+        "extra",
+        "duplicate",
+        "multi",
+        "unresolved",
+        "unvalidated",
+        "inherited",
+        "referenced",
+    ],
+)
+def test_postgres_catalog_rejects_pg18_not_null_constraint_mismatch(tamper: str) -> None:
+    with pytest.raises(GateBlocked, match="NOT NULL constraint catalog"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(not_null_tamper=tamper),
+            migrations=MIGRATIONS,
+        )
+
+
+def test_postgres_catalog_rejects_unknown_constraint_type() -> None:
+    with pytest.raises(GateBlocked, match="constraint type"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(unknown_constraint_type=True),
+            migrations=MIGRATIONS,
+        )
+
+
+def test_postgres_catalog_rejects_unsupported_check_definition() -> None:
+    with pytest.raises(GateBlocked, match="constraint definition is unsupported"):
+        require_exact_postgres_catalog(
+            _ExactCatalogConnection(malformed_check=True),
+            migrations=MIGRATIONS,
+        )
+
+
+def test_postgres_catalog_verdict_is_independent_of_constraint_row_order() -> None:
+    require_exact_postgres_catalog(
+        _ExactCatalogConnection(reverse_constraint_rows=True),
+        migrations=MIGRATIONS,
+    )
 
 
 class _S4CatalogConnection:

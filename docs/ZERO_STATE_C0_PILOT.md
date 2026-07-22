@@ -26,12 +26,16 @@ These labels describe the approved implementation plan; they do not change produ
 
 - Existing server runs verified AgentNet Core, PostgreSQL, Approval, OIDC callback, and public TLS routes, but business state starts with zero AgentNet passkeys, principals, harnesses, entitlements, messages, rooms, files, or effects.
 - Existing A2A, Pi Hub, PostgreSQL service, cloudflared, and non-AgentNet data remain untouched.
-- The C0 peers are the owner-laptop harness `H_owner` and the genuinely fresh-laptop harness `H_fresh`. No server-responder harness is needed.
+- The C0 peers are the ordinary Hub-hosted human harness `H_owner` and the genuinely fresh-laptop harness `H_fresh`. `H_owner` is an ordinary AgentNet counterparty colocated on the existing server; it does not reuse Pi Hub/A2A identity and receives no Hub/root privilege.
 - Both harnesses authenticate as the same exact human principal `P = (domain, OIDC issuer, OIDC subject)`. Distinct-principal messaging is outside this pilot.
 - One public, non-secret prompt goes to the fresh laptop. Human browser/passkey and masked-local-input actions remain explicit.
 - Installation creates code only. Each enrollment creates identity only. Positive authority requires a later exact WebAuthn-approved plan.
 - Colocated Core/PostgreSQL/Approval remains an ordinary profile and reports `independent_boundary_proven=false`.
 - No production, HA, federation, files/scanner, A2A-conformance, or cutover claim.
+
+### Pre-first-test clean-state rule
+
+Until the first real two-harness C0 journey succeeds, backward compatibility must not delay or alter this pilot. Do not add N-1 config migration, legacy aliases/defaults, fallback authority paths, old-schema preservation, or old AgentNet state reuse. After the exact current artifact passes independent verification, the deployment owner removes prior AgentNet runtime/config/database/schema/data/credential/enrollment/authority/message state and initializes the current Core/Approval schema and config from zero. Source history, release evidence, external host/PostgreSQL/DNS/tunnel/OIDC infrastructure, unrelated services, and existing A2A remain intact. Any later backward-compatibility work requires successful pilot evidence and separate owner direction.
 
 ## 2. Non-negotiable invariants
 
@@ -51,7 +55,7 @@ These labels describe the approved implementation plan; they do not change produ
 
 - **Owner human:** controls pinned workforce/OIDC account and UV passkey.
 - **Owner browser/authenticator:** separate human-confirmation surface not readable by either enrolling harness.
-- **`H_owner`:** ordinary owner-laptop harness and explicit C0 counterparty; never a privileged Hub/root.
+- **`H_owner`:** ordinary Hub-hosted human harness and explicit C0 counterparty; never Pi Hub/A2A identity or a privileged Hub/root.
 - **`H_fresh`:** ordinary fresh-laptop harness driven by one public prompt.
 - **Core:** authoritative identity, policy, bootstrap-plan, mailbox, idempotency, and audit owner.
 - **Approval:** purpose-limited WebAuthn verifier and receipt signer under a separate service/OS identity. Colocation does not prove independent administration.
@@ -91,7 +95,7 @@ Multiple tabs use separate challenge rows or return `ceremony_already_active`; t
 
 Result: one Approval-side passkey; still zero AgentNet principal, harness, or authority.
 
-## 6. Phase B — owner-laptop identity-only enrollment
+## 6. Phase B — Hub-hosted counterparty identity-only enrollment
 
 1. `H_owner` generates its candidate key locally and starts guided enrollment.
 2. OIDC resolves pinned principal `P`; candidate proves key possession.
@@ -187,9 +191,9 @@ Before retrieval Core reserves exact completion-request digest. Inside one Core 
 
 Deterministic IDs derive from canonical plan digest plus fixed item ordinal. No random retry IDs and no global uniqueness index. No partial-ready or repair workflow.
 
-## 9. Owner-laptop deterministic responder
+## 9. Hub-hosted ordinary deterministic responder
 
-Before the fresh prompt reaches C0 verification, `H_owner` starts a product-owned deterministic C0 responder through its normal supervisor lifecycle. It is an ordinary harness process, not Hub/root. It waits without positive authority, then after plan commit reads only its own mailbox, acknowledges the exact event, and sends one fixed harmless C0 reply correlated to the original event. It performs no model inference, company-data access, file operation, task, external effect, or A2A action.
+Before the fresh prompt reaches C0 verification, `H_owner` starts a product-owned deterministic C0 responder through its normal supervisor lifecycle. It is an ordinary AgentNet harness process colocated on the Hub host, not Pi Hub/A2A identity or Hub/root. It waits without positive authority, then after plan commit reads only its own mailbox, acknowledges the exact event, and sends one fixed harmless C0 reply correlated to the original event. It performs no model inference, company-data access, file operation, task, external effect, or A2A action.
 
 ## 10. Phase E — C0 verifier
 
@@ -306,6 +310,7 @@ This is one public prompt to the fresh laptop, not one total human approval. Ind
 ### Packaging/evidence
 - Source, packed generation, and recursively repacked generation contain same implementation/tests.
 - Linux/macOS/Windows package gates run.
+- PostgreSQL 18 catalog verification reconciles every `contype='n'` row exactly against the already-required non-null column catalog, rejects unknown or malformed constraints, and compares CHECK expressions through bounded semantic parsing of both migration and server-rendered forms. Redundant parentheses and `BETWEEN` expansion may normalize; changed operators, literals, precedence, FK actions, or columns must fail closed.
 - Hermetic/local results remain distinct from live OIDC/passkey/cross-device pilot evidence.
 
 ## 15. Required implementation delta from AgentNet 0.1.18
@@ -316,7 +321,7 @@ Owner approval and the separately approved implementation plan authorize reposit
 2. Add plan-completion reservation before broker receipt retrieval. Current guided OIDC retrieval ordering remains source evidence but is not the target ordering for new bootstrap plans.
 3. Replace the current one-row `authorization.entitlement.issue/*` founder path for this profile with `BootstrapGrantPlan`, new purpose/config allowlist, deterministic ten-row atomic commit, and stored-result replay. Existing founder tests must be replaced or retained only as explicitly disabled legacy-path tests; production profile must not fall back to wildcard bootstrap.
 4. Redact current guided-enrollment and C0 human/model-visible CLI output. Protected local identity files and authenticated internal API records may retain exact IDs, but public/model-visible reports must not print principal IDs, harness IDs, credential IDs, event IDs, envelope digests, payloads, receipts, codes, or capabilities.
-5. Add deterministic owner-laptop responder and C0 verifier without changing A2A or granting server/Hub privilege.
+5. Add the deterministic ordinary Hub-hosted responder and C0 verifier without changing A2A or granting server/Hub privilege.
 
 These deltas are requirements of the candidate architecture, not claims that 0.1.18 already satisfies it.
 
