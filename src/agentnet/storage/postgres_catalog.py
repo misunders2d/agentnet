@@ -318,7 +318,8 @@ def require_exact_postgres_catalog(
                   attribute.attnotnull AS not_null,current_schema() AS current_schema_name,
                   pg_catalog.pg_get_expr(default_value.adbin,default_value.adrelid,true) AS default_value,
                   pg_catalog.pg_get_serial_sequence(
-                      pg_catalog.format('%I.%I',namespace.nspname,relation.relname),
+                      pg_catalog.quote_ident(namespace.nspname) || '.' ||
+                      pg_catalog.quote_ident(relation.relname),
                       attribute.attname
                   ) AS owned_sequence,
                   sequence_dependency.sequence_targets AS sequence_targets

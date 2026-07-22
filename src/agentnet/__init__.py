@@ -9,5 +9,5 @@ from .core.app import CommunicationCore
 from .operations.config import ExtensionConfig, RuntimeProfile
 
 __all__ = ["CommunicationCore", "ExtensionConfig", "RuntimeProfile"]
-__version__ = "0.1.19"
+__version__ = "0.1.20"
 

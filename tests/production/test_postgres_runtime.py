@@ -671,6 +671,10 @@ class _ExactCatalogConnection:
 
     def execute(self, query, _parameters=()):
         sql = str(query)
+        if _parameters and "%I" in sql:
+            raise psycopg.ProgrammingError(
+                "only '%s', '%b', '%t' are allowed as placeholders, got '%I'"
+            )
         if "relation.relkind IN ('r','p','v','m','f')" in sql:
             return _Cursor(
                 {"table_name": table_name, "kind": "r"}

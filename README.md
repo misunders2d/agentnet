@@ -262,32 +262,33 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.18`. This branch contains the uncommitted `0.1.19` S0–S9 release
-candidate for the approved zero-state C0 architecture; it is not published and
-cannot be published until the remaining plan, release, and owner gates pass and
-Sergey performs the separate npm publication step. The candidate adds Core and
-Approval schema v4, stable owner OIDC/session/WebAuthn ceremonies, hardened
-guided identity-only enrollment, one atomic bounded `BootstrapGrantPlan`, and a
-dedicated selector-free C0 service. That service activates only the exact
-same-principal owner/fresh harness pair, records the seven approved facts across
-three atomic phases, runs a no-model owner responder, revokes exactly the five
-communication entitlements at success, and persistently invalidates the guard
-if the approved active harness or credential set drifts. Generic policy paths
-cannot consume bootstrap-plan authority. Public output exposes only sanitized
-stages or `COMPLETED_C0_ROUND_TRIP`.
+`0.1.19`. It contains the approved zero-state C0 architecture, but the remote
+deployment peer reported a deterministic PostgreSQL catalog-verifier defect
+from its pre-migration preflight:
+a parameterized psycopg query also contained PostgreSQL `format('%I.%I', ...)`,
+so psycopg rejected `%I` before the read-only v3 catalog gate could execute.
+The remote deployment peer reported that no migration, restart, runtime switch,
+enrollment, authority, message, or A2A change occurred and that live Core and
+Approval remained on `0.1.18` with schema v3. This candidate's retained local
+evidence does not independently verify that remote runtime report.
 
-This is repository H/L evidence, not a shipped or live C0 result. The published
-`0.1.18` package remains identity-only for this journey. The candidate source
-suite reports `1346 passed, 15 expected host/PostgreSQL skips`; `agentnet verify`
-and each of two recursively packed npm generations report `1267 passed, 15
-expected skips`. Exact installed harness probe/lifecycle checks report `18
-passed`; release-manifest, package, and two-generation packed checks pass.
-Mutation-authorized PostgreSQL, real Google/passkey/two-laptop proof, final
-candidate review, real-host candidate CI, deployment, publication, production
-certification, and A2A cutover remain unproven or separately gated. The
-repository contains a broad executable local kernel and adversarial test suite,
-but it does **not** claim production certification or a completed live
-cross-host ceremony.
+This branch contains the uncommitted `0.1.20` correction candidate. It replaces
+that literal-percent expression with server-side `quote_ident()` composition;
+no schema, migration checksum, identity, authority, C0, messaging, cleanup, or
+A2A semantics change. The existing C0 service still activates only the exact
+same-principal owner/fresh harness pair, records seven approved facts across
+three atomic phases, runs a no-model owner responder, revokes exactly five
+communication entitlements at success, and permanently invalidates binding
+drift. Focused PostgreSQL tests report `47 passed, 7 expected dedicated-database
+skips`; the full source suite reports `1346 passed, 15 expected host/PostgreSQL
+skips`; release/package conformance reports `32 passed`; and the release
+verifier passes. `agentnet verify` and both recursive installed npm package
+generations each report `1267 passed, 15 expected skips`; the recursive package
+gate passes. Final review, commit/tag/push, Sergey-only publication, independent
+public-artifact
+verification, fresh deployment approval, deployment, live ceremony, production
+certification, and A2A cutover remain pending or separately gated. Repository
+evidence is not a completed live cross-host journey.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

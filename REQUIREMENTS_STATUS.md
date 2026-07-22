@@ -8,27 +8,30 @@ they are accountable policy decisions, not additional requirements.
 Observed evidence, with current uncommitted candidate results separated from
 published and historical release evidence:
 
-- The current uncommitted `0.1.19` S0–S9 release candidate is based on published
-  `0.1.18`; it is not published or live release evidence. It adds the fixed atomic
-  `BootstrapGrantPlan`, dedicated selector-free C0 service, exact active
-  harness/credential-set invalidation, authoritative seven-fact/event/receipt
-  replay validation, no-model owner responder, and exact five-power cleanup.
-  Post-hardening targeted checks report **168 passed** for the integrated C0,
-  mailbox, messaging, HTTP, CLI, supervisor, and offline lane; **475 passed** for
-  security/approval/authorization/identity/integration; **428 passed and 7
-  skipped** for authorization/approval/production/CLI/A2A; and **44 passed/25
-  deselected** for the focused C0 service lane. Package check, compileall,
-  `git diff --check`, and the 85-ID count pass. The seven skips require a
-  separately authorized disposable PostgreSQL database. The full source suite
-  reports **1346 passed and 15 expected host/PostgreSQL skips**; `agentnet
-  verify` and each of two recursively packed npm generations report **1267
-  passed and 15 expected skips**. Exact installed harness probe/lifecycle checks
-  report **18 passed** after refreshing their explicit local version pins.
-  Release-manifest, package, and two-generation packed checks pass. These are
-  H/L candidate facts only. Fresh final candidate review, real-host candidate
-  CI, mutation-authorized PostgreSQL, live Google/passkey/two-harness ceremony,
-  C0 round trip, publication, deployment, production, and cutover remain
-  unproven or gated.
+- Published `0.1.19` contains the fixed atomic `BootstrapGrantPlan`, dedicated
+  selector-free C0 service, exact active harness/credential-set invalidation,
+  authoritative seven-fact/event/receipt replay validation, no-model owner
+  responder, and exact five-power cleanup. Independent public package checks
+  passed. The remote deployment peer reported that its pre-migration preflight
+  found a deterministic PostgreSQL catalog verifier defect before mutation: psycopg rejected PostgreSQL literal `%I` in
+  a parameterized query. The remote deployment peer reported no migration,
+  restart, runtime switch, enrollment, authority, message, or A2A change and
+  reported live Core and Approval still on `0.1.18` with schema v3. This
+  candidate's retained local evidence does not independently verify that remote
+  runtime report.
+- Current uncommitted `0.1.20` changes only that verifier expression to
+  server-side `quote_ident()` composition. Migration SQL/checksums, exact
+  catalog comparisons, C0 authority, identity, messaging, cleanup, and A2A
+  semantics remain unchanged. The failing psycopg regression was reproduced
+  before the fix. Focused PostgreSQL checks now report **47 passed and 7
+  expected dedicated-database skips**; the full source suite reports **1346 passed and 15 expected
+  host/PostgreSQL skips**; release/package conformance reports **32 passed**;
+  and the release verifier passes. Package, lock, import-version, deterministic
+  build, and `git diff --check` checks pass. `agentnet verify` and both recursive
+  installed npm generations each report **1267 passed and 15 expected skips**;
+  the recursive package gate passes. Final review, commit/tag/push/CI, Sergey-only
+  publication, independent public-artifact verification, fresh deployment
+  approval, live ceremony, production, and cutover remain pending or gated.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is
