@@ -262,31 +262,28 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.20`. It corrected the earlier psycopg `%I` placeholder defect, but an
-independent read-only PostgreSQL 18.4 preflight found that its exact-catalog
-verifier did not reconcile PostgreSQL 18 `contype='n'` rows or structurally
-compare server-rendered CHECK and partial-index predicates. The deployment peer
-stopped before mutation and reported live Core/Approval still on `0.1.18` with
-schema v3.
+`0.1.21`. It corrected PostgreSQL 18 exact-catalog reconciliation, but exact
+public-artifact startup on PostgreSQL 18.4 exposed a reserved SQL alias in the
+S4 constraint query: `pg_constraint` was aliased as `constraint`. The deployment
+peer stopped the failed rollout and later clean-uninstalled AgentNet under owner
+direction. Pi, A2A, and the PostgreSQL service remained unchanged; no AgentNet
+runtime is currently deployed on that host.
 
-This branch contains the uncommitted `0.1.21` correction candidate. It verifies
-every PostgreSQL 18 NOT NULL constraint against the migration-derived column
-catalog and compares bounded CHECK/index predicates structurally while failing
-closed on unsupported syntax or semantic drift. Migration SQL/checksums,
-identity, authority, C0, messaging, cleanup, and A2A semantics remain unchanged.
-The C0 counterparty may be an ordinary Hub-hosted human harness; it never reuses
-Pi Hub/A2A identity or gains Hub/root privilege. Focused PostgreSQL tests report
-`78 passed, 7 expected dedicated-database skips`; the complete source suite
-reports `1377 passed, 15 expected host/PostgreSQL skips`. Hub independently
-verified candidate-v4 in a private temporary public-`0.1.20` copy, and its
-read-only live-v3 PostgreSQL 18.4 verifier passed exactly `94 tables, 1,085
-columns, 1,398 constraints, 53 indexes`; no live mutation or deployment
-occurred. The reviewer-required evidence refresh and complete release/package
-verification pass. Commit/tag/push, Sergey-only publication, independent
-public-artifact verification, fresh deployment approval, deployment,
-live ceremony, production certification, and A2A cutover remain pending or
-separately gated. Repository evidence is not a completed live cross-host
-journey.
+This branch contains the uncommitted `0.1.22` correction candidate. It changes
+only that table alias to the non-keyword `con` and adds a focused regression;
+migration SQL/checksums, exact catalog expectations, identity, authority, C0,
+messaging, cleanup, and A2A semantics remain unchanged. The C0 counterparty may
+be an ordinary Hub-hosted human harness; it never reuses Pi Hub/A2A identity or
+gains Hub/root privilege. Focused hermetic PostgreSQL tests report `78 passed,
+7 expected dedicated-database skips`; a disposable, package-signature-verified
+PostgreSQL 18.4 process reports `85 passed, 0 skipped`, including clean schema-v4
+startup and reopen. The complete source suite reports `1377 passed, 15 expected
+host/PostgreSQL skips`; an installed npm-packed candidate with the same disposable
+PostgreSQL 18.4 lane reports `1305 passed, 8 expected non-Linux host skips`.
+Commit/tag/push, Sergey-only publication, independent
+public-artifact verification, fresh deployment approval, deployment, live
+ceremony, production certification, and A2A cutover remain pending or separately
+gated. Repository evidence is not a completed live cross-host journey.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

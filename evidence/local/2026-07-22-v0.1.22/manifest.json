@@ -1,0 +1,63 @@
+{
+  "run_id": "2026-07-22-v0.1.22",
+  "evaluated_at": "2026-07-22T20:45:00+00:00",
+  "scope": "v0_1_22_postgresql18_reserved_alias_runtime_repair_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "967b601f6b587f0d09104210f0ff8a621262a69148209d60314cb4799e1cb7a6",
+  "prior_runtime_evidence": "evidence/local/2026-07-22-v0.1.21/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-22-v0.1.21/manifest.json",
+  "remote_runtime_report": "Hub reported that exact public 0.1.21 startup on PostgreSQL 18.4 failed because require_s4_postgres_catalog used reserved SQL alias constraint. Hub stopped the rollout and later clean-uninstalled AgentNet under owner direction. Hub reported Pi, A2A, and the PostgreSQL service healthy and unchanged, with no AgentNet runtime remaining. This local manifest records peer-reported evidence and does not independently attest the remote host.",
+  "change_boundary": "Renames only the pg_catalog.pg_constraint alias from reserved word constraint to non-keyword con in the S4 constraint-count query and adds a focused query regression. Migration SQL/checksums, schema version, exact catalog expectations, identity, authority, bounded C0, messaging, cleanup, enrollment, Approval, supervisor, and A2A runtime semantics remain unchanged.",
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/production/test_postgres_runtime.py::test_postgres_s4_catalog_requires_exact_relations_constraints_and_indexes before source repair",
+      "result": "1 failed exactly because the query contained constraint.contype"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/production/test_postgres_runtime.py::test_postgres_s4_catalog_requires_exact_relations_constraints_and_indexes after source repair",
+      "result": "1 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/production/test_postgres_runtime.py",
+      "result": "78 passed; 7 expected mutation-authorized dedicated PostgreSQL skips; 0 failed"
+    },
+    {
+      "command": "Signature-verified Arch PostgreSQL 18.4 package extracted under /tmp; disposable UTF-8 instance; mutation-authorized tests/production/test_postgres_runtime.py",
+      "result": "85 passed; 0 failed; 0 skipped; clean schema-v4 startup and reopen included"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q",
+      "result": "1377 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "1298 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "npm run check:package && npm run check:packed",
+      "result": "PASS; source package check passed; installed npm generation 1 and repacked generation 2 each passed 1298 tests with 15 expected skips"
+    },
+    {
+      "command": "Installed npm-packed 0.1.22 candidate; signature-verified disposable PostgreSQL 18.4; agentnet verify",
+      "result": "1305 passed; 8 expected non-Linux host skips; 0 failed; all seven PostgreSQL cases executed"
+    },
+    {
+      "command": "verified-model Codex critic and constitution review over exact alias-only diff and dirty-tree evidence",
+      "result": "critic converged; final constitution review PASS"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-sources",
+      "result": "byte-identical 0.1.22 sdist and wheel archives"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-22-v0.1.22/artifacts/agentnet-0.1.22.tar.gz",
+      "sha256": "7b08c7858336653253896307face686afeb56b1729f5241de78ec0dd1ddeba03"
+    },
+    {
+      "path": "evidence/local/2026-07-22-v0.1.22/artifacts/agentnet-0.1.22-py3-none-any.whl",
+      "sha256": "3fb0f8aca5f30fd408df795058af9cafdb117d32079516e99bbaf6e00d342af3"
+    }
+  ]
+}

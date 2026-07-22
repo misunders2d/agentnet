@@ -4,7 +4,7 @@
   "snapshot_date": "2026-07-22",
   "release": {
     "name": "agentnet",
-    "version": "0.1.21",
+    "version": "0.1.22",
     "profile": "self_hosted_local_conformance_candidate",
     "status": "BLOCKED",
     "production_ready": false,
@@ -32,12 +32,12 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "7ac3236384649e1387cf002cbdbc145990db7ae5bcf1b0da3471126122992617",
+    "sha256": "39607477e41e9aa3b4556f71c61969e48cf428f14d24b76e4387a732c8490e11",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "3d88f8f8822b558e49b1453c8094cd6d7acb6cbe584ee01fe4d53990d9d841a2"
+      "sha256": "b869a6efebaccffd8cb41d8ea477431bd535f7e44a29fd0219cf6b1c9e638408"
     },
     "direct_dependencies": {
       "build": {
@@ -193,11 +193,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "3811198f325836cb95874391e50ef935a967cc31f3f4f44991fa8973a0061430"
+      "sha256": "6b3810d808316a8d2bba3f6b662096d335c32685d3c090059bcd3fe1a6efaf64"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "200f7d990ea55503ceab9ba59866299e6e87f277e35cad92bf716b9c64cfde61"
+      "sha256": "95d3c6c72cff66799ee7eb98282446be34743b69d74955c227ed3cbb0efcfc07"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "de3652efb207005503d53b0a40b7cbe41e5efece62a92832dd99bc6c8d30044f"
+      "sha256": "558e33508b0d710437a4ec51497edfb036d7b072d4a763d450683af6b5a078da"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "442046029d42c7fb5412ca3a69c5a218ef67fffaeacb1884f4ff1360eb70a35f"
+      "sha256": "fac815cc754221150a6a886e92543cdb554f49a68873f0fdd23087314928dd2b"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -245,13 +245,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "b92ceecad75a2f9f3ac4d855daaa64fa7781c037cb7732568e473207cee43ce0"
+      "sha256": "d4102deefa54a2926cd72889eb4b7387195f524152fb58a2352348a54e17b071"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "008b82c654fcefd5a0d1e710aa31273d7b373ab9f7e4fb684e4fe52ad104066b"
+    "sha256": "967b601f6b587f0d09104210f0ff8a621262a69148209d60314cb4799e1cb7a6"
   },
   "protocols": {
     "a2a": {
@@ -410,7 +410,7 @@
     },
     "supervisor_harness_lifecycle": {
       "status": "BUILD_OWN_INTEGRATION",
-      "pin": "agentnet-0.1.21",
+      "pin": "agentnet-0.1.22",
       "boundary": "Exact human plus harness binding and foreground isolation remain owned."
     },
     "a2a_gateway": {

@@ -1060,6 +1060,11 @@ class _S4CatalogConnection:
                 for name, (table, columns) in self.indexes.items()
             )
         if "COUNT(*) FILTER" in sql:
+            assert "constraint." not in sql
+            assert (
+                "LEFT JOIN pg_catalog.pg_constraint con ON con.conrelid=relation.oid"
+                in sql
+            )
             rows = []
             for table, counts in self.constraints.items():
                 check, foreign, unique, primary = counts

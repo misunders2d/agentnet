@@ -23,19 +23,25 @@ published and historical release evidence:
   read-only PostgreSQL 18.4 preflight exposed exact-catalog renderer gaps for
   `contype='n'` NOT NULL rows, CHECK definitions, and partial-index predicates.
   The peer stopped before mutation; `0.1.20` remains immutable and undeployable.
-- Current uncommitted `0.1.21` reconciles every PostgreSQL 18 NOT NULL row
-  against migration-derived required columns and structurally compares bounded
-  CHECK/index predicates while rejecting unsupported syntax or semantic drift.
-  Migration SQL/checksums, C0 authority, identity, messaging, cleanup, and A2A
-  semantics remain unchanged. Focused PostgreSQL checks report **78 passed and
-  7 expected dedicated-database skips**; the complete source suite reports
-  **1377 passed and 15 expected host/PostgreSQL skips**. Hub's independent
-  candidate-v4 private-staging, transaction-read-only live-v3 check passed
-  exactly **94 tables, 1,085 columns, 1,398 constraints, and 53 indexes**, with
-  no live mutation. The reviewer-required evidence refresh and complete
-  release/package checks pass. Commit/tag/push/CI, Sergey-only publication,
-  public-artifact verification, fresh deployment approval, live
-  ceremony, production, and cutover remain pending or gated.
+- Published `0.1.21` reconciled every PostgreSQL 18 NOT NULL row against
+  migration-derived required columns and structurally compared bounded
+  CHECK/index predicates, but exact public-artifact startup on PostgreSQL 18.4
+  failed because the S4 constraint-count query used reserved table alias
+  `constraint`. The peer stopped the rollout and later clean-uninstalled
+  AgentNet under owner direction. Pi, A2A, and the PostgreSQL service remained
+  unchanged; `0.1.21` is immutable and undeployable.
+- Current uncommitted `0.1.22` changes only that query alias to non-keyword `con`
+  and adds a focused regression. Migration SQL/checksums, catalog expectations,
+  C0 authority, identity, messaging, cleanup, and A2A semantics remain unchanged.
+  Hermetic PostgreSQL checks report **78 passed and 7 expected dedicated-database
+  skips**. A disposable signature-verified PostgreSQL 18.4 process reports
+  **85 passed and 0 skipped**, including clean schema-v4 startup and reopen. The
+  complete source suite reports **1377 passed and 15 expected host/PostgreSQL
+  skips**. An installed npm-packed candidate with the same disposable PostgreSQL
+  18.4 lane reports **1305 passed and 8 expected non-Linux host skips**.
+  Commit/tag/push/CI, Sergey-only publication, public-artifact
+  verification, fresh deployment approval, live ceremony, production, and
+  cutover remain pending or gated.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

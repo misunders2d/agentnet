@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-22
-Candidate: `agentnet 0.1.21`
+Candidate: `agentnet 0.1.22`
 Profile: self-hosted local conformance candidate
 
 This is not a production release. It is the human projection of
@@ -23,8 +23,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `1964b2cd1398b0f5a5efb561e9d5942668d90416a1e9d1f4382ae70d43569074` |
-| `pyproject.toml` | SHA-256 `b1adac46a0b036d451b37a7e72860a427716ec40753af4a7f2930cebf73e98bf` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `39607477e41e9aa3b4556f71c61969e48cf428f14d24b76e4387a732c8490e11` |
+| `pyproject.toml` | SHA-256 `b869a6efebaccffd8cb41d8ea477431bd535f7e44a29fd0219cf6b1c9e638408` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -152,21 +152,21 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 
 ## Local candidate evidence
 
-Published `0.1.20` corrected the earlier psycopg `%I` defect, but independent
-read-only PostgreSQL 18.4 preflight exposed exact-catalog gaps for
-`contype='n'` NOT NULL rows and server-rendered CHECK/index predicates before
-any mutation. Current uncommitted `0.1.21` reconciles every NOT NULL row against
-migration-derived required columns and structurally compares bounded CHECK and
-partial-index predicates while rejecting unsupported syntax or semantic drift.
-Migration SQL/checksums and all identity, authority, C0, messaging, cleanup,
-and A2A semantics remain unchanged. Focused PostgreSQL tests report `78 passed,
-7 expected dedicated-database skips`; the complete source suite reports `1377
-passed, 15 expected host/PostgreSQL skips`. Hub's independent candidate-v4
-private-staging, transaction-read-only live-v3 verifier passed exactly `94
-tables, 1,085 columns, 1,398 constraints, 53 indexes`, with no live mutation or
-deployment. The reviewer-required evidence refresh and complete release/package
-verification pass. Commit/tag/push/CI, Sergey-only publication,
-public-artifact verification, fresh deployment
+Published `0.1.21` corrected PostgreSQL 18 exact-catalog reconciliation, but
+exact public-artifact startup on PostgreSQL 18.4 exposed reserved SQL alias
+`constraint` in the S4 constraint-count query. The peer stopped the failed
+rollout and later clean-uninstalled AgentNet under owner direction; Pi, A2A, and
+the PostgreSQL service remained unchanged. Current uncommitted `0.1.22` changes
+only that alias to non-keyword `con` and adds a focused regression. Migration
+SQL/checksums, exact catalog expectations, and all identity, authority, C0,
+messaging, cleanup, and A2A semantics remain unchanged. Hermetic PostgreSQL
+tests report `78 passed, 7 expected dedicated-database skips`; a disposable,
+package-signature-verified PostgreSQL 18.4 process reports `85 passed, 0 skipped`,
+including clean schema-v4 startup and reopen. The complete source suite reports
+`1377 passed, 15 expected host/PostgreSQL skips`; an installed npm-packed
+candidate with the same disposable PostgreSQL 18.4 lane reports `1305 passed,
+8 expected non-Linux host skips`. Commit/tag/push/CI,
+Sergey-only publication, public-artifact verification, fresh deployment
 approval, live ceremony, and production certification remain pending or
 separately gated.
 

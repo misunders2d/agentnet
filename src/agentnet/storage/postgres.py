@@ -186,13 +186,13 @@ def require_s4_postgres_catalog(connection: Any) -> None:
 
     constraint_rows = connection.execute(
         """SELECT relation.relname AS table_name,
-                  COUNT(*) FILTER (WHERE constraint.contype='c') AS check_count,
-                  COUNT(*) FILTER (WHERE constraint.contype='f') AS foreign_count,
-                  COUNT(*) FILTER (WHERE constraint.contype='u') AS unique_count,
-                  COUNT(*) FILTER (WHERE constraint.contype='p') AS primary_count
+                  COUNT(*) FILTER (WHERE con.contype='c') AS check_count,
+                  COUNT(*) FILTER (WHERE con.contype='f') AS foreign_count,
+                  COUNT(*) FILTER (WHERE con.contype='u') AS unique_count,
+                  COUNT(*) FILTER (WHERE con.contype='p') AS primary_count
              FROM pg_catalog.pg_class relation
              JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
-             LEFT JOIN pg_catalog.pg_constraint constraint ON constraint.conrelid=relation.oid
+             LEFT JOIN pg_catalog.pg_constraint con ON con.conrelid=relation.oid
             WHERE namespace.nspname=current_schema() AND relation.relname=ANY(%s)
             GROUP BY relation.relname ORDER BY relation.relname""",
         (sorted(_S4_TABLES),),
