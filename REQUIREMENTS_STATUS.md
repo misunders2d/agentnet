@@ -39,17 +39,19 @@ published and historical release evidence:
   skips**; and the installed npm-packed candidate reported **1305 passed and 8
   expected non-Linux host skips**. Commit, tag, CI, Sergey-only publication, and
   public-artifact verification completed for that immutable release.
-- Prepared `0.1.23` builds on published `0.1.22` and adds one fixed
-  product-owned ordinary-server setup boundary, dedicated locked service
+- Tag `v0.1.23` reached the staging workflow, but CI stopped before npm staging
+  because one hermetic interruption test mocked `/usr/bin/useradd` on a runner
+  without that path. No `0.1.23` package was staged or published.
+- Prepared `0.1.24` retains the reviewed `0.1.23` runtime and changes only that
+  fixture to mock AgentNet's validated host-tool resolver. The candidate provides
+  one fixed product-owned ordinary-server setup boundary, dedicated locked service
   identities, exact plan/apply digest approval, create-or-exact-match host state,
-  and redacted health/readiness evidence. It does not grant identity or authority.
-  The focused lane reports **100 passed**; the final source lane excluding
-  installed-live inference reports **1407 passed and 15 expected host/PostgreSQL
-  skips**; release verification, byte-identical Python builds, recursive npm
-  generation-1/generation-2 checks (**1336 passed and 15 expected skips** each),
-  real Pi skill loading, and exact code/security, constitution, and skill-architecture
-  reviews pass. Privileged clean-host evidence, live ceremony, production
-  certification, publication, and cutover remain pending or separately gated.
+  and redacted health/readiness evidence; it grants no identity or authority.
+  The corrected focused lane reports **46 passed**; the source lane excluding
+  installed-live inference and release-manifest self-check reports **1385 passed
+  and 15 expected host/PostgreSQL skips**. Privileged clean-host evidence, live
+  ceremony, production certification, publication, and cutover remain pending or
+  separately gated.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

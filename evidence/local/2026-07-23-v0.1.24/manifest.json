@@ -1,0 +1,46 @@
+{
+  "run_id": "2026-07-23-v0.1.24",
+  "evaluated_at": "2026-07-23T18:45:00+00:00",
+  "scope": "v0_1_24_ci_portability_release_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "4de3d1b94f2f7e5aa1350ad09662cade12f673286457560241db9b01855dcc12",
+  "prior_runtime_evidence": "evidence/local/2026-07-23-v0.1.23/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-23-v0.1.23/manifest.json",
+  "change_boundary": "Test-only CI portability correction after v0.1.23 staging stopped before registry staging: the interruption test mocks AgentNet host-tool resolution instead of asserting nonexistent runner filesystem paths. Reviewed ordinary-server runtime behavior is unchanged. No v0.1.23 package was staged or published.",
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_server_setup.py tests/conformance/test_npm_package.py",
+      "result": "46 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1385 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-sources",
+      "result": "byte-identical 0.1.24 sdist and wheel archives"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/conformance/test_release_manifest.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "22 passed; release manifest verification PASS"
+    },
+    {
+      "command": "npm run check",
+      "result": "exact prepublish gate PASS: source package, 1336-test source lane, release verifier, recursive generation 1 and generation 2, unrelated-cwd setup probes"
+    },
+    {
+      "command": "Pi loadSkillsFromDir against generation-2 packed-installed skills directory",
+      "result": "exactly one agentnet-operator skill; zero diagnostics"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-23-v0.1.24/artifacts/agentnet-0.1.24.tar.gz",
+      "sha256": "4ec28c362944e91f246e965707612cc1089f47768e6e41eb944ea007f1ef46dd"
+    },
+    {
+      "path": "evidence/local/2026-07-23-v0.1.24/artifacts/agentnet-0.1.24-py3-none-any.whl",
+      "sha256": "e2780850ae3c09ee9970174638a674603b584bcc29b7220354cf365d7882d6f4"
+    }
+  ]
+}

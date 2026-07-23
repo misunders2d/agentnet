@@ -1,7 +1,7 @@
 # Release Manifest
 
 Snapshot: 2026-07-23
-Candidate: `agentnet 0.1.23`
+Candidate: `agentnet 0.1.24`
 Latest published package: `agentnet 0.1.22`
 Evidence profile: self-hosted local conformance release
 
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `e99d82c1d095496bdda8bd3af383a4a0b903ac98cfd5ceef0875fbfc19c11eb1` |
-| `pyproject.toml` | SHA-256 `82a0b508546f95d96d9a19b5e0dc4d1a89c2dff8cf1a38bb4055a14bbd0dd013` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `44b4ee60cad3cb4f258f475386b4058fae4848b6691d4b0fcdbca274130ecaad` |
+| `pyproject.toml` | SHA-256 `f20ec917a155160ba531ad334efeb19907824d4b62b63e80eceba914b152a2aa` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -154,23 +154,26 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 ## Local candidate evidence
 
 Published `0.1.22` corrected the PostgreSQL 18 reserved SQL alias exposed by
-exact public-artifact startup. Prepared `0.1.23` adds one fixed product-owned
-ordinary Linux server setup boundary: strict request/reference custody, exact
-secret-free plan/apply digest approval, separate locked Core and Approval
-identities, create-or-exact-match managed state, bounded systemd scope, exact
-loopback/public health identity, interruption recovery, and a canonical bundled
-operator workflow. It grants neither identity nor authority.
+exact public-artifact startup. Tag `v0.1.23` contained the reviewed product-owned
+ordinary Linux setup boundary, but its staging workflow stopped before npm
+staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
+runner without that path. No `0.1.23` package was staged or published.
 
-The focused setup/CLI/HTTP/package lane reports `100 passed`; the final source
-lane excluding installed-live inference reports `1407 passed, 15 expected
-host/PostgreSQL skips`; release-manifest verification and `22` focused release
-tests pass; two fixed-epoch Python builds are byte-identical; recursive npm
-generation 1 and generation 2 each report `1336 passed, 15 expected skips`; and
-the actual Pi generation-2 skill loader reports exactly one `agentnet-operator`
-with zero diagnostics. Exact code/security, constitution, and skill-architecture
-reviews pass. Privileged clean-host apply, live PostgreSQL/OIDC/WebAuthn/TLS
-ceremony, commit/tag/push, Sergey-only publication, and independent
-public-artifact deployment remain pending or separately gated. No
+Prepared `0.1.24` changes only that fixture to mock AgentNet's validated
+host-tool resolver directly. Runtime behavior remains the reviewed fixed setup:
+strict request/reference custody, exact secret-free plan/apply digest approval,
+separate locked Core and Approval identities, create-or-exact-match managed
+state, bounded systemd scope, exact loopback/public health identity,
+interruption recovery, and one canonical bundled operator workflow. Setup grants
+neither identity nor authority.
+
+The corrected focused server-setup/npm lane reports `46 passed`; the source lane
+excluding installed-live inference and this release-manifest self-check reports
+`1385 passed, 15 expected host/PostgreSQL skips`. Exact prepublication,
+retained-artifact, recursive packed, and Pi-loader results are recorded in the
+candidate evidence manifest after verification. Privileged clean-host apply,
+live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and
+independent public-artifact deployment remain pending or separately gated. No
 production-certification or gate-promotion claim is made.
 
 ## Verification boundary

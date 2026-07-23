@@ -762,7 +762,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
     monkeypatch.setattr(setup, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
-    monkeypatch.setattr(setup.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
 
     signer = P256KeyPair.generate()
     trusted = IndependentApproverConfig(

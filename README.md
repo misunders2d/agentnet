@@ -300,19 +300,22 @@ host/PostgreSQL skips`), and installed npm-packed candidate (`1305 passed,
 8 expected non-Linux host skips`). No AgentNet runtime is currently deployed on
 the prior peer; Pi, A2A, and PostgreSQL remained unchanged.
 
-This branch contains prepared `0.1.23`, a product-owned ordinary Linux
-server-setup candidate. It adds fixed plan/apply/start convergence,
-Approval/Core separation, scanner trust, exact public HTTPS health identity,
-interruption recovery, redacted evidence, bundled operator workflow, and
-package regressions. The focused lane reports `100 passed`; the final source
-lane excluding installed-live inference reports `1407 passed, 15 expected
-host/PostgreSQL skips`; release-manifest verification, two byte-identical Python
-builds, recursive npm generation-1/generation-2 checks (`1336 passed, 15 expected
-skips` per generation), and real Pi skill loading pass. Final code/security,
-constitution, and skill-architecture reviews also pass. Privileged clean-host
-apply, live PostgreSQL/OIDC/WebAuthn/TLS ceremony, commit/tag/push, Sergey-only
-publication, and independent public-artifact deployment remain pending or
-separately gated.
+Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
+staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
+runner where that path did not exist. No `0.1.23` package was staged or
+published. Prepared `0.1.24` changes only that fixture to mock AgentNet's
+validated host-tool resolver directly; runtime behavior is unchanged.
+
+Prepared `0.1.24` contains the product-owned ordinary Linux server setup:
+fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
+exact public HTTPS health identity, interruption recovery, redacted evidence,
+and bundled operator workflow. The corrected focused lane reports `46 passed`;
+the source lane excluding installed-live inference and release-manifest
+self-check reports `1385 passed, 15 expected host/PostgreSQL skips`. Exact
+prepublication, retained-artifact, recursive packed, and Pi-loader checks are
+recorded in the candidate evidence after they pass. Privileged clean-host apply,
+live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and
+independent public-artifact deployment remain pending or separately gated.
 Repository evidence is not a completed live cross-host journey or a
 production-certification claim.
 
