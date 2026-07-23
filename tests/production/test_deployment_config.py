@@ -93,6 +93,26 @@ def _deployment_environment() -> dict[str, str]:
     return environ
 
 
+def test_compose_is_explicitly_not_the_zero_state_ordinary_installer() -> None:
+    compose = json.loads(COMPOSE_PATH.read_text(encoding="utf-8"))
+    assert compose["x-agentnet-profile"] == {
+        "role": "advanced-post-enrollment-two-agent-comparator",
+        "ordinary_zero_state_entrypoint": "agentnet server-agent setup",
+        "approval_boundary": "external-preprovisioned",
+    }
+    environment_example = (ROOT / "deploy" / ".env.production.example").read_text(encoding="utf-8")
+    for required in (
+        "AGENTNET_SERVER_AGENT_IMAGE_DIGEST=",
+        "AGENTNET_POSTGRES_IMAGE_DIGEST=",
+        "AGENTNET_NGINX_IMAGE_DIGEST=",
+        "AGENTNET_AGENT_A_TLS_CERT_FILE=",
+        "AGENTNET_AGENT_B_TLS_KEY_FILE=",
+        "AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE=",
+        "AGENTNET_AGENT_B_OIDC_ENROLLMENT_CONFIG_FILE=",
+    ):
+        assert required in environment_example
+
+
 def test_compose_wires_two_ordinary_server_agents_to_shared_durable_storage() -> None:
     compose = json.loads(COMPOSE_PATH.read_text(encoding="utf-8"))
     services = compose["services"]

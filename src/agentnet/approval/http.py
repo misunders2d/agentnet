@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from importlib.metadata import version as package_version
 import os
 import secrets
 import time
@@ -727,7 +728,16 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
         raise ValueError("owner session service requires owner OIDC")
 
     async def health(_request: Request) -> Response:
-        return Response(status_code=204)
+        return JSONResponse(
+            {
+                "schema": "agentnet.approval.health.v1",
+                "service": "agentnet-approval",
+                "version": package_version("agentnet"),
+                "status": "alive",
+                "public_origin": service.config.public_origin,
+                "verifier_id": service.config.verifier_id,
+            }
+        )
 
     async def page(_request: Request) -> Response:
         return HTMLResponse(

@@ -30,8 +30,9 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-22-v0.1.22/artifacts/RETENTION.md",
+  "evidence/local/2026-07-23-v0.1.23/artifacts/RETENTION.md",
   "skills/**/*.md",
+  "skills/**/*.json",
   "tests/fixtures/**/*.json",
 ];
 for (const relative of requiredPublishedFiles) {
@@ -74,7 +75,9 @@ for (const relative of [
   "skills/agentnet-operator/references/fail-closed-boundaries.md",
   "skills/agentnet-operator/references/required-communication-scope.md",
   "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
+  "skills/agentnet-operator/references/ordinary-server-setup.md",
   "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
+  "skills/agentnet-operator/references/examples/ordinary-server-setup-request.json",
   "skills/agentnet-operator/evals/evals.json",
   "src/agentnet/bindings/pi_extension.ts",
   "src/agentnet/adapters/claude.py",
@@ -99,6 +102,8 @@ for (const required of [
   "Fresh-laptop onboarding is human-mediated",
   "references/fresh-laptop-onboarding.md",
   "references/examples/fresh-laptop-single-prompt.md",
+  "references/ordinary-server-setup.md",
+  "agentnet server-agent setup",
 ]) {
   if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
 }
@@ -182,6 +187,11 @@ const expectedOnboardingEvalIds = [
   "headless-server-uses-private-terminal-browser-handoff",
   "hub-generates-public-onboarding-packet",
   "identity-only-mode-skips-c0-phase",
+  "ordinary-server-human-ceremony-remains-explicit",
+  "ordinary-server-missing-route-blocks",
+  "ordinary-server-remote-manager-never-shells",
+  "ordinary-server-resumes-exact-request",
+  "ordinary-server-uses-product-owned-setup",
   "repository-candidate-does-not-unblock-installed-release",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",
@@ -203,6 +213,19 @@ if (!launcherText.includes('"3.13.13"') || launcherText.includes('">=3.13,<3.15"
 }
 if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
   fail("npm launcher does not enforce the minimum supported uv version");
+}
+for (const marker of [
+  "privilegedSetupApply",
+  'from "../lib/server-setup-preflight.mjs"',
+  "privilegedApprovalDigest(userArguments)",
+  "requireRootOwnedPath(packageRoot, { recursive: true })",
+  "AGENTNET_NODE_EXECUTABLE: process.execPath",
+  'const setupRoot = "/var/lib/agentnet-setup"',
+  "const inheritedEnvironment = privilegedSetupApply",
+]) {
+  if (!launcherText.includes(marker)) {
+    fail(`npm launcher is missing privileged setup provenance marker: ${marker}`);
+  }
 }
 
 if (!process.exitCode) console.log("npm package check: PASS");

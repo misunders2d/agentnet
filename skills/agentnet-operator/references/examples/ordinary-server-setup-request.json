@@ -1,0 +1,19 @@
+{
+  "schema": "agentnet.server-setup.request.v1",
+  "profile": "always_on_server_agent",
+  "domain_id": "corp.example",
+  "service_audience": "urn:agentnet:corp.example:corporate-api",
+  "runtime_instance_id": "ordinary-server-1",
+  "core_public_origin": "https://core.corp.example",
+  "approval_public_origin": "https://approval.corp.example",
+  "database_url": "postgresql://agentnet@127.0.0.1/agentnet",
+  "database_url_env": "AGENTNET_DATABASE_URL",
+  "core_environment_file": "/home/operator/.config/agentnet-setup/core.env",
+  "approval_environment_file": "/home/operator/.config/agentnet-setup/approval.env",
+  "oidc_provider_file": "/home/operator/.config/agentnet-setup/core-oidc.json",
+  "approval_owner_oidc_file": "/home/operator/.config/agentnet-setup/approval-owner-oidc.json",
+  "approval_approvers_file": "/home/operator/.config/agentnet-setup/approvers.json",
+  "scanner_trust_file": "/home/operator/.config/agentnet-setup/scanner-trust.json",
+  "approval_approver_principal_id": "owner-principal",
+  "approval_verifier_id": "approval.corp.example"
+}

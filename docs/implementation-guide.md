@@ -32,8 +32,7 @@ uv run agentnet serve --config agentnet-config.json --host 127.0.0.1 --port 8080
 uv run agentnet verify
 ```
 
-The production Compose file accepts no mutable runtime image tags. Operators
-must supply verified repository and digest pairs through
+The advanced post-enrollment two-agent Compose comparator accepts no mutable runtime image tags. It is not the default zero-state installer and does not own Approval provisioning; use `agentnet server-agent setup` for the ordinary one-server profile. Operators using this separate comparator must supply verified repository and digest pairs through
 `AGENTNET_SERVER_AGENT_IMAGE_REPOSITORY`/`AGENTNET_SERVER_AGENT_IMAGE_DIGEST`,
 `AGENTNET_POSTGRES_IMAGE_REPOSITORY`/`AGENTNET_POSTGRES_IMAGE_DIGEST`, and
 `AGENTNET_NGINX_IMAGE_REPOSITORY`/`AGENTNET_NGINX_IMAGE_DIGEST`. Build the AgentNet image with
@@ -81,11 +80,12 @@ Credentials are injected only into their bound private worker and are never
 accepted as command-line arguments or printed. Missing evidence, binary, or
 credential fails the requested gate; it is never reported as a skip.
 
-The npm/Pi package bundles a documentation-only `agentnet-operator` skill under
-`skills/agentnet-operator/`. It routes install, local-conformance, server-agent,
-identity, supervisor, Pi-binding, and troubleshooting requests to safe examples
-and fail-closed references. Loading the skill does not initialize or activate
-AgentNet and never grants identity or authority.
+The npm/Pi package bundles the `agentnet-operator` skill under
+`skills/agentnet-operator/` plus the fixed `agentnet server-agent setup`
+implementation. The skill routes target-local install, ordinary server setup,
+local-conformance, identity, supervisor, Pi-binding, and troubleshooting work to
+product-owned commands and fail-closed references. Loading the skill does not
+initialize or activate AgentNet and never grants identity or authority.
 
 The real-network install-and-use contract is exactly the stable requirement set:
 no reduced communication product, synthetic C0 substitute, or extra privileged
@@ -97,6 +97,49 @@ write missing approval services, scanners, storage adapters, receipt logic, or
 vendor glue. A missing product component is a named blocker, not an operator
 integration assignment or justification to weaken identity, authority,
 durability, artifact, task, room, federation, or non-interruption semantics.
+
+## Product-owned ordinary Linux server setup
+
+The default host path is one fixed wrapper, not a general deployment framework. The target agent first resolves system-wide root-owned AgentNet, Node.js, and `uv` executables accessible to the locked service identities:
+
+```bash
+# read-only plan
+<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+
+# one frozen approved scope
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+  --request /home/operator/.config/agentnet-setup/server-setup.json \
+  --expected-request-digest <approved-request-digest> \
+  --apply --start
+```
+
+The strict request contains public metadata and absolute references only. Secret
+values remain in owner-only Core and Approval environment files. The wrapper
+validates exact package version, password-free PostgreSQL DSN, OIDC callbacks,
+Approval owner/approver inputs, scanner public trust, dedicated account
+conflicts, and operator-owned HTTPS route prerequisites. It then converges on
+locked `agentnet` and `agentnet-approval` identities, private state roots,
+Approval provisioning, Core bootstrap, fixed loopback ports, two hardened
+systemd units, and structured redacted evidence. It never overwrites differing
+managed state and never mutates DNS, TLS certificates, reverse-proxy policy,
+PostgreSQL administration, firewall policy, identity, or authority.
+
+A remote Manager does not execute target-host commands. The target coding agent
+follows the bundled
+`skills/agentnet-operator/references/ordinary-server-setup.md`; remote peers may
+provide immutable package instructions and inspect sanitized evidence only.
+Exact reruns resume after partial provisioning. Start verifies local and public
+Core/Approval health. Before owner enrollment the honest status is
+`waiting_owner_oidc_or_passkey`.
+
+Owner registration, workforce OIDC, WebAuthn UV, claim-code entry, and exact
+server-harness enrollment remain explicit human ceremonies. After `join guided`
+finishes identity-only, Core is stopped, `server-agent activate` binds the exact
+identity offline, and the same setup request with its approved
+`--expected-request-digest` plus `--apply --start` restarts and
+checks it. Final status is `operational`, `identity_enrolled=true`, and
+`authority_granted=false`. This proves neither production durability nor any
+business permission.
 
 ## WebAuthn-UV approval service and deployment profiles
 
@@ -323,25 +366,30 @@ independent approval deployment, production key custody, or owner-policy gates.
 
 ## Ordinary server-agent activation
 
-`agentnet network create` provisions the namespace, PostgreSQL schema, and
-owner-only software-key files, but it does not invent an enrolled identity or
-start a protected service. For a release that ships the guided flow, complete exact OIDC, candidate-key
+`agentnet server-agent setup` is the ordinary entry point and composes the
+lower-level `network create` primitive. It provisions the namespace, PostgreSQL
+schema, scanner trust, Approval and owner-only software-key files, but it does
+not invent an enrolled identity or authority. For a release that ships the guided flow, complete exact OIDC, candidate-key
 possession, and WebAuthn human-approval enrollment with one resumable command,
 then bind the offline configuration explicitly:
 
 ```bash
-agentnet join guided \
+sudo -u agentnet -H <resolved-root-owned-agentnet-path> join guided \
   --server https://agents.corp.example \
   --domain corp.example \
   --harness pi \
   --name server-agent-1 \
-  --state .agentnet/guided-join.json \
-  --identity .agentnet/server-agent-identity.json \
+  --state /var/lib/agentnet/guided-join.json \
+  --identity /var/lib/agentnet/server-agent-identity.json \
   --browser terminal
-agentnet server-agent activate \
-  --config agentnet.json \
-  --identity .agentnet/server-agent-identity.json
-agentnet serve --config agentnet.json
+sudo systemctl stop agentnet-core.service
+sudo -u agentnet -H <resolved-root-owned-agentnet-path> server-agent activate \
+  --config /var/lib/agentnet/agentnet.json \
+  --identity /var/lib/agentnet/server-agent-identity.json
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+  --request /home/operator/.config/agentnet-setup/server-setup.json \
+  --expected-request-digest <approved-request-digest> \
+  --apply --start
 ```
 
 The guided command defaults to the system browser without printing the

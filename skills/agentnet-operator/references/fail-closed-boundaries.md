@@ -51,15 +51,12 @@ AgentNet requires credentials to be injected securely at runtime. It does not re
 
 ## Core versus supervisor configuration
 
-Use the core config with core/server commands. After exact enrollment and
-before service start, activate the ordinary server-agent binding explicitly:
-
-```bash
-agentnet server-agent activate --config agentnet.json --identity .agentnet/server-agent-identity.json
-agentnet status --config agentnet.json
-agentnet serve --config agentnet.json --host 127.0.0.1 --port 8080
-agentnet bootstrap-server-agent --config agentnet.json
-```
+Use the core config with core/server commands. The ordinary always-on Linux
+profile must follow [ordinary-server-setup.md](ordinary-server-setup.md) only:
+dedicated service identities, the resolved absolute root-owned launcher, exact
+`/var/lib/agentnet` custody, offline activation, and the approved setup rerun.
+Generic per-user `.agentnet` paths and bare PATH-selected launchers are not valid
+for that profile.
 
 Activation must run while the service is offline. It holds the exact runtime
 lease under a distinct activation owner, runs no migrations, checks the current

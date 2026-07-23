@@ -110,22 +110,38 @@ agentnet supervisor-run \
 
 Only after enrollment and explicit approval may an operator run the supervisor without `--check`. Pi binding requires `local_bindings_required=true`, an owner-only capability root, a private Unix socket, and a measured supervisor-launched Pi child.
 
-## Always-on server preflight
+## Always-on server setup
 
-This is a fail-closed product preflight—not a manual integration recipe. AgentNet must ship the deployment manifests, ceremony service, and adapters required by the supported profile. If the installed release lacks them, report `blocked: product component not yet shipped`; do not make the operator build glue code or assemble an undocumented vendor stack.
+This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Resolve the strict non-secret [request example](examples/ordinary-server-setup-request.json), whose sensitive values remain owner-only file references, then run the read-only plan:
+
+```bash
+<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+```
+
+After one frozen human approval, target server agent runs:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+  --request /home/operator/.config/agentnet-setup/server-setup.json \
+  --expected-request-digest <approved-request-digest> \
+  --apply --start
+```
+
+The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, scanner trust, hardened units, bounded start/restart, and redacted evidence. It verifies existing operator-owned HTTPS routes to loopback Core and Approval. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
 
 OIDC discovery is public-only by default. A private/non-global provider is allowed only when configuration pins its exact HTTPS origin, exact JWK thumbprints, and explicit canonical private CIDRs and/or endpoint addresses; the direct TLS transport may connect only to the validated address tuple. Loopback, link-local, multicast, reserved, documentation, benchmark, transition/softwire, and IPv4-mapped addresses remain forbidden. Do not suggest hosts-file tricks, DNS rebinding, proxy mirrors, or weakened SSRF checks.
 
-Before creating server state, verify that the operator has approved values for:
+Before creating server state, verify that operator has approved values for:
 
 - nonproduction or production trust-domain identifier;
-- dedicated HTTPS public base URL and service audience;
-- PostgreSQL endpoint and environment variable containing the runtime DSN;
-- OIDC enrollment configuration file;
-- retention and recovery policy;
-- an exact independently approved identity profile produced by enrollment.
+- distinct Core and Approval HTTPS origins plus exact service audience;
+- PostgreSQL endpoint and environment variable containing runtime DSN;
+- Core and Approval OIDC policy files;
+- exact owner/approver policy, scanner trust, retention, and recovery policy.
 
-The CLI shape is:
+No server-harness identity profile exists yet. Setup creates state first and reports `waiting_owner_oidc_or_passkey`; guided enrollment then produces exact identity used by offline activation.
+
+The underlying expert primitive below is not the ordinary setup path. Product setup invokes it internally; do not make a human or remote Manager assemble these steps:
 
 ```bash
 agentnet network create \
@@ -134,6 +150,7 @@ agentnet network create \
   --domain corp.example \
   --public-base-url https://agentnet.example \
   --oidc-config oidc-enrollment.json \
+  --scanner-trust-config scanner-trust.json \
   --database-url postgresql://agentnet@db.example/agentnet \
   --database-url-env AGENTNET_DATABASE_URL
 ```
@@ -145,8 +162,7 @@ schema/keys without inventing identity or authority:
 agentnet bootstrap-server-agent --config agentnet.json
 ```
 
-Under the dedicated approval-service OS identity, use the shipped WebAuthn
-component. The default profile may colocate this service with Core/PostgreSQL on
+Product setup invokes the shipped WebAuthn component under the dedicated approval-service OS identity. The following commands document the primitive and exceptional existing-state diagnosis; they are not manual ordinary setup. The default profile may colocate this service with Core/PostgreSQL on
 the existing server; the optional high-assurance profile uses separate
 administration. Never copy its private config, signer keys, record key,
 database, or capability URLs into enrolled-agent storage:
@@ -181,34 +197,14 @@ shared-host process-boundary, recovery, and owner evidence must be proven for
 the default profile. Separate-host evidence belongs only to the optional
 high-assurance profile.
 
-For an installed release whose actual help exposes `join guided`, complete exact
-OIDC/key-possession/Core-brokered independent approval enrollment. While the
-server process is offline, bind only that exact identity. Replace `pi`, domain,
-and display name with approved values:
+The ordinary always-on server ceremony is defined only in
+[ordinary-server-setup.md](ordinary-server-setup.md). Do not reuse generic
+per-user `.agentnet` paths or bare `agentnet` PATH lookups for that profile; its
+commands use dedicated service identities, exact `/var/lib/agentnet` custody,
+and the resolved absolute root-owned launcher. Fresh-laptop guided enrollment
+is separately defined in [fresh-laptop-onboarding.md](fresh-laptop-onboarding.md).
 
-```bash
-agentnet join guided \
-  --server https://agentnet.example \
-  --domain corp.example \
-  --harness pi \
-  --name server-agent-1 \
-  --state .agentnet/guided-join.json \
-  --identity .agentnet/server-agent-identity.json \
-  --browser terminal
-agentnet server-agent activate \
-  --config agentnet.json \
-  --identity .agentnet/server-agent-identity.json
-agentnet serve --config agentnet.json
-```
-
-Default `join guided` opens the system browser. This server-bootstrap example
-uses explicit `--browser terminal`: AgentNet verifies private POSIX `/dev/tty`
-and discloses the HTTPS URL only there for manual opening on the owner laptop.
-Never record or relay that URL. Missing TTY, control bytes, partial writes, and
-unsupported platforms fail closed with pending state retained. Both modes
-prompt only for the human claim code and must finish as `enrolled_identity_only` and
-`first_message_blocked_explicit_authority_required`. The expert manual
-`join begin`/`join complete` commands remain compatible but require explicit
+The expert manual `join begin`/`join complete` commands remain compatible but require explicit
 local challenge/receipt handling and are not the fresh-laptop workflow:
 
 ```bash

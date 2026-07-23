@@ -344,6 +344,11 @@ async def test_every_protected_v1_error_is_non_cacheable_and_router_errors_keep_
             assert {name: response.headers[name] for name in protected_headers} == protected_headers
 
         health = await client.get("/healthz")
+        assert health.status_code == 200
+        assert health.json()["schema"] == "agentnet.core.health.v1"
+        assert health.json()["service"] == "agentnet-core"
+        assert health.json()["status"] == "alive"
+        assert health.json()["domain_id"] == actor.domain_id
         assert "cache-control" not in health.headers
 
 

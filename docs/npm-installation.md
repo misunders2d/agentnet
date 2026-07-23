@@ -30,7 +30,30 @@ The launcher uses the committed `uv.lock` and selects the release-certified CPyt
 
 Host state uses XDG state paths on Linux, `~/Library/Application Support/agentnet` on macOS, and `%LOCALAPPDATA%\\agentnet` on Windows. POSIX state is owner-mode checked. Windows private state and npm runtime roots use protected current-user DACLs and reject reparse-point roots. Linux uses descriptor-pinned executable measurement; macOS and Windows use repeated process creation-time, account, parent, path identity, and executable digest checks. The latter path-based measurement is fail-closed but is not claimed equivalent to Linux `/proc/<pid>/exe` against privileged path replacement.
 
-Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension plus a documentation-only `agentnet-operator` skill with safe setup examples and fail-closed references. The skill provides guidance only; it grants no authority and performs no automatic initialization. Extension tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
+Installation does not enroll a person, create an identity, start a supervisor, activate a local binding, or grant authority. The Pi package contributes the AgentNet extension plus the `agentnet-operator` skill and fixed `agentnet server-agent setup` implementation. The skill routes the target coding agent through read-only planning, one approved apply/start, genuine OIDC/WebAuthn ceremonies, offline activation, and structured verification; the skill itself grants no authority and performs no automatic initialization. Extension tools become usable only inside a measured Pi child launched by an enrolled AgentNet supervisor with `local_bindings_required=true`; there is no ambient fallback.
+
+## Product-owned ordinary Linux server setup
+
+The default self-hosted profile is installed and operated locally by the target server's coding agent. Server setup requires system-wide root-owned AgentNet, Node.js, and `uv` executables readable/executable by locked service identities. Target coding agent must reject any per-user, home, temporary, writable, or request-selected launcher before privileged invocation; code inside an untrusted launcher cannot make its own execution as root safe. Launcher and Python provenance checks are defense in depth after that precondition. A remote Manager may provide immutable public package/version instructions and inspect sanitized evidence, but must not shell into the host or invent users, directories, units, or recovery steps.
+
+Prepare the strict non-secret request with owner-only sensitive file references described by the bundled `skills/agentnet-operator/references/ordinary-server-setup.md`, then plan without writes:
+
+```bash
+<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+```
+
+After one frozen human-approved scope:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+  --request /home/operator/.config/agentnet-setup/server-setup.json \
+  --expected-request-digest <approved-request-digest> \
+  --apply --start
+```
+
+The fixed wrapper manages two locked identities, two private data roots, root-only environment custody, Approval provisioning, Core/PostgreSQL bootstrap, maintained-scanner public trust, two hardened systemd units, bounded start/restart, and redacted step evidence. Exact reruns converge and conflicts never overwrite. It uses loopback Core `8080` and Approval `8090`, then verifies the operator-owned exact public HTTPS routes. It never mutates DNS, TLS certificates, proxy configuration, PostgreSQL administration, firewall policy, human identity, or authority.
+
+Expected initial status is `waiting_owner_oidc_or_passkey`. The bundled skill then uses only dedicated-user Approval registration, `join guided --browser terminal`, offline `server-agent activate`, and an exact setup rerun. Final status is `operational`, `identity_enrolled=true`, public Core `/readyz` verified, and `authority_granted=false`. Human OIDC and passkey steps are never automated.
 
 The supported real-network experience must deliver exactly the capability set in `docs/requirements.md`. AgentNet is responsible for shipping or explicitly provisioning the required maintained mechanisms, adapters, manifests, and preflight checks. The operator supplies approved infrastructure, secrets, owner decisions, trust roots, and human ceremonies—not custom integration code. Missing product components block the real-network path; local synthetic C0 is test evidence, not a smaller product substitute.
 

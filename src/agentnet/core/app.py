@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from importlib.metadata import version as package_version
 from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -1701,8 +1702,14 @@ class CommunicationCore:
             # convert an otherwise useful degraded response into a 500.
             pass
         return {
+            "schema": "agentnet.core.readiness.v1",
+            "service": "agentnet-core",
+            "version": package_version("agentnet"),
             "ready": operational,
             "profile": self.config.profile.value,
+            "public_origin": self.config.public_base_url,
+            "service_audience": self.config.effective_service_audience,
+            "runtime_instance_id": self.config.runtime_instance_id,
             "acceptance_fact": self.mailboxes.acceptance_fact.value,
             "domain_id": self.config.domain_id,
             "enabled_features": [name for name, value in self.config.features.model_dump().items() if value],
@@ -1728,8 +1735,15 @@ class CommunicationCore:
         """Process-only probe; dependency failures belong to readiness."""
 
         return {
+            "schema": "agentnet.core.health.v1",
+            "service": "agentnet-core",
+            "version": package_version("agentnet"),
             "status": "alive",
             "profile": self.config.profile.value,
+            "domain_id": self.config.domain_id,
+            "public_origin": self.config.public_base_url,
+            "service_audience": self.config.effective_service_audience,
+            "runtime_instance_id": self.config.runtime_instance_id,
         }
 
     def recovery_status(self, *, record_observation: bool = False) -> dict[str, Any]:

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temporary = mkdtempSync(path.join(os.tmpdir(), "agentnet-packed-check-"));
+chmodSync(temporary, 0o755);
 const unrelated = path.join(temporary, "unrelated");
 const state = path.join(temporary, "state");
 const home = path.join(temporary, "home");
@@ -17,6 +18,17 @@ const timeout = 10 * 60 * 1000;
 for (const directory of [unrelated, state, home, npmCache]) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
 }
+
+const writePrivate = (file, value) => {
+  writeFileSync(file, typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+};
+
+const scannerPublicKey = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELh/2FNSADEBCRZPRN7OMxfF3xJpu
+04cThwOVHuyhEwl/iDcYB+XmcjSPTW5owy7+fdOD8jZIi4wR1lZ96za/7g==
+-----END PUBLIC KEY-----
+`;
 
 const run = (command, arguments_, options = {}) => {
   const completed = spawnSync(command, arguments_, {
@@ -38,13 +50,48 @@ const run = (command, arguments_, options = {}) => {
   return completed;
 };
 
+const requireBlockedSetup = (launcher, request, options) => {
+  const completed = spawnSync(
+    launcher,
+    ["server-agent", "setup", "--request", request],
+    {
+      ...options,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 128 * 1024 * 1024,
+      timeout,
+      shell: false,
+    },
+  );
+  if (completed.error) throw completed.error;
+  if (completed.status !== 1) {
+    throw new Error(`packed user-owned setup probe expected status 1, got ${completed.status}`);
+  }
+  let evidence;
+  try {
+    evidence = JSON.parse(completed.stdout);
+  } catch {
+    throw new Error("packed setup probe did not return structured blocker evidence");
+  }
+  if (
+    evidence.schema !== "agentnet.server-setup.evidence.v1" ||
+    evidence.status !== "blocked" ||
+    evidence.blocker !== "unsafe_executable" ||
+    evidence.authority_granted !== false ||
+    evidence.identity_enrolled !== false
+  ) {
+    throw new Error("packed setup probe returned unexpected blocker evidence");
+  }
+};
+
 try {
   let packageRoot = root;
   for (let generation = 1; generation <= 2; generation += 1) {
     const packDirectory = path.join(temporary, `pack-${generation}`);
     const prefix = path.join(temporary, `prefix-${generation}`);
     mkdirSync(packDirectory, { recursive: true, mode: 0o700 });
-    mkdirSync(prefix, { recursive: true, mode: 0o700 });
+    mkdirSync(prefix, { recursive: true, mode: 0o755 });
+    chmodSync(prefix, 0o755);
 
     const packed = run(
       "npm",
@@ -103,6 +150,82 @@ try {
 
     const launcher = path.join(prefix, "node_modules", ".bin", "agentnet");
     run(launcher, ["verify"], { cwd: unrelated, env: environment });
+    run(launcher, ["server-agent", "setup", "--help"], { cwd: unrelated, env: environment });
+
+    const initName = process.platform === "linux" && (() => {
+      try { return readFileSync("/proc/1/comm", "utf8").trim(); } catch { return ""; }
+    })();
+    if (initName === "systemd") {
+      const inputs = path.join(temporary, `server-setup-inputs-${generation}`);
+      mkdirSync(inputs, { mode: 0o700 });
+      const coreEnv = path.join(inputs, "core.env");
+      const approvalEnv = path.join(inputs, "approval.env");
+      const coreOidc = path.join(inputs, "core-oidc.json");
+      const ownerOidc = path.join(inputs, "owner-oidc.json");
+      const approvers = path.join(inputs, "approvers.json");
+      const scannerTrust = path.join(inputs, "scanner-trust.json");
+      const request = path.join(inputs, "server-setup.json");
+      writePrivate(coreEnv, "AGENTNET_DATABASE_URL=postgresql://agentnet@127.0.0.1/agentnet\nAGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token\n");
+      writePrivate(approvalEnv, "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token\n");
+      writePrivate(coreOidc, {
+        issuer: "https://accounts.example",
+        client_id: "packed-core-client",
+        redirect_uri: "https://core.corp.example/v1/enrollment/oidc/callback",
+        token_endpoint_auth_method: "none",
+        allowed_endpoint_origins: ["https://accounts.example"],
+        allowed_signing_algorithms: ["RS256"],
+        binding_assurance: "hardware_bound",
+      });
+      writePrivate(ownerOidc, {
+        issuer: "https://accounts.example",
+        client_id: "packed-approval-client",
+        redirect_uri: "https://approval.corp.example/v1/approval/owner/oidc/callback",
+        token_endpoint_auth_method: "none",
+        allowed_endpoint_origins: ["https://accounts.example"],
+        allowed_signing_algorithms: ["RS256"],
+      });
+      writePrivate(approvers, { approvers: [{
+        principal_id: "packed-owner",
+        authority_kind: "human",
+        domain_id: "corp.example",
+        allowed_purposes: [
+          "authorization.bootstrap_plan.approve",
+          "authorization.elevation.approve",
+          "identity.credential.recover.approve",
+          "identity.enrollment.approve",
+          "identity.harness.revoke.approve",
+          "organization.relationship.accept",
+        ],
+        oidc_issuer: "https://accounts.example",
+        oidc_subject: "packed-owner-subject",
+      }] });
+      writePrivate(scannerTrust, {
+        trusted_public_keys: { "packed-scanner-key": scannerPublicKey },
+        required_engine: "packed-check-scanner",
+        required_rules_digest: "a".repeat(64),
+        required_profile_digest: "b".repeat(64),
+      });
+      writePrivate(request, {
+        schema: "agentnet.server-setup.request.v1",
+        profile: "always_on_server_agent",
+        domain_id: "corp.example",
+        service_audience: "urn:agentnet:corp.example:corporate-api",
+        runtime_instance_id: "packed-server-1",
+        core_public_origin: "https://core.corp.example",
+        approval_public_origin: "https://approval.corp.example",
+        database_url: "postgresql://agentnet@127.0.0.1/agentnet",
+        database_url_env: "AGENTNET_DATABASE_URL",
+        core_environment_file: coreEnv,
+        approval_environment_file: approvalEnv,
+        oidc_provider_file: coreOidc,
+        approval_owner_oidc_file: ownerOidc,
+        approval_approvers_file: approvers,
+        scanner_trust_file: scannerTrust,
+        approval_approver_principal_id: "packed-owner",
+        approval_verifier_id: "approval.corp.example",
+      });
+      requireBlockedSetup(launcher, request, { cwd: unrelated, env: environment });
+    }
   }
   console.log("two-generation packed npm package check: PASS");
 } finally {

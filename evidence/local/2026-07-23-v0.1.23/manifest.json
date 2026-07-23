@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-23-v0.1.23",
+  "evaluated_at": "2026-07-23T17:45:00+00:00",
+  "scope": "v0_1_23_product_owned_ordinary_linux_server_setup_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "b275258eaced8eef72f0408f11346665fdc4fa3aa2c875a26a6a995d7cdeb905",
+  "prior_runtime_evidence": "evidence/local/2026-07-22-v0.1.22/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-22-v0.1.22/manifest.json",
+  "change_boundary": "Adds one fixed ordinary Linux server setup composition with strict request/reference custody, exact secret-free plan/apply digest approval, private Core and Approval identities, exact managed-state reconciliation, bounded systemd control, exact health/readiness identity, interruption recovery, and bundled operator workflow. Setup and enrollment grant no authority; privileged clean-host and live ceremony evidence remain external.",
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_server_setup.py tests/integration/test_cli_product_journey.py tests/approval/test_approval_http.py tests/integration/test_http_api.py tests/integration/test_product_http_api.py tests/conformance/test_npm_package.py tests/production/test_deployment_config.py tests/platform/test_host_support.py::test_cli_import_does_not_require_posix_fcntl",
+      "result": "100 passed; 0 failed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/adapters/test_installed_live_inference.py",
+      "result": "1407 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "verified openai-codex/gpt-5.5 code/security, constitution, and mandatory ten-category skill-architecture reviews over exact frozen ordinary-server patch",
+      "result": "code/security PASS; constitution PASS; skill architecture converged; no blocker"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-sources",
+      "result": "byte-identical 0.1.23 sdist and wheel archives"
+    },
+    {
+      "command": "npm run check:package && npm run check:packed",
+      "result": "source package check PASS; installed generation 1 and recursively repacked generation 2 each 1336 passed with 15 expected host/PostgreSQL skips; unrelated-cwd setup probes PASS"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/conformance/test_release_manifest.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "22 passed; release manifest verification PASS"
+    },
+    {
+      "command": "Pi loadSkillsFromDir against generation-2 packed-installed skills directory",
+      "result": "exactly one agentnet-operator skill; zero diagnostics"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-23-v0.1.23/artifacts/agentnet-0.1.23.tar.gz",
+      "sha256": "ca318ebd23a662f7d534e484d420d38a5aff293739553b47fcb38a9ed0bb904c"
+    },
+    {
+      "path": "evidence/local/2026-07-23-v0.1.23/artifacts/agentnet-0.1.23-py3-none-any.whl",
+      "sha256": "bffe9727226fbb27bd15718d5f4746ce3336544d8bd610604f0d43af297ea76e"
+    }
+  ]
+}

@@ -38,7 +38,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-22-v0.1.22/artifacts/RETENTION.md",
+        "evidence/local/2026-07-23-v0.1.23/artifacts/RETENTION.md",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
@@ -76,7 +76,7 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
     assert os.access(ROOT / "npm/bin/agentnet.mjs", os.X_OK)
 
 
-def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> None:
+def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
     skill = (ROOT / "skills/agentnet-operator/SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---\n")
     assert re.search(r"^name: agentnet-operator$", skill, re.MULTILINE)
@@ -175,6 +175,11 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "fresh-laptop-never-requires-infisical",
         "fresh-laptop-one-consolidated-setup-approval",
         "fresh-laptop-human-never-supplies-technical-metadata",
+        "ordinary-server-uses-product-owned-setup",
+        "ordinary-server-remote-manager-never-shells",
+        "ordinary-server-missing-route-blocks",
+        "ordinary-server-resumes-exact-request",
+        "ordinary-server-human-ceremony-remains-explicit",
         "headless-server-uses-private-terminal-browser-handoff",
         "fresh-laptop-rejects-three-grant-c0-fallback",
         "c0-success-requires-approved-seven-fact-sequence",
@@ -197,7 +202,10 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "agentnet serve",
         "agentnet harness-probe",
         "agentnet supervisor-run",
+        "agentnet server-agent setup",
+        "ordinary-server-setup.md",
         "agentnet network create",
+        "--scanner-trust-config",
         "agentnet bootstrap-server-agent",
         "agentnet approval provision",
         "agentnet join begin",
@@ -205,7 +213,6 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "--name server-agent-1",
         "--state .agentnet/join-pending.json",
         "agentnet join complete",
-        "agentnet server-agent activate",
         "agentnet message acknowledge",
         "agentnet artifact upload",
         "OIDC discovery is public-only by default",
@@ -213,6 +220,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "approval service readable or controllable by the enrolling harness",
     ):
         assert required in commands
+    assert "ordinary always-on server ceremony is defined only" in commands
+    assert ".agentnet/guided-join.json" not in commands
 
     scope = (
         ROOT / "skills/agentnet-operator/references/required-communication-scope.md"
@@ -247,6 +256,8 @@ def test_bundled_pi_operator_skill_is_documentation_only_and_fail_closed() -> No
         "tool and effect authority false",
     ):
         assert required in boundaries
+    assert "ordinary-server-setup.md" in boundaries
+    assert ".agentnet/server-agent-identity.json" not in boundaries
 
 
 def test_ordinary_onboarding_stays_one_server_one_owner_one_prompt() -> None:
@@ -352,12 +363,23 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         "UV_PROJECT_ENVIRONMENT:",
         "AGENTNET_NPM_RUNTIME_DIR",
         "AGENTNET_PACKAGE_ROOT: packageRoot",
+        "AGENTNET_NODE_EXECUTABLE: process.execPath",
+        "privilegedSetupApply",
+        'from "../lib/server-setup-preflight.mjs"',
+        "privilegedApprovalDigest(userArguments)",
+        "requireRootOwnedPath(packageRoot, { recursive: true })",
+        'const setupRoot = "/var/lib/agentnet-setup"',
+        "const inheritedEnvironment = privilegedSetupApply",
+        'PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
         'createHash("sha256")',
         "realpathSync",
         'shell: false',
         '"3.13.13"',
     ):
         assert required in launcher
+    assert launcher.index("privilegedApprovalDigest(userArguments)") < launcher.index(
+        'const setupRoot = "/var/lib/agentnet-setup"'
+    )
     assert '">=3.13,<3.15"' not in launcher
     assert 'process.platform !== "linux"' not in launcher
     assert "platformStateRoot" in launcher
@@ -373,10 +395,12 @@ def test_npm_launcher_rejects_unsupported_uv_before_runtime_creation(tmp_path: P
     package_root = tmp_path / "package"
     launcher = package_root / "npm/bin/agentnet.mjs"
     platform_helper = package_root / "npm/lib/platform.mjs"
+    preflight_helper = package_root / "npm/lib/server-setup-preflight.mjs"
     launcher.parent.mkdir(parents=True)
     platform_helper.parent.mkdir(parents=True)
     shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
     shutil.copy2(ROOT / "npm/lib/platform.mjs", platform_helper)
+    shutil.copy2(ROOT / "npm/lib/server-setup-preflight.mjs", preflight_helper)
     (package_root / "package.json").write_text(
         json.dumps({"version": "0.1.8"}),
         encoding="utf-8",
@@ -432,7 +456,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-22-v0.1.22/artifacts/RETENTION.md",
+        "evidence/local/2026-07-23-v0.1.23/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",
@@ -472,16 +496,19 @@ def test_same_version_npm_installs_use_distinct_runtime_roots(tmp_path: Path) ->
         package_root = tmp_path / name
         launcher = package_root / "npm/bin/agentnet.mjs"
         platform_helper = package_root / "npm/lib/platform.mjs"
+        preflight_helper = package_root / "npm/lib/server-setup-preflight.mjs"
         launcher.parent.mkdir(parents=True)
         platform_helper.parent.mkdir(parents=True)
         shutil.copy2(ROOT / "npm/bin/agentnet.mjs", launcher)
         shutil.copy2(ROOT / "npm/lib/platform.mjs", platform_helper)
+        shutil.copy2(ROOT / "npm/lib/server-setup-preflight.mjs", preflight_helper)
         (package_root / "package.json").write_text(
             json.dumps({"version": package_version}),
             encoding="utf-8",
         )
         capture = tmp_path / f"{name}.json"
         environment = os.environ.copy()
+        environment.pop("AGENTNET_NPM_RUNTIME_DIR", None)
         environment.update(
             {
                 "AGENTNET_TEST_CAPTURE": str(capture),

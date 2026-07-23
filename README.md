@@ -190,11 +190,40 @@ Installation adds code only. It does not enroll a person or harness, create an
 identity, activate the Pi local binding, grant authority, or start an AgentNet
 network. Those operations use explicit enrollment and supervisor workflows.
 
-The Pi package also bundles the `agentnet-operator` skill. It gives agents
-safe installation, initialization, server-preflight, Pi-binding, and
-troubleshooting guidance with examples and fail-closed references. The skill is
-documentation, not an identity or authority source. You can also load it
-explicitly with `/skill:agentnet-operator`.
+The Pi package also bundles the `agentnet-operator` skill. It gives target
+coding agents safe installation, fixed ordinary-server setup, Pi-binding, and
+troubleshooting workflows with fail-closed references. The skill is not an
+identity or authority source. You can also load it explicitly with
+`/skill:agentnet-operator`.
+
+### Product-owned ordinary Linux server setup
+
+After verifying system-wide root-owned AgentNet, Node.js, and `uv` executables, then
+resolving approved PostgreSQL, OIDC, scanner trust, secret-file, and distinct
+public HTTPS-route inputs, plan without writes:
+
+```bash
+<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+```
+
+After one frozen human-approved scope, the target server's coding agent runs:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+  --request /home/operator/.config/agentnet-setup/server-setup.json \
+  --expected-request-digest <approved-request-digest> \
+  --apply --start
+```
+
+This fixed wrapper creates only AgentNet's two locked identities, private roots,
+Approval/Core state, scanner trust, and two hardened systemd units. It starts
+loopback Core and Approval, verifies operator-owned public HTTPS routes, emits
+redacted resumable evidence, and rejects conflicting state without overwrite.
+It never mutates DNS, TLS certificates, proxy or firewall policy, PostgreSQL
+administration, identity, or authority. A remote Manager does not shell into
+the target. Human OIDC/WebAuthn and offline activation remain explicit steps in
+the bundled skill. Final setup status is `operational` with identity enrolled
+and authority still false.
 
 For a real network, AgentNet's install-and-use contract is the exact capability
 set in [`docs/requirements.md`](docs/requirements.md)—no reduced messaging
@@ -261,29 +290,31 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation; the latest published package is
-`0.1.21`. It corrected PostgreSQL 18 exact-catalog reconciliation, but exact
-public-artifact startup on PostgreSQL 18.4 exposed a reserved SQL alias in the
-S4 constraint query: `pg_constraint` was aliased as `constraint`. The deployment
-peer stopped the failed rollout and later clean-uninstalled AgentNet under owner
-direction. Pi, A2A, and the PostgreSQL service remained unchanged; no AgentNet
-runtime is currently deployed on that host.
+AgentNet is an early public implementation; latest published package is
+`0.1.22`. That release corrected PostgreSQL 18 reserved-alias reconciliation and
+retained prior identity, authority, C0, messaging, cleanup, and A2A semantics.
+Its retained evidence includes focused hermetic PostgreSQL tests (`78 passed,
+7 expected dedicated-database skips`), a disposable PostgreSQL 18.4 lane
+(`85 passed, 0 skipped`), complete source suite (`1377 passed, 15 expected
+host/PostgreSQL skips`), and installed npm-packed candidate (`1305 passed,
+8 expected non-Linux host skips`). No AgentNet runtime is currently deployed on
+the prior peer; Pi, A2A, and PostgreSQL remained unchanged.
 
-This branch contains the uncommitted `0.1.22` correction candidate. It changes
-only that table alias to the non-keyword `con` and adds a focused regression;
-migration SQL/checksums, exact catalog expectations, identity, authority, C0,
-messaging, cleanup, and A2A semantics remain unchanged. The C0 counterparty may
-be an ordinary Hub-hosted human harness; it never reuses Pi Hub/A2A identity or
-gains Hub/root privilege. Focused hermetic PostgreSQL tests report `78 passed,
-7 expected dedicated-database skips`; a disposable, package-signature-verified
-PostgreSQL 18.4 process reports `85 passed, 0 skipped`, including clean schema-v4
-startup and reopen. The complete source suite reports `1377 passed, 15 expected
-host/PostgreSQL skips`; an installed npm-packed candidate with the same disposable
-PostgreSQL 18.4 lane reports `1305 passed, 8 expected non-Linux host skips`.
-Commit/tag/push, Sergey-only publication, independent
-public-artifact verification, fresh deployment approval, deployment, live
-ceremony, production certification, and A2A cutover remain pending or separately
-gated. Repository evidence is not a completed live cross-host journey.
+This branch contains prepared `0.1.23`, a product-owned ordinary Linux
+server-setup candidate. It adds fixed plan/apply/start convergence,
+Approval/Core separation, scanner trust, exact public HTTPS health identity,
+interruption recovery, redacted evidence, bundled operator workflow, and
+package regressions. The focused lane reports `100 passed`; the final source
+lane excluding installed-live inference reports `1407 passed, 15 expected
+host/PostgreSQL skips`; release-manifest verification, two byte-identical Python
+builds, recursive npm generation-1/generation-2 checks (`1336 passed, 15 expected
+skips` per generation), and real Pi skill loading pass. Final code/security,
+constitution, and skill-architecture reviews also pass. Privileged clean-host
+apply, live PostgreSQL/OIDC/WebAuthn/TLS ceremony, commit/tag/push, Sergey-only
+publication, and independent public-artifact deployment remain pending or
+separately gated.
+Repository evidence is not a completed live cross-host journey or a
+production-certification claim.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

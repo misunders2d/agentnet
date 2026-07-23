@@ -1,8 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-22
-Candidate: `agentnet 0.1.22`
-Profile: self-hosted local conformance candidate
+Snapshot: 2026-07-23
+Candidate: `agentnet 0.1.23`
+Latest published package: `agentnet 0.1.22`
+Evidence profile: self-hosted local conformance release
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -12,7 +13,7 @@ owner, installer, or production-topology gates.
 
 | Field | Value |
 |---|---|
-| Status | `BLOCKED` |
+| Must-not-ship gate status | `BLOCKED` |
 | Production ready | `false` |
 | Ship eligible | `false` |
 | Reason | Every must-not-ship gate remains non-passed; locally implementable accepted blockers are closed, while required P/E/O evidence remains absent. |
@@ -23,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `39607477e41e9aa3b4556f71c61969e48cf428f14d24b76e4387a732c8490e11` |
-| `pyproject.toml` | SHA-256 `b869a6efebaccffd8cb41d8ea477431bd535f7e44a29fd0219cf6b1c9e638408` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `e99d82c1d095496bdda8bd3af383a4a0b903ac98cfd5ceef0875fbfc19c11eb1` |
+| `pyproject.toml` | SHA-256 `82a0b508546f95d96d9a19b5e0dc4d1a89c2dff8cf1a38bb4055a14bbd0dd013` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -152,23 +153,25 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 
 ## Local candidate evidence
 
-Published `0.1.21` corrected PostgreSQL 18 exact-catalog reconciliation, but
-exact public-artifact startup on PostgreSQL 18.4 exposed reserved SQL alias
-`constraint` in the S4 constraint-count query. The peer stopped the failed
-rollout and later clean-uninstalled AgentNet under owner direction; Pi, A2A, and
-the PostgreSQL service remained unchanged. Current uncommitted `0.1.22` changes
-only that alias to non-keyword `con` and adds a focused regression. Migration
-SQL/checksums, exact catalog expectations, and all identity, authority, C0,
-messaging, cleanup, and A2A semantics remain unchanged. Hermetic PostgreSQL
-tests report `78 passed, 7 expected dedicated-database skips`; a disposable,
-package-signature-verified PostgreSQL 18.4 process reports `85 passed, 0 skipped`,
-including clean schema-v4 startup and reopen. The complete source suite reports
-`1377 passed, 15 expected host/PostgreSQL skips`; an installed npm-packed
-candidate with the same disposable PostgreSQL 18.4 lane reports `1305 passed,
-8 expected non-Linux host skips`. Commit/tag/push/CI,
-Sergey-only publication, public-artifact verification, fresh deployment
-approval, live ceremony, and production certification remain pending or
-separately gated.
+Published `0.1.22` corrected the PostgreSQL 18 reserved SQL alias exposed by
+exact public-artifact startup. Prepared `0.1.23` adds one fixed product-owned
+ordinary Linux server setup boundary: strict request/reference custody, exact
+secret-free plan/apply digest approval, separate locked Core and Approval
+identities, create-or-exact-match managed state, bounded systemd scope, exact
+loopback/public health identity, interruption recovery, and a canonical bundled
+operator workflow. It grants neither identity nor authority.
+
+The focused setup/CLI/HTTP/package lane reports `100 passed`; the final source
+lane excluding installed-live inference reports `1407 passed, 15 expected
+host/PostgreSQL skips`; release-manifest verification and `22` focused release
+tests pass; two fixed-epoch Python builds are byte-identical; recursive npm
+generation 1 and generation 2 each report `1336 passed, 15 expected skips`; and
+the actual Pi generation-2 skill loader reports exactly one `agentnet-operator`
+with zero diagnostics. Exact code/security, constitution, and skill-architecture
+reviews pass. Privileged clean-host apply, live PostgreSQL/OIDC/WebAuthn/TLS
+ceremony, commit/tag/push, Sergey-only publication, and independent
+public-artifact deployment remain pending or separately gated. No
+production-certification or gate-promotion claim is made.
 
 ## Verification boundary
 

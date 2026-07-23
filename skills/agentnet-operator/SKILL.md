@@ -118,16 +118,27 @@ A normal foreground Pi process does not receive AgentNet tools merely because th
 
 ### Real server-agent network
 
-Do not initialize or enroll until all required inputs exist:
+Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) before any host change. The target server's coding agent owns local execution. Remote Managers may provide immutable public package instructions and inspect sanitized evidence only; they must not shell into the host or send bespoke user/directory/unit/systemctl choreography.
+
+For the default Linux profile, the fixed CLI surface is `agentnet server-agent setup`; invoke it only through the resolved absolute root-owned launcher:
+
+```bash
+<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+sudo -- <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json --expected-request-digest <approved-request-digest> --apply --start
+```
+
+First command is read-only. Second follows one frozen human-approved scope and manages only AgentNet's two identities, private roots, environment custody, and two systemd units. Exact reruns converge; conflicts never overwrite. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual `useradd`, directory, unit, `network create`, Approval-provision, or service-start assembly.
+
+Do not apply setup until these host and policy inputs exist:
 
 - supported PostgreSQL with verified durability settings and recovery plan;
 - securely injected database credentials;
-- dedicated HTTPS/TLS endpoint and exact service audience;
-- workforce OIDC provider with exact issuer, callback, endpoint origins, signing algorithms, and token-endpoint authentication method;
-- for confidential OIDC, a public `client_secret_env` reference plus a private runtime value; never a secret in config, commands, logs, evidence, or chat;
-- owner-controlled WebAuthn user-verification authority that the enrolling harness cannot read or automate;
-- per-harness keys, proof of possession, revocation and recovery procedures;
-- explicit capabilities, policies, retention, and evidence appropriate to enabled features.
+- dedicated HTTPS/TLS endpoints and exact service audience;
+- workforce OIDC provider with exact issuer, callbacks, endpoint origins, signing algorithms, and token-endpoint authentication method;
+- for confidential OIDC, public `client_secret_env` references plus private runtime values; never a secret in config, commands, logs, evidence, or chat;
+- exact owner/approver identity policy, mandatory approval purposes, scanner trust, capabilities, retention, recovery, and evidence policy.
+
+Setup intentionally precedes server-harness enrollment. Only after setup reports `waiting_owner_oidc_or_passkey` require owner-controlled WebAuthn user verification, per-harness keys, proof of possession, and exact revocation/recovery procedures for guided enrollment and offline activation.
 
 The WebAuthn-UV ceremony service is an AgentNet product component operated through `agentnet approval`; it uses pinned maintained verification and the existing receipt contract. In the default self-hosted profile it may share the existing server with Core/PostgreSQL under a distinct OS identity, credential, storage root, and loopback service that the enrolling harness cannot read or control. The owner approves with a WebAuthn authenticator on the current laptop. This profile reports `independent_boundary_proven=false`; separate administration is optional high assurance. Operators must not be sent through manual extra-host, secret-manager, or per-command setup choreography.
 
@@ -141,18 +152,9 @@ implementation guide.
 
 If any prerequisite is missing, report **blocked** and name it. Never replace real identity with payload fields, chat claims, A2A receipts, Slack messages, synthetic actors, or model output.
 
-After exact enrollment, an ordinary always-on process still needs explicit
-offline deployment binding:
+After setup reports `waiting_owner_oidc_or_passkey`, follow only the dedicated-user registration, `join guided --browser terminal`, offline activation, and setup rerun sequence in the ordinary-server reference. Final setup status must be `operational` with `identity_enrolled=true`, public Core readiness verified, and `authority_granted=false`.
 
-```bash
-agentnet server-agent activate --config agentnet.json --identity .agentnet/server-agent-identity.json
-```
-
-This command must acquire the configured runtime lease under a distinct owner,
-verify the same PostgreSQL credential and owner-only private key, and change
-only the enrolled harness/credential labels. It never grants authority or
-restarts the service. A live process, stale/retired credential, key mismatch,
-or different prior binding blocks activation.
+Activation acquires the configured runtime lease under the dedicated Core owner, verifies the same PostgreSQL credential and owner-only private key, and changes only enrolled harness/credential labels. It never grants authority. Core must be offline; a live process, stale/retired credential, key mismatch, or different prior binding blocks activation. Rerunning product setup with the same approved `--expected-request-digest` plus `--apply --start` performs the bounded Core restart and readiness check.
 
 ## Preserve evidence boundaries
 
@@ -186,6 +188,7 @@ Do not print secrets, private keys, credential-bearing DSNs, reusable approval m
 
 ## Use references
 
+- Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) and its [strict request example](references/examples/ordinary-server-setup-request.json) for the default always-on profile.
 - Read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and issue only the resolved [single-paste example](references/examples/fresh-laptop-single-prompt.md) for human-copyable bootstrap instructions.
 - Read [required communication scope](references/required-communication-scope.md) before judging installation or network readiness; one direct-message round trip is not full requirement coverage.
 - Read [safe commands](references/safe-commands.md) for installation, local examples, package checks, supervisor validation, and server preflight.

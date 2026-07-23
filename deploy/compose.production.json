@@ -1,5 +1,10 @@
 {
   "name": "agentnet-self-hosted",
+  "x-agentnet-profile": {
+    "role": "advanced-post-enrollment-two-agent-comparator",
+    "ordinary_zero_state_entrypoint": "agentnet server-agent setup",
+    "approval_boundary": "external-preprovisioned"
+  },
   "services": {
     "postgres": {
       "image": "${AGENTNET_POSTGRES_IMAGE_REPOSITORY:-postgres}@sha256:${AGENTNET_POSTGRES_IMAGE_DIGEST:?owner-supplied PostgreSQL image digest is required}",

@@ -142,6 +142,7 @@ class FakeApprovalService:
         self.config = SimpleNamespace(
             max_http_body_bytes=max_body,
             public_origin="https://approval.corp.example",
+            verifier_id="approval.corp.example",
             owner_oidc=SimpleNamespace() if owner_sessions is not None else None,
         )
         self.owner_sessions = owner_sessions
@@ -172,6 +173,24 @@ class FakeApprovalService:
     def reject_request(self, token: str):
         self.calls.append(("reject_request", token))
         return {"status": "rejected"}
+
+
+def test_health_identifies_exact_approval_service() -> None:
+    async def exercise() -> None:
+        app = create_approval_app(FakeApprovalService())
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="https://approval.corp.example",
+        ) as client:
+            response = await client.get("/healthz")
+        assert response.status_code == 200
+        assert response.json()["schema"] == "agentnet.approval.health.v1"
+        assert response.json()["service"] == "agentnet-approval"
+        assert response.json()["status"] == "alive"
+        assert response.json()["public_origin"] == "https://approval.corp.example"
+        assert response.json()["verifier_id"] == "approval.corp.example"
+
+    asyncio.run(exercise())
 
 
 def test_owner_oidc_app_requires_matching_owner_session_service() -> None:

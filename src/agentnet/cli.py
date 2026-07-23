@@ -77,8 +77,15 @@ from agentnet.operations.config import (
     ExtensionConfig,
     OIDCEnrollmentConfig,
     RuntimeProfile,
+    ScannerTrustConfig,
 )
 from agentnet.operations.config_migration import load_config_json
+from agentnet.operations.server_setup import (
+    ServerSetupError,
+    apply_server_setup,
+    load_server_setup_request,
+    plan_server_setup,
+)
 from agentnet.operations.incident import (
     DomainIncidentService,
     IncidentMode,
@@ -1003,23 +1010,37 @@ def command_network_create(args: argparse.Namespace) -> int:
         oidc = OIDCEnrollmentConfig.model_validate_json(oidc_value)
     except Exception as exc:
         raise SystemExit("OIDC/independent-approval configuration is invalid") from exc
+    scanner_trust = None
+    if args.scanner_trust_config:
+        try:
+            scanner_trust = ScannerTrustConfig.model_validate_json(
+                Path(args.scanner_trust_config).read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            raise SystemExit("scanner trust configuration is invalid") from exc
     domain_id = args.domain or f"network-{uuid4().hex}.agentnet"
     data_dir = Path(args.data_dir)
     _owner_only_directory(data_dir.absolute())
     seal_key_path = (data_dir / "secrets" / "backup-seal.key.pem").absolute()
     seal_key = _provision_owner_only_signing_key(seal_key_path)
     activated_at = int(datetime.now(UTC).replace(microsecond=0).timestamp())
+    database_url = args.database_url
+    if args.database_url_from_env:
+        database_url = os.environ.get(args.database_url_env)
+        if not database_url:
+            raise SystemExit("network create database URL environment reference is absent")
     config = ExtensionConfig(
         profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
         domain_id=domain_id,
         data_dir=data_dir,
-        database_url=args.database_url,
+        database_url=database_url,
         database_url_env=args.database_url_env,
         artifact_backend="postgres-manifest",
         artifact_dir=data_dir / "artifacts",
         public_base_url=args.public_base_url,
         runtime_instance_id=args.runtime_instance_id,
         oidc_enrollment=oidc,
+        scanner_trust=scanner_trust,
         postgres_recovery_topology=args.postgres_recovery_topology,
         backup_trust=BackupTrustConfig(
             domain_id=domain_id,
@@ -1059,15 +1080,13 @@ def command_network_create(args: argparse.Namespace) -> int:
                 "backup_seal_key_custody": "local_software_key_not_production_kms",
                 "next": [
                     (
-                        "run agentnet join begin with --server "
+                        "run agentnet join guided with --server "
                         + config.public_base_url
+                        + ", --domain "
+                        + config.domain_id
                         + ", the exact supported --harness, an approved --name, "
-                        "and --state .agentnet/join-pending.json"
-                    ),
-                    (
-                        "after OIDC and approval, run agentnet join complete with "
-                        "--state .agentnet/join-pending.json, exact --challenge and --approval files, "
-                        "and --identity .agentnet/server-agent-identity.json"
+                        "--state .agentnet/guided-join.json, and "
+                        "--identity .agentnet/server-agent-identity.json"
                     ),
                     "agentnet server-agent activate --config "
                     + str(path)
@@ -1085,6 +1104,56 @@ def command_network_create(args: argparse.Namespace) -> int:
         )
     )
     return 0 if bool(local_readiness.get("ready")) else 1
+
+
+def command_server_agent_setup(args: argparse.Namespace) -> int:
+    """Plan or apply the fixed product-owned ordinary Linux server profile."""
+
+    try:
+        if args.start and not args.apply:
+            raise ServerSetupError("invalid_action", "--start requires --apply")
+        if args.apply and not args.expected_request_digest:
+            raise ServerSetupError(
+                "approval_digest_required",
+                "--apply requires --expected-request-digest from the frozen read-only plan",
+            )
+        if not args.apply and args.expected_request_digest:
+            raise ServerSetupError("invalid_action", "--expected-request-digest requires --apply")
+        request = load_server_setup_request(Path(args.request))
+        result = (
+            apply_server_setup(
+                request,
+                start=bool(args.start),
+                expected_request_digest=str(args.expected_request_digest),
+            )
+            if args.apply
+            else plan_server_setup(request)
+        )
+    except ServerSetupError as exc:
+        blocker = exc.blocker
+        message = str(exc)
+    except Exception:
+        blocker = "internal_setup_failure"
+        message = "server setup failed before producing verified evidence"
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.server-setup.evidence.v1",
+                "status": "blocked",
+                "blocker": blocker,
+                "message": message,
+                "authority_granted": False,
+                "identity_enrolled": False,
+                "production_durability_proven": False,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 1
 
 
 def command_server_agent_activate(args: argparse.Namespace) -> int:
@@ -3528,8 +3597,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="password-free PostgreSQL DSN; credentials come from --database-url-env",
     )
     network_create.add_argument("--database-url-env", default="AGENTNET_DATABASE_URL")
+    network_create.add_argument(
+        "--database-url-from-env",
+        action="store_true",
+        help="resolve the DSN only from --database-url-env so it never appears in process arguments",
+    )
     network_create.add_argument("--public-base-url", required=True)
     network_create.add_argument("--oidc-config", required=True)
+    network_create.add_argument(
+        "--scanner-trust-config",
+        help="public maintained-scanner trust configuration required for operational readiness",
+    )
     network_create.add_argument("--runtime-instance-id", default="agentnet-server-1")
     network_create.add_argument("--postgres-recovery-topology", action="store_true")
     network_create.add_argument("--force", action="store_true")
@@ -3543,6 +3621,26 @@ def build_parser() -> argparse.ArgumentParser:
         dest="server_agent_command",
         required=True,
     )
+    server_agent_setup = server_agent_commands.add_parser(
+        "setup",
+        help="plan or apply the fixed product-owned ordinary Linux server profile",
+    )
+    server_agent_setup.add_argument("--request", required=True)
+    server_agent_setup.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply the frozen setup request; omitted means read-only plan",
+    )
+    server_agent_setup.add_argument(
+        "--start",
+        action="store_true",
+        help="start and health-check only the managed AgentNet units after apply",
+    )
+    server_agent_setup.add_argument(
+        "--expected-request-digest",
+        help="exact digest from the human-approved read-only plan; required with --apply",
+    )
+    server_agent_setup.set_defaults(func=command_server_agent_setup)
     server_agent_activate = server_agent_commands.add_parser(
         "activate",
         help="bind an offline server config to one exact enrolled identity without granting authority",

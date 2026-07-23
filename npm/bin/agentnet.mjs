@@ -3,7 +3,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  accessSync,
   chmodSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -18,22 +20,106 @@ import {
   platformStateRoot,
   supportedPlatform,
 } from "../lib/platform.mjs";
+import {
+  argumentValue,
+  privilegedApprovalDigest,
+} from "../lib/server-setup-preflight.mjs";
 
 const packageRoot = realpathSync(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
 );
-const metadata = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-const installIdentity = createHash("sha256")
-  .update(packageRoot, "utf8")
-  .digest("hex")
-  .slice(0, 12);
-
 if (!supportedPlatform(process.platform)) {
   console.error(`AgentNet does not support host platform: ${process.platform}`);
   process.exit(1);
 }
 
-const uvExecutable = process.env.AGENTNET_UV || "uv";
+const userArguments = process.argv.slice(2);
+const privilegedSetupApply = process.platform === "linux" &&
+  typeof process.getuid === "function" && process.getuid() === 0 &&
+  userArguments[0] === "server-agent" && userArguments[1] === "setup" &&
+  userArguments.includes("--apply");
+
+if (privilegedSetupApply) {
+  try {
+    const expectedDigest = argumentValue(userArguments, "--expected-request-digest");
+    if (
+      !/^[a-f0-9]{64}$/u.test(expectedDigest) ||
+      privilegedApprovalDigest(userArguments) !== expectedDigest
+    ) {
+      throw new Error("approved digest mismatch");
+    }
+  } catch {
+    console.error("Privileged AgentNet setup requires the exact frozen request digest before runtime setup.");
+    process.exit(1);
+  }
+}
+
+const resolveCommand = (command) => {
+  const candidates = path.isAbsolute(command)
+    ? [command]
+    : (process.env.PATH ?? "").split(path.delimiter).filter(Boolean).map((entry) => path.join(entry, command));
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return realpathSync(candidate);
+    } catch {
+      // Try next PATH candidate.
+    }
+  }
+  return null;
+};
+
+const requireRootOwnedPath = (target, { recursive = false } = {}) => {
+  const resolved = realpathSync(target);
+  for (let current = resolved; ; current = path.dirname(current)) {
+    const info = lstatSync(current);
+    const requiredMode = 0o005;
+    if (info.uid !== 0 || (info.mode & 0o022) !== 0 || (info.mode & requiredMode) !== requiredMode) {
+      throw new Error("privileged AgentNet setup requires root-owned non-writable service-readable executable lineage");
+    }
+    if (current === path.dirname(current)) break;
+  }
+  if (recursive) {
+    const inspectTree = (directory) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const child = path.join(directory, entry.name);
+        const info = lstatSync(child);
+        const requiredMode = entry.isDirectory() ? 0o005 : 0o004;
+        if (
+          entry.isSymbolicLink() || info.uid !== 0 || (info.mode & 0o022) !== 0 ||
+          (info.mode & requiredMode) !== requiredMode
+        ) {
+          throw new Error("privileged AgentNet setup requires one root-owned non-writable service-readable package tree");
+        }
+        if (entry.isDirectory()) inspectTree(child);
+      }
+    };
+    inspectTree(resolved);
+  }
+  return resolved;
+};
+
+let uvExecutable = process.env.AGENTNET_UV || "uv";
+if (privilegedSetupApply) {
+  try {
+    requireRootOwnedPath(process.execPath);
+    requireRootOwnedPath(packageRoot, { recursive: true });
+    const resolvedUv = resolveCommand(uvExecutable);
+    if (!resolvedUv) throw new Error("uv unavailable");
+    uvExecutable = requireRootOwnedPath(resolvedUv);
+  } catch {
+    console.error(
+      "Privileged AgentNet setup requires absolute root-owned Node.js, uv, launcher, and package tree provenance.",
+    );
+    process.exit(1);
+  }
+}
+
+const metadata = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const installIdentity = createHash("sha256")
+  .update(packageRoot, "utf8")
+  .digest("hex")
+  .slice(0, 12);
 const minimumUvVersion = [0, 11, 28];
 const uvVersion = spawnSync(uvExecutable, ["--version"], {
   encoding: "utf8",
@@ -69,15 +155,33 @@ if (!versionAtLeast(actualUvVersion, minimumUvVersion)) {
 }
 
 let stateRoot;
-try {
-  stateRoot = path.resolve(platformStateRoot(process.platform, process.env, os.homedir()));
-} catch (error) {
-  console.error(error instanceof Error ? error.message : "AgentNet host state path is invalid");
-  process.exit(1);
+if (!privilegedSetupApply) {
+  try {
+    stateRoot = path.resolve(platformStateRoot(process.platform, process.env, os.homedir()));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "AgentNet host state path is invalid");
+    process.exit(1);
+  }
 }
-const runtimeRoot = process.env.AGENTNET_NPM_RUNTIME_DIR
-  ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
-  : path.join(stateRoot, "agentnet", "npm-runtime", `${metadata.version}-${installIdentity}`);
+let runtimeRoot;
+if (privilegedSetupApply) {
+  const setupRoot = "/var/lib/agentnet-setup";
+  mkdirSync(setupRoot, { recursive: true, mode: 0o700 });
+  const setupRootStat = lstatSync(setupRoot);
+  if (
+    !setupRootStat.isDirectory() || setupRootStat.isSymbolicLink() || setupRootStat.uid !== 0 ||
+    (setupRootStat.mode & 0o077) !== 0
+  ) {
+    console.error("Privileged AgentNet setup runtime custody conflicts with the fixed profile.");
+    process.exit(1);
+  }
+  chmodSync(setupRoot, 0o700);
+  runtimeRoot = path.join(setupRoot, "npm-runtime", `${metadata.version}-${installIdentity}`);
+} else {
+  runtimeRoot = process.env.AGENTNET_NPM_RUNTIME_DIR
+    ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
+    : path.join(stateRoot, "agentnet", "npm-runtime", `${metadata.version}-${installIdentity}`);
+}
 
 mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
 const runtimeStat = lstatSync(runtimeRoot);
@@ -111,7 +215,6 @@ if (process.platform !== "win32") {
   }
 }
 
-const userArguments = process.argv.slice(2);
 const verify = userArguments[0] === "verify";
 const uvArguments = [
   "run",
@@ -125,11 +228,24 @@ const uvArguments = [
 if (verify) uvArguments.push("--extra", "test");
 uvArguments.push("agentnet", ...userArguments);
 
+const inheritedEnvironment = privilegedSetupApply
+  ? {
+      PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      HOME: "/root",
+      LANG: "C.UTF-8",
+      ...(process.env.SUDO_UID && /^\d+$/.test(process.env.SUDO_UID)
+        ? { SUDO_UID: process.env.SUDO_UID }
+        : {}),
+    }
+  : { ...process.env };
 const child = spawn(uvExecutable, uvArguments, {
   stdio: "inherit",
   env: {
-    ...process.env,
+    ...inheritedEnvironment,
     AGENTNET_PACKAGE_ROOT: packageRoot,
+    AGENTNET_NODE_EXECUTABLE: process.execPath,
+    AGENTNET_UV: uvExecutable,
+    AGENTNET_NPM_RUNTIME_DIR: runtimeRoot,
     UV_NO_MODIFY_PATH: "1",
     UV_PROJECT_ENVIRONMENT: runtimeRoot,
   },
