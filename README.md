@@ -291,33 +291,33 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.22`. That release corrected PostgreSQL 18 reserved-alias reconciliation and
-retained prior identity, authority, C0, messaging, cleanup, and A2A semantics.
-Its retained evidence includes focused hermetic PostgreSQL tests (`78 passed,
-7 expected dedicated-database skips`), a disposable PostgreSQL 18.4 lane
-(`85 passed, 0 skipped`), complete source suite (`1377 passed, 15 expected
-host/PostgreSQL skips`), and installed npm-packed candidate (`1305 passed,
-8 expected non-Linux host skips`). No AgentNet runtime is currently deployed on
-the prior peer; Pi, A2A, and PostgreSQL remained unchanged.
+`0.1.24`. That release contains the product-owned ordinary Linux server setup:
+fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
+exact public HTTPS health identity, interruption recovery, redacted evidence,
+and bundled operator workflow. Setup grants neither identity nor authority.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
 runner where that path did not exist. No `0.1.23` package was staged or
-published. Prepared `0.1.24` changes only that fixture to mock AgentNet's
-validated host-tool resolver directly; runtime behavior is unchanged.
+published. Published `0.1.24` changed only that fixture to mock AgentNet's
+validated host-tool resolver directly; runtime behavior was unchanged.
 
-Prepared `0.1.24` contains the product-owned ordinary Linux server setup:
-fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
-exact public HTTPS health identity, interruption recovery, redacted evidence,
-and bundled operator workflow. The corrected focused lane reports `46 passed`;
-the source lane excluding installed-live inference and release-manifest
-self-check reports `1385 passed, 15 expected host/PostgreSQL skips`. Exact
-prepublication, retained-artifact, recursive packed, and Pi-loader checks are
-recorded in the candidate evidence after they pass. Privileged clean-host apply,
-live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and
-independent public-artifact deployment remain pending or separately gated.
-Repository evidence is not a completed live cross-host journey or a
-production-certification claim.
+Prepared `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
+pinned official A2A TCK: `/rpc` and `/rpc/` now use the same strict endpoint
+without POST redirects, and a blank SDK request tenant is restored only from an
+exact verified opaque route binding. Missing/spoofed bindings and tenant
+conflicts fail closed; rejected requests leave no event/task residue; alias
+retries preserve exact idempotency and non-enumerating task lookup. Local A2A
+reports `57 passed`; the source lane excluding installed-live inference and
+release-manifest self-check reports `1386 passed, 15 expected host/PostgreSQL
+skips`. The focused official JSON-RPC lane reports `3 passed`, while the full
+MUST run remains non-green at `50 passed, 11 failed, 174 skipped`; G04 therefore
+remains `FAILED`. Exact prepublication, retained-artifact, recursive packed, and
+Pi-loader checks are recorded in the candidate evidence after they pass.
+Privileged clean-host apply, cross-SDK/public-peer evidence, live
+PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and independent
+public-artifact deployment remain pending or separately gated. Repository
+evidence is not a completed live cross-host journey or production certification.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

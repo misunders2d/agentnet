@@ -1,0 +1,54 @@
+{
+  "run_id": "2026-07-24-v0.1.25",
+  "evaluated_at": "2026-07-24T11:14:51+00:00",
+  "scope": "v0_1_25_a2a_jsonrpc_interoperability_release_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "58351234cd75447ff974416d1cbd3e59b9854c28be36e6bd1d94dfeaafa61742",
+  "prior_runtime_evidence": "evidence/local/2026-07-23-v0.1.24/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-23-v0.1.24/manifest.json",
+  "change_boundary": "Two bounded A2A JSON-RPC interoperability repairs: serve /rpc and /rpc/ through the same strict endpoint without POST redirects; restore an absent SDK request tenant only from the exact verified opaque route binding. Missing or spoofed route tokens and conflicting tenants fail closed. Cross-alias retries preserve exact idempotency, rejected requests persist no event/task/task-event residue, and inaccessible or missing tasks retain non-enumerating TASK_NOT_FOUND behavior. No authority, quarantine, release, task-ownership, artifact-custody, worker-transition, or gate-status semantics are broadened.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/a2a",
+      "result": "57 passed; 0 failed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1386 passed; 15 expected host/PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider",
+      "result": "1414 passed; 2 failed; 15 expected host/PostgreSQL skips; both failures are preserved G01 installed-harness pin mismatches for antigravity, claude, codex, and pi"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-sources",
+      "result": "byte-identical 0.1.25 sdist and wheel archives"
+    },
+    {
+      "command": "official A2A TCK commit 5996b79f9cefa6fc390980e383e358a66fb9e49e focused JSON-RPC plus full JSON-RPC MUST against fresh loopback state",
+      "result": "focused 3 passed; full MUST 50 passed, 11 failed, 174 skipped; G04 remains FAILED"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/conformance/test_release_manifest.py && UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run python scripts/verify_release.py",
+      "result": "22 passed; release manifest verification PASS"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy npm run check",
+      "result": "exact prepublication gate PASS: package check, 1337-test source lane, release verifier, recursive generation 1 and generation 2; 15 expected host/PostgreSQL skips per source/installed lane"
+    },
+    {
+      "command": "Pi loadSkillsFromDir against generation-2 packed-installed skills directory",
+      "result": "exactly one agentnet-operator skill; zero diagnostics"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-24-v0.1.25/artifacts/agentnet-0.1.25.tar.gz",
+      "sha256": "23c94800c75771191a1b4e5ef64948f6a9e240384a43f2dd9cd0bb1a61afa6cb"
+    },
+    {
+      "path": "evidence/local/2026-07-24-v0.1.25/artifacts/agentnet-0.1.25-py3-none-any.whl",
+      "sha256": "630732cee8b6748804c1eac9e4e90cdf9dc7c025016eba46536cfdb94d528dcc"
+    }
+  ]
+}

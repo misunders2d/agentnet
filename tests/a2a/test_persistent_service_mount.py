@@ -145,7 +145,7 @@ def _seed_task_authority(core: CommunicationCore, sender, recipient_id: str) -> 
         input_sources=frozenset({corporate_input_source(sender)}),
         output_sinks=frozenset({corporate_output_sink(recipient_id)}),
         data_classes=frozenset({Classification.C1_INTERNAL}),
-        max_uses=2,
+        max_uses=3,
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     with core.store.transaction() as connection:
@@ -215,6 +215,127 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
         health_before = await client.get("/healthz")
         readiness = await client.get("/readyz")
         card_response = await client.get(f"/a2a/{TENANT}/.well-known/agent-card.json")
+        rpc_path = f"/a2a/{TENANT}/rpc/"
+        missing_task_id = "persistent-jsonrpc-missing-task"
+        missing_task_body = canonical_json(
+            {
+                "jsonrpc": "2.0",
+                "id": "persistent-jsonrpc-get-missing-1",
+                "method": "GetTask",
+                "params": {"id": missing_task_id},
+            }
+        )
+        missing_counts_before = {
+            table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+            for table in ("events", "a2a_tasks", "a2a_task_events")
+        }
+        missing_task = await client.post(
+            rpc_path,
+            content=missing_task_body,
+            headers={
+                "A2A-Version": "1.0",
+                "Content-Type": "application/json",
+                **_signed_headers(
+                    sender_key,
+                    sender,
+                    method="POST",
+                    path=rpc_path,
+                    body=missing_task_body,
+                ),
+            },
+        )
+        missing_counts_after = {
+            table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+            for table in ("events", "a2a_tasks", "a2a_task_events")
+        }
+        rejected_counts_before = {
+            table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+            for table in ("events", "a2a_tasks", "a2a_task_events")
+        }
+        conflicting_task_id = "persistent-jsonrpc-conflicting-tenant-task"
+        conflicting_tenant_responses = []
+        for conflicting_rpc_path in (f"/a2a/{TENANT}/rpc", rpc_path):
+            conflicting_body = canonical_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": f"conflicting-tenant-{conflicting_rpc_path.endswith('/')}",
+                    "method": "GetTask",
+                    "params": {"tenant": "T" * 43, "id": conflicting_task_id},
+                }
+            )
+            conflicting_tenant_responses.append(
+                await client.post(
+                    conflicting_rpc_path,
+                    content=conflicting_body,
+                    headers={
+                        "A2A-Version": "1.0",
+                        "Content-Type": "application/json",
+                        **_signed_headers(
+                            sender_key,
+                            sender,
+                            method="POST",
+                            path=conflicting_rpc_path,
+                            body=conflicting_body,
+                        ),
+                    },
+                )
+            )
+        rejected_counts_after = {
+            table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+            for table in ("events", "a2a_tasks", "a2a_task_events")
+        }
+        idempotent_rpc_request = SendMessageRequest(
+            tenant=TENANT,
+            message=Message(
+                message_id="persistent-jsonrpc-idempotent-message",
+                role=Role.ROLE_USER,
+                parts=[Part(text="same signed request through both JSON-RPC spellings")],
+            ),
+            metadata={
+                "agentnetIntent": "task",
+                "agentnetIdempotencyKey": "persistent-jsonrpc-idempotency-0003",
+                "agentnetTaskGrantId": grant.grant_id,
+                "agentnetDataClass": "C1",
+            },
+        )
+        idempotent_rpc_params = MessageToDict(idempotent_rpc_request)
+        idempotent_rpc_responses = []
+        idempotent_counts = []
+        for request_id, idempotent_rpc_path in (
+            ("persistent-rpc-idempotent-1", f"/a2a/{TENANT}/rpc"),
+            ("persistent-rpc-idempotent-2", rpc_path),
+        ):
+            idempotent_body = canonical_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "SendMessage",
+                    "params": idempotent_rpc_params,
+                }
+            )
+            idempotent_rpc_responses.append(
+                await client.post(
+                    idempotent_rpc_path,
+                    content=idempotent_body,
+                    headers={
+                        "A2A-Version": "1.0",
+                        "Content-Type": "application/json",
+                        **_signed_headers(
+                            sender_key,
+                            sender,
+                            method="POST",
+                            path=idempotent_rpc_path,
+                            body=idempotent_body,
+                        ),
+                    },
+                )
+            )
+            idempotent_counts.append(
+                {
+                    table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+                    for table in ("events", "a2a_tasks", "a2a_task_events")
+                }
+            )
         accepted = await client.post(
             path,
             content=a2a_body,
@@ -292,7 +413,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
         await native.close()
 
     proposals = core.task_proposals(actor=recipient)
-    assert len(proposals) == 2
+    assert len(proposals) == 3
     for proposal in proposals:
         core.approve_task_proposal(
             actor=recipient,
@@ -305,6 +426,31 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
     assert health_after.status_code == 200
     assert readiness.json()["a2a_schema"] == {"ready": True, "required": True}
     assert card_response.status_code == 200
+    assert missing_task.status_code == 200
+    missing_task_error = missing_task.json()["error"]
+    assert missing_task_error["code"] == -32001
+    assert missing_task_error["data"][0]["reason"] == "TASK_NOT_FOUND"
+    assert missing_counts_after == missing_counts_before
+    assert store.fetch_one(
+        "SELECT task_id FROM a2a_tasks WHERE task_id=?",
+        (missing_task_id,),
+    ) is None
+    for conflicting_response in conflicting_tenant_responses:
+        assert conflicting_response.status_code == 200
+        conflicting_error = conflicting_response.json()["error"]
+        assert conflicting_error["code"] == -32004
+        assert conflicting_error["data"][0]["reason"] == "UNSUPPORTED_OPERATION"
+    assert rejected_counts_after == rejected_counts_before
+    assert store.fetch_one(
+        "SELECT task_id FROM a2a_tasks WHERE task_id=?",
+        (conflicting_task_id,),
+    ) is None
+    assert [response.status_code for response in idempotent_rpc_responses] == [200, 200]
+    idempotent_task_ids = [
+        response.json()["result"]["task"]["id"] for response in idempotent_rpc_responses
+    ]
+    assert idempotent_task_ids[0] == idempotent_task_ids[1]
+    assert idempotent_counts[0] == idempotent_counts[1]
     card_response_payload = card_response.json()
     assert card_response_payload["name"] == "Persistent ordinary agent"
     assert "agentNetCorporateProof" in card_response_payload["securitySchemes"]
@@ -321,7 +467,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
     assert core.mailboxes is app.state.a2a_service.runtime.mailbox
     assert core.policy is app.state.a2a_service.runtime.policy
     assert core.store is app.state.a2a_service.runtime.store
-    assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 3
+    assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 4
 
 
 def test_public_a2a_config_and_owner_provisioned_key_fail_closed(

@@ -762,13 +762,22 @@ class BoundedA2ARequestHandler(RequestHandler):
             raise AuthenticationError("A2A workload identities cannot enter through the human peer gateway")
         if context.state.get("a2a_identity_mode") not in {"external_unverified", "corporate_verified"}:
             raise AuthenticationError("A2A peer binding is missing or inconsistent")
+        bound_route_token = context.state.get("a2a_route_token")
+        if not isinstance(bound_route_token, str) or not secrets.compare_digest(
+            bound_route_token,
+            self.route.route_token,
+        ):
+            raise AuthorizationError("A2A context route binding mismatch")
         parameter_tenant = getattr(params, "tenant", "")
         if parameter_tenant and parameter_tenant != self.route.tenant:
             raise AuthorizationError("A2A tenant route mismatch")
         if context.tenant and context.tenant != self.route.tenant:
             raise AuthorizationError("A2A context tenant route mismatch")
-        if not parameter_tenant and not context.tenant:
-            raise AuthorizationError("A2A tenant route is missing")
+        if not context.tenant:
+            # The pinned SDK's JSON-RPC dispatcher overwrites the route-bound
+            # context tenant with an absent request tenant. Restore only from
+            # the context builder's exact opaque-route binding above.
+            context.tenant = self.route.tenant
         return require_standing_grant(
             self.grant_lookup(self.route.route_token),
             route=self.route,
@@ -1593,21 +1602,28 @@ def build_starlette_routes(
             continue
         if not isinstance(candidate, Route):
             raise ValidationError("unexpected SDK A2A route type")
-        result.append(
-            _clone_route(
-                candidate,
-                _strict_wire_endpoint(
-                    candidate.endpoint,
-                    protocol_binding=(
-                        JSONRPC_BINDING
-                        if candidate.path == f"{route.path_prefix}/rpc"
-                        else HTTP_JSON_BINDING
-                    ),
-                    corporate_authenticator=corporate_authenticator,
-                    max_request_bytes=max_request_bytes,
-                ),
-            )
+        is_jsonrpc = candidate.path == f"{route.path_prefix}/rpc"
+        strict_endpoint = _strict_wire_endpoint(
+            candidate.endpoint,
+            protocol_binding=JSONRPC_BINDING if is_jsonrpc else HTTP_JSON_BINDING,
+            corporate_authenticator=corporate_authenticator,
+            max_request_bytes=max_request_bytes,
         )
+        result.append(_clone_route(candidate, strict_endpoint))
+        if is_jsonrpc:
+            # Some standards-compliant clients resolve ``POST /`` against the
+            # advertised JSON-RPC interface URL, producing one trailing slash.
+            # Serve both spellings directly so POST bodies are never lost to a
+            # redirect; both retain the same strict proof and protocol gates.
+            result.append(
+                Route(
+                    path=f"{candidate.path}/",
+                    endpoint=strict_endpoint,
+                    methods=sorted(candidate.methods) if candidate.methods else None,
+                    name=(f"{candidate.name}-trailing-slash" if candidate.name else None),
+                    include_in_schema=getattr(candidate, "include_in_schema", True),
+                )
+            )
     return result
 
 

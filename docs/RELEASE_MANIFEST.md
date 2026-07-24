@@ -1,8 +1,8 @@
 # Release Manifest
 
-Snapshot: 2026-07-23
-Candidate: `agentnet 0.1.24`
-Latest published package: `agentnet 0.1.22`
+Snapshot: 2026-07-24
+Candidate: `agentnet 0.1.25`
+Latest published package: `agentnet 0.1.24`
 Evidence profile: self-hosted local conformance release
 
 This is not a production release. It is the human projection of
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `44b4ee60cad3cb4f258f475386b4058fae4848b6691d4b0fcdbca274130ecaad` |
-| `pyproject.toml` | SHA-256 `f20ec917a155160ba531ad334efeb19907824d4b62b63e80eceba914b152a2aa` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `2db5b45786e7d90c466c12731ad15dc7187cb69ca10373f419c1a49845363605` |
+| `pyproject.toml` | SHA-256 `160953aa554cffe7b146bd7e5043aedadb7cab6daf3c5749ab5a214d77ef1395` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -159,22 +159,34 @@ ordinary Linux setup boundary, but its staging workflow stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
 runner without that path. No `0.1.23` package was staged or published.
 
-Prepared `0.1.24` changes only that fixture to mock AgentNet's validated
-host-tool resolver directly. Runtime behavior remains the reviewed fixed setup:
+Published `0.1.24` changed only that fixture to mock AgentNet's validated
+host-tool resolver directly. Runtime behavior remained the reviewed fixed setup:
 strict request/reference custody, exact secret-free plan/apply digest approval,
 separate locked Core and Approval identities, create-or-exact-match managed
 state, bounded systemd scope, exact loopback/public health identity,
 interruption recovery, and one canonical bundled operator workflow. Setup grants
 neither identity nor authority.
 
-The corrected focused server-setup/npm lane reports `46 passed`; the source lane
-excluding installed-live inference and this release-manifest self-check reports
-`1385 passed, 15 expected host/PostgreSQL skips`. Exact prepublication,
-retained-artifact, recursive packed, and Pi-loader results are recorded in the
-candidate evidence manifest after verification. Privileged clean-host apply,
-live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and
-independent public-artifact deployment remain pending or separately gated. No
-production-certification or gate-promotion claim is made.
+Prepared `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
+pinned official A2A TCK at commit
+`5996b79f9cefa6fc390980e383e358a66fb9e49e`: it serves `/rpc` and `/rpc/`
+through the same strict endpoint without a POST redirect, and restores an absent
+SDK request tenant only from the exact verified opaque route binding. Missing or
+spoofed route tokens and conflicting request/context tenants fail closed. Signed
+same-idempotency requests across both aliases create no second effect, rejected
+requests persist no event/task/task-event residue, and inaccessible or missing
+tasks retain non-enumerating `TASK_NOT_FOUND` behavior.
+
+The focused local A2A lane reports `57 passed`; the source lane excluding
+installed-live inference and this release-manifest self-check reports `1386
+passed, 15 expected host/PostgreSQL skips`. Focused official JSON-RPC checks
+report `3 passed`; the full JSON-RPC MUST run reports `50 passed, 11 failed, 174
+skipped`, so G04 remains `FAILED`. Exact prepublication, retained-artifact,
+recursive packed, and Pi-loader results are recorded in the candidate evidence
+manifest after verification. Privileged clean-host apply, cross-SDK/public-peer
+interoperability, live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only
+publication, and independent public-artifact deployment remain pending or
+separately gated. No production-certification or gate-promotion claim is made.
 
 ## Verification boundary
 

@@ -42,16 +42,23 @@ published and historical release evidence:
 - Tag `v0.1.23` reached the staging workflow, but CI stopped before npm staging
   because one hermetic interruption test mocked `/usr/bin/useradd` on a runner
   without that path. No `0.1.23` package was staged or published.
-- Prepared `0.1.24` retains the reviewed `0.1.23` runtime and changes only that
-  fixture to mock AgentNet's validated host-tool resolver. The candidate provides
-  one fixed product-owned ordinary-server setup boundary, dedicated locked service
+- Published `0.1.24` retains the reviewed `0.1.23` runtime and changes only that
+  fixture to mock AgentNet's validated host-tool resolver. It provides one fixed
+  product-owned ordinary-server setup boundary, dedicated locked service
   identities, exact plan/apply digest approval, create-or-exact-match host state,
   and redacted health/readiness evidence; it grants no identity or authority.
-  The corrected focused lane reports **46 passed**; the source lane excluding
-  installed-live inference and release-manifest self-check reports **1385 passed
-  and 15 expected host/PostgreSQL skips**. Privileged clean-host evidence, live
-  ceremony, production certification, publication, and cutover remain pending or
-  separately gated.
+- Prepared `0.1.25` repairs two local JSON-RPC interoperability defects exposed
+  by official A2A TCK commit `5996b79f9cefa6fc390980e383e358a66fb9e49e`:
+  exact `/rpc` and `/rpc/` aliases avoid POST redirects, and an absent SDK request
+  tenant is restored only from an exact verified opaque route binding. Missing or
+  spoofed bindings and conflicting tenants fail closed; rejected requests persist
+  no event/task/task-event residue; cross-alias retries preserve exact idempotency
+  and non-enumerating task lookup. Local A2A reports **57 passed** and the source
+  lane excluding installed-live inference and release-manifest self-check reports
+  **1386 passed and 15 expected host/PostgreSQL skips**. Focused official JSON-RPC
+  reports **3 passed**, but the full MUST lane remains non-green at **50 passed,
+  11 failed, 174 skipped**. G04 remains `FAILED`; no requirement, production,
+  publication, or cutover status is promoted.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

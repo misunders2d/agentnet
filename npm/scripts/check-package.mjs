@@ -30,7 +30,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-23-v0.1.24/artifacts/RETENTION.md",
+  "evidence/local/2026-07-24-v0.1.25/artifacts/RETENTION.md",
   "skills/**/*.md",
   "skills/**/*.json",
   "tests/fixtures/**/*.json",

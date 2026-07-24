@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentnet"
-version = "0.1.24"
+version = "0.1.25"
 description = "Self-hosted, agent-agnostic secure communication conformance kernel"
 readme = "README.md"
 requires-python = ">=3.13,<3.15"

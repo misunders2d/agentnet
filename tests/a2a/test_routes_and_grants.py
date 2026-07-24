@@ -215,6 +215,55 @@ def test_handler_rechecks_revocation_for_each_operation() -> None:
         asyncio.run(handler.on_get_task(params, context))
 
 
+def test_handler_restores_only_exact_route_bound_tenant() -> None:
+    standing_grant = grant()
+    lookup = lambda token: standing_grant if token == ROUTE_TOKEN else None
+    builder = A2AGatewayContextBuilder(
+        route=route(),
+        grant_lookup=lookup,
+        peer_resolver=lambda incoming: PEER_ID,
+        clock=lambda: NOW,
+    )
+    handler = BoundedA2ARequestHandler(
+        cast("RequestHandler", _TaskDelegate()),
+        route=route(),
+        grant_lookup=lookup,
+        url_validator=lambda url: url,
+        clock=lambda: NOW,
+    )
+    params = GetTaskRequest(id="task-1")
+
+    restored = builder.build(request())
+    restored.tenant = ""
+    result = asyncio.run(handler.on_get_task(params, restored))
+    assert result is not None and result.id == "task-1"
+    assert restored.tenant == ROUTE_TOKEN
+
+    for bound_token in (None, "S" * 43):
+        invalid_binding = builder.build(request())
+        invalid_binding.tenant = ""
+        if bound_token is None:
+            invalid_binding.state.pop("a2a_route_token")
+        else:
+            invalid_binding.state["a2a_route_token"] = bound_token
+        with pytest.raises(AuthorizationError):
+            asyncio.run(handler.on_get_task(params, invalid_binding))
+
+    conflicting_parameter = builder.build(request())
+    with pytest.raises(AuthorizationError):
+        asyncio.run(
+            handler.on_get_task(
+                GetTaskRequest(tenant="T" * 43, id="task-1"),
+                conflicting_parameter,
+            )
+        )
+
+    conflicting_context = builder.build(request())
+    conflicting_context.tenant = "T" * 43
+    with pytest.raises(AuthorizationError):
+        asyncio.run(handler.on_get_task(params, conflicting_context))
+
+
 def test_sdk_route_builder_is_fixed_v1_and_card_revocation_hides_route() -> None:
     current = {"grant": grant()}
     lookup = lambda token: current["grant"] if token == ROUTE_TOKEN else None
@@ -243,6 +292,7 @@ def test_sdk_route_builder_is_fixed_v1_and_card_revocation_hides_route() -> None
     assert f"/a2a/{ROUTE_TOKEN}/message:send" in paths
     assert f"/a2a/{ROUTE_TOKEN}/message:stream" in paths
     assert f"/a2a/{ROUTE_TOKEN}/rpc" in paths
+    assert f"/a2a/{ROUTE_TOKEN}/rpc/" in paths
     assert all("{tenant}" not in path and "0.3" not in path for path in paths)
 
     async def exercise_routes() -> None:
@@ -361,6 +411,23 @@ def test_sdk_route_builder_is_fixed_v1_and_card_revocation_hides_route() -> None
             assert rpc_media.json()["id"] == "rpc-boundary-1"
             assert rpc_media.json()["error"]["code"] == -32005
 
+            rpc_slash_version = await client.post(
+                f"/a2a/{ROUTE_TOKEN}/rpc/",
+                json={**rpc_envelope, "id": "rpc-slash-version-boundary-1"},
+                headers={"A2A-Version": "1.1"},
+            )
+            rpc_slash_media = await client.post(
+                f"/a2a/{ROUTE_TOKEN}/rpc/",
+                content=json.dumps({**rpc_envelope, "id": "rpc-slash-media-boundary-1"}),
+                headers={"A2A-Version": "1.0", "Content-Type": "text/plain"},
+            )
+            assert rpc_slash_version.status_code == 200
+            assert rpc_slash_version.json()["id"] == "rpc-slash-version-boundary-1"
+            assert rpc_slash_version.json()["error"]["code"] == -32009
+            assert rpc_slash_media.status_code == 200
+            assert rpc_slash_media.json()["id"] == "rpc-slash-media-boundary-1"
+            assert rpc_slash_media.json()["error"]["code"] == -32005
+
             inbound = SendMessageRequest(
                 tenant=ROUTE_TOKEN,
                 message=Message(
@@ -426,6 +493,24 @@ def test_sdk_route_builder_is_fixed_v1_and_card_revocation_hides_route() -> None
             assert jsonrpc_payload["result"]["task"]["status"]["state"] == "TASK_STATE_SUBMITTED"
             assert (
                 jsonrpc_payload["result"]["task"]["metadata"]["agentnetDisposition"]
+                == "tainted_non_executable_proposal"
+            )
+
+            trailing_slash_response = await client.post(
+                f"/a2a/{ROUTE_TOKEN}/rpc/",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "rpc-trailing-slash-1",
+                    "method": "SendMessage",
+                    "params": MessageToDict(inbound),
+                },
+                headers={"A2A-Version": "1.0"},
+            )
+            assert trailing_slash_response.status_code == 200
+            trailing_slash_payload = trailing_slash_response.json()
+            assert trailing_slash_payload["id"] == "rpc-trailing-slash-1"
+            assert (
+                trailing_slash_payload["result"]["task"]["metadata"]["agentnetDisposition"]
                 == "tainted_non_executable_proposal"
             )
 
