@@ -30,6 +30,7 @@ PLAN="$WORK/plan.json"
 APPLY_BLOCKED="$WORK/apply-postgres-blocked.json"
 APPLY1="$WORK/apply-1.json"
 APPLY2="$WORK/apply-2.json"
+APPLY3="$WORK/apply-3.json"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
 RUNTIME_PREFIX="/usr/local/agentnet-e2e"
 RUNTIME_PATH="$RUNTIME_PREFIX/bin:/usr/bin:/bin"
@@ -245,20 +246,32 @@ REVISION_1="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 MARKER_1="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
 echo "ordinary server setup E2E: first converged apply complete"
 
-# Same-digest retry revalidates realized state; configs/units remain exact.
+# First same-digest retry revalidates the now-running Core. Its stronger
+# realized evidence is genuine same-request evolution; configs/units stay exact.
 run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
 jq -c '{status, steps: [.steps[] | {id, status}]}' "$APPLY2"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY2" >/dev/null || { echo "ordinary server setup E2E: retry evidence mismatch" >&2; exit 1; }
+jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and any(.steps[]; .id == "setup_marker" and .status == "updated_same_request")' "$APPLY2" >/dev/null || { echo "ordinary server setup E2E: evolving retry evidence mismatch" >&2; exit 1; }
 [[ "$(sudo sha256sum /var/lib/agentnet/agentnet.json | cut -d' ' -f1)" == "$CORE_CONFIG_1" ]] || { echo "ordinary server setup E2E: Core config changed on retry" >&2; exit 1; }
 [[ "$(sudo sha256sum /var/lib/agentnet-approval/config.json | cut -d' ' -f1)" == "$APPROVAL_CONFIG_1" ]] || { echo "ordinary server setup E2E: Approval config changed on retry" >&2; exit 1; }
 [[ "$(sudo sha256sum /etc/systemd/system/agentnet-core.service | cut -d' ' -f1)" == "$CORE_UNIT_1" ]] || { echo "ordinary server setup E2E: Core unit changed on retry" >&2; exit 1; }
 [[ "$(sudo sha256sum /etc/systemd/system/agentnet-approval.service | cut -d' ' -f1)" == "$APPROVAL_UNIT_1" ]] || { echo "ordinary server setup E2E: Approval unit changed on retry" >&2; exit 1; }
 REVISION_2="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
-[[ "$REVISION_2" -eq "$REVISION_1" ]] || { echo "ordinary server setup E2E: marker revision evolved on retry" >&2; exit 1; }
-[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_1" ]] || { echo "ordinary server setup E2E: marker bytes changed on retry" >&2; exit 1; }
+[[ "$REVISION_2" -eq $((REVISION_1 + 1)) ]] || { echo "ordinary server setup E2E: evolving retry revision mismatch" >&2; exit 1; }
+MARKER_2="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
+[[ "$MARKER_2" != "$MARKER_1" ]] || { echo "ordinary server setup E2E: evolving retry did not refresh marker" >&2; exit 1; }
+
+# A second unchanged retry must converge byte-for-byte without a new revision.
+run_evidence "$APPLY3" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
+  --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
+jq -c '{status, steps: [.steps[] | {id, status}]}' "$APPLY3"
+jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$APPLY3" >/dev/null || { echo "ordinary server setup E2E: stable retry evidence mismatch" >&2; exit 1; }
+REVISION_3="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
+[[ "$REVISION_3" -eq "$REVISION_2" ]] || { echo "ordinary server setup E2E: stable retry changed revision" >&2; exit 1; }
+[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_2" ]] || { echo "ordinary server setup E2E: stable retry changed marker bytes" >&2; exit 1; }
 
 # Output must not contain synthetic credential values.
-! grep -Fq "$TOKEN" "$PLAN" "$APPLY_BLOCKED" "$APPLY1" "$APPLY2" || { echo "ordinary server setup E2E: credential appeared in output" >&2; exit 1; }
+! grep -Fq "$TOKEN" "$PLAN" "$APPLY_BLOCKED" "$APPLY1" "$APPLY2" "$APPLY3" || { echo "ordinary server setup E2E: credential appeared in output" >&2; exit 1; }
 echo "ordinary server setup E2E: PASS"
