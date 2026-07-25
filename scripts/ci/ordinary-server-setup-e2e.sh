@@ -63,6 +63,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+run_evidence() {
+  local output="$1"
+  shift
+  local exit_code=0
+  "$@" >"$output" || exit_code=$?
+  if [[ "$exit_code" -ne 0 ]]; then
+    jq -c '{schema, status, blocker, message}' "$output" >&2 || true
+    return "$exit_code"
+  fi
+}
+
 # Install exact packed source under a root-owned system prefix. Service units must
 # not depend on setup-node/setup-uv paths under runner home.
 PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
@@ -162,8 +173,8 @@ EOF
 chmod 600 "$INPUTS"/* "$WORK/scanner.key" "$WORK/scanner.pub"
 
 # No privileged or managed-host writes; caller-owned npm runtime is allowed.
-env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
-  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup --request "$INPUTS/server-setup.json" >"$PLAN"
+run_evidence "$PLAN" env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup --request "$INPUTS/server-setup.json"
 jq -e '.schema == "agentnet.server-setup.evidence.v1" and .status == "planned" and .identity_enrolled == false and .authority_granted == false and .prerequisites.postgresql.hba_rule == "local agentnet agentnet peer"' "$PLAN" >/dev/null
 for user in agentnet agentnet-approval; do ! getent passwd "$user" >/dev/null; done
 for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-setup /etc/agentnet-secrets; do ! sudo test -e "$path"; done
@@ -212,9 +223,9 @@ sudo -u postgres psql -Atq --dbname=postgres -c \
 
 # Same approved digest resumes, starts services, and proves exact public health
 # without granting identity, authority, or production durability.
-sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+run_evidence "$APPLY1" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
-  --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start >"$APPLY1"
+  --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY1" >/dev/null
 sudo systemctl is-active --quiet agentnet-core.service
 sudo systemctl is-active --quiet agentnet-approval.service
@@ -230,9 +241,9 @@ REVISION_1="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 MARKER_1="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
 
 # Same-digest retry revalidates realized state; configs/units remain exact.
-sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
-  --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start >"$APPLY2"
+  --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY2" >/dev/null
 [[ "$(sudo sha256sum /var/lib/agentnet/agentnet.json | cut -d' ' -f1)" == "$CORE_CONFIG_1" ]]
 [[ "$(sudo sha256sum /var/lib/agentnet-approval/config.json | cut -d' ' -f1)" == "$APPROVAL_CONFIG_1" ]]
