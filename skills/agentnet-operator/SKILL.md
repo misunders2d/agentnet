@@ -127,12 +127,12 @@ For the default Linux profile, the fixed CLI surface is `agentnet server-agent s
 sudo -- <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json --expected-request-digest <approved-request-digest> --apply --start
 ```
 
-First command is read-only. Second follows one frozen human-approved scope and manages only AgentNet's two identities, private roots, environment custody, and two systemd units. Exact reruns converge; conflicts never overwrite. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual `useradd`, directory, unit, `network create`, Approval-provision, or service-start assembly.
+First command performs no privileged or managed-host write; npm may materialize its caller-owned Python runtime. It requires system-wide root-owned Node/uv/AgentNet runtime visible to hardened services. Approval digest v2 binds exact executable paths/content for Node.js, uv, AgentNet, `systemctl`, and `useradd`, plus one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`. Second follows one frozen AgentNet setup approval, repeats preflight under setup lock, and manages only AgentNet identities, private roots, environment custody, and two systemd units. Exact reruns revalidate realized state; marker is provenance and never causes bootstrap skip. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual AgentNet `useradd`, directory, unit, marker, `network create`, Approval-provision, or service-start assembly.
 
-Do not apply setup until these host and policy inputs exist:
+Before apply, require these host and policy inputs. PostgreSQL role/database/HBA may be prepared first; on a clean host, the first approved apply may instead create only the fixed Core OS identity plus `/var/lib/agentnet-setup` runtime/lock and stop at `postgres_auth_not_ready`:
 
 - supported PostgreSQL with verified durability settings and recovery plan;
-- securely injected database credentials;
+- operator-owned role/database and HBA for the fixed password-free local peer contract: role/database `agentnet` over `/var/run/postgresql`, exact unshadowed `local agentnet agentnet peer`, no ident map;
 - dedicated HTTPS/TLS endpoints and exact service audience;
 - workforce OIDC provider with exact issuer, callbacks, endpoint origins, signing algorithms, and token-endpoint authentication method;
 - for confidential OIDC, public `client_secret_env` references plus private runtime values; never a secret in config, commands, logs, evidence, or chat;
@@ -149,6 +149,8 @@ non-empty runtime secret resolved through `client_secret_env`; method inference
 and embedded secret values are forbidden. Google Web applications use the exact
 registered HTTPS callback and `client_secret_post` profile documented in the
 implementation guide.
+
+Apply may create fixed Core OS identity plus root-owned setup runtime/lock, then report `postgres_auth_not_ready` before any AgentNet environment, Core/Approval config, database schema, unit, Approval identity, or service write. PostgreSQL role/database/HBA changes and reload are separate operator-owned approval boundary; after exact live rule is installed and reloaded, rerun same AgentNet digest. Never treat root/operator database access, raw HBA text, TCP/SCRAM/trust, or an old setup marker as service-user proof.
 
 If any prerequisite is missing, report **blocked** and name it. Never replace real identity with payload fields, chat claims, A2A receipts, Slack messages, synthetic actors, or model output.
 

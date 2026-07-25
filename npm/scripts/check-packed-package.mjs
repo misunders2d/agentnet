@@ -165,8 +165,8 @@ try {
       const approvers = path.join(inputs, "approvers.json");
       const scannerTrust = path.join(inputs, "scanner-trust.json");
       const request = path.join(inputs, "server-setup.json");
-      writePrivate(coreEnv, "AGENTNET_DATABASE_URL=postgresql://agentnet@127.0.0.1/agentnet\nAGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token\n");
-      writePrivate(approvalEnv, "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token\n");
+      writePrivate(coreEnv, "AGENTNET_DATABASE_URL=postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet\nAGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token-0123456789abcdef0123456789\n");
+      writePrivate(approvalEnv, "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-packed-check-token-0123456789abcdef0123456789\n");
       writePrivate(coreOidc, {
         issuer: "https://accounts.example",
         client_id: "packed-core-client",
@@ -213,7 +213,7 @@ try {
         runtime_instance_id: "packed-server-1",
         core_public_origin: "https://core.corp.example",
         approval_public_origin: "https://approval.corp.example",
-        database_url: "postgresql://agentnet@127.0.0.1/agentnet",
+        database_url: "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
         database_url_env: "AGENTNET_DATABASE_URL",
         core_environment_file: coreEnv,
         approval_environment_file: approvalEnv,

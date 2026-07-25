@@ -1,8 +1,8 @@
 # Release Manifest
 
 Snapshot: 2026-07-24
-Candidate: `agentnet 0.1.25`
-Latest published package: `agentnet 0.1.24`
+Candidate: `agentnet 0.1.26`
+Latest published package: `agentnet 0.1.25`
 Evidence profile: self-hosted local conformance release
 
 This is not a production release. It is the human projection of
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `2db5b45786e7d90c466c12731ad15dc7187cb69ca10373f419c1a49845363605` |
-| `pyproject.toml` | SHA-256 `160953aa554cffe7b146bd7e5043aedadb7cab6daf3c5749ab5a214d77ef1395` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `0435578badd41758f98601e69c8910b519c712110261f2997dccf58b6f374e11` |
+| `pyproject.toml` | SHA-256 `a9d2dde83596edafaeefa7bcfbfed7435d8ecc18380b4e5f5731d14949978470` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -151,7 +151,7 @@ reviewed; it does not mean the required evidence tier or official gate passed.
 | `signature` | `EXTERNAL_REQUIRED` | `false` |
 | `installer_lifecycle` | `EXTERNAL_REQUIRED` | `false` |
 
-## Local candidate evidence
+## Published-release and local-candidate evidence
 
 Published `0.1.22` corrected the PostgreSQL 18 reserved SQL alias exposed by
 exact public-artifact startup. Tag `v0.1.23` contained the reviewed product-owned
@@ -167,7 +167,7 @@ state, bounded systemd scope, exact loopback/public health identity,
 interruption recovery, and one canonical bundled operator workflow. Setup grants
 neither identity nor authority.
 
-Prepared `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
+Published `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
 pinned official A2A TCK at commit
 `5996b79f9cefa6fc390980e383e358a66fb9e49e`: it serves `/rpc` and `/rpc/`
 through the same strict endpoint without a POST redirect, and restores an absent
@@ -182,17 +182,40 @@ installed-live inference and this release-manifest self-check reports `1386
 passed, 15 expected host/PostgreSQL skips`. Focused official JSON-RPC checks
 report `3 passed`; the full JSON-RPC MUST run reports `50 passed, 11 failed, 174
 skipped`, so G04 remains `FAILED`. Exact prepublication, retained-artifact,
-recursive packed, and Pi-loader results are recorded in the candidate evidence
-manifest after verification. Privileged clean-host apply, cross-SDK/public-peer
-interoperability, live PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only
-publication, and independent public-artifact deployment remain pending or
-separately gated. No production-certification or gate-promotion claim is made.
+recursive packed, Pi-loader, and public-package identity results are recorded in
+the immutable `0.1.25` package evidence manifest.
+
+Unreleased `0.1.26` corrects ordinary-server setup convergence and installer
+truthfulness: approval digest v2 binds exact service-visible Node/uv/launcher/
+`systemctl`/`useradd` paths/content plus the deterministic full executed AgentNet package-tree hash;
+broker semantics and locked preflight precede managed writes; the
+fixed PostgreSQL profile verifies service-identity Unix-socket peer access,
+parsed HBA/ident rules, and config-load freshness; marker v2 uses same-request
+prior-byte compare-and-swap and never substitutes for realized-state bootstrap,
+health, identity, or authority. It also incorporates the Windows CLI import
+correction and one ordered operator procedure. Current local evidence is `151
+passed, 9 expected platform skips` for platform/setup/activation/package/release
+and `1432 passed, 16 expected platform/dedicated-PostgreSQL skips` for source
+regression excluding installed-harness and release-manifest gates; source and
+both recursive installed npm generations report `1385 passed, 16 expected
+skips`. The release verifier, byte-identical wheel/sdist build, recursive
+package gate, and source/fresh-packed Pi skill loaders pass. Clean Ubuntu
+24.04/PostgreSQL 18 workflow result, cross-platform CI, review closure, and
+Sergey-only publication remain pending.
+
+Privileged clean-host apply, cross-SDK/public-peer interoperability, live
+OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
+evidence remain pending or separately gated. No production-certification or
+gate-promotion claim is made.
 
 ## Verification boundary
 
 `scripts/verify_release.py` checks authoritative-source hashes, frozen runtime,
 test and build dependencies, byte-current generated schemas, deployment and
 evidence input hashes, exact 85-row/11-decision ledgers, machine/human gate
-status parity, component/protocol projections, and blocked release claims.
-It cannot certify the explicitly missing privileged, external, owner, signing,
-installer, HA/PITR, real-harness, partner, or public-peer evidence.
+status parity, component/protocol projections, and blocked release claims. A Git
+checkout must retain the exact candidate-artifact `.gitignore`; npm installs,
+where npm strips nested `.gitignore` metadata, must retain the exact portable
+`RETENTION.md` and archive set instead. The verifier cannot certify the
+explicitly missing privileged, external, owner, signing, installer, HA/PITR,
+real-harness, partner, or public-peer evidence.

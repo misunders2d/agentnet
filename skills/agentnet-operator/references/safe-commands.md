@@ -112,7 +112,7 @@ Only after enrollment and explicit approval may an operator run the supervisor w
 
 ## Always-on server setup
 
-This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Resolve the strict non-secret [request example](examples/ordinary-server-setup-request.json), whose sensitive values remain owner-only file references, then run the read-only plan:
+This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Resolve the strict non-secret [request example](examples/ordinary-server-setup-request.json), whose sensitive values remain owner-only file references, then run the no-managed-host-write plan (npm may materialize its caller-owned Python runtime):
 
 ```bash
 <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
@@ -135,13 +135,13 @@ Before creating server state, verify that operator has approved values for:
 
 - nonproduction or production trust-domain identifier;
 - distinct Core and Approval HTTPS origins plus exact service audience;
-- PostgreSQL endpoint and environment variable containing runtime DSN;
+- ordinary profile's fixed local PostgreSQL role/database `agentnet`, socket `/var/run/postgresql`, exact unshadowed `local agentnet agentnet peer` rule, and environment reference containing canonical peer DSN;
 - Core and Approval OIDC policy files;
 - exact owner/approver policy, scanner trust, retention, and recovery policy.
 
 No server-harness identity profile exists yet. Setup creates state first and reports `waiting_owner_oidc_or_passkey`; guided enrollment then produces exact identity used by offline activation.
 
-The underlying expert primitive below is not the ordinary setup path. Product setup invokes it internally; do not make a human or remote Manager assemble these steps:
+The underlying expert primitive below is not the ordinary setup path. Product setup invokes it internally; do not make a human or remote Manager assemble these steps. Its remote `db.example` DSN is deliberately non-ordinary; ordinary setup only accepts `postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet`:
 
 ```bash
 agentnet network create \
@@ -169,21 +169,21 @@ database, or capability URLs into enrolled-agent storage:
 
 ```bash
 agentnet approval provision \
-  --config /etc/agentnet-approval/config.json \
-  --data-dir /var/lib/agentnet-approval \
+  --config /var/lib/agentnet-approval/config.json \
+  --data-dir /var/lib/agentnet-approval/state \
   --public-origin https://approval.corp.example \
   --rp-id approval.corp.example \
   --verifier-id approval.corp.example \
   --approvers /root/agentnet-approval-approvers.json
-agentnet approval status --config /etc/agentnet-approval/config.json
+agentnet approval status --config /var/lib/agentnet-approval/config.json
 agentnet approval serve \
-  --config /etc/agentnet-approval/config.json \
+  --config /var/lib/agentnet-approval/config.json \
   --host 127.0.0.1 --port 8090
 agentnet approval register-begin \
-  --config /etc/agentnet-approval/config.json \
+  --config /var/lib/agentnet-approval/config.json \
   --approver security-owner
 agentnet approval request-create \
-  --config /etc/agentnet-approval/config.json \
+  --config /var/lib/agentnet-approval/config.json \
   --approver security-owner \
   --purpose identity.enrollment.approve \
   --transaction /root/exact-enrollment-transaction.json

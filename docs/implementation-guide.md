@@ -103,7 +103,7 @@ durability, artifact, task, room, federation, or non-interruption semantics.
 The default host path is one fixed wrapper, not a general deployment framework. The target agent first resolves system-wide root-owned AgentNet, Node.js, and `uv` executables accessible to the locked service identities:
 
 ```bash
-# read-only plan
+# no privileged or managed-host writes; npm may materialize caller-owned runtime
 <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
 
 # one frozen approved scope
@@ -114,23 +114,62 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
 ```
 
 The strict request contains public metadata and absolute references only. Secret
-values remain in owner-only Core and Approval environment files. The wrapper
-validates exact package version, password-free PostgreSQL DSN, OIDC callbacks,
-Approval owner/approver inputs, scanner public trust, dedicated account
-conflicts, and operator-owned HTTPS route prerequisites. It then converges on
-locked `agentnet` and `agentnet-approval` identities, private state roots,
-Approval provisioning, Core bootstrap, fixed loopback ports, two hardened
-systemd units, and structured redacted evidence. It never overwrites differing
-managed state and never mutates DNS, TLS certificates, reverse-proxy policy,
-PostgreSQL administration, firewall policy, identity, or authority.
+values remain in owner-only Core and Approval environment files. The no-managed-host-write plan
+validates semantic broker-credential policy, OIDC callbacks, approver policy,
+scanner trust, fixed local PostgreSQL peer contract, and exact service-visible
+Node/uv/AgentNet/`systemctl`/`useradd` paths. Approval digest v2 binds request/input fingerprints,
+stable no-follow executable hashes, and one hash computed from deterministic
+path/type/size/content records for the exact root-owned AgentNet package tree
+executed through `uv run --project`. Privileged apply reproduces the digest in
+the npm launcher, repeats full Python preflight under the setup lock, and blocks
+if any descriptor metadata or package-tree content changed. Setup disables
+Python bytecode writes so execution cannot alter the approved package tree. It
+also re-reads full effective Approval trust after Core bootstrap, including
+signer key IDs/public keys, and blocks before unit/marker commit on drift.
 
-A remote Manager does not execute target-host commands. The target coding agent
-follows the bundled
+Ordinary PostgreSQL contract is fixed:
+
+```text
+OS user: agentnet
+DB role/database: agentnet / agentnet
+socket: /var/run/postgresql
+DSN: postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet
+HBA: local agentnet agentnet peer
+ident map: none (exact names match)
+```
+
+Apply creates the fixed Core OS identity when absent, then runs a bounded
+read-only canary as that identity. A second read-only probe under local
+`postgres` identity checks parsed current-file `pg_hba_file_rules` and
+`pg_ident_file_mappings` plus `pg_conf_load_time()` freshness against both auth
+files; parse errors, stale reload state, broad/shadowing/mapped/non-peer rules,
+TCP transport, wrong role/database, or a non-writable primary block before
+AgentNet environment/config/database writes. AgentNet never edits PostgreSQL
+role/database/HBA/ident state or reloads PostgreSQL. Those are separately
+approved operator actions. A first apply may therefore return
+`postgres_auth_not_ready` after creating the Core OS identity plus root-owned
+`/var/lib/agentnet-setup` npm runtime and lock custody needed to execute and
+serialize setup. It creates no AgentNet environment, Core/Approval config,
+database schema, unit, Approval identity, or service. Install the exact scoped
+rule, reload PostgreSQL, and rerun the same setup digest.
+
+After the database gate, wrapper converges on Approval identity, private roots,
+Approval provisioning, Core bootstrap, fixed loopback ports, two hardened
+systemd units, and structured redacted evidence. Before any Approval/Core
+product subprocess, it uses `lstat` to reject symlink, dangling-symlink,
+nonregular, ownership, and mode conflicts at fixed config/state/data child
+paths. Existing service state and newly realized Core state are recursively
+custody-checked before further product writes or unit/marker commit. Retry never skips bootstrap
+from old marker data: it reloads Core after bootstrap, revalidates Approval,
+writes exact units, then commits marker v2 through same-request, prior-byte
+compare-and-swap. Manual marker/config/unit surgery is unsupported.
+
+A remote Manager does not execute target-host commands. Target coding agent
+follows bundled
 `skills/agentnet-operator/references/ordinary-server-setup.md`; remote peers may
 provide immutable package instructions and inspect sanitized evidence only.
-Exact reruns resume after partial provisioning. Start verifies local and public
-Core/Approval health. Before owner enrollment the honest status is
-`waiting_owner_oidc_or_passkey`.
+Start verifies local and public Core/Approval health. Before owner enrollment,
+honest status is `waiting_owner_oidc_or_passkey`.
 
 Owner registration, workforce OIDC, WebAuthn UV, claim-code entry, and exact
 server-harness enrollment remain explicit human ceremonies. After `join guided`

@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import grp
 import json
 import os
-import pwd
 import re
+import select
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -24,8 +24,12 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 from urllib.parse import urlsplit
+
+if os.name == "posix":
+    import grp
+    import pwd
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
@@ -45,6 +49,15 @@ from agentnet.operations.config import (
 )
 from agentnet.operations.config_migration import load_config_json
 from agentnet.security.signatures import P256KeyPair, canonical_digest
+from agentnet.storage.postgres import (
+    ORDINARY_SERVER_POSTGRES_DATABASE,
+    ORDINARY_SERVER_POSTGRES_DSN,
+    ORDINARY_SERVER_POSTGRES_SOCKET,
+    ORDINARY_SERVER_POSTGRES_USER,
+    inspect_ordinary_server_postgres_auth,
+    probe_ordinary_server_postgres_connection,
+    validate_ordinary_server_postgres_dsn,
+)
 
 
 CORE_USER = "agentnet"
@@ -63,6 +76,12 @@ CORE_PORT = 8080
 APPROVAL_PORT = 8090
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _ENV_VALUE = re.compile(r"^[^\s'\"\\\x00-\x1f\x7f]+$")
+_BROKER_CREDENTIAL_NAME = "AGENTNET_APPROVAL_CORE_TOKEN"
+_BROKER_CREDENTIAL_MIN_LENGTH = 43
+_BROKER_CREDENTIAL_MAX_LENGTH = 512
+_SYSTEMCTL_TIMEOUT_SECONDS = 30
+_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_PROTECTED_SERVICE_PATHS = (Path("/home"), Path("/root"), Path("/run/user"))
 
 
 class ServerSetupError(RuntimeError):
@@ -231,15 +250,12 @@ class ServerSetupRequest(BaseModel):
         expected_audience = f"urn:agentnet:{self.domain_id}:corporate-api"
         if self.service_audience != expected_audience:
             raise ValueError("service_audience must be the canonical domain audience")
-        parsed_database = urlsplit(self.database_url)
-        if (
-            parsed_database.scheme not in {"postgresql", "postgres"}
-            or not parsed_database.hostname
-            or parsed_database.password is not None
-            or parsed_database.query
-            or parsed_database.fragment
-        ):
-            raise ValueError("database_url must be a password-free PostgreSQL DSN")
+        try:
+            validate_ordinary_server_postgres_dsn(self.database_url)
+        except Exception as exc:
+            raise ValueError(
+                "database_url must use the fixed local PostgreSQL peer-auth contract"
+            ) from exc
         for path in (
             self.core_environment_file,
             self.approval_environment_file,
@@ -266,7 +282,7 @@ class SetupLayout:
 
     @property
     def lock(self) -> Path:
-        return self.host(Path("/run/agentnet-setup/setup.lock"))
+        return self.host(SETUP_MARKER.parent / "setup.lock")
 
     @property
     def core_unit(self) -> Path:
@@ -275,6 +291,38 @@ class SetupLayout:
     @property
     def approval_unit(self) -> Path:
         return self.host(Path("/etc/systemd/system") / APPROVAL_UNIT)
+
+
+@dataclass(frozen=True)
+class SetupRuntimeIdentity:
+    node_executable: Path
+    node_sha256: str
+    uv_executable: Path
+    uv_sha256: str
+    agentnet_executable: Path
+    agentnet_sha256: str
+    package_root: Path
+    package_tree_sha256: str
+    systemctl_executable: Path
+    systemctl_sha256: str
+    useradd_executable: Path
+    useradd_sha256: str
+
+
+@dataclass(frozen=True)
+class ServerSetupPreflight:
+    runtime: SetupRuntimeIdentity
+    input_bundle: dict[str, bytes]
+    oidc_provider: SetupOIDCProvider
+    owner_oidc: ApprovalOwnerOIDCConfig
+    approvers: tuple[SetupApprover, ...]
+    scanner_trust: ScannerTrustConfig
+    core_values: dict[str, str]
+    approval_values: dict[str, str]
+    core_environment: dict[str, str]
+    approval_environment: dict[str, str]
+    request_digest: str
+    legacy_request_digest: str
 
 
 def _strict_json_bytes(raw: bytes, *, label: str) -> dict[str, Any]:
@@ -414,11 +462,10 @@ def _read_input_bundle(request: ServerSetupRequest) -> dict[str, bytes]:
     }
 
 
-def _request_digest(
+def _request_references(
     request: ServerSetupRequest,
-    bundle: Mapping[str, bytes] | None = None,
-) -> str:
-    inputs = dict(bundle) if bundle is not None else _read_input_bundle(request)
+    inputs: Mapping[str, bytes],
+) -> dict[str, dict[str, str]]:
     if not re.fullmatch(r"[a-f0-9]{64}", request._source_sha256):
         raise ServerSetupError("invalid_request", "setup request source binding is unavailable")
     public = request.model_dump(mode="json", by_alias=True)
@@ -432,13 +479,58 @@ def _request_digest(
         else:
             fingerprint = hashlib.sha256(raw).hexdigest()
         references[key] = {"path": str(path), "fingerprint": fingerprint}
+    return references
+
+
+def _legacy_request_digest(
+    request: ServerSetupRequest,
+    bundle: Mapping[str, bytes],
+) -> str:
     return canonical_digest(
         {
             "schema": "agentnet.server-setup.approval-digest.v1",
             "request_file_sha256": request._source_sha256,
-            "referenced_inputs": references,
+            "referenced_inputs": _request_references(request, bundle),
         }
     )
+
+
+def _request_digest(
+    request: ServerSetupRequest,
+    bundle: Mapping[str, bytes] | None = None,
+    *,
+    runtime: SetupRuntimeIdentity,
+) -> str:
+    inputs = dict(bundle) if bundle is not None else _read_input_bundle(request)
+    return canonical_digest(
+        {
+            "schema": "agentnet.server-setup.approval-digest.v2",
+            "request_file_sha256": request._source_sha256,
+            "referenced_inputs": _request_references(request, inputs),
+            "runtime_identity": {
+                "agentnet_executable": str(runtime.agentnet_executable),
+                "agentnet_sha256": runtime.agentnet_sha256,
+                "package_root": str(runtime.package_root),
+                "package_tree_sha256": runtime.package_tree_sha256,
+                "node_executable": str(runtime.node_executable),
+                "node_sha256": runtime.node_sha256,
+                "systemctl_executable": str(runtime.systemctl_executable),
+                "systemctl_sha256": runtime.systemctl_sha256,
+                "useradd_executable": str(runtime.useradd_executable),
+                "useradd_sha256": runtime.useradd_sha256,
+                "uv_executable": str(runtime.uv_executable),
+                "uv_sha256": runtime.uv_sha256,
+            },
+        }
+    )
+
+
+def _require_service_visible_path(value: Path, *, label: str) -> None:
+    if any(value == root or root in value.parents for root in _PROTECTED_SERVICE_PATHS):
+        raise ServerSetupError(
+            "service_executable_inaccessible",
+            f"installed {label} executable is hidden by the managed service sandbox",
+        )
 
 
 def _require_root_owned_executable(value: Path, *, label: str) -> Path:
@@ -448,6 +540,7 @@ def _require_root_owned_executable(value: Path, *, label: str) -> Path:
         raise ServerSetupError("missing_executable", f"installed {label} executable is unavailable") from exc
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise ServerSetupError("unsafe_executable", f"installed {label} executable is not executable")
+    _require_service_visible_path(resolved, label=label)
     for item in (resolved, *resolved.parents):
         if item == Path("/"):
             break
@@ -504,14 +597,17 @@ def _require_root_owned_tree(root: Path) -> Path:
 
 
 def _resolve_host_tool(name: str) -> Path:
-    located = shutil.which(name)
+    located = shutil.which(name, path=_SYSTEM_PATH)
     if located is None:
         raise ServerSetupError("missing_host_tool", f"ordinary server setup requires {name}")
     return _require_root_owned_executable(Path(located), label=name)
 
 
 def _resolve_uv_executable() -> Path:
-    located = shutil.which("uv")
+    configured = os.environ.get("AGENTNET_UV")
+    if configured is not None and not Path(configured).is_absolute():
+        raise ServerSetupError("unsafe_executable", "configured uv executable must be absolute")
+    located = configured or shutil.which("uv")
     if located is None:
         raise ServerSetupError("missing_executable", "installed uv executable is unavailable")
     return _require_root_owned_executable(Path(located), label="uv")
@@ -519,10 +615,170 @@ def _resolve_uv_executable() -> Path:
 
 def _resolve_node_executable() -> Path:
     configured = os.environ.get("AGENTNET_NODE_EXECUTABLE")
-    located = configured if configured and Path(configured).is_absolute() else shutil.which("node")
+    if configured is not None and not Path(configured).is_absolute():
+        raise ServerSetupError("unsafe_executable", "configured Node.js executable must be absolute")
+    located = configured or shutil.which("node")
     if located is None:
         raise ServerSetupError("missing_executable", "installed Node.js executable is unavailable")
     return _require_root_owned_executable(Path(located), label="Node.js")
+
+
+def _sha256_stable_file(path: Path, *, label: str) -> str:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as exc:
+        raise ServerSetupError("unsafe_executable", f"installed {label} executable is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink < 1 or before.st_size < 1:
+            raise ServerSetupError("unsafe_executable", f"installed {label} executable custody is unsafe")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1_048_576)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if any(
+            getattr(after, field) != getattr(before, field)
+            for field in (
+                "st_dev",
+                "st_ino",
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_nlink",
+                "st_size",
+                "st_mtime_ns",
+                "st_ctime_ns",
+            )
+        ):
+            raise ServerSetupError("unsafe_executable", f"installed {label} executable changed during preflight")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _sha256_stable_tree(root: Path) -> str:
+    maximum_records = 20_000
+    maximum_bytes = 536_870_912
+    records: list[dict[str, object]] = [{"path": ".", "type": "directory"}]
+    total_bytes = 0
+
+    def unchanged(before: os.stat_result, after: os.stat_result) -> bool:
+        return all(
+            getattr(before, field) == getattr(after, field)
+            for field in (
+                "st_dev",
+                "st_ino",
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_nlink",
+                "st_size",
+                "st_mtime_ns",
+                "st_ctime_ns",
+            )
+        )
+
+    def stable_file(path: Path, relative: str) -> None:
+        nonlocal total_bytes
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            )
+        except OSError as exc:
+            raise ServerSetupError("unsafe_executable", "installed AgentNet package tree is not stable") from exc
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_size < 0:
+                raise ServerSetupError("unsafe_executable", "installed AgentNet package tree contains an unsupported entry")
+            total_bytes += before.st_size
+            if total_bytes > maximum_bytes:
+                raise ServerSetupError("unsafe_executable", "installed AgentNet package tree exceeds the fixed evidence bound")
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(descriptor, 1_048_576)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+            if not unchanged(before, after):
+                raise ServerSetupError("unsafe_executable", "installed AgentNet package tree changed during preflight")
+            records.append(
+                {
+                    "path": relative,
+                    "sha256": digest.hexdigest(),
+                    "size": before.st_size,
+                    "type": "file",
+                }
+            )
+        finally:
+            os.close(descriptor)
+
+    def visit(directory: Path) -> None:
+        try:
+            before = directory.lstat()
+            if not stat.S_ISDIR(before.st_mode) or directory.is_symlink():
+                raise ServerSetupError("unsafe_executable", "installed AgentNet package tree contains an unsupported entry")
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name.encode("utf-8"))
+            for entry in entries:
+                path = directory / entry.name
+                relative = path.relative_to(root).as_posix()
+                metadata = path.lstat()
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise ServerSetupError("unsafe_executable", "installed AgentNet package tree contains a symbolic link")
+                if stat.S_ISDIR(metadata.st_mode):
+                    records.append({"path": relative, "type": "directory"})
+                    visit(path)
+                elif stat.S_ISREG(metadata.st_mode):
+                    stable_file(path, relative)
+                else:
+                    raise ServerSetupError("unsafe_executable", "installed AgentNet package tree contains an unsupported entry")
+                if len(records) > maximum_records:
+                    raise ServerSetupError("unsafe_executable", "installed AgentNet package tree exceeds the fixed evidence bound")
+            after = directory.lstat()
+            if not unchanged(before, after):
+                raise ServerSetupError("unsafe_executable", "installed AgentNet package tree changed during preflight")
+        except ServerSetupError:
+            raise
+        except OSError as exc:
+            raise ServerSetupError("unsafe_executable", "installed AgentNet package tree is not inspectable") from exc
+
+    visit(root)
+    return canonical_digest(
+        {
+            "records": records,
+            "schema": "agentnet.package-tree-content.v1",
+        }
+    )
+
+
+def _resolve_setup_runtime() -> SetupRuntimeIdentity:
+    node_executable = _resolve_node_executable()
+    uv_executable = _resolve_uv_executable()
+    agentnet_executable = _resolve_executable(node_executable, uv_executable)
+    package_root = agentnet_executable.parents[2]
+    systemctl_executable = _resolve_host_tool("systemctl")
+    useradd_executable = _resolve_host_tool("useradd")
+    return SetupRuntimeIdentity(
+        node_executable=node_executable,
+        node_sha256=_sha256_stable_file(node_executable, label="Node.js"),
+        uv_executable=uv_executable,
+        uv_sha256=_sha256_stable_file(uv_executable, label="uv"),
+        agentnet_executable=agentnet_executable,
+        agentnet_sha256=_sha256_stable_file(agentnet_executable, label="agentnet"),
+        package_root=package_root,
+        package_tree_sha256=_sha256_stable_tree(package_root),
+        systemctl_executable=systemctl_executable,
+        systemctl_sha256=_sha256_stable_file(systemctl_executable, label="systemctl"),
+        useradd_executable=useradd_executable,
+        useradd_sha256=_sha256_stable_file(useradd_executable, label="useradd"),
+    )
 
 
 def _resolve_executable(node_executable: Path, uv_executable: Path) -> Path:
@@ -555,6 +811,7 @@ def _resolve_executable(node_executable: Path, uv_executable: Path) -> Path:
             "AGENTNET_NODE_EXECUTABLE": str(node_executable),
             "AGENTNET_UV": str(uv_executable),
             "AGENTNET_NPM_RUNTIME_DIR": str(runtime_root),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "UV_NO_MODIFY_PATH": "1",
         },
         stdin=subprocess.DEVNULL,
@@ -803,11 +1060,22 @@ WantedBy=multi-user.target
     return {APPROVAL_UNIT: approval, CORE_UNIT: core}
 
 
-def plan_server_setup(
+def _validate_broker_credential(value: str) -> None:
+    if (
+        not _BROKER_CREDENTIAL_MIN_LENGTH <= len(value) <= _BROKER_CREDENTIAL_MAX_LENGTH
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in value)
+    ):
+        raise ServerSetupError(
+            "invalid_broker_credential",
+            "Approval broker credential does not satisfy the fixed runtime policy",
+        )
+
+
+def _server_setup_preflight(
     request: ServerSetupRequest,
     *,
-    layout: SetupLayout = SetupLayout(),
-) -> dict[str, Any]:
+    layout: SetupLayout,
+) -> ServerSetupPreflight:
     if os.name != "posix" or not Path("/proc/1/comm").exists():
         raise ServerSetupError("unsupported_host", "ordinary server setup requires Linux with systemd")
     try:
@@ -816,40 +1084,64 @@ def plan_server_setup(
         raise ServerSetupError("unsupported_host", "ordinary server setup cannot inspect init") from exc
     if init_name != "systemd" and layout.root == Path("/"):
         raise ServerSetupError("unsupported_host", "ordinary server setup requires systemd as PID 1")
-    for tool in ("systemctl", "useradd"):
-        _resolve_host_tool(tool)
-    node_executable = _resolve_node_executable()
-    uv_executable = _resolve_uv_executable()
-    executable = _resolve_executable(node_executable, uv_executable)
+    runtime = _resolve_setup_runtime()
     input_bundle = _read_input_bundle(request)
-    oidc, owner_oidc, _approvers, _scanner_trust = _validate_inputs(request, input_bundle)
-    core_environment = _parse_environment(input_bundle["core_environment_file"], label="Core environment input")
-    approval_environment = _parse_environment(input_bundle["approval_environment_file"], label="Approval environment input")
-    required_core = {request.database_url_env, "AGENTNET_APPROVAL_CORE_TOKEN"}
+    oidc, owner_oidc, approvers, scanner_trust = _validate_inputs(request, input_bundle)
+    core_values = _parse_environment(input_bundle["core_environment_file"], label="Core environment input")
+    approval_values = _parse_environment(input_bundle["approval_environment_file"], label="Approval environment input")
+    required_core = {request.database_url_env, _BROKER_CREDENTIAL_NAME}
     if oidc.client_secret_env is not None:
         required_core.add(oidc.client_secret_env)
-    required_approval = {"AGENTNET_APPROVAL_CORE_TOKEN"}
+    required_approval = {_BROKER_CREDENTIAL_NAME}
     if owner_oidc.client_secret_env is not None:
         required_approval.add(owner_oidc.client_secret_env)
-    if not required_core <= set(core_environment) or not required_approval <= set(approval_environment):
+    if not required_core <= set(core_values) or not required_approval <= set(approval_values):
         raise ServerSetupError("missing_secret_reference", "required runtime environment reference is absent")
-    _service_environment(
-        core_environment,
+    core_environment = _service_environment(
+        core_values,
         CORE_DATA,
-        uv_executable,
+        runtime.uv_executable,
         allowed_names=frozenset(required_core),
     )
-    _service_environment(
-        approval_environment,
+    approval_environment = _service_environment(
+        approval_values,
         APPROVAL_DATA,
-        uv_executable,
+        runtime.uv_executable,
         allowed_names=frozenset(required_approval),
     )
-    if core_environment["AGENTNET_APPROVAL_CORE_TOKEN"] != approval_environment["AGENTNET_APPROVAL_CORE_TOKEN"]:
-        raise ServerSetupError("broker_credential_mismatch", "Core and Approval broker credential references do not match")
+    core_broker_credential = core_environment[_BROKER_CREDENTIAL_NAME]
+    approval_broker_credential = approval_environment[_BROKER_CREDENTIAL_NAME]
+    _validate_broker_credential(core_broker_credential)
+    _validate_broker_credential(approval_broker_credential)
+    if core_broker_credential != approval_broker_credential:
+        raise ServerSetupError("broker_credential_mismatch", "Core and Approval broker credentials do not match")
     if core_environment[request.database_url_env] != request.database_url:
         raise ServerSetupError("database_reference_mismatch", "Core database reference does not match setup request")
-    units = render_units(node_executable, executable, uv_executable)
+    return ServerSetupPreflight(
+        runtime=runtime,
+        input_bundle=input_bundle,
+        oidc_provider=oidc,
+        owner_oidc=owner_oidc,
+        approvers=approvers,
+        scanner_trust=scanner_trust,
+        core_values=core_values,
+        approval_values=approval_values,
+        core_environment=core_environment,
+        approval_environment=approval_environment,
+        request_digest=_request_digest(request, input_bundle, runtime=runtime),
+        legacy_request_digest=_legacy_request_digest(request, input_bundle),
+    )
+
+
+def _planned_setup_evidence(
+    request: ServerSetupRequest,
+    preflight: ServerSetupPreflight,
+) -> dict[str, Any]:
+    units = render_units(
+        preflight.runtime.node_executable,
+        preflight.runtime.agentnet_executable,
+        preflight.runtime.uv_executable,
+    )
     steps = [
         {"id": "preflight", "status": "completed"},
         {"id": "core_identity", "status": _account_fact(CORE_USER, CORE_DATA)},
@@ -865,17 +1157,46 @@ def plan_server_setup(
         "schema": "agentnet.server-setup.evidence.v1",
         "status": "planned",
         "profile": request.profile,
-        "request_digest": _request_digest(request, input_bundle),
+        "request_digest": preflight.request_digest,
         "package_version": __version__,
         "managed_units": sorted(units),
         "loopback_ports": {"core": CORE_PORT, "approval": APPROVAL_PORT},
         "https_topology": "external_self_hosted_reverse_proxy_to_loopback",
+        "prerequisites": {
+            "host": "validated_linux_systemd",
+            "runtime": "validated_service_visible_and_digest_bound",
+            "inputs": "validated_owner_only",
+            "broker_credential": "validated_redacted_runtime_policy",
+            "database_reference": "validated_fixed_local_peer_contract_service_canary_pending_apply",
+            "postgresql": {
+                "auth_method": "peer",
+                "database": ORDINARY_SERVER_POSTGRES_DATABASE,
+                "hba_rule": "local agentnet agentnet peer",
+                "hba_rule_order": "before_any_potentially_matching_local_rule",
+                "ident_map": "none_exact_name_match",
+                "os_user": CORE_USER,
+                "role": ORDINARY_SERVER_POSTGRES_USER,
+                "socket": ORDINARY_SERVER_POSTGRES_SOCKET,
+                "operator_action": "install exact scoped HBA rule, reload PostgreSQL, then rerun same approved digest",
+            },
+            "public_routes": "pending_start_health_checks",
+            "human_ceremonies": "pending_owner_oidc_and_passkey",
+        },
         "steps": steps,
         "authority_granted": False,
         "identity_enrolled": False,
         "production_durability_proven": False,
         "next": "freeze request_digest, then rerun with --expected-request-digest and --apply after one human approval",
     }
+
+
+def plan_server_setup(
+    request: ServerSetupRequest,
+    *,
+    layout: SetupLayout = SetupLayout(),
+) -> dict[str, Any]:
+    preflight = _server_setup_preflight(request, layout=layout)
+    return _planned_setup_evidence(request, preflight)
 
 
 def _atomic_write(path: Path, payload: bytes, *, mode: int, uid: int = 0, gid: int = 0) -> str:
@@ -946,6 +1267,214 @@ def _atomic_write(path: Path, payload: bytes, *, mode: int, uid: int = 0, gid: i
     return "completed"
 
 
+def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | os.O_NONBLOCK
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ServerSetupError("setup_marker_conflict", "setup marker custody is unsafe") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid != uid
+            or before.st_gid != gid
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or not 1 <= before.st_size <= 65_536
+        ):
+            raise ServerSetupError("setup_marker_conflict", "setup marker custody is unsafe")
+        payload = os.read(descriptor, before.st_size + 1)
+        after = os.fstat(descriptor)
+        if (
+            len(payload) != before.st_size
+            or after.st_dev != before.st_dev
+            or after.st_ino != before.st_ino
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ServerSetupError("setup_marker_conflict", "setup marker changed during preflight")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _validated_setup_marker(
+    payload: bytes | None,
+    *,
+    request_digest: str,
+    legacy_request_digest: str,
+) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    marker = _strict_json_bytes(payload, label="setup marker")
+    common = {
+        "schema",
+        "request_digest",
+        "approval_config_digest",
+        "core_config_digest",
+        "units",
+    }
+    digests = (marker.get("approval_config_digest"), marker.get("core_config_digest"))
+    if (
+        marker.get("units") != [APPROVAL_UNIT, CORE_UNIT]
+        or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in digests)
+    ):
+        raise ServerSetupError("setup_marker_conflict", "setup marker does not match the fixed profile")
+    if marker.get("schema") == "agentnet.server-setup.marker.v1":
+        if set(marker) != common or marker.get("request_digest") != legacy_request_digest:
+            raise ServerSetupError("setup_marker_conflict", "legacy setup marker does not match this request")
+        return marker
+    v2_keys = common | {
+        "package_version",
+        "previous_marker_digest",
+        "revision",
+        "unit_digests",
+    }
+    previous = marker.get("previous_marker_digest")
+    unit_digests = marker.get("unit_digests")
+    if (
+        marker.get("schema") != "agentnet.server-setup.marker.v2"
+        or set(marker) != v2_keys
+        or marker.get("request_digest") != request_digest
+        or not isinstance(marker.get("revision"), int)
+        or marker["revision"] < 1
+        or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
+        or not isinstance(marker.get("package_version"), str)
+        or not isinstance(unit_digests, dict)
+        or set(unit_digests) != {APPROVAL_UNIT, CORE_UNIT}
+        or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
+    ):
+        raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
+    return marker
+
+
+def _atomic_replace_exact(
+    path: Path,
+    *,
+    expected: bytes,
+    payload: bytes,
+    mode: int,
+    uid: int,
+    gid: int,
+) -> str:
+    current = _read_setup_marker(path, uid=uid, gid=gid)
+    if current != expected:
+        raise ServerSetupError("setup_marker_conflict", "setup marker changed before compare-and-swap")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        os.fchown(descriptor, uid, gid)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        before_replace = path.lstat()
+        if (
+            not stat.S_ISREG(before_replace.st_mode)
+            or before_replace.st_nlink != 1
+            or before_replace.st_uid != uid
+            or before_replace.st_gid != gid
+            or stat.S_IMODE(before_replace.st_mode) != mode
+            or _read_setup_marker(path, uid=uid, gid=gid) != expected
+        ):
+            raise ServerSetupError("setup_marker_conflict", "setup marker changed before compare-and-swap")
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+    return "updated_same_request"
+
+
+def _commit_setup_marker(
+    path: Path,
+    *,
+    existing_payload: bytes | None,
+    existing_marker: dict[str, Any] | None,
+    request_digest: str,
+    approval_config_digest: str,
+    core_config_digest: str,
+    unit_payloads: Mapping[str, bytes],
+    uid: int,
+    gid: int,
+) -> str:
+    unit_digests = {
+        unit: hashlib.sha256(unit_payloads[unit]).hexdigest()
+        for unit in (APPROVAL_UNIT, CORE_UNIT)
+    }
+    realized = {
+        "approval_config_digest": approval_config_digest,
+        "core_config_digest": core_config_digest,
+        "package_version": __version__,
+        "request_digest": request_digest,
+        "unit_digests": unit_digests,
+        "units": [APPROVAL_UNIT, CORE_UNIT],
+    }
+    if existing_marker is not None and existing_marker.get("schema") == "agentnet.server-setup.marker.v2":
+        if all(existing_marker.get(key) == value for key, value in realized.items()):
+            return _atomic_write(path, existing_payload or b"", mode=0o600, uid=uid, gid=gid)
+        revision = int(existing_marker["revision"]) + 1
+    else:
+        revision = 1
+    marker = {
+        "schema": "agentnet.server-setup.marker.v2",
+        "revision": revision,
+        "previous_marker_digest": hashlib.sha256(existing_payload).hexdigest() if existing_payload is not None else None,
+        **realized,
+    }
+    payload = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if existing_payload is None:
+        return _atomic_write(path, payload, mode=0o600, uid=uid, gid=gid)
+    return _atomic_replace_exact(
+        path,
+        expected=existing_payload,
+        payload=payload,
+        mode=0o600,
+        uid=uid,
+        gid=gid,
+    )
+
+
+def _run_systemctl(
+    executable: Path,
+    arguments: list[str],
+    *,
+    failure_message: str,
+) -> None:
+    try:
+        completed = subprocess.run(
+            [str(executable), *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": _SYSTEM_PATH, "HOME": "/root", "LANG": "C.UTF-8"},
+            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServerSetupError("systemd_start", failure_message) from exc
+    if completed.returncode != 0:
+        raise ServerSetupError("systemd_start", failure_message)
+
+
 def _ensure_account(
     name: str,
     home: Path,
@@ -1000,9 +1529,19 @@ def _ensure_root_private_directory(path: Path, *, uid: int, gid: int, label: str
 
 
 def _ensure_private_root(path: Path, account: pwd.struct_passwd) -> str:
-    if path.exists():
-        metadata = path.stat()
-        if path.is_symlink() or not path.is_dir() or metadata.st_uid != account.pw_uid or metadata.st_gid != account.pw_gid or stat.S_IMODE(metadata.st_mode) != 0o700:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        metadata = None
+    except OSError as exc:
+        raise ServerSetupError("private_root_conflict", "private AgentNet root is unavailable") from exc
+    if metadata is not None:
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != account.pw_uid
+            or metadata.st_gid != account.pw_gid
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
             raise ServerSetupError("private_root_conflict", "private AgentNet root conflicts with fixed profile")
         return "already_satisfied"
     path.mkdir(parents=True, mode=0o700)
@@ -1053,33 +1592,288 @@ def _drop_identity(account: pwd.struct_passwd):
     return apply
 
 
+def _run_postgres_probe_as(
+    account: pwd.struct_passwd,
+    probe: Callable[[], dict[str, Any]],
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    read_descriptor, write_descriptor = os.pipe()
+    try:
+        child = os.fork()
+    except OSError as exc:
+        os.close(read_descriptor)
+        os.close(write_descriptor)
+        raise ServerSetupError("postgres_preflight", f"{stage} could not start") from exc
+    if child == 0:
+        try:
+            os.close(read_descriptor)
+            try:
+                _drop_identity(account)()
+                os.environ.clear()
+                os.environ.update(
+                    {
+                        "PATH": _SYSTEM_PATH,
+                        "HOME": account.pw_dir,
+                        "LANG": "C.UTF-8",
+                    }
+                )
+                evidence = probe()
+            except BaseException as exc:
+                evidence = {"ready": False, "reason": type(exc).__name__}
+            payload = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+            if len(payload) > 16_384:
+                payload = b'{"ready":false,"reason":"OversizedEvidence"}'
+            os.write(write_descriptor, payload)
+        finally:
+            os.close(write_descriptor)
+            os._exit(0)
+    os.close(write_descriptor)
+    try:
+        readable, _, _ = select.select([read_descriptor], [], [], 10)
+        if not readable:
+            os.kill(child, 9)
+            os.waitpid(child, 0)
+            raise ServerSetupError("postgres_preflight", f"{stage} timed out")
+        payload = os.read(read_descriptor, 16_385)
+        _, wait_status = os.waitpid(child, 0)
+    finally:
+        os.close(read_descriptor)
+    if not payload or len(payload) > 16_384 or os.waitstatus_to_exitcode(wait_status) != 0:
+        raise ServerSetupError("postgres_preflight", f"{stage} returned invalid evidence")
+    try:
+        evidence = _strict_json_bytes(payload, label=f"{stage} evidence")
+    except ServerSetupError as exc:
+        raise ServerSetupError("postgres_preflight", f"{stage} returned invalid evidence") from exc
+    if evidence.get("ready") is not True:
+        reason = evidence.get("reason")
+        reason_class = reason if isinstance(reason, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", reason) else "Unavailable"
+        raise ServerSetupError(
+            "postgres_auth_not_ready",
+            f"{stage} failed ({reason_class}); apply the exact operator-owned PostgreSQL peer rule, reload PostgreSQL, and retry the same approved digest",
+        )
+    return evidence
+
+
+def _postgres_peer_gate(core_account: pwd.struct_passwd, database_url: str) -> dict[str, Any]:
+    service = _run_postgres_probe_as(
+        core_account,
+        lambda: probe_ordinary_server_postgres_connection(database_url),
+        stage="postgres_service_identity_canary",
+    )
+    try:
+        postgres_account = pwd.getpwnam("postgres")
+    except KeyError as exc:
+        raise ServerSetupError(
+            "postgres_admin_identity",
+            "local PostgreSQL administrator identity is unavailable for read-only auth-rule inspection",
+        ) from exc
+    if postgres_account.pw_uid == 0 or postgres_account.pw_name != "postgres":
+        raise ServerSetupError(
+            "postgres_admin_identity",
+            "local PostgreSQL administrator identity conflicts with fixed profile",
+        )
+    auth = _run_postgres_probe_as(
+        postgres_account,
+        inspect_ordinary_server_postgres_auth,
+        stage="postgres_auth_rule_inspection",
+    )
+    if (
+        service.get("current_user") != ORDINARY_SERVER_POSTGRES_USER
+        or service.get("current_database") != ORDINARY_SERVER_POSTGRES_DATABASE
+        or service.get("transport") != "unix_socket"
+        or service.get("writable_primary") is not True
+        or auth.get("auth_method") != "peer"
+        or auth.get("ident_map") != "none_exact_name_match"
+    ):
+        raise ServerSetupError(
+            "postgres_auth_not_ready",
+            "PostgreSQL service identity or exact peer rule does not match the fixed profile",
+        )
+    return {
+        "status": "validated_exact_local_peer",
+        "database": ORDINARY_SERVER_POSTGRES_DATABASE,
+        "os_user": CORE_USER,
+        "role": ORDINARY_SERVER_POSTGRES_USER,
+        "socket": ORDINARY_SERVER_POSTGRES_SOCKET,
+        "auth_method": "peer",
+        "ident_map": "none_exact_name_match",
+    }
+
+
+@dataclass(frozen=True)
+class _BoundedCommandResult:
+    returncode: int
+    stdout: bytes
+    stderr_present: bool
+
+
+def _kill_product_process_tree(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+
+def _run_bounded_product_process(
+    account: pwd.struct_passwd,
+    argv: list[str],
+    *,
+    environment: Mapping[str, str],
+    stage: str,
+) -> _BoundedCommandResult:
+    try:
+        process = subprocess.Popen(
+            argv,
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=_drop_identity(account),
+            start_new_session=True,
+            text=False,
+            bufsize=0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ServerSetupError("product_command_failed", f"{stage} could not start") from exc
+    if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen invariant
+        _kill_product_process_tree(process)
+        process.wait()
+        raise ServerSetupError("invalid_product_evidence", f"{stage} returned invalid evidence streams")
+
+    stdout = bytearray()
+    stderr_bytes = 0
+    streams = {
+        process.stdout.fileno(): "stdout",
+        process.stderr.fileno(): "stderr",
+    }
+    deadline = time.monotonic() + 300
+    try:
+        for descriptor in streams:
+            os.set_blocking(descriptor, False)
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, 300)
+            readable, _, _ = select.select(tuple(streams), (), (), min(remaining, 1.0))
+            if not readable:
+                if process.poll() is not None:
+                    raise ServerSetupError(
+                        "invalid_product_evidence",
+                        f"{stage} left structured evidence streams open",
+                    )
+                continue
+            for descriptor in readable:
+                try:
+                    chunk = os.read(descriptor, 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    streams.pop(descriptor, None)
+                    continue
+                if streams[descriptor] == "stdout":
+                    if len(stdout) + len(chunk) > 1_048_576:
+                        raise ServerSetupError(
+                            "invalid_product_evidence",
+                            f"{stage} returned oversized structured evidence",
+                        )
+                    stdout.extend(chunk)
+                else:
+                    stderr_bytes += len(chunk)
+                    if stderr_bytes > 65_536:
+                        raise ServerSetupError(
+                            "invalid_product_evidence",
+                            f"{stage} returned oversized error evidence",
+                        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, 300)
+        returncode = process.wait(timeout=remaining)
+    except BaseException:
+        _kill_product_process_tree(process)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    return _BoundedCommandResult(
+        returncode=returncode,
+        stdout=bytes(stdout),
+        stderr_present=stderr_bytes > 0,
+    )
+
+
 def _run_as(
     account: pwd.struct_passwd,
     argv: list[str],
     *,
     environment: Mapping[str, str],
-    allowed_returncodes: tuple[int, ...] = (0,),
+    stage: str,
+    accepted_returncodes: frozenset[int] = frozenset({0}),
 ) -> dict[str, Any]:
-    completed = subprocess.run(
-        argv,
-        env=dict(environment),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        preexec_fn=_drop_identity(account),
-        text=True,
-        timeout=300,
-    )
-    if completed.returncode not in allowed_returncodes:
-        raise ServerSetupError("product_command_failed", "fixed setup product command failed")
     try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ServerSetupError("invalid_product_evidence", "fixed setup product command returned invalid evidence") from exc
+        completed = _run_bounded_product_process(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ServerSetupError("product_command_failed", f"{stage} timed out") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ServerSetupError("product_command_failed", f"{stage} could not start") from exc
+    if completed.returncode not in accepted_returncodes:
+        stderr_state = "stderr_present" if completed.stderr_present else "no_stderr"
+        raise ServerSetupError(
+            "product_command_failed",
+            f"{stage} failed with exit status {completed.returncode} ({stderr_state})",
+        )
+    try:
+        value = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ServerSetupError("invalid_product_evidence", f"{stage} returned invalid structured evidence") from exc
     if not isinstance(value, dict):
-        raise ServerSetupError("invalid_product_evidence", "fixed setup product command returned invalid evidence")
+        raise ServerSetupError("invalid_product_evidence", f"{stage} returned invalid structured evidence")
     return value
+
+
+def _private_entry_exists(
+    path: Path,
+    account: pwd.struct_passwd,
+    *,
+    expected: str,
+    blocker: str,
+) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ServerSetupError(blocker, "managed private path is unavailable") from exc
+    if expected == "file":
+        valid_type = stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+        expected_mode = 0o600
+    elif expected == "directory":
+        valid_type = stat.S_ISDIR(metadata.st_mode)
+        expected_mode = 0o700
+    else:  # pragma: no cover - internal invariant
+        raise AssertionError(expected)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not valid_type
+        or metadata.st_uid != account.pw_uid
+        or metadata.st_gid != account.pw_gid
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+    ):
+        raise ServerSetupError(blocker, "managed private path custody conflicts with fixed profile")
+    return True
 
 
 def _require_private_file(path: Path, account: pwd.struct_passwd, *, blocker: str) -> None:
@@ -1161,6 +1955,39 @@ def _require_private_directory(path: Path, account: pwd.struct_passwd, *, blocke
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         raise ServerSetupError(blocker, "managed private directory custody conflicts with fixed profile")
+
+
+def _require_private_tree(
+    root: Path,
+    account: pwd.struct_passwd,
+    *,
+    blocker: str,
+) -> None:
+    _require_private_directory(root, account, blocker=blocker)
+    pending = [root]
+    records = 0
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = tuple(os.scandir(directory))
+        except OSError as exc:
+            raise ServerSetupError(blocker, "managed private tree is unavailable") from exc
+        for entry in entries:
+            records += 1
+            if records > 20_000:
+                raise ServerSetupError(blocker, "managed private tree exceeds fixed custody bound")
+            item = Path(entry.path)
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ServerSetupError(blocker, "managed private tree changed during validation") from exc
+            if stat.S_ISDIR(metadata.st_mode):
+                _require_private_directory(item, account, blocker=blocker)
+                pending.append(item)
+            elif stat.S_ISREG(metadata.st_mode):
+                _require_private_file(item, account, blocker=blocker)
+            else:
+                raise ServerSetupError(blocker, "managed private tree contains an unsupported entry")
 
 
 def _approval_trust(
@@ -1285,6 +2112,73 @@ def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> 
     raise ServerSetupError("service_health", "AgentNet service did not return exact healthy identity evidence")
 
 
+def _require_core_create_evidence(result: Mapping[str, Any], core_config_path: Path) -> None:
+    readiness = result.get("local_readiness")
+    if (
+        result.get("config") != str(core_config_path)
+        or not isinstance(readiness, dict)
+        or readiness.get("schema") != "agentnet.core.readiness.v1"
+        or readiness.get("ready") is not False
+        or not isinstance(readiness.get("storage"), dict)
+        or readiness["storage"].get("ready") is not True
+        or not isinstance(readiness.get("audit"), dict)
+        or readiness["audit"].get("valid") is not True
+        or not isinstance(readiness.get("artifacts"), dict)
+        or readiness["artifacts"].get("ready") is not True
+        or not isinstance(readiness.get("deployment_binding"), dict)
+        or readiness["deployment_binding"].get("ready") is not False
+        or readiness["deployment_binding"].get("required") is not True
+        or not isinstance(readiness.get("a2a_schema"), dict)
+        or readiness["a2a_schema"].get("ready") is not True
+        or not isinstance(readiness.get("scanner_trust"), dict)
+        or readiness["scanner_trust"].get("ready") is not True
+    ):
+        raise ServerSetupError(
+            "core_evidence",
+            "Core create evidence did not prove exact healthy pre-enrollment state",
+        )
+
+
+def _load_validated_core_config(
+    core_config_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    core_data: Path,
+    oidc: OIDCEnrollmentConfig,
+    scanner_trust: ScannerTrustConfig,
+):
+    config = load_config_json(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="core_custody",
+            max_bytes=1_048_576,
+        ).decode("utf-8")
+    )
+    if (
+        config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+        or config.domain_id != request.domain_id
+        or config.data_dir != core_data / "core"
+        or config.database_url != request.database_url
+        or config.database_url_env != request.database_url_env
+        or config.artifact_backend != "postgres-manifest"
+        or config.artifact_dir != core_data / "core" / "artifacts"
+        or config.public_base_url != request.core_public_origin
+        or config.effective_service_audience != request.service_audience
+        or config.runtime_instance_id != request.runtime_instance_id
+        or config.oidc_enrollment != oidc
+        or config.scanner_trust != scanner_trust
+        or config.a2a is not None
+        or config.local_bindings is not None
+        or config.relay is not None
+        or config.federation_trust is not None
+        or config.postgres_recovery_topology
+    ):
+        raise ServerSetupError("core_conflict", "existing Core state conflicts with fixed request")
+    return config
+
+
 def apply_server_setup(
     request: ServerSetupRequest,
     *,
@@ -1293,8 +2187,8 @@ def apply_server_setup(
     layout: SetupLayout = SetupLayout(),
     _allow_test_layout: bool = False,
 ) -> dict[str, Any]:
-    plan = plan_server_setup(request, layout=layout)
-    actual_digest = str(plan["request_digest"])
+    preflight = _server_setup_preflight(request, layout=layout)
+    actual_digest = preflight.request_digest
     if not re.fullmatch(r"[a-f0-9]{64}", expected_request_digest) or actual_digest != expected_request_digest:
         raise ServerSetupError(
             "approval_digest_mismatch",
@@ -1353,38 +2247,81 @@ def apply_server_setup(
         core_env_path = layout.host(CORE_ENV)
         approval_env_path = layout.host(APPROVAL_ENV)
 
-        node_executable = _resolve_node_executable()
-        uv_executable = _resolve_uv_executable()
-        executable = _resolve_executable(node_executable, uv_executable)
-        systemctl_executable = _resolve_host_tool("systemctl")
-        useradd_executable = _resolve_host_tool("useradd")
-        input_bundle = _read_input_bundle(request)
-        if _request_digest(request, input_bundle) != approved_digest:
-            raise ServerSetupError("request_changed", "setup request inputs changed after approved preflight")
-        oidc_provider, owner_oidc, approvers, scanner_trust = _validate_inputs(request, input_bundle)
+        locked_preflight = _server_setup_preflight(request, layout=layout)
+        if locked_preflight.request_digest != approved_digest:
+            raise ServerSetupError("request_changed", "setup request, inputs, or runtime changed after approved preflight")
+        preflight = locked_preflight
+        plan = _planned_setup_evidence(request, preflight)
+        node_executable = preflight.runtime.node_executable
+        uv_executable = preflight.runtime.uv_executable
+        executable = preflight.runtime.agentnet_executable
+        systemctl_executable = preflight.runtime.systemctl_executable
+        useradd_executable = preflight.runtime.useradd_executable
+        input_bundle = preflight.input_bundle
+        oidc_provider = preflight.oidc_provider
+        owner_oidc = preflight.owner_oidc
+        approvers = preflight.approvers
+        scanner_trust = preflight.scanner_trust
+        existing_marker_payload = _read_setup_marker(setup_marker, uid=root_uid, gid=root_gid)
+        existing_marker = _validated_setup_marker(
+            existing_marker_payload,
+            request_digest=approved_digest,
+            legacy_request_digest=preflight.legacy_request_digest,
+        )
         for unit in (APPROVAL_UNIT, CORE_UNIT):
             _require_no_unit_overrides(layout, unit)
         core_input = input_bundle["core_environment_file"]
         approval_input = input_bundle["approval_environment_file"]
-        core_values = _parse_environment(core_input, label="Core environment input")
-        approval_values = _parse_environment(approval_input, label="Approval environment input")
+        core_values = preflight.core_values
+        approval_values = preflight.approval_values
         core_account = _ensure_account(
             CORE_USER,
             CORE_DATA,
             useradd_executable=useradd_executable,
         )
+        postgres_evidence = _postgres_peer_gate(core_account, request.database_url)
         approval_account = _ensure_account(
             APPROVAL_USER,
             APPROVAL_DATA,
             useradd_executable=useradd_executable,
         )
-        steps: list[dict[str, str]] = [
+        steps: list[dict[str, Any]] = [
             {"id": "preflight", "status": "completed"},
             {"id": "core_identity", "status": "completed"},
+            {"id": "postgres_service_identity", "status": postgres_evidence["status"]},
             {"id": "approval_identity", "status": "completed"},
         ]
         steps.append({"id": "core_private_root", "status": _ensure_private_root(core_data, core_account)})
         steps.append({"id": "approval_private_root", "status": _ensure_private_root(approval_data, approval_account)})
+        approval_preexisting = _private_entry_exists(
+            approval_config_path,
+            approval_account,
+            expected="file",
+            blocker="approval_config",
+        )
+        approval_state_preexisting = _private_entry_exists(
+            approval_state,
+            approval_account,
+            expected="directory",
+            blocker="approval_custody",
+        )
+        core_preexisting = _private_entry_exists(
+            core_config_path,
+            core_account,
+            expected="file",
+            blocker="core_custody",
+        )
+        core_runtime = core_data / "core"
+        core_runtime_preexisting = _private_entry_exists(
+            core_runtime,
+            core_account,
+            expected="directory",
+            blocker="core_custody",
+        )
+        if approval_state_preexisting:
+            _require_private_tree(approval_state, approval_account, blocker="approval_custody")
+        if core_runtime_preexisting:
+            _require_private_tree(core_runtime, core_account, blocker="core_custody")
         secret_root = layout.host(Path("/etc/agentnet-secrets"))
         steps.append(
             {
@@ -1411,16 +2348,7 @@ def apply_server_setup(
         steps.append({"id": "core_environment", "status": _atomic_write(core_env_path, core_input, mode=0o600, uid=root_uid, gid=root_gid)})
         steps.append({"id": "approval_environment", "status": _atomic_write(approval_env_path, approval_input, mode=0o600, uid=root_uid, gid=root_gid)})
 
-        required_approval_environment = {"AGENTNET_APPROVAL_CORE_TOKEN"}
-        if owner_oidc.client_secret_env is not None:
-            required_approval_environment.add(owner_oidc.client_secret_env)
-        approval_environment = _service_environment(
-            approval_values,
-            approval_data,
-            uv_executable,
-            allowed_names=frozenset(required_approval_environment),
-        )
-        approval_preexisting = approval_config_path.exists()
+        approval_environment = preflight.approval_environment
         if not approval_preexisting:
             staging_root = layout.host(Path("/run"))
             staging_root.mkdir(parents=True, exist_ok=True)
@@ -1458,9 +2386,11 @@ def apply_server_setup(
                         "--internal-core-credential-env", "AGENTNET_APPROVAL_CORE_TOKEN",
                     ],
                     environment=approval_environment,
+                    stage="approval_provision",
                 )
                 if result.get("schema") != "agentnet.approval.provision-result.v1":
                     raise ServerSetupError("approval_evidence", "Approval provision evidence schema is invalid")
+                _require_private_tree(approval_state, approval_account, blocker="approval_custody")
                 steps.append({"id": "approval_provision", "status": "completed"})
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
@@ -1484,6 +2414,7 @@ def apply_server_setup(
                 approval_account,
                 [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
                 environment=approval_environment,
+                stage="approval_status",
             )
             steps.append({"id": "approval_provision", "status": "already_satisfied"})
         selected = [item for item in trusted if item.principal_id == request.approval_approver_principal_id]
@@ -1507,19 +2438,7 @@ def apply_server_setup(
         scanner_payload = json.dumps(scanner_trust.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
         steps.append({"id": "scanner_trust", "status": _atomic_write(scanner_path, scanner_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
 
-        required_core_environment = {
-            request.database_url_env,
-            "AGENTNET_APPROVAL_CORE_TOKEN",
-        }
-        if oidc_provider.client_secret_env is not None:
-            required_core_environment.add(oidc_provider.client_secret_env)
-        core_environment = _service_environment(
-            core_values,
-            core_data,
-            uv_executable,
-            allowed_names=frozenset(required_core_environment),
-        )
-        core_preexisting = core_config_path.exists()
+        core_environment = preflight.core_environment
         if not core_preexisting:
             result = _run_as(
                 core_account,
@@ -1536,98 +2455,102 @@ def apply_server_setup(
                     "--runtime-instance-id", request.runtime_instance_id,
                 ],
                 environment=core_environment,
-                allowed_returncodes=(0, 1),
+                stage="core_create",
+                accepted_returncodes=frozenset({1}),
             )
-            readiness = result.get("local_readiness")
             _require_private_file(core_config_path, core_account, blocker="core_custody")
-            if (
-                result.get("config") != str(core_config_path)
-                or not isinstance(readiness, dict)
-                or not isinstance(readiness.get("storage"), dict)
-                or not readiness["storage"].get("ready")
-                or not isinstance(readiness.get("audit"), dict)
-                or not readiness["audit"].get("valid")
-            ):
-                raise ServerSetupError("core_evidence", "Core bootstrap evidence is invalid")
+            _require_core_create_evidence(result, core_config_path)
             bootstrap_status = "completed"
         else:
             _require_private_file(core_config_path, core_account, blocker="core_custody")
-            bootstrap_status = "already_satisfied"
+            bootstrap_status = "revalidated"
 
-        config = load_config_json(
-            _read_private_managed_file(
-                core_config_path,
-                core_account,
-                blocker="core_custody",
-                max_bytes=1_048_576,
-            ).decode("utf-8")
+        _require_private_tree(core_runtime, core_account, blocker="core_custody")
+        config = _load_validated_core_config(
+            core_config_path,
+            core_account,
+            request=request,
+            core_data=core_data,
+            oidc=oidc,
+            scanner_trust=scanner_trust,
         )
-        identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
-        if (
-            config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
-            or config.domain_id != request.domain_id
-            or config.data_dir != core_data / "core"
-            or config.database_url != request.database_url
-            or config.database_url_env != request.database_url_env
-            or config.artifact_backend != "postgres-manifest"
-            or config.artifact_dir != core_data / "core" / "artifacts"
-            or config.public_base_url != request.core_public_origin
-            or config.effective_service_audience != request.service_audience
-            or config.runtime_instance_id != request.runtime_instance_id
-            or config.oidc_enrollment != oidc
-            or config.scanner_trust != scanner_trust
-            or config.a2a is not None
-            or config.local_bindings is not None
-            or config.relay is not None
-            or config.federation_trust is not None
-            or config.postgres_recovery_topology
-        ):
-            raise ServerSetupError("core_conflict", "existing Core state conflicts with fixed request")
         if core_preexisting:
             _run_as(
                 core_account,
                 [str(node_executable), str(executable), "bootstrap-server-agent", "--config", str(core_config_path)],
                 environment=core_environment,
+                stage="core_bootstrap",
             )
+            _require_private_tree(core_runtime, core_account, blocker="core_custody")
+            config = _load_validated_core_config(
+                core_config_path,
+                core_account,
+                request=request,
+                core_data=core_data,
+                oidc=oidc,
+                scanner_trust=scanner_trust,
+            )
+        identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
         steps.append({"id": "core_bootstrap", "status": bootstrap_status})
 
-        marker = {
-            "schema": "agentnet.server-setup.marker.v1",
-            "request_digest": approved_digest,
-            "approval_config_digest": canonical_digest(approval_config.model_dump(mode="json")),
-            "core_config_digest": canonical_digest(
-                config.model_dump(
-                    mode="json",
-                    exclude={"enrolled_harness_id", "enrolled_credential_id"},
-                )
-            ),
-            "units": [APPROVAL_UNIT, CORE_UNIT],
-        }
-        steps.append({"id": "setup_marker", "status": _atomic_write(setup_marker, json.dumps(marker, sort_keys=True).encode() + b"\n", mode=0o600, uid=root_uid, gid=root_gid)})
+        approval_config, trusted_after = _approval_trust(
+            approval_config_path,
+            approval_account,
+            approval_state,
+        )
+        _require_exact_approval_policy(
+            approval_config,
+            request=request,
+            owner_oidc=owner_oidc,
+            approvers=approvers,
+            approval_state=approval_state,
+        )
+        if trusted_after != trusted:
+            raise ServerSetupError("approval_conflict", "Approval trust changed during setup")
 
-        for unit, payload in render_units(node_executable, executable, uv_executable).items():
+        unit_payloads = render_units(node_executable, executable, uv_executable)
+        for unit, payload in unit_payloads.items():
             target = layout.host(Path("/etc/systemd/system") / unit)
             steps.append({"id": f"unit:{unit}", "status": _atomic_write(target, payload, mode=0o644, uid=root_uid, gid=root_gid)})
+        steps.append(
+            {
+                "id": "setup_marker",
+                "status": _commit_setup_marker(
+                    setup_marker,
+                    existing_payload=existing_marker_payload,
+                    existing_marker=existing_marker,
+                    request_digest=approved_digest,
+                    approval_config_digest=canonical_digest(approval_config.model_dump(mode="json")),
+                    core_config_digest=canonical_digest(
+                        config.model_dump(
+                            mode="json",
+                            exclude={"enrolled_harness_id", "enrolled_credential_id"},
+                        )
+                    ),
+                    unit_payloads=unit_payloads,
+                    uid=root_uid,
+                    gid=root_gid,
+                ),
+            }
+        )
         if start:
-            for argv in (
-                [str(systemctl_executable), "daemon-reload"],
-                [str(systemctl_executable), "enable", "--now", APPROVAL_UNIT],
-                [str(systemctl_executable), "enable", CORE_UNIT],
-                [str(systemctl_executable), "restart", CORE_UNIT],
+            for arguments in (
+                ["daemon-reload"],
+                ["enable", "--now", APPROVAL_UNIT],
+                ["enable", CORE_UNIT],
+                ["restart", CORE_UNIT],
             ):
-                completed = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                if completed.returncode != 0:
-                    raise ServerSetupError("systemd_start", "failed to start AgentNet managed units")
-            for unit in (APPROVAL_UNIT, CORE_UNIT):
-                active = subprocess.run(
-                    [str(systemctl_executable), "is-active", "--quiet", unit],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
+                _run_systemctl(
+                    systemctl_executable,
+                    arguments,
+                    failure_message="failed to start AgentNet managed units",
                 )
-                if active.returncode != 0:
-                    raise ServerSetupError("systemd_start", "AgentNet managed unit is not active")
+            for unit in (APPROVAL_UNIT, CORE_UNIT):
+                _run_systemctl(
+                    systemctl_executable,
+                    ["is-active", "--quiet", unit],
+                    failure_message="AgentNet managed unit is not active",
+                )
             approval_health = {
                 "schema": "agentnet.approval.health.v1",
                 "service": "agentnet-approval",

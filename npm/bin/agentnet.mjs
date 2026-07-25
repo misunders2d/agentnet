@@ -39,25 +39,11 @@ const privilegedSetupApply = process.platform === "linux" &&
   userArguments[0] === "server-agent" && userArguments[1] === "setup" &&
   userArguments.includes("--apply");
 
-if (privilegedSetupApply) {
-  try {
-    const expectedDigest = argumentValue(userArguments, "--expected-request-digest");
-    if (
-      !/^[a-f0-9]{64}$/u.test(expectedDigest) ||
-      privilegedApprovalDigest(userArguments) !== expectedDigest
-    ) {
-      throw new Error("approved digest mismatch");
-    }
-  } catch {
-    console.error("Privileged AgentNet setup requires the exact frozen request digest before runtime setup.");
-    process.exit(1);
-  }
-}
-
-const resolveCommand = (command) => {
+const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const resolveCommand = (command, searchPath = process.env.PATH ?? "") => {
   const candidates = path.isAbsolute(command)
     ? [command]
-    : (process.env.PATH ?? "").split(path.delimiter).filter(Boolean).map((entry) => path.join(entry, command));
+    : searchPath.split(path.delimiter).filter(Boolean).map((entry) => path.join(entry, command));
   for (const candidate of candidates) {
     try {
       accessSync(candidate, fsConstants.X_OK);
@@ -71,9 +57,13 @@ const resolveCommand = (command) => {
 
 const requireRootOwnedPath = (target, { recursive = false } = {}) => {
   const resolved = realpathSync(target);
+  const protectedRoots = ["/home", "/root", "/run/user"];
+  if (protectedRoots.some((root) => resolved === root || resolved.startsWith(`${root}/`))) {
+    throw new Error("privileged AgentNet setup executable is hidden by ProtectHome");
+  }
   for (let current = resolved; ; current = path.dirname(current)) {
     const info = lstatSync(current);
-    const requiredMode = 0o005;
+    const requiredMode = info.isDirectory() ? 0o001 : 0o005;
     if (info.uid !== 0 || (info.mode & 0o022) !== 0 || (info.mode & requiredMode) !== requiredMode) {
       throw new Error("privileged AgentNet setup requires root-owned non-writable service-readable executable lineage");
     }
@@ -99,17 +89,50 @@ const requireRootOwnedPath = (target, { recursive = false } = {}) => {
   return resolved;
 };
 
+let nodeExecutable = realpathSync(process.execPath);
 let uvExecutable = process.env.AGENTNET_UV || "uv";
+let systemctlExecutable;
+let useraddExecutable;
+const resolvedUv = resolveCommand(uvExecutable);
+if (!resolvedUv) {
+  console.error("AgentNet requires an executable uv installation.");
+  process.exit(1);
+}
+uvExecutable = resolvedUv;
 if (privilegedSetupApply) {
   try {
-    requireRootOwnedPath(process.execPath);
+    nodeExecutable = requireRootOwnedPath(nodeExecutable);
     requireRootOwnedPath(packageRoot, { recursive: true });
-    const resolvedUv = resolveCommand(uvExecutable);
-    if (!resolvedUv) throw new Error("uv unavailable");
-    uvExecutable = requireRootOwnedPath(resolvedUv);
+    uvExecutable = requireRootOwnedPath(uvExecutable);
+    const resolvedSystemctl = resolveCommand("systemctl", systemPath);
+    const resolvedUseradd = resolveCommand("useradd", systemPath);
+    if (!resolvedSystemctl || !resolvedUseradd) {
+      throw new Error("required setup host tool is unavailable");
+    }
+    systemctlExecutable = requireRootOwnedPath(resolvedSystemctl);
+    useraddExecutable = requireRootOwnedPath(resolvedUseradd);
+    const agentnetExecutable = requireRootOwnedPath(
+      path.join(packageRoot, "npm", "bin", "agentnet.mjs"),
+    );
+    const expectedDigest = argumentValue(userArguments, "--expected-request-digest");
+    const digestEnvironment = {
+      ...process.env,
+      AGENTNET_EXECUTABLE: agentnetExecutable,
+      AGENTNET_NODE_EXECUTABLE: nodeExecutable,
+      AGENTNET_PACKAGE_ROOT: packageRoot,
+      AGENTNET_SYSTEMCTL: systemctlExecutable,
+      AGENTNET_USERADD: useraddExecutable,
+      AGENTNET_UV: uvExecutable,
+    };
+    if (
+      !/^[a-f0-9]{64}$/u.test(expectedDigest) ||
+      privilegedApprovalDigest(userArguments, digestEnvironment) !== expectedDigest
+    ) {
+      throw new Error("approved digest mismatch");
+    }
   } catch {
     console.error(
-      "Privileged AgentNet setup requires absolute root-owned Node.js, uv, launcher, and package tree provenance.",
+      "Privileged AgentNet setup requires the exact frozen digest and absolute root-owned, service-visible Node.js, uv, launcher, package, systemctl, and useradd provenance.",
     );
     process.exit(1);
   }
@@ -230,7 +253,7 @@ uvArguments.push("agentnet", ...userArguments);
 
 const inheritedEnvironment = privilegedSetupApply
   ? {
-      PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      PATH: systemPath,
       HOME: "/root",
       LANG: "C.UTF-8",
       ...(process.env.SUDO_UID && /^\d+$/.test(process.env.SUDO_UID)
@@ -243,9 +266,10 @@ const child = spawn(uvExecutable, uvArguments, {
   env: {
     ...inheritedEnvironment,
     AGENTNET_PACKAGE_ROOT: packageRoot,
-    AGENTNET_NODE_EXECUTABLE: process.execPath,
+    AGENTNET_NODE_EXECUTABLE: nodeExecutable,
     AGENTNET_UV: uvExecutable,
     AGENTNET_NPM_RUNTIME_DIR: runtimeRoot,
+    PYTHONDONTWRITEBYTECODE: "1",
     UV_NO_MODIFY_PATH: "1",
     UV_PROJECT_ENVIRONMENT: runtimeRoot,
   },

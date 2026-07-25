@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-07-22. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-07-25. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -47,7 +47,7 @@ published and historical release evidence:
   product-owned ordinary-server setup boundary, dedicated locked service
   identities, exact plan/apply digest approval, create-or-exact-match host state,
   and redacted health/readiness evidence; it grants no identity or authority.
-- Prepared `0.1.25` repairs two local JSON-RPC interoperability defects exposed
+- Published `0.1.25` repairs two local JSON-RPC interoperability defects exposed
   by official A2A TCK commit `5996b79f9cefa6fc390980e383e358a66fb9e49e`:
   exact `/rpc` and `/rpc/` aliases avoid POST redirects, and an absent SDK request
   tenant is restored only from an exact verified opaque route binding. Missing or
@@ -58,7 +58,24 @@ published and historical release evidence:
   **1386 passed and 15 expected host/PostgreSQL skips**. Focused official JSON-RPC
   reports **3 passed**, but the full MUST lane remains non-green at **50 passed,
   11 failed, 174 skipped**. G04 remains `FAILED`; no requirement, production,
-  publication, or cutover status is promoted.
+  deployment, cutover, or gate status is promoted by those results.
+- Unreleased `0.1.26` working candidate repairs ordinary Linux setup convergence.
+  Affected stable IDs: `ARC-001`, `ID-001`, `ID-002`, `ID-003`, `ID-006`,
+  `SEC-005`, `SEC-007`, `OPS-003`, `OPS-006`, and `OPS-007`. The candidate's
+  approval digest v2 binds exact service-visible Node/uv/AgentNet/`systemctl`/
+  `useradd` executable paths/content and the full executed AgentNet package-tree
+  content identity; semantic
+  broker validation and locked preflight precede managed writes; PostgreSQL uses
+  one exact service-identity Unix-socket peer gate with parsed-rule and reload-
+  freshness evidence; marker v2 uses same-request prior-byte compare-and-swap and
+  never skips realized-state bootstrap. Windows CLI import no longer requires
+  Unix account modules. Current local focused platform/setup/activation/package/
+  release lane is **151 passed with 9 expected non-host platform skips** and the
+  release verifier passes; source regression excluding installed-harness
+  and release-manifest gates is **1432 passed
+  with 16 expected platform/dedicated-PostgreSQL skips**. Clean Ubuntu 24.04/PostgreSQL 18
+  installed-artifact workflow, final release manifest, publication, and external
+  deployment evidence remain pending; no requirement or gate status is promoted.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is
@@ -208,7 +225,7 @@ stable requirement's status or remaining external/owner boundary.
 | OPS-004 — privacy-safe health/queue/latency/error/denial/security observability | partial-external | `src/agentnet/operations/telemetry.py`; `src/agentnet/audit/service.py`; `src/agentnet/product_http.py` | Fixed-label counters, bounded latency buckets, gauges, outage denials, scanner/audit/cost/adapter results, and protected content-free operator status: `tests/operations/test_privacy_budgets_attention.py`; `tests/integration/test_product_http_api.py`; `tests/production/test_postgres_runtime.py` | Production dashboard, alert delivery, retention, and load-SLO evidence remain external/owner-governed. |
 | OPS-005 — quotas, rate limits, backpressure, abuse and loop controls | partial-external | `src/agentnet/operations/quotas.py`; `src/agentnet/supervisor/model_egress.py`; `src/agentnet/operations/policy_defaults.py` | Persistent multidimensional fairness, atomic authoritative pressure reservations, circuit-breaker CAS/reclaim, loop fencing, safety reserve, relay/effect composition, and real-PostgreSQL one-winner race: `tests/operations/test_privacy_budgets_attention.py`; `tests/relay/test_server_agent_relay.py`; `tests/effects/test_effect_reservation.py`; `tests/production/test_postgres_runtime.py` | Production flood/soak/capacity tuning remains external and owner-governed. |
 | OPS-006 — portable self-hosted install/config/credentials/deployment | partial-external | `npm/bin/agentnet.mjs`; `src/agentnet/host.py`; `src/agentnet/host_security.py`; `src/agentnet/windows_security.py`; `src/agentnet/_terminal_handoff.py`; `src/agentnet/cli.py`; `src/agentnet/operations/server_setup.py`; `src/agentnet/storage/sqlite.py`; `src/agentnet/security/distribution.py`; `deploy/compose.production.json` | Linux/macOS/Windows package install/launch; fixed Linux setup plan/apply/resume/redaction; canonical state roots; owner-mode/protected-DACL state; reparse/link rejection; portable SQLite reopen/replay; signed HTTP client availability; config rebinding; backup/restore; anti-rollback; and POSIX private-TTY behavior: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/cli/test_terminal_handoff.py`; `tests/production/test_deployment_config.py`; `tests/operations/test_backup_restore.py`; `tests/security/test_distribution_lifecycle.py` | Current setup apply/start evidence is hermetic and Linux/systemd-only. GitHub real-host evidence covers prior named local/package contracts only. Windows terminal mode intentionally fails closed; signed native installer/update/uninstall/rollback, privileged hostile-path trials, live Google/WebAuthn, PostgreSQL locked restore, KMS/off-host custody, and independently signed production artifacts remain external. |
-| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `docs/BAKEOFF_PLAN.md` | `0.1.12` historical real-host platform contracts and packed launch pass on Ubuntu/macOS/Windows in run `29610467753`; published `0.1.18` historical unfiltered local `1166 passed/15 expected skips`; published `0.1.18` `agentnet verify` and source/gen1/gen2 each `1087 passed/15 expected skips`; current uncommitted S0–S7 targeted checks `168 passed`, `475 passed`, and `428 passed/7 expected PostgreSQL skips`, with focused C0 `44 passed/25 deselected`, focused PostgreSQL catalog `12 passed/2 expected skips`, source package check, compileall, diff check, and 85-ID count PASS; historical release verifier, recursive package gate, reproducible Python builds, and exact installed deterministic harness probe pass: `tests/platform/test_host_support.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py`; `evidence/local/2026-07-20-v0.1.18/manifest.json` | Official A2A remains non-green; the uncommitted S0–S7 candidate has no current full-suite, recursive-package, release-verifier, real-host CI, skill-loader final proof, or mutation-authorized PostgreSQL evidence; completed live cross-device ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
+| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For the current uncommitted `0.1.26` candidate, the source lane excluding installed-live inference and release-manifest self-check reports `1432 passed/16 expected skips`; the focused setup/platform/package/release lane reports `151 passed/9 expected skips`; source and both recursive installed npm generations report `1385 passed/16 expected skips`. The release verifier, source package checks, syntax checks, bounded subprocess overflow/pipe-stall regressions, byte-identical wheel/sdist build, recursive package gate, and source/fresh-packed Pi skill loaders pass: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Clean Ubuntu 24.04/PostgreSQL 18 workflow, current cross-platform CI, and mutation-authorized PostgreSQL evidence remain pending; completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
 
 ## Accountable policy decisions (separate from the 85 requirements)
 

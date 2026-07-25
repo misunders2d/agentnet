@@ -1115,7 +1115,7 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
         if args.apply and not args.expected_request_digest:
             raise ServerSetupError(
                 "approval_digest_required",
-                "--apply requires --expected-request-digest from the frozen read-only plan",
+                "--apply requires --expected-request-digest from the frozen no-managed-host-write plan",
             )
         if not args.apply and args.expected_request_digest:
             raise ServerSetupError("invalid_action", "--expected-request-digest requires --apply")
@@ -3629,7 +3629,7 @@ def build_parser() -> argparse.ArgumentParser:
     server_agent_setup.add_argument(
         "--apply",
         action="store_true",
-        help="apply the frozen setup request; omitted means read-only plan",
+        help="apply the frozen setup request; omitted means no-managed-host-write plan",
     )
     server_agent_setup.add_argument(
         "--start",
@@ -3638,7 +3638,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     server_agent_setup.add_argument(
         "--expected-request-digest",
-        help="exact digest from the human-approved read-only plan; required with --apply",
+        help="exact digest from the human-approved no-managed-host-write plan; required with --apply",
     )
     server_agent_setup.set_defaults(func=command_server_agent_setup)
     server_agent_activate = server_agent_commands.add_parser(

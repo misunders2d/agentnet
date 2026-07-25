@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +22,7 @@ from agentnet.approval.config import (
 from agentnet.operations.config import IndependentApproverConfig
 from agentnet.cli import build_parser, command_server_agent_setup
 from agentnet.security.signatures import P256KeyPair
+from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 from agentnet.operations.server_setup import (
     APPROVAL_UNIT,
     CORE_UNIT,
@@ -32,6 +36,40 @@ from agentnet.operations.server_setup import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stable_synthetic_runtime_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(
+        setup,
+        "_sha256_stable_file",
+        lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest(),
+    )
+    if request.node.name not in {
+        "test_launcher_preflight_digest_matches_python_plan",
+        "test_package_tree_digest_rejects_symlinks_and_changes_with_content",
+    }:
+        monkeypatch.setattr(
+            setup,
+            "_sha256_stable_tree",
+            lambda path: hashlib.sha256(f"tree:{path}".encode()).hexdigest(),
+        )
+
+
+def test_setup_layout_keeps_runtime_lock_and_marker_in_persistent_setup_custody(
+    tmp_path: Path,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    assert SetupLayout().lock == Path("/var/lib/agentnet-setup/setup.lock")
+    layout = SetupLayout(root=tmp_path)
+    assert layout.lock == tmp_path / "var/lib/agentnet-setup/setup.lock"
+    assert layout.host(setup.SETUP_MARKER) == tmp_path / "var/lib/agentnet-setup/setup.json"
+
+
 def _private_json(path: Path, value: object) -> Path:
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)
@@ -41,16 +79,16 @@ def _private_json(path: Path, value: object) -> Path:
 def _request(tmp_path: Path) -> Path:
     core_env = tmp_path / "core.env"
     core_env.write_text(
-        "AGENTNET_DATABASE_URL=postgresql://agentnet@127.0.0.1/agentnet\n"
+        f"AGENTNET_DATABASE_URL={ORDINARY_SERVER_POSTGRES_DSN}\n"
         "AGENTNET_CORE_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
         encoding="utf-8",
     )
     core_env.chmod(0o600)
     approval_env = tmp_path / "approval.env"
     approval_env.write_text(
         "AGENTNET_APPROVAL_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
         encoding="utf-8",
     )
     approval_env.chmod(0o600)
@@ -113,7 +151,7 @@ def _request(tmp_path: Path) -> Path:
             "runtime_instance_id": "ordinary-server-1",
             "core_public_origin": "https://core.corp.example",
             "approval_public_origin": "https://approval.corp.example",
-            "database_url": "postgresql://agentnet@127.0.0.1/agentnet",
+            "database_url": ORDINARY_SERVER_POSTGRES_DSN,
             "database_url_env": "AGENTNET_DATABASE_URL",
             "core_environment_file": str(core_env),
             "approval_environment_file": str(approval_env),
@@ -159,11 +197,36 @@ def test_launcher_preflight_digest_matches_python_plan(
     request = load_server_setup_request(request_path)
     import agentnet.operations.server_setup as setup
 
+    node = Path(str(shutil.which("node"))).resolve()
+    uv_value = shutil.which("uv")
+    if uv_value is None:
+        pytest.skip("uv is unavailable")
+    uv = Path(uv_value).resolve()
+    package_root = tmp_path / "package"
+    executable = package_root / "npm/bin/agentnet.mjs"
+    systemctl = tmp_path / "systemctl"
+    useradd = tmp_path / "useradd"
+    systemctl.write_bytes(b"systemctl-v1")
+    useradd.write_bytes(b"useradd-v1")
+    executable.parent.mkdir(parents=True)
+    shutil.copy2(Path(__file__).parents[2] / "npm/bin/agentnet.mjs", executable)
+    (package_root / "src/agentnet").mkdir(parents=True)
+    (package_root / "src/agentnet/runtime.py").write_text("RUNTIME = 'fixed'\n", encoding="utf-8")
+    executable = executable.resolve()
     monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(
+        setup,
+        "_resolve_host_tool",
+        lambda name: {"systemctl": systemctl, "useradd": useradd}[name],
+    )
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: node)
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: uv)
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: executable)
+    monkeypatch.setattr(
+        setup,
+        "_sha256_stable_file",
+        lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
     expected = plan_server_setup(request)["request_digest"]
     module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
     script = f"""
@@ -173,12 +236,19 @@ def test_launcher_preflight_digest_matches_python_plan(
         'server-agent', 'setup', '--request', request, '--apply',
       ], process.env));
     """
+    digest_environment = {
+        "PATH": "/usr/bin:/bin",
+        "SUDO_UID": str(os.geteuid()),
+        "AGENTNET_EXECUTABLE": str(executable),
+        "AGENTNET_NODE_EXECUTABLE": str(node),
+        "AGENTNET_PACKAGE_ROOT": str(package_root),
+        "AGENTNET_SYSTEMCTL": str(systemctl),
+        "AGENTNET_USERADD": str(useradd),
+        "AGENTNET_UV": str(uv),
+    }
     completed = subprocess.run(
         [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
-        env={
-            "PATH": "/usr/bin:/bin",
-            "SUDO_UID": str(os.geteuid()),
-        },
+        env=digest_environment,
         capture_output=True,
         text=True,
         check=False,
@@ -186,6 +256,70 @@ def test_launcher_preflight_digest_matches_python_plan(
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == expected
+
+    runtime_file = package_root / "src/agentnet/runtime.py"
+    runtime_file.write_text("RUNTIME = 'changed'\n", encoding="utf-8")
+    changed = plan_server_setup(request)["request_digest"]
+    changed_completed = subprocess.run(
+        [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
+        env=digest_environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert changed != expected
+    assert changed_completed.returncode == 0, changed_completed.stderr
+    assert changed_completed.stdout.strip() == changed
+
+
+def test_package_tree_digest_rejects_symlinks_and_changes_with_content(tmp_path: Path) -> None:
+    import agentnet.operations.server_setup as setup
+
+    root = tmp_path / "package"
+    root.mkdir()
+    runtime = root / "runtime.py"
+    runtime.write_text("VALUE = 1\n", encoding="utf-8")
+    first = setup._sha256_stable_tree(root)
+    runtime.write_text("VALUE = 2\n", encoding="utf-8")
+    assert setup._sha256_stable_tree(root) != first
+    (root / "linked.py").symlink_to(runtime)
+    with pytest.raises(ServerSetupError, match="symbolic link"):
+        setup._sha256_stable_tree(root)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_launcher_executable_digest_rejects_in_place_change(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.bin"
+    runtime.write_bytes(b"a" * 2_097_152)
+    module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
+    script = f"""
+      import {{ stableExecutableSha256 }} from {json.dumps(module)};
+      import {{ readSync, writeFileSync }} from 'node:fs';
+      const runtime = process.argv.at(-1);
+      let changed = false;
+      try {{
+        stableExecutableSha256(runtime, (...args) => {{
+          const count = readSync(...args);
+          if (count > 0 && !changed) {{
+            changed = true;
+            writeFileSync(runtime, Buffer.from('x'));
+          }}
+          return count;
+        }});
+      }} catch (error) {{
+        console.log(error.message);
+      }}
+    """
+    completed = subprocess.run(
+        [str(shutil.which("node")), "--input-type=module", "-e", script, str(runtime)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "setup runtime executable changed during preflight"
 
 
 def test_private_input_rejects_fifo_without_blocking(tmp_path: Path) -> None:
@@ -287,6 +421,32 @@ def test_private_managed_file_custody_rejects_mode_and_symlink(tmp_path: Path) -
         setup._require_private_file(linked, account, blocker="test_custody")
 
 
+def test_private_tree_custody_rejects_symlinks_and_nonregular_entries(tmp_path: Path) -> None:
+    import agentnet.operations.server_setup as setup
+
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    root = tmp_path / "managed"
+    nested = root / "nested"
+    nested.mkdir(parents=True, mode=0o700)
+    root.chmod(0o700)
+    nested.chmod(0o700)
+    private_file = nested / "fixed.json"
+    private_file.write_text("{}", encoding="utf-8")
+    private_file.chmod(0o600)
+    setup._require_private_tree(root, account, blocker="test_custody")
+
+    linked = nested / "linked"
+    linked.symlink_to(private_file)
+    with pytest.raises(ServerSetupError, match="unsupported entry"):
+        setup._require_private_tree(root, account, blocker="test_custody")
+    linked.unlink()
+
+    fifo = nested / "fifo"
+    os.mkfifo(fifo, mode=0o600)
+    with pytest.raises(ServerSetupError, match="unsupported entry"):
+        setup._require_private_tree(root, account, blocker="test_custody")
+
+
 def test_private_managed_read_detects_same_size_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -323,6 +483,28 @@ def test_temporary_or_user_owned_launcher_is_rejected(tmp_path: Path) -> None:
     launcher.chmod(0o755)
     with pytest.raises(ServerSetupError, match="unsafe"):
         setup._require_root_owned_executable(launcher, label="agentnet")
+
+
+def test_executable_lineage_accepts_traversable_nonwritable_directories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    target = Path("/opt/agentnet-runtime/bin/node")
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=True: self)
+    monkeypatch.setattr(Path, "is_file", lambda self: self == target)
+    monkeypatch.setattr(Path, "is_dir", lambda self: self != target)
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self: SimpleNamespace(
+            st_uid=0,
+            st_mode=(stat.S_IFREG | 0o755) if self == target else (stat.S_IFDIR | 0o711),
+        ),
+    )
+    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
+
+    assert setup._require_root_owned_executable(target, label="Node.js") == target
 
 
 def test_request_is_strict_non_secret_and_callback_bound(tmp_path: Path) -> None:
@@ -388,6 +570,20 @@ def test_plan_is_read_only_and_emits_redacted_fixed_steps(
     assert report["managed_units"] == [APPROVAL_UNIT, CORE_UNIT]
     assert report["https_topology"] == "external_self_hosted_reverse_proxy_to_loopback"
     assert report["package_version"]
+    assert report["prerequisites"]["database_reference"] == (
+        "validated_fixed_local_peer_contract_service_canary_pending_apply"
+    )
+    assert report["prerequisites"]["postgresql"] == {
+        "auth_method": "peer",
+        "database": "agentnet",
+        "hba_rule": "local agentnet agentnet peer",
+        "hba_rule_order": "before_any_potentially_matching_local_rule",
+        "ident_map": "none_exact_name_match",
+        "operator_action": "install exact scoped HBA rule, reload PostgreSQL, then rerun same approved digest",
+        "os_user": "agentnet",
+        "role": "agentnet",
+        "socket": "/var/run/postgresql",
+    }
     assert report["authority_granted"] is False
     assert report["identity_enrolled"] is False
     assert "synthetic-test-secret" not in json.dumps(report)
@@ -440,6 +636,82 @@ def test_request_digest_binds_absolute_references_and_input_content(
     _private_json(first.oidc_provider_file, first_value)
     changed = load_server_setup_request(first_root / "setup.json")
     assert plan_server_setup(changed)["request_digest"] != first_digest
+
+
+def test_request_digest_binds_runtime_content_and_locked_apply_rechecks_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    request = load_server_setup_request(_request(tmp_path))
+    layout = SetupLayout(tmp_path / "host")
+    layout.root.mkdir()
+    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    tree_calls = 0
+
+    def changing_tree_hash(path: Path) -> str:
+        nonlocal tree_calls
+        tree_calls += 1
+        generation = "approved" if tree_calls <= 2 else "changed"
+        return hashlib.sha256(f"{path}:{generation}".encode()).hexdigest()
+
+    monkeypatch.setattr(setup, "_sha256_stable_tree", changing_tree_hash)
+    approved = str(plan_server_setup(request, layout=layout)["request_digest"])
+    monkeypatch.setattr(
+        setup,
+        "_ensure_account",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("account mutation reached")),
+    )
+    with pytest.raises(ServerSetupError, match="runtime changed after approved preflight") as exc_info:
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.blocker == "request_changed"
+    assert not layout.host(setup.CORE_ENV).exists()
+    assert not layout.host(setup.APPROVAL_ENV).exists()
+
+
+def test_request_digest_binds_privileged_host_tool_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    request = load_server_setup_request(_request(tmp_path))
+    runtime_root = tmp_path / "runtime"
+    executable = runtime_root / "npm/bin/agentnet.mjs"
+    executable.parent.mkdir(parents=True)
+    tools = {
+        "node": tmp_path / "node",
+        "uv": tmp_path / "uv",
+        "systemctl": tmp_path / "systemctl",
+        "useradd": tmp_path / "useradd",
+        "agentnet": executable,
+    }
+    for name, path in tools.items():
+        path.write_bytes(f"{name}-v1".encode("ascii"))
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: tools["node"])
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: tools["uv"])
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: tools["agentnet"])
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: tools[name])
+    monkeypatch.setattr(
+        setup,
+        "_sha256_stable_file",
+        lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+    approved = plan_server_setup(request)["request_digest"]
+    tools["systemctl"].write_bytes(b"systemctl-v2")
+    assert plan_server_setup(request)["request_digest"] != approved
 
 
 def test_request_rejects_same_core_and_approval_origin(tmp_path: Path) -> None:
@@ -643,9 +915,9 @@ def test_plan_rejects_database_reference_drift(
     value = json.loads(request_path.read_text(encoding="utf-8"))
     core_env = Path(value["core_environment_file"])
     core_env.write_text(
-        "AGENTNET_DATABASE_URL=postgresql://other@127.0.0.1/agentnet\n"
+        "AGENTNET_DATABASE_URL=postgresql://other@%2Fvar%2Frun%2Fpostgresql/agentnet\n"
         "AGENTNET_CORE_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
         encoding="utf-8",
     )
     core_env.chmod(0o600)
@@ -658,6 +930,440 @@ def test_plan_rejects_database_reference_drift(
         plan_server_setup(load_server_setup_request(request_path))
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql://agentnet@127.0.0.1/agentnet",
+        "postgresql://agentnet@%2Ftmp%2Fpostgresql/agentnet",
+        "postgresql://other@%2Fvar%2Frun%2Fpostgresql/agentnet",
+        "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/other",
+    ],
+)
+def test_request_rejects_noncanonical_postgres_peer_contract(
+    tmp_path: Path,
+    database_url: str,
+) -> None:
+    request_path = _request(tmp_path)
+    value = json.loads(request_path.read_text(encoding="utf-8"))
+    value["database_url"] = database_url
+    _private_json(request_path, value)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(request_path)
+
+
+def test_postgres_auth_rules_require_exact_unshadowed_peer_rule() -> None:
+    from agentnet.errors import ValidationError
+    from agentnet.storage.postgres import validate_ordinary_server_postgres_auth_rules
+
+    exact = {
+        "rule_number": 2,
+        "type": "local",
+        "database": ["agentnet"],
+        "user_name": ["agentnet"],
+        "auth_method": "peer",
+        "options": None,
+        "error": None,
+    }
+    postgres_only = {
+        "rule_number": 1,
+        "type": "local",
+        "database": ["all"],
+        "user_name": ["postgres"],
+        "auth_method": "peer",
+        "options": None,
+        "error": None,
+    }
+    result = validate_ordinary_server_postgres_auth_rules(
+        [postgres_only, exact],
+        [],
+    )
+    assert result["auth_method"] == "peer"
+    assert result["ident_map"] == "none_exact_name_match"
+
+    broad_shadow = {**exact, "rule_number": 1, "database": ["all"], "user_name": ["all"]}
+    with pytest.raises(ValidationError, match="first matching local rule"):
+        validate_ordinary_server_postgres_auth_rules([broad_shadow, exact], [])
+    for database, user_name in (
+        (["samegroup"], ["all"]),
+        (["/agent.*/"], ["all"]),
+        (["@database-list"], ["all"]),
+        (["all"], ["+agentnet_role"]),
+        (["all"], ["/agent.*/"]),
+        (["all"], ["@user-list"]),
+    ):
+        with pytest.raises(ValidationError, match="first matching local rule"):
+            validate_ordinary_server_postgres_auth_rules(
+                [{**exact, "rule_number": 1, "database": database, "user_name": user_name}, exact],
+                [],
+            )
+    with pytest.raises(ValidationError, match="parse errors"):
+        validate_ordinary_server_postgres_auth_rules(
+            [{**exact, "error": "synthetic parse error"}],
+            [],
+        )
+    with pytest.raises(ValidationError, match="first matching local rule"):
+        validate_ordinary_server_postgres_auth_rules(
+            [{**exact, "options": ["map=agentnet"]}],
+            [],
+        )
+
+
+def test_postgres_connection_probe_uses_fixed_dsn_and_query_shape() -> None:
+    from agentnet.storage.postgres import (
+        ORDINARY_SERVER_POSTGRES_DSN,
+        probe_ordinary_server_postgres_connection,
+    )
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    statements: list[str] = []
+
+    class Result:
+        def fetchone(self) -> dict[str, object]:
+            return {
+                "current_user": "agentnet",
+                "current_database": "agentnet",
+                "unix_socket": True,
+                "in_recovery": False,
+                "server_version": "18.4",
+            }
+
+    class Connection:
+        def __enter__(self) -> "Connection":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, query: str) -> Result:
+            statements.append(" ".join(query.split()))
+            return Result()
+
+    def connector(dsn: str, **kwargs: object) -> Connection:
+        calls.append((dsn, kwargs))
+        return Connection()
+
+    result = probe_ordinary_server_postgres_connection(
+        ORDINARY_SERVER_POSTGRES_DSN,
+        connector=connector,
+    )
+    assert result == {
+        "ready": True,
+        "current_user": "agentnet",
+        "current_database": "agentnet",
+        "transport": "unix_socket",
+        "writable_primary": True,
+        "server_version": "18.4",
+    }
+    assert calls[0][0] == ORDINARY_SERVER_POSTGRES_DSN
+    assert calls[0][1]["autocommit"] is True
+    assert calls[0][1]["connect_timeout"] == 3
+    assert statements[0] == "SET statement_timeout = '3s'"
+    assert "inet_server_addr() IS NULL AS unix_socket" in statements[1]
+    assert "pg_is_in_recovery() AS in_recovery" in statements[1]
+
+
+def test_postgres_auth_probe_uses_live_parsed_views() -> None:
+    from agentnet.storage.postgres import (
+        ORDINARY_SERVER_POSTGRES_ADMIN_DSN,
+        inspect_ordinary_server_postgres_auth,
+    )
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    statements: list[str] = []
+
+    class Result:
+        def __init__(
+            self,
+            rows: list[dict[str, object]],
+            row: dict[str, object] | None = None,
+        ) -> None:
+            self._rows = rows
+            self._row = row
+
+        def fetchall(self) -> list[dict[str, object]]:
+            return self._rows
+
+        def fetchone(self) -> dict[str, object] | None:
+            return self._row
+
+    class Connection:
+        def __enter__(self) -> "Connection":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, query: str) -> Result:
+            normalized = " ".join(query.split())
+            statements.append(normalized)
+            if "FROM pg_hba_file_rules" in normalized:
+                return Result(
+                    [
+                        {
+                            "rule_number": 1,
+                            "type": "local",
+                            "database": ["agentnet"],
+                            "user_name": ["agentnet"],
+                            "auth_method": "peer",
+                            "options": None,
+                            "error": None,
+                        }
+                    ]
+                )
+            if "FROM pg_ident_file_mappings" in normalized:
+                assert "map_number,map_name,sys_name,pg_username,error" in normalized
+                return Result([])
+            return Result([], {"hba_loaded": True, "ident_loaded": True})
+
+    def connector(dsn: str, **kwargs: object) -> Connection:
+        calls.append((dsn, kwargs))
+        return Connection()
+
+    result = inspect_ordinary_server_postgres_auth(connector=connector)
+    assert result == {
+        "ready": True,
+        "configuration_loaded": True,
+        "auth_method": "peer",
+        "database": "agentnet",
+        "ident_map": "none_exact_name_match",
+        "rule_number": 1,
+        "user": "agentnet",
+    }
+    assert calls[0][0] == ORDINARY_SERVER_POSTGRES_ADMIN_DSN
+    assert calls[0][1]["autocommit"] is True
+    assert any("FROM pg_hba_file_rules" in statement for statement in statements)
+    assert any("FROM pg_ident_file_mappings" in statement for statement in statements)
+    assert any("pg_conf_load_time()" in statement for statement in statements)
+
+    class StaleConnection(Connection):
+        def execute(self, query: str) -> Result:
+            normalized = " ".join(query.split())
+            if "pg_conf_load_time()" in normalized:
+                return Result([], {"hba_loaded": False, "ident_loaded": True})
+            return super().execute(query)
+
+    stale = inspect_ordinary_server_postgres_auth(
+        connector=lambda *_args, **_kwargs: StaleConnection()
+    )
+    assert stale == {"ready": False, "reason": "ValidationError"}
+
+
+def test_apply_blocks_after_identity_before_agentnet_writes_when_postgres_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    request = load_server_setup_request(_request(tmp_path))
+    layout = SetupLayout(tmp_path / "host")
+    layout.root.mkdir()
+    account = SimpleNamespace(
+        pw_name=setup.CORE_USER,
+        pw_uid=os.geteuid(),
+        pw_gid=os.getegid(),
+    )
+    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup, "_ensure_account", lambda *_args, **_kwargs: account)
+    approved = str(plan_server_setup(request, layout=layout)["request_digest"])
+    monkeypatch.setattr(
+        setup,
+        "_postgres_peer_gate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError(
+                "postgres_auth_not_ready",
+                "PostgreSQL peer rule is not ready; reload and retry",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        setup,
+        "_run_as",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("product mutation reached")),
+    )
+    with pytest.raises(ServerSetupError) as exc_info:
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.blocker == "postgres_auth_not_ready"
+    assert not layout.host(setup.CORE_ENV).exists()
+    assert not layout.host(setup.APPROVAL_ENV).exists()
+    assert not layout.host(setup.CORE_CONFIG).exists()
+    assert not layout.host(setup.APPROVAL_CONFIG).exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork is unavailable")
+def test_postgres_probe_runs_under_bounded_child_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    monkeypatch.setenv("PGSERVICE", "untrusted-service")
+    monkeypatch.setenv("PGPASSFILE", "/private/credential-path")
+    monkeypatch.setenv("UNRELATED_SECRET", "private-value")
+    account = SimpleNamespace(
+        pw_uid=os.geteuid(),
+        pw_gid=os.getegid(),
+        pw_dir="/var/lib/agentnet",
+    )
+    evidence = setup._run_postgres_probe_as(
+        account,
+        lambda: {
+            "ready": True,
+            "transport": "unix_socket",
+            "pg_environment": sorted(name for name in os.environ if name.startswith("PG")),
+            "unrelated_secret_present": "UNRELATED_SECRET" in os.environ,
+            "home": os.environ.get("HOME"),
+        },
+        stage="postgres_test",
+    )
+    assert evidence == {
+        "ready": True,
+        "transport": "unix_socket",
+        "pg_environment": [],
+        "unrelated_secret_present": False,
+        "home": "/var/lib/agentnet",
+    }
+    with pytest.raises(ServerSetupError, match=r"postgres_test failed \(SyntheticFailure\)") as exc_info:
+        setup._run_postgres_probe_as(
+            account,
+            lambda: {"ready": False, "reason": "SyntheticFailure"},
+            stage="postgres_test",
+        )
+    assert exc_info.value.blocker == "postgres_auth_not_ready"
+
+
+@pytest.mark.parametrize(
+    ("target_name", "entry_kind", "expected_blocker"),
+    [
+        ("approval_config", "dangling_symlink", "approval_config"),
+        ("approval_state", "directory_symlink", "approval_custody"),
+        ("core_config", "dangling_symlink", "core_custody"),
+        ("core_config", "fifo", "core_custody"),
+        ("core_runtime", "directory_symlink", "core_custody"),
+    ],
+)
+def test_apply_rejects_managed_child_conflicts_before_product_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    entry_kind: str,
+    expected_blocker: str,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    request = load_server_setup_request(_request(tmp_path))
+    layout = SetupLayout(tmp_path / "host")
+    layout.root.mkdir()
+    account = SimpleNamespace(
+        pw_name=setup.CORE_USER,
+        pw_uid=os.geteuid(),
+        pw_gid=os.getegid(),
+    )
+    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup, "_ensure_account", lambda *_args, **_kwargs: account)
+    monkeypatch.setattr(
+        setup,
+        "_postgres_peer_gate",
+        lambda *_args, **_kwargs: {"status": "validated_exact_local_peer"},
+    )
+    product_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        setup,
+        "_run_as",
+        lambda _account, argv, **_kwargs: product_calls.append(argv),
+    )
+    approved = str(plan_server_setup(request, layout=layout)["request_digest"])
+
+    for private_root in (layout.host(setup.CORE_DATA), layout.host(setup.APPROVAL_DATA)):
+        private_root.mkdir(parents=True, mode=0o700)
+        private_root.chmod(0o700)
+    targets = {
+        "approval_config": layout.host(setup.APPROVAL_CONFIG),
+        "approval_state": layout.host(setup.APPROVAL_STATE),
+        "core_config": layout.host(setup.CORE_CONFIG),
+        "core_runtime": layout.host(setup.CORE_DATA) / "core",
+    }
+    target = targets[target_name]
+    if entry_kind == "dangling_symlink":
+        target.symlink_to(tmp_path / "missing-target")
+    elif entry_kind == "directory_symlink":
+        external = tmp_path / f"external-{target_name}"
+        external.mkdir(mode=0o700)
+        target.symlink_to(external, target_is_directory=True)
+    elif entry_kind == "fifo":
+        os.mkfifo(target, mode=0o600)
+    else:  # pragma: no cover - parameter invariant
+        raise AssertionError(entry_kind)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.blocker == expected_blocker
+    assert product_calls == []
+    assert not layout.host(setup.CORE_ENV).exists()
+    assert not layout.host(setup.APPROVAL_ENV).exists()
+
+
+def test_postgres_peer_gate_requires_exact_service_and_rule_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    core_account = SimpleNamespace(pw_name="agentnet", pw_uid=1234, pw_gid=1234)
+    postgres_account = SimpleNamespace(pw_name="postgres", pw_uid=1235, pw_gid=1235)
+    monkeypatch.setattr(setup.pwd, "getpwnam", lambda name: postgres_account if name == "postgres" else None)
+    stages: list[str] = []
+
+    def exact_probe(_account: object, _probe: object, *, stage: str) -> dict[str, object]:
+        stages.append(stage)
+        if stage == "postgres_service_identity_canary":
+            return {
+                "ready": True,
+                "current_user": "agentnet",
+                "current_database": "agentnet",
+                "transport": "unix_socket",
+                "writable_primary": True,
+            }
+        return {
+            "ready": True,
+            "auth_method": "peer",
+            "ident_map": "none_exact_name_match",
+        }
+
+    monkeypatch.setattr(setup, "_run_postgres_probe_as", exact_probe)
+    evidence = setup._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
+    assert evidence["status"] == "validated_exact_local_peer"
+    assert stages == ["postgres_service_identity_canary", "postgres_auth_rule_inspection"]
+
+    def wrong_auth(_account: object, _probe: object, *, stage: str) -> dict[str, object]:
+        result = exact_probe(_account, _probe, stage=stage)
+        if stage == "postgres_auth_rule_inspection":
+            result["auth_method"] = "trust"
+        return result
+
+    monkeypatch.setattr(setup, "_run_postgres_probe_as", wrong_auth)
+    with pytest.raises(ServerSetupError, match="does not match the fixed profile"):
+        setup._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
+
+
 def test_plan_rejects_shell_syntax_in_runtime_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -666,9 +1372,9 @@ def test_plan_rejects_shell_syntax_in_runtime_environment(
     value = json.loads(request_path.read_text(encoding="utf-8"))
     core_env = Path(value["core_environment_file"])
     core_env.write_text(
-        "AGENTNET_DATABASE_URL=postgresql://agentnet@127.0.0.1/agentnet\n"
+        f"AGENTNET_DATABASE_URL={ORDINARY_SERVER_POSTGRES_DSN}\n"
         "AGENTNET_CORE_OIDC_CLIENT_SECRET='quoted value'\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
         encoding="utf-8",
     )
     core_env.chmod(0o600)
@@ -729,7 +1435,7 @@ def test_plan_rejects_mismatched_broker_credentials(
     approval_env = Path(value["approval_environment_file"])
     approval_env.write_text(
         "AGENTNET_APPROVAL_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=different-token\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=different-synthetic-broker-token-0123456789abcdef012345\n",
         encoding="utf-8",
     )
     approval_env.chmod(0o600)
@@ -738,8 +1444,526 @@ def test_plan_rejects_mismatched_broker_credentials(
     monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
     monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
     monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    with pytest.raises(ServerSetupError, match="broker credential references do not match"):
+    with pytest.raises(ServerSetupError, match="Core and Approval broker credentials do not match"):
         plan_server_setup(load_server_setup_request(request_path))
+
+
+@pytest.mark.parametrize(
+    "broker_value",
+    ["too-short", "é" * 43, "x" * 513],
+)
+def test_plan_rejects_invalid_broker_credential_before_managed_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    broker_value: str,
+) -> None:
+    request_path = _request(tmp_path)
+    value = json.loads(request_path.read_text(encoding="utf-8"))
+    for field, oidc_name in (
+        ("core_environment_file", "AGENTNET_CORE_OIDC_CLIENT_SECRET"),
+        ("approval_environment_file", "AGENTNET_APPROVAL_OIDC_CLIENT_SECRET"),
+    ):
+        environment = Path(value[field])
+        lines = [f"{oidc_name}=synthetic-test-secret"]
+        if field == "core_environment_file":
+            lines.insert(0, f"AGENTNET_DATABASE_URL={ORDINARY_SERVER_POSTGRES_DSN}")
+        lines.append(f"AGENTNET_APPROVAL_CORE_TOKEN={broker_value}")
+        environment.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        environment.chmod(0o600)
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    managed_root = tmp_path / "managed-host"
+    with pytest.raises(ServerSetupError) as exc_info:
+        plan_server_setup(
+            load_server_setup_request(request_path),
+            layout=SetupLayout(managed_root),
+        )
+    assert exc_info.value.blocker == "invalid_broker_credential"
+    assert not managed_root.exists()
+
+
+def test_host_tool_resolution_uses_fixed_system_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    observed: dict[str, str | None] = {}
+
+    def which(name: str, *, path: str | None = None) -> str:
+        observed[name] = path
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setenv("PATH", "/tmp/untrusted")
+    monkeypatch.setattr(setup.shutil, "which", which)
+    monkeypatch.setattr(setup, "_require_root_owned_executable", lambda value, **_kwargs: value)
+    assert setup._resolve_host_tool("systemctl") == Path("/usr/bin/systemctl")
+    assert observed == {"systemctl": setup._SYSTEM_PATH}
+
+
+def test_uv_resolution_uses_exact_configured_path_and_rejects_protected_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    selected: list[Path] = []
+    monkeypatch.setenv("AGENTNET_UV", "/usr/local/lib/agentnet-runtime/uv")
+    monkeypatch.setattr(
+        setup,
+        "_require_root_owned_executable",
+        lambda value, **_kwargs: selected.append(value) or value,
+    )
+    assert setup._resolve_uv_executable() == Path("/usr/local/lib/agentnet-runtime/uv")
+    assert selected == [Path("/usr/local/lib/agentnet-runtime/uv")]
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._require_service_visible_path(Path("/root/.local/bin/uv"), label="uv")
+    assert exc_info.value.blocker == "service_executable_inaccessible"
+
+
+def test_run_as_reports_nonzero_stage_without_leaking_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(
+        setup,
+        "_run_bounded_product_process",
+        lambda *_args, **_kwargs: setup._BoundedCommandResult(
+            returncode=1,
+            stdout=b"",
+            stderr_present=True,
+        ),
+    )
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_as(
+            account,
+            ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="core_create",
+        )
+    assert exc_info.value.blocker == "product_command_failed"
+    assert "core_create failed with exit status 1" in str(exc_info.value)
+    assert "private-token" not in str(exc_info.value)
+
+
+def test_run_as_accepts_only_network_create_not_ready_exit_with_structured_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    evidence = {
+        "config": "/etc/agentnet/agentnet.json",
+        "local_readiness": {
+            "ready": False,
+            "storage": {"ready": True},
+            "audit": {"valid": True},
+            "deployment_binding": {"ready": False},
+        },
+    }
+    monkeypatch.setattr(
+        setup,
+        "_run_bounded_product_process",
+        lambda *_args, **_kwargs: setup._BoundedCommandResult(
+            returncode=1,
+            stdout=json.dumps(evidence).encode("utf-8"),
+            stderr_present=False,
+        ),
+    )
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+
+    assert setup._run_as(
+        account,
+        ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+        environment={"PATH": "/usr/bin:/bin"},
+        stage="core_create",
+        accepted_returncodes=frozenset({1}),
+    ) == evidence
+
+    monkeypatch.setattr(
+        setup,
+        "_run_bounded_product_process",
+        lambda *_args, **_kwargs: setup._BoundedCommandResult(
+            returncode=0,
+            stdout=json.dumps(evidence).encode("utf-8"),
+            stderr_present=False,
+        ),
+    )
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_as(
+            account,
+            ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="core_create",
+            accepted_returncodes=frozenset({1}),
+        )
+    assert exc_info.value.blocker == "product_command_failed"
+
+
+def test_systemctl_commands_are_bounded_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    observed: dict[str, object] = {}
+
+    def timeout(argv: list[str], **kwargs: object) -> object:
+        observed["argv"] = argv
+        observed.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd="private-systemctl-detail", timeout=30)
+
+    monkeypatch.setattr(setup.subprocess, "run", timeout)
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_systemctl(
+            Path("/usr/bin/systemctl"),
+            ["restart", setup.CORE_UNIT],
+            failure_message="failed to start AgentNet managed units",
+        )
+    assert exc_info.value.blocker == "systemd_start"
+    assert str(exc_info.value) == "failed to start AgentNet managed units"
+    assert "private-systemctl-detail" not in str(exc_info.value)
+    assert observed["timeout"] == 30
+    assert observed["env"] == {
+        "PATH": setup._SYSTEM_PATH,
+        "HOME": "/root",
+        "LANG": "C.UTF-8",
+    }
+
+
+def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() -> None:
+    import agentnet.operations.server_setup as setup
+
+    config_path = Path("/etc/agentnet/agentnet.json")
+    evidence = {
+        "config": str(config_path),
+        "local_readiness": {
+            "schema": "agentnet.core.readiness.v1",
+            "ready": False,
+            "storage": {"ready": True},
+            "audit": {"valid": True},
+            "artifacts": {"ready": True},
+            "deployment_binding": {"ready": False, "required": True},
+            "a2a_schema": {"ready": True},
+            "scanner_trust": {"ready": True},
+        },
+    }
+    setup._require_core_create_evidence(evidence, config_path)
+
+    mutations = (
+        lambda item: item.update({"config": "/wrong/config.json"}),
+        lambda item: item["local_readiness"].update({"schema": "wrong"}),
+        lambda item: item["local_readiness"].update({"ready": True}),
+        lambda item: item["local_readiness"]["storage"].update({"ready": False}),
+        lambda item: item["local_readiness"]["audit"].update({"valid": False}),
+        lambda item: item["local_readiness"]["artifacts"].update({"ready": False}),
+        lambda item: item["local_readiness"]["deployment_binding"].update({"ready": True}),
+        lambda item: item["local_readiness"]["deployment_binding"].update({"required": False}),
+        lambda item: item["local_readiness"]["a2a_schema"].update({"ready": False}),
+        lambda item: item["local_readiness"]["scanner_trust"].update({"ready": False}),
+    )
+    for mutate in mutations:
+        changed = json.loads(json.dumps(evidence))
+        mutate(changed)
+        with pytest.raises(ServerSetupError) as exc_info:
+            setup._require_core_create_evidence(changed, config_path)
+        assert exc_info.value.blocker == "core_evidence"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (subprocess.TimeoutExpired(cmd="agentnet", timeout=300), "core_create timed out"),
+        (OSError("private path detail"), "core_create could not start"),
+        (subprocess.SubprocessError("private preexec detail"), "core_create could not start"),
+    ],
+)
+def test_run_as_reports_bounded_launch_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    expected: str,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(
+        setup,
+        "_run_bounded_product_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_as(
+            account,
+            ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="core_create",
+        )
+    assert exc_info.value.blocker == "product_command_failed"
+    assert str(exc_info.value) == expected
+    assert "private path detail" not in str(exc_info.value)
+    assert "private preexec detail" not in str(exc_info.value)
+
+
+def test_bounded_product_process_redacts_preexec_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(
+        setup.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subprocess.SubprocessError("private preexec detail")
+        ),
+    )
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_bounded_product_process(
+            account,
+            ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="core_create",
+        )
+
+    assert exc_info.value.blocker == "product_command_failed"
+    assert str(exc_info.value) == "core_create could not start"
+    assert "private preexec detail" not in str(exc_info.value)
+
+
+def test_run_as_rejects_invalid_success_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    outputs = iter(("", "[]"))
+    monkeypatch.setattr(
+        setup,
+        "_run_bounded_product_process",
+        lambda *_args, **_kwargs: setup._BoundedCommandResult(
+            returncode=0,
+            stdout=next(outputs).encode("utf-8"),
+            stderr_present=False,
+        ),
+    )
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    for expected in ("invalid structured evidence", "invalid structured evidence"):
+        with pytest.raises(ServerSetupError, match=expected) as exc_info:
+            setup._run_as(
+                account,
+                ["/usr/bin/node", "/usr/local/bin/agentnet", "network", "create"],
+                environment={"PATH": "/usr/bin:/bin"},
+                stage="core_create",
+            )
+        assert exc_info.value.blocker == "invalid_product_evidence"
+
+
+@pytest.mark.parametrize(
+    ("stream", "size", "expected"),
+    [
+        ("stdout", 1_048_577, "oversized structured evidence"),
+        ("stderr", 65_537, "oversized error evidence"),
+    ],
+)
+def test_run_as_kills_real_product_process_on_evidence_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: str,
+    size: int,
+    expected: str,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    script = (
+        "import sys; target=getattr(sys," + repr(stream) + ").buffer; "
+        f"target.write(b'x'*{size}); target.flush()"
+    )
+    with pytest.raises(ServerSetupError, match=expected) as exc_info:
+        setup._run_as(
+            account,
+            [sys.executable, "-c", script],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="bounded_evidence",
+        )
+    assert exc_info.value.blocker == "invalid_product_evidence"
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are unavailable")
+def test_bounded_product_process_rejects_inherited_pipe_eof_stall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    script = (
+        "import subprocess,sys; "
+        "subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        "sys.stdout.write('{}'); sys.stdout.flush()"
+    )
+    started = time.monotonic()
+    with pytest.raises(ServerSetupError, match="left structured evidence streams open") as exc_info:
+        setup._run_as(
+            account,
+            [sys.executable, "-c", script],
+            environment={"PATH": "/usr/bin:/bin"},
+            stage="bounded_evidence",
+        )
+    assert exc_info.value.blocker == "invalid_product_evidence"
+    assert time.monotonic() - started < 5
+
+
+def test_setup_marker_migrates_and_revisions_same_request_state(
+    tmp_path: Path,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    marker_path = tmp_path / "setup.json"
+    legacy = {
+        "schema": "agentnet.server-setup.marker.v1",
+        "request_digest": "1" * 64,
+        "approval_config_digest": "2" * 64,
+        "core_config_digest": "3" * 64,
+        "units": [setup.APPROVAL_UNIT, setup.CORE_UNIT],
+    }
+    legacy_payload = json.dumps(legacy, sort_keys=True).encode() + b"\n"
+    marker_path.write_bytes(legacy_payload)
+    marker_path.chmod(0o600)
+    existing = setup._validated_setup_marker(
+        legacy_payload,
+        request_digest="4" * 64,
+        legacy_request_digest="1" * 64,
+    )
+    units = {
+        setup.APPROVAL_UNIT: b"approval-unit\n",
+        setup.CORE_UNIT: b"core-unit\n",
+    }
+    status = setup._commit_setup_marker(
+        marker_path,
+        existing_payload=legacy_payload,
+        existing_marker=existing,
+        request_digest="4" * 64,
+        approval_config_digest="5" * 64,
+        core_config_digest="6" * 64,
+        unit_payloads=units,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    )
+    assert status == "updated_same_request"
+    v2_payload = marker_path.read_bytes()
+    v2 = setup._validated_setup_marker(
+        v2_payload,
+        request_digest="4" * 64,
+        legacy_request_digest="1" * 64,
+    )
+    assert v2 is not None
+    assert v2["schema"] == "agentnet.server-setup.marker.v2"
+    assert v2["revision"] == 1
+    assert v2["previous_marker_digest"] == hashlib.sha256(legacy_payload).hexdigest()
+    assert setup._commit_setup_marker(
+        marker_path,
+        existing_payload=v2_payload,
+        existing_marker=v2,
+        request_digest="4" * 64,
+        approval_config_digest="5" * 64,
+        core_config_digest="6" * 64,
+        unit_payloads=units,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    ) == "already_satisfied"
+    latest_payload = marker_path.read_bytes()
+    latest = setup._validated_setup_marker(
+        latest_payload,
+        request_digest="4" * 64,
+        legacy_request_digest="1" * 64,
+    )
+    assert setup._commit_setup_marker(
+        marker_path,
+        existing_payload=latest_payload,
+        existing_marker=latest,
+        request_digest="4" * 64,
+        approval_config_digest="5" * 64,
+        core_config_digest="7" * 64,
+        unit_payloads=units,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    ) == "updated_same_request"
+    revised = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert revised["revision"] == 2
+    assert revised["core_config_digest"] == "7" * 64
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schema": "agentnet.server-setup.marker.v3"},
+        {"request_digest": "9" * 64},
+        {"units": [CORE_UNIT, APPROVAL_UNIT]},
+        {"unit_digests": {APPROVAL_UNIT: "8" * 64, CORE_UNIT: "invalid"}},
+        {"unexpected": True},
+    ],
+)
+def test_setup_marker_rejects_unknown_or_tampered_provenance(
+    mutation: dict[str, object],
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    marker: dict[str, object] = {
+        "schema": "agentnet.server-setup.marker.v2",
+        "request_digest": "4" * 64,
+        "approval_config_digest": "5" * 64,
+        "core_config_digest": "6" * 64,
+        "units": [APPROVAL_UNIT, CORE_UNIT],
+        "package_version": "0.1.test",
+        "previous_marker_digest": None,
+        "revision": 1,
+        "unit_digests": {APPROVAL_UNIT: "7" * 64, CORE_UNIT: "8" * 64},
+    }
+    marker.update(mutation)
+    payload = json.dumps(marker, sort_keys=True).encode() + b"\n"
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            payload,
+            request_digest="4" * 64,
+            legacy_request_digest="1" * 64,
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
+def test_setup_marker_compare_and_swap_detects_external_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    path = tmp_path / "setup.json"
+    expected = b'{"marker":"expected"}\n'
+    path.write_bytes(expected)
+    path.chmod(0o600)
+    reads = 0
+    original_read = setup._read_setup_marker
+
+    def changed_on_second_read(target: Path, *, uid: int, gid: int) -> bytes | None:
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            return b'{"marker":"changed"}\n'
+        return original_read(target, uid=uid, gid=gid)
+
+    monkeypatch.setattr(setup, "_read_setup_marker", changed_on_second_read)
+    with pytest.raises(ServerSetupError, match="changed before compare-and-swap"):
+        setup._atomic_replace_exact(
+            path,
+            expected=expected,
+            payload=b'{"marker":"replacement"}\n',
+            mode=0o600,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+    assert path.read_bytes() == expected
 
 
 def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
@@ -763,6 +1987,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
     monkeypatch.setattr(setup, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
     monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(
+        setup,
+        "_postgres_peer_gate",
+        lambda _account, _database_url: {"status": "validated_exact_local_peer"},
+    )
 
     signer = P256KeyPair.generate()
     trusted = IndependentApproverConfig(
@@ -772,14 +2001,24 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         public_key_pem=signer.public_pem,
         allowed_purposes=MANDATORY_APPROVAL_PURPOSES,
     )
-    monkeypatch.setattr(
-        setup,
-        "_approval_trust",
-        lambda _path, _account, _state: (
-            SimpleNamespace(model_dump=lambda **_kwargs: {"policy": "fixed"}),
-            [trusted],
-        ),
+    changed_signer = P256KeyPair.generate()
+    changed_trusted = IndependentApproverConfig(
+        principal_id=request.approval_approver_principal_id,
+        authority_kind="human",
+        signer_key_id=changed_signer.thumbprint,
+        public_key_pem=changed_signer.public_pem,
+        allowed_purposes=MANDATORY_APPROVAL_PURPOSES,
     )
+    drift_trust_during_apply = False
+    trust_reads = 0
+
+    def fake_approval_trust(_path: Path, _account: object, _state: Path):
+        nonlocal trust_reads
+        trust_reads += 1
+        effective = changed_trusted if drift_trust_during_apply and trust_reads % 2 == 0 else trusted
+        return SimpleNamespace(model_dump=lambda **_kwargs: {"policy": "fixed"}), [effective]
+
+    monkeypatch.setattr(setup, "_approval_trust", fake_approval_trust)
     monkeypatch.setattr(setup, "_require_exact_approval_policy", lambda *_args, **_kwargs: None)
 
     class _Equal:
@@ -788,6 +2027,8 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     enrolled = False
     config_drift = False
+    config_generation = 0
+    mutate_bootstrap_once = False
 
     def fake_load_config(_text: str):
         return SimpleNamespace(
@@ -810,7 +2051,10 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             postgres_recovery_topology=False,
             enrolled_harness_id="server-harness" if enrolled else None,
             enrolled_credential_id="server-credential" if enrolled else None,
-            model_dump=lambda **_kwargs: {"immutable": "fixed"},
+            model_dump=lambda **_kwargs: {
+                "immutable": "fixed",
+                "generation": config_generation,
+            },
         )
 
     monkeypatch.setattr(setup, "load_config_json", fake_load_config)
@@ -818,29 +2062,48 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     fail_network = True
     product_calls: list[list[str]] = []
 
-    def fake_run_as(_account, argv, *, environment, allowed_returncodes=(0,)):
-        nonlocal fail_network
+    def fake_run_as(_account, argv, *, environment, stage, accepted_returncodes=frozenset({0})):
+        nonlocal fail_network, config_generation, mutate_bootstrap_once
         product_calls.append(argv)
         command = argv[2:]
         if command[:2] == ["approval", "provision"]:
             config_path = Path(argv[argv.index("--config") + 1])
+            data_dir = Path(argv[argv.index("--data-dir") + 1])
+            data_dir.mkdir(parents=True, mode=0o700)
+            data_dir.chmod(0o700)
             config_path.write_text("{}", encoding="utf-8")
             config_path.chmod(0o600)
             return {"schema": "agentnet.approval.provision-result.v1"}
         if command[:2] == ["approval", "status"]:
             return {"ready": True}
         if command[:2] == ["network", "create"]:
+            assert accepted_returncodes == frozenset({1})
             if fail_network:
                 fail_network = False
                 raise ServerSetupError("injected_failure", "injected network interruption")
             config_path = Path(argv[argv.index("--config") + 1])
+            data_dir = Path(argv[argv.index("--data-dir") + 1])
+            data_dir.mkdir(parents=True, mode=0o700)
+            data_dir.chmod(0o700)
             config_path.write_text("{}", encoding="utf-8")
             config_path.chmod(0o600)
             return {
                 "config": str(config_path),
-                "local_readiness": {"storage": {"ready": True}, "audit": {"valid": True}},
+                "local_readiness": {
+                    "schema": "agentnet.core.readiness.v1",
+                    "ready": False,
+                    "storage": {"ready": True},
+                    "audit": {"valid": True},
+                    "artifacts": {"ready": True},
+                    "deployment_binding": {"ready": False, "required": True},
+                    "a2a_schema": {"ready": True},
+                    "scanner_trust": {"ready": True},
+                },
             }
         if command[0] == "bootstrap-server-agent":
+            if mutate_bootstrap_once:
+                config_generation += 1
+                mutate_bootstrap_once = False
             return {"ready": True}
         raise AssertionError(argv)
 
@@ -903,6 +2166,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert marker.parent == layout.host(Path("/var/lib/agentnet-setup"))
     assert stat.S_IMODE(marker.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    mutate_bootstrap_once = True
     rerun = apply_server_setup(
         request,
         start=False,
@@ -912,8 +2176,20 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     )
     assert rerun["status"] == "configured_not_started"
     assert any(
-        step["id"] == "setup_marker" and step["status"] == "already_satisfied"
+        step["id"] == "setup_marker" and step["status"] == "updated_same_request"
         for step in rerun["steps"]
+    )
+    assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 2
+    stable_rerun = apply_server_setup(
+        request,
+        start=False,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+    assert any(
+        step["id"] == "setup_marker" and step["status"] == "already_satisfied"
+        for step in stable_rerun["steps"]
     )
     assert all(argv[:2] == ["/usr/bin/node", "/usr/local/bin/agentnet"] for argv in product_calls)
     network_call = next(argv for argv in product_calls if argv[2:4] == ["network", "create"])
@@ -921,6 +2197,20 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert request.database_url not in network_call
 
     bootstrap_calls = sum(argv[2] == "bootstrap-server-agent" for argv in product_calls)
+    drift_trust_during_apply = True
+    trust_reads = 0
+    with pytest.raises(ServerSetupError, match="Approval trust changed during setup"):
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    drift_trust_during_apply = False
+    assert sum(argv[2] == "bootstrap-server-agent" for argv in product_calls) == bootstrap_calls + 1
+    bootstrap_calls += 1
+
     config_drift = True
     with pytest.raises(ServerSetupError, match="Core state conflicts"):
         apply_server_setup(
@@ -933,6 +2223,73 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert sum(argv[2] == "bootstrap-server-agent" for argv in product_calls) == bootstrap_calls
     config_drift = False
 
+    original_atomic_write = setup._atomic_write
+    fail_core_unit_once = True
+
+    def interrupted_unit_write(path: Path, payload: bytes, **kwargs: object) -> str:
+        nonlocal fail_core_unit_once
+        if path == layout.core_unit and fail_core_unit_once:
+            fail_core_unit_once = False
+            raise ServerSetupError("injected_failure", "injected unit interruption")
+        return original_atomic_write(path, payload, **kwargs)
+
+    mutate_bootstrap_once = True
+    monkeypatch.setattr(setup, "_atomic_write", interrupted_unit_write)
+    with pytest.raises(ServerSetupError, match="injected unit interruption"):
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 2
+    monkeypatch.setattr(setup, "_atomic_write", original_atomic_write)
+    recovered_unit = apply_server_setup(
+        request,
+        start=False,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+    assert any(
+        step["id"] == "setup_marker" and step["status"] == "updated_same_request"
+        for step in recovered_unit["steps"]
+    )
+    assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 3
+
+    original_commit_marker = setup._commit_setup_marker
+    mutate_bootstrap_once = True
+    monkeypatch.setattr(
+        setup,
+        "_commit_setup_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected marker interruption")
+        ),
+    )
+    with pytest.raises(ServerSetupError, match="injected marker interruption"):
+        apply_server_setup(
+            request,
+            start=False,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 3
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit_marker)
+    recovered_marker = apply_server_setup(
+        request,
+        start=False,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+    assert any(
+        step["id"] == "setup_marker" and step["status"] == "updated_same_request"
+        for step in recovered_marker["steps"]
+    )
+    assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 4
+
     enrolled = True
     systemctl_calls: list[list[str]] = []
     health_urls: list[str] = []
@@ -941,7 +2298,26 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "run",
         lambda argv, **_kwargs: systemctl_calls.append(argv) or SimpleNamespace(returncode=0),
     )
-    monkeypatch.setattr(setup, "_health", lambda url, **_kwargs: health_urls.append(url))
+    fail_health_once = True
+
+    def health_with_interruption(url: str, **_kwargs: object) -> None:
+        nonlocal fail_health_once
+        if fail_health_once:
+            fail_health_once = False
+            raise ServerSetupError("service_health", "injected health interruption")
+        health_urls.append(url)
+
+    monkeypatch.setattr(setup, "_health", health_with_interruption)
+    with pytest.raises(ServerSetupError, match="injected health interruption"):
+        apply_server_setup(
+            request,
+            start=True,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    systemctl_calls.clear()
+    health_urls.clear()
     started = apply_server_setup(
         request,
         start=True,

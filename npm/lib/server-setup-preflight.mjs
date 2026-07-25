@@ -3,8 +3,11 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
+  lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
+  readSync,
   realpathSync,
 } from "node:fs";
 import path from "node:path";
@@ -96,6 +99,149 @@ const environmentNames = (payload) => {
   return [...names].sort();
 };
 
+const unchangedMetadata = (before, after) => [
+  "dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs",
+].every((field) => before[field] === after[field]);
+
+export const stableExecutableSha256 = (filename, readChunk = readSync) => {
+  const descriptor = openSync(
+    filename,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+  );
+  try {
+    const before = fstatSync(descriptor, { bigint: true });
+    if (!before.isFile() || before.nlink < 1n || before.size < 1n) {
+      throw new Error("setup runtime executable custody is unsafe");
+    }
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1_048_576);
+    for (;;) {
+      const count = readChunk(descriptor, buffer, 0, buffer.length, null);
+      if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length) {
+        throw new Error("setup runtime executable read is invalid");
+      }
+      if (count === 0) break;
+      digest.update(buffer.subarray(0, count));
+    }
+    const after = fstatSync(descriptor, { bigint: true });
+    if (!unchangedMetadata(before, after)) {
+      throw new Error("setup runtime executable changed during preflight");
+    }
+    return digest.digest("hex");
+  } finally {
+    closeSync(descriptor);
+  }
+};
+
+export const stablePackageTreeSha256 = (root) => {
+  if (typeof root !== "string" || !path.isAbsolute(root) || path.normalize(root) !== root || realpathSync(root) !== root) {
+    throw new Error("setup package root is invalid");
+  }
+  const maximumRecords = 20_000;
+  const maximumBytes = 536_870_912n;
+  let totalBytes = 0n;
+  const records = [{ path: ".", type: "directory" }];
+
+  const stableFile = (filename, relative) => {
+    const descriptor = openSync(
+      filename,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+    );
+    try {
+      const before = fstatSync(descriptor, { bigint: true });
+      if (!before.isFile() || before.size < 0n) {
+        throw new Error("setup package tree contains an unsupported entry");
+      }
+      totalBytes += before.size;
+      if (totalBytes > maximumBytes || before.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error("setup package tree exceeds fixed evidence bound");
+      }
+      const digest = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(1_048_576);
+      for (;;) {
+        const count = readSync(descriptor, buffer, 0, buffer.length, null);
+        if (count === 0) break;
+        digest.update(buffer.subarray(0, count));
+      }
+      const after = fstatSync(descriptor, { bigint: true });
+      if (!unchangedMetadata(before, after)) {
+        throw new Error("setup package tree changed during preflight");
+      }
+      records.push({
+        path: relative,
+        sha256: digest.digest("hex"),
+        size: Number(before.size),
+        type: "file",
+      });
+    } finally {
+      closeSync(descriptor);
+    }
+  };
+
+  const visit = (directory) => {
+    const before = lstatSync(directory, { bigint: true });
+    if (!before.isDirectory() || before.isSymbolicLink()) {
+      throw new Error("setup package tree contains an unsupported entry");
+    }
+    const entries = readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => Buffer.compare(Buffer.from(left.name, "utf8"), Buffer.from(right.name, "utf8")));
+    for (const entry of entries) {
+      const filename = path.join(directory, entry.name);
+      const relative = path.relative(root, filename).split(path.sep).join("/");
+      const metadata = lstatSync(filename, { bigint: true });
+      if (metadata.isSymbolicLink()) {
+        throw new Error("setup package tree contains a symbolic link");
+      }
+      if (metadata.isDirectory()) {
+        records.push({ path: relative, type: "directory" });
+        visit(filename);
+      } else if (metadata.isFile()) {
+        stableFile(filename, relative);
+      } else {
+        throw new Error("setup package tree contains an unsupported entry");
+      }
+      if (records.length > maximumRecords) {
+        throw new Error("setup package tree exceeds fixed evidence bound");
+      }
+    }
+    const after = lstatSync(directory, { bigint: true });
+    if (!unchangedMetadata(before, after)) {
+      throw new Error("setup package tree changed during preflight");
+    }
+  };
+
+  visit(root);
+  return canonicalDigest({
+    records,
+    schema: "agentnet.package-tree-content.v1",
+  });
+};
+
+const runtimeIdentity = (environment) => {
+  const fields = {
+    agentnet_executable: environment.AGENTNET_EXECUTABLE,
+    node_executable: environment.AGENTNET_NODE_EXECUTABLE,
+    systemctl_executable: environment.AGENTNET_SYSTEMCTL,
+    useradd_executable: environment.AGENTNET_USERADD,
+    uv_executable: environment.AGENTNET_UV,
+  };
+  const result = {};
+  for (const [name, filename] of Object.entries(fields)) {
+    if (typeof filename !== "string" || !path.isAbsolute(filename) || path.normalize(filename) !== filename) {
+      throw new Error("setup runtime identity is invalid");
+    }
+    const resolved = realpathSync(filename);
+    if (resolved !== filename) throw new Error("setup runtime identity is not canonical");
+    result[name] = filename;
+    result[name.replace("_executable", "_sha256")] = stableExecutableSha256(filename);
+  }
+  const packageRoot = environment.AGENTNET_PACKAGE_ROOT;
+  if (typeof packageRoot !== "string") throw new Error("setup package root is invalid");
+  result.package_root = packageRoot;
+  result.package_tree_sha256 = stablePackageTreeSha256(packageRoot);
+  return result;
+};
+
 export const privilegedApprovalDigest = (
   userArguments,
   environment = process.env,
@@ -121,8 +267,9 @@ export const privilegedApprovalDigest = (
     references[field] = { path: filename, fingerprint };
   }
   return canonicalDigest({
-    schema: "agentnet.server-setup.approval-digest.v1",
+    schema: "agentnet.server-setup.approval-digest.v2",
     request_file_sha256: sha256(requestPayload),
     referenced_inputs: references,
+    runtime_identity: runtimeIdentity(environment),
   });
 };

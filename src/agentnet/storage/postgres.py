@@ -31,6 +31,188 @@ from agentnet.storage.postgres_catalog import require_exact_postgres_catalog
 MIGRATION_LOCK_ID = 0x41474E544D494752  # "AGNTMIGR", inside PostgreSQL signed-bigint range.
 WRITE_LOCK_ID = 0x41474E5457524954  # "AGNTWRIT", serializes canonical chain/cursor writes.
 _VERIFIED_POSTGRESQL_SEAL = object()
+ORDINARY_SERVER_POSTGRES_USER = "agentnet"
+ORDINARY_SERVER_POSTGRES_DATABASE = "agentnet"
+ORDINARY_SERVER_POSTGRES_SOCKET = "/var/run/postgresql"
+ORDINARY_SERVER_POSTGRES_DSN = (
+    "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet"
+)
+ORDINARY_SERVER_POSTGRES_ADMIN_DSN = (
+    "postgresql://postgres@%2Fvar%2Frun%2Fpostgresql/postgres"
+)
+
+
+def validate_ordinary_server_postgres_dsn(database_url: str) -> dict[str, str]:
+    """Require one canonical local peer-auth connection contract.
+
+    This validates connection selection only. A live service-identity canary and
+    live HBA/ident inspection remain separate apply-time gates.
+    """
+
+    try:
+        parameters = conninfo_to_dict(database_url)
+    except Exception as exc:
+        raise ValidationError("ordinary server PostgreSQL DSN is not valid libpq conninfo") from exc
+    expected = {
+        "dbname": ORDINARY_SERVER_POSTGRES_DATABASE,
+        "host": ORDINARY_SERVER_POSTGRES_SOCKET,
+        "user": ORDINARY_SERVER_POSTGRES_USER,
+    }
+    if database_url != ORDINARY_SERVER_POSTGRES_DSN or parameters != expected:
+        raise ValidationError(
+            "ordinary server PostgreSQL DSN must use the fixed local peer-auth contract"
+        )
+    return expected
+
+
+def _ordinary_hba_token_may_match(
+    values: object,
+    target: str,
+    *,
+    same_user_database: bool,
+) -> bool:
+    if not isinstance(values, (list, tuple)):
+        return True
+    for raw in values:
+        value = str(raw)
+        if value in {"all", target}:
+            return True
+        if same_user_database and value in {"sameuser", "samerole", "samegroup"}:
+            return True
+        if value.startswith(("/", "@")):
+            return True
+        if not same_user_database and value.startswith("+"):
+            return True
+    return False
+
+
+def validate_ordinary_server_postgres_auth_rules(
+    hba_rows: Sequence[Mapping[str, Any]],
+    ident_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Validate live parsed PostgreSQL auth files for one exact peer rule.
+
+    The first potentially matching local rule must be the exact scoped peer
+    rule. Broad, role/regex, mapped, malformed, or shadowing rules fail closed.
+    """
+
+    if any(row.get("error") for row in hba_rows) or any(row.get("error") for row in ident_rows):
+        raise ValidationError("PostgreSQL authentication files contain parse errors")
+    candidate: Mapping[str, Any] | None = None
+    for row in sorted(hba_rows, key=lambda item: int(item.get("rule_number") or 0)):
+        if row.get("type") != "local":
+            continue
+        if not _ordinary_hba_token_may_match(
+            row.get("database"),
+            ORDINARY_SERVER_POSTGRES_DATABASE,
+            same_user_database=True,
+        ):
+            continue
+        if not _ordinary_hba_token_may_match(
+            row.get("user_name"),
+            ORDINARY_SERVER_POSTGRES_USER,
+            same_user_database=False,
+        ):
+            continue
+        candidate = row
+        break
+    if (
+        candidate is None
+        or list(candidate.get("database") or ()) != [ORDINARY_SERVER_POSTGRES_DATABASE]
+        or list(candidate.get("user_name") or ()) != [ORDINARY_SERVER_POSTGRES_USER]
+        or candidate.get("auth_method") != "peer"
+        or candidate.get("options") not in (None, [], ())
+    ):
+        raise ValidationError(
+            "PostgreSQL first matching local rule is not the exact AgentNet peer rule"
+        )
+    return {
+        "auth_method": "peer",
+        "database": ORDINARY_SERVER_POSTGRES_DATABASE,
+        "ident_map": "none_exact_name_match",
+        "rule_number": int(candidate.get("rule_number") or 0),
+        "user": ORDINARY_SERVER_POSTGRES_USER,
+    }
+
+
+def probe_ordinary_server_postgres_connection(
+    database_url: str,
+    *,
+    connector: Callable[..., Any] = psycopg.connect,
+) -> dict[str, Any]:
+    """Run one read-only service-identity canary over the fixed Unix socket."""
+
+    validate_ordinary_server_postgres_dsn(database_url)
+    try:
+        with connector(
+            database_url,
+            autocommit=True,
+            connect_timeout=3,
+            row_factory=dict_row,
+        ) as connection:
+            connection.execute("SET statement_timeout = '3s'")
+            row = connection.execute(
+                """SELECT current_user AS current_user,
+                          current_database() AS current_database,
+                          inet_server_addr() IS NULL AS unix_socket,
+                          pg_is_in_recovery() AS in_recovery,
+                          current_setting('server_version') AS server_version"""
+            ).fetchone()
+    except Exception as exc:
+        return {"ready": False, "reason": type(exc).__name__}
+    ready = bool(
+        row
+        and row["current_user"] == ORDINARY_SERVER_POSTGRES_USER
+        and row["current_database"] == ORDINARY_SERVER_POSTGRES_DATABASE
+        and row["unix_socket"]
+        and not row["in_recovery"]
+    )
+    return {
+        "ready": ready,
+        "current_user": row["current_user"] if row else None,
+        "current_database": row["current_database"] if row else None,
+        "transport": "unix_socket" if row and row["unix_socket"] else "other",
+        "writable_primary": bool(row and not row["in_recovery"]),
+        "server_version": row["server_version"] if row else None,
+    }
+
+
+def inspect_ordinary_server_postgres_auth(
+    *,
+    connector: Callable[..., Any] = psycopg.connect,
+) -> dict[str, Any]:
+    """Inspect current auth files plus reload freshness as local postgres identity."""
+
+    try:
+        with connector(
+            ORDINARY_SERVER_POSTGRES_ADMIN_DSN,
+            autocommit=True,
+            connect_timeout=3,
+            row_factory=dict_row,
+        ) as connection:
+            connection.execute("SET statement_timeout = '3s'")
+            hba_rows = connection.execute(
+                """SELECT rule_number,type,database,user_name,auth_method,options,error
+                   FROM pg_hba_file_rules ORDER BY rule_number"""
+            ).fetchall()
+            ident_rows = connection.execute(
+                """SELECT map_number,map_name,sys_name,pg_username,error
+                   FROM pg_ident_file_mappings ORDER BY map_number"""
+            ).fetchall()
+            freshness = connection.execute(
+                """SELECT pg_conf_load_time() >=
+                              (pg_stat_file(current_setting('hba_file'))).modification
+                              AS hba_loaded,
+                          pg_conf_load_time() >=
+                              (pg_stat_file(current_setting('ident_file'))).modification
+                              AS ident_loaded"""
+            ).fetchone()
+        if not freshness or not freshness["hba_loaded"] or not freshness["ident_loaded"]:
+            raise ValidationError("PostgreSQL authentication files have not been reloaded")
+        result = validate_ordinary_server_postgres_auth_rules(hba_rows, ident_rows)
+    except Exception as exc:
+        return {"ready": False, "reason": type(exc).__name__}
+    return {"ready": True, "configuration_loaded": True, **result}
 
 
 def validate_postgres_recovery_dsn(database_url: str) -> tuple[str, ...]:

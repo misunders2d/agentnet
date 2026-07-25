@@ -198,9 +198,13 @@ identity or authority source. You can also load it explicitly with
 
 ### Product-owned ordinary Linux server setup
 
-After verifying system-wide root-owned AgentNet, Node.js, and `uv` executables, then
-resolving approved PostgreSQL, OIDC, scanner trust, secret-file, and distinct
-public HTTPS-route inputs, plan without writes:
+Follow the bundled canonical checklist in
+[`skills/agentnet-operator/references/ordinary-server-setup.md`](skills/agentnet-operator/references/ordinary-server-setup.md).
+First verify system-wide root-owned AgentNet, Node.js, and `uv` executables whose
+resolved paths are outside `/root`, `/home`, and `/run/user`. Prepare exact
+owner-only OIDC/scanner/environment inputs and the fixed local PostgreSQL peer
+contract (`agentnet` OS user → `agentnet` role/database through
+`/var/run/postgresql`). Then plan without privileged or managed-host writes (the npm launcher may materialize its caller-owned Python runtime):
 
 ```bash
 <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
@@ -215,15 +219,26 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
-This fixed wrapper creates only AgentNet's two locked identities, private roots,
-Approval/Core state, scanner trust, and two hardened systemd units. It starts
-loopback Core and Approval, verifies operator-owned public HTTPS routes, emits
-redacted resumable evidence, and rejects conflicting state without overwrite.
-It never mutates DNS, TLS certificates, proxy or firewall policy, PostgreSQL
-administration, identity, or authority. A remote Manager does not shell into
-the target. Human OIDC/WebAuthn and offline activation remain explicit steps in
-the bundled skill. Final setup status is `operational` with identity enrolled
-and authority still false.
+Plan and apply bind exact Node/uv/launcher/`systemctl`/`useradd` paths and
+content hashes plus the canonical full AgentNet package-tree content hash to
+approval digest v2. Apply
+repeats preflight under an exclusive lock, may create the fixed Core OS identity
+plus root-owned setup runtime/lock, and then blocks before AgentNet
+environments/config/database writes
+unless a read-only canary succeeds as that identity and parsed PostgreSQL
+HBA/ident views plus config-load freshness prove the exact loaded unshadowed
+`local agentnet agentnet peer` rule. PostgreSQL
+role/database/HBA edits and reload remain a separate operator-owned approval;
+rerun the same AgentNet digest afterward.
+
+The wrapper then owns only AgentNet's two locked identities, private roots,
+Approval/Core state, scanner trust, two hardened systemd units, bounded start,
+and exact loopback/public health. Retry reloads realized state and commits
+marker v2 only through same-request compare-and-swap; manual marker/unit surgery
+is unsupported. It never mutates DNS, TLS, proxy/firewall policy, PostgreSQL
+administration, identity, or authority. Human OIDC/WebAuthn and offline
+activation remain explicit. Final setup status is `operational` with identity
+enrolled and authority still false.
 
 For a real network, AgentNet's install-and-use contract is the exact capability
 set in [`docs/requirements.md`](docs/requirements.md)—no reduced messaging
@@ -291,7 +306,8 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.24`. That release contains the product-owned ordinary Linux server setup:
+`0.1.25`. The current unpublished `0.1.26` candidate corrects ordinary Linux
+server setup convergence. The earlier `0.1.24` release introduced product-owned ordinary Linux server setup:
 fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
 exact public HTTPS health identity, interruption recovery, redacted evidence,
 and bundled operator workflow. Setup grants neither identity nor authority.
@@ -302,7 +318,7 @@ runner where that path did not exist. No `0.1.23` package was staged or
 published. Published `0.1.24` changed only that fixture to mock AgentNet's
 validated host-tool resolver directly; runtime behavior was unchanged.
 
-Prepared `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
+Published `0.1.25` repairs two JSON-RPC interoperability defects exposed by the
 pinned official A2A TCK: `/rpc` and `/rpc/` now use the same strict endpoint
 without POST redirects, and a blank SDK request tenant is restored only from an
 exact verified opaque route binding. Missing/spoofed bindings and tenant
@@ -313,10 +329,16 @@ release-manifest self-check reports `1386 passed, 15 expected host/PostgreSQL
 skips`. The focused official JSON-RPC lane reports `3 passed`, while the full
 MUST run remains non-green at `50 passed, 11 failed, 174 skipped`; G04 therefore
 remains `FAILED`. Exact prepublication, retained-artifact, recursive packed, and
-Pi-loader checks are recorded in the candidate evidence after they pass.
-Privileged clean-host apply, cross-SDK/public-peer evidence, live
-PostgreSQL/OIDC/WebAuthn/TLS ceremony, Sergey-only publication, and independent
-public-artifact deployment remain pending or separately gated. Repository
+Pi-loader checks are recorded in its immutable evidence.
+
+Unpublished `0.1.26` repairs runtime-bound setup approval, semantic broker
+preflight, exact PostgreSQL service-identity peer validation, safe same-digest
+resume, marker provenance/CAS, Windows CLI imports, and installer guidance.
+Local source/package evidence is recorded as working-candidate evidence only;
+clean Ubuntu 24.04/PostgreSQL 18 CI, cross-platform CI, retained-artifact refresh,
+Sergey-only publication, and independent public-artifact deployment remain
+pending. Cross-SDK/public-peer evidence and live OIDC/WebAuthn ceremony remain
+separately gated. Repository
 evidence is not a completed live cross-host journey or production certification.
 
 Production adoption still requires deployment-specific evidence such as a real

@@ -38,7 +38,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-24-v0.1.25/artifacts/RETENTION.md",
+        "evidence/local/2026-07-24-v0.1.26/artifacts/RETENTION.md",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
@@ -179,6 +179,13 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "ordinary-server-remote-manager-never-shells",
         "ordinary-server-missing-route-blocks",
         "ordinary-server-resumes-exact-request",
+        "ordinary-server-rejects-home-runtime",
+        "ordinary-server-invalid-broker-blocks-before-mutation",
+        "ordinary-server-postgres-peer-block-and-resume",
+        "ordinary-server-postgres-first-apply-safe-partial-state",
+        "ordinary-server-configured-not-started-resume",
+        "ordinary-server-runtime-drift-invalidates-digest",
+        "ordinary-server-marker-never-proves-readiness",
         "ordinary-server-human-ceremony-remains-explicit",
         "headless-server-uses-private-terminal-browser-handoff",
         "fresh-laptop-rejects-three-grant-c0-fallback",
@@ -363,21 +370,26 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         "UV_PROJECT_ENVIRONMENT:",
         "AGENTNET_NPM_RUNTIME_DIR",
         "AGENTNET_PACKAGE_ROOT: packageRoot",
-        "AGENTNET_NODE_EXECUTABLE: process.execPath",
+        "AGENTNET_NODE_EXECUTABLE: nodeExecutable",
+        "AGENTNET_SYSTEMCTL: systemctlExecutable",
+        "AGENTNET_USERADD: useraddExecutable",
+        "PYTHONDONTWRITEBYTECODE",
         "privilegedSetupApply",
         'from "../lib/server-setup-preflight.mjs"',
-        "privilegedApprovalDigest(userArguments)",
+        "privilegedApprovalDigest(userArguments, digestEnvironment)",
         "requireRootOwnedPath(packageRoot, { recursive: true })",
+        "info.isDirectory() ? 0o001 : 0o005",
         'const setupRoot = "/var/lib/agentnet-setup"',
         "const inheritedEnvironment = privilegedSetupApply",
-        'PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+        'const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+        "PATH: systemPath",
         'createHash("sha256")',
         "realpathSync",
         'shell: false',
         '"3.13.13"',
     ):
         assert required in launcher
-    assert launcher.index("privilegedApprovalDigest(userArguments)") < launcher.index(
+    assert launcher.index("privilegedApprovalDigest(userArguments, digestEnvironment)") < launcher.index(
         'const setupRoot = "/var/lib/agentnet-setup"'
     )
     assert '">=3.13,<3.15"' not in launcher
@@ -388,6 +400,19 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
     assert "postinstall" not in json.loads(
         (ROOT / "package.json").read_text(encoding="utf-8")
     )["scripts"]
+    preflight = (ROOT / "npm/lib/server-setup-preflight.mjs").read_text(encoding="utf-8")
+    for required in (
+        "stableExecutableSha256",
+        "setup runtime executable changed during preflight",
+        "stablePackageTreeSha256",
+        "agentnet.package-tree-content.v1",
+        "maximumRecords = 20_000",
+        "maximumBytes = 536_870_912n",
+        "package_tree_sha256",
+        "systemctl_executable",
+        "useradd_executable",
+    ):
+        assert required in preflight
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -456,7 +481,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-24-v0.1.25/artifacts/RETENTION.md",
+        "evidence/local/2026-07-24-v0.1.26/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

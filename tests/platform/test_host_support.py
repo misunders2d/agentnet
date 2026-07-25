@@ -558,8 +558,11 @@ def test_cli_private_state_round_trip_uses_host_security(tmp_path: Path) -> None
 
 
 def test_cli_import_does_not_require_posix_fcntl() -> None:
-    script = r'''
+    source_root = str(ROOT / "src")
+    script = f'''
 import builtins
+import sys
+sys.path.insert(0, {source_root!r})
 original = builtins.__import__
 def guarded(name, *args, **kwargs):
     if name == "fcntl":
@@ -571,7 +574,34 @@ import agentnet.cli
     completed = subprocess.run(
         [sys.executable, "-I", "-c", script],
         cwd=ROOT,
-        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Unix account modules exist on POSIX")
+def test_cli_import_on_windows_does_not_require_unix_account_modules() -> None:
+    source_root = str(ROOT / "src")
+    script = f'''
+import builtins
+import sys
+sys.path.insert(0, {source_root!r})
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name in {{"grp", "pwd"}}:
+        raise ModuleNotFoundError(f"{{name}} deliberately unavailable")
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+import agentnet.cli
+'''
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        cwd=ROOT,
+        env=os.environ.copy(),
         capture_output=True,
         text=True,
         check=False,

@@ -1,0 +1,50 @@
+{
+  "run_id": "2026-07-24-v0.1.26",
+  "evaluated_at": "2026-07-25T08:14:46+00:00",
+  "scope": "v0_1_26_ordinary_server_setup_convergence_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "f871821eb22626249ee6e2b44aacd83383db487c778915cba977c8fd4f1b4417",
+  "prior_runtime_evidence": "evidence/local/2026-07-24-v0.1.25/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-24-v0.1.25/manifest.json",
+  "change_boundary": "Correct the fixed ordinary Linux setup path: approval digest v2 binds stable no-follow Node.js/uv/AgentNet/systemctl/useradd executables plus the deterministic full executed root-owned package tree; locked Python reread rejects drift; exact network-create rc=1, bounded redacted product/systemd execution, inherited-pipe cleanup, semantic broker preflight, exact service-identity PostgreSQL peer and parsed HBA/ident reload gate, complete Approval trust reread, managed-child custody, marker-v2 CAS/retry, persistent setup lock custody, installer-agent workflow, and Windows import portability are regressed. PostgreSQL administration, identity, authority, G04, production durability, publication, and clean-host CI remain separate and unpromoted.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider tests/platform/test_host_support.py tests/operations/test_server_setup.py tests/cli/test_server_agent_activation.py tests/conformance/test_npm_package.py tests/conformance/test_release_manifest.py",
+      "result": "151 passed; 9 expected non-host platform skips; 0 failed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "1432 passed; 16 expected platform/dedicated-PostgreSQL skips; 0 failed; one known Starlette/httpx deprecation warning"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider tests/conformance/test_release_manifest.py -k \"artifact_ignore_policy or npm_install_without_git_ignore\"",
+      "result": "2 passed; Git checkout requires exact archive ignore policy while npm-installed root may omit npm-stripped nested .gitignore"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and recursive installed npm generations 1 and 2 each 1385 passed; 16 expected platform/dedicated-PostgreSQL skips; one known Starlette/httpx warning; package check and release verifier passed"
+    },
+    {
+      "command": "Pi DefaultResourceLoader against source and freshly packed agentnet-operator SKILL.md",
+      "result": "PASS: source and fresh npm-packed package each loaded exactly one agentnet-operator skill with zero diagnostics"
+    },
+    {
+      "command": "two independent SOURCE_DATE_EPOCH=1580601600 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-sources",
+      "result": "byte-identical 0.1.26 sdist and wheel archives"
+    },
+    {
+      "command": "bash -n scripts/ci/ordinary-server-setup-e2e.sh",
+      "result": "PASS; real Ubuntu 24.04/PostgreSQL 18 workflow execution pending"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-24-v0.1.26/artifacts/agentnet-0.1.26.tar.gz",
+      "sha256": "4034766e61dc8378c150f9ca93a806f48fd5be33c333a6f2316b8f05329434f7"
+    },
+    {
+      "path": "evidence/local/2026-07-24-v0.1.26/artifacts/agentnet-0.1.26-py3-none-any.whl",
+      "sha256": "acc4aae0283c2c03fd39dcb2245beacf8a430bd7be05c303e2ee7b1625f984e4"
+    }
+  ]
+}

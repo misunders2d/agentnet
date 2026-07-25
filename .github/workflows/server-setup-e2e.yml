@@ -1,0 +1,109 @@
+name: Ordinary server setup E2E
+
+on:
+  push:
+    paths:
+      - ".github/workflows/server-setup-e2e.yml"
+      - "scripts/ci/ordinary-server-setup-e2e.sh"
+      - "npm/**"
+      - "src/agentnet/approval/cli_commands.py"
+      - "src/agentnet/cli.py"
+      - "src/agentnet/core/app.py"
+      - "src/agentnet/operations/server_setup.py"
+      - "src/agentnet/storage/postgres.py"
+      - "skills/agentnet-operator/**"
+      - "package.json"
+      - "package-lock.json"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/server-setup-e2e.yml"
+      - "scripts/ci/ordinary-server-setup-e2e.sh"
+      - "npm/**"
+      - "src/agentnet/approval/cli_commands.py"
+      - "src/agentnet/cli.py"
+      - "src/agentnet/core/app.py"
+      - "src/agentnet/operations/server_setup.py"
+      - "src/agentnet/storage/postgres.py"
+      - "skills/agentnet-operator/**"
+      - "package.json"
+      - "package-lock.json"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-24-postgresql-18:
+    name: Ubuntu 24.04 / PostgreSQL 18 clean install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
+      - name: Configure uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          python-version: "3.13.13"
+          enable-cache: false
+
+      - name: Install PostgreSQL 18 and local route dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common nginx jq openssl ca-certificates
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get update
+          sudo apt-get install -y postgresql-18
+          sudo systemctl start postgresql
+          sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
+
+      - name: Run clean installed-artifact setup lifecycle
+        shell: bash
+        run: scripts/ci/ordinary-server-setup-e2e.sh
+
+      - name: Verify E2E cleanup
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! getent passwd agentnet >/dev/null
+          ! getent passwd agentnet-approval >/dev/null
+          ! getent group agentnet >/dev/null
+          ! getent group agentnet-approval >/dev/null
+          for path in \
+            /opt/agentnet-e2e \
+            /var/lib/agentnet \
+            /var/lib/agentnet-approval \
+            /var/lib/agentnet-setup \
+            /etc/agentnet-secrets \
+            /etc/systemd/system/agentnet-core.service \
+            /etc/systemd/system/agentnet-approval.service \
+            /etc/nginx/sites-enabled/agentnet-e2e \
+            /etc/nginx/sites-available/agentnet-e2e \
+            /usr/local/share/ca-certificates/agentnet-e2e.crt \
+            /etc/ssl/certs/agentnet-e2e.crt \
+            /etc/ssl/certs/agentnet-e2e.pem \
+            /etc/ssl/private/agentnet-e2e.key \
+            "$RUNNER_TEMP/agentnet-ordinary-server-e2e"; do
+            ! sudo test -e "$path"
+          done
+          ! grep -Fq '# agentnet-e2e' /etc/hosts
+          HBA_FILE="$(sudo -u postgres psql -Atq --dbname=postgres -c 'SHOW hba_file')"
+          ! sudo grep -Fq '# agentnet-e2e' "$HBA_FILE"
+          [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_roles WHERE rolname='agentnet'")" == "0" ]]
+          [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_database WHERE datname='agentnet'")" == "0" ]]

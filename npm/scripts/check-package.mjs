@@ -30,7 +30,7 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-24-v0.1.25/artifacts/RETENTION.md",
+  "evidence/local/2026-07-24-v0.1.26/artifacts/RETENTION.md",
   "skills/**/*.md",
   "skills/**/*.json",
   "tests/fixtures/**/*.json",
@@ -93,6 +93,14 @@ for (const relative of [
 }
 
 const skillText = readFileSync(path.join(root, "skills/agentnet-operator/SKILL.md"), "utf8");
+const ordinaryServerText = readFileSync(
+  path.join(root, "skills/agentnet-operator/references/ordinary-server-setup.md"),
+  "utf8",
+);
+const safeCommandsText = readFileSync(
+  path.join(root, "skills/agentnet-operator/references/safe-commands.md"),
+  "utf8",
+);
 for (const required of [
   "name: agentnet-operator",
   "description:",
@@ -104,8 +112,36 @@ for (const required of [
   "references/examples/fresh-laptop-single-prompt.md",
   "references/ordinary-server-setup.md",
   "agentnet server-agent setup",
+  "the first approved apply may instead create only the fixed Core OS identity plus `/var/lib/agentnet-setup` runtime/lock and stop at `postgres_auth_not_ready`",
 ]) {
   if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
+}
+for (const required of [
+  "one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`",
+  "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
+  "then return `postgres_auth_not_ready`. It creates no AgentNet environment, Core/Approval config, database schema, unit, Approval identity, or service.",
+  "Correcting only private environment values while preserving the approved absolute files and variable-name sets keeps the same digest",
+]) {
+  if (!ordinaryServerText.includes(required)) {
+    fail(`ordinary-server setup reference is missing canonical contract: ${required}`);
+  }
+}
+for (const required of [
+  "/var/lib/agentnet-approval/config.json",
+  "/var/lib/agentnet-approval/state",
+  "deliberately non-ordinary",
+]) {
+  if (!safeCommandsText.includes(required)) {
+    fail(`safe commands reference is missing canonical ordinary-server boundary: ${required}`);
+  }
+}
+for (const forbidden of [
+  "/etc/agentnet-approval/config.json",
+  "postgresql://agentnet@127.0.0.1/agentnet",
+]) {
+  if (skillText.includes(forbidden) || ordinaryServerText.includes(forbidden) || safeCommandsText.includes(forbidden)) {
+    fail(`AgentNet operator skill contains stale ordinary-server contract: ${forbidden}`);
+  }
 }
 const onboardingText = readFileSync(
   path.join(root, "skills/agentnet-operator/references/fresh-laptop-onboarding.md"),
@@ -187,10 +223,17 @@ const expectedOnboardingEvalIds = [
   "headless-server-uses-private-terminal-browser-handoff",
   "hub-generates-public-onboarding-packet",
   "identity-only-mode-skips-c0-phase",
+  "ordinary-server-configured-not-started-resume",
   "ordinary-server-human-ceremony-remains-explicit",
+  "ordinary-server-invalid-broker-blocks-before-mutation",
+  "ordinary-server-marker-never-proves-readiness",
   "ordinary-server-missing-route-blocks",
+  "ordinary-server-postgres-first-apply-safe-partial-state",
+  "ordinary-server-postgres-peer-block-and-resume",
+  "ordinary-server-rejects-home-runtime",
   "ordinary-server-remote-manager-never-shells",
   "ordinary-server-resumes-exact-request",
+  "ordinary-server-runtime-drift-invalidates-digest",
   "ordinary-server-uses-product-owned-setup",
   "repository-candidate-does-not-unblock-installed-release",
   "v018-fresh-laptop-receipt-gap",
@@ -217,9 +260,14 @@ if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
 for (const marker of [
   "privilegedSetupApply",
   'from "../lib/server-setup-preflight.mjs"',
-  "privilegedApprovalDigest(userArguments)",
+  "privilegedApprovalDigest(userArguments, digestEnvironment)",
   "requireRootOwnedPath(packageRoot, { recursive: true })",
-  "AGENTNET_NODE_EXECUTABLE: process.execPath",
+  "info.isDirectory() ? 0o001 : 0o005",
+  "AGENTNET_NODE_EXECUTABLE: nodeExecutable",
+  "AGENTNET_PACKAGE_ROOT: packageRoot",
+  "AGENTNET_SYSTEMCTL: systemctlExecutable",
+  "AGENTNET_USERADD: useraddExecutable",
+  'PYTHONDONTWRITEBYTECODE: "1"',
   'const setupRoot = "/var/lib/agentnet-setup"',
   "const inheritedEnvironment = privilegedSetupApply",
 ]) {
