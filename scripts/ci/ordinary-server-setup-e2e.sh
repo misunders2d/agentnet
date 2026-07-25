@@ -249,15 +249,16 @@ echo "ordinary server setup E2E: first converged apply complete"
 run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY2" >/dev/null
-[[ "$(sudo sha256sum /var/lib/agentnet/agentnet.json | cut -d' ' -f1)" == "$CORE_CONFIG_1" ]]
-[[ "$(sudo sha256sum /var/lib/agentnet-approval/config.json | cut -d' ' -f1)" == "$APPROVAL_CONFIG_1" ]]
-[[ "$(sudo sha256sum /etc/systemd/system/agentnet-core.service | cut -d' ' -f1)" == "$CORE_UNIT_1" ]]
-[[ "$(sudo sha256sum /etc/systemd/system/agentnet-approval.service | cut -d' ' -f1)" == "$APPROVAL_UNIT_1" ]]
+jq -c '{status, steps: [.steps[] | {id, status}]}' "$APPLY2"
+jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY2" >/dev/null || { echo "ordinary server setup E2E: retry evidence mismatch" >&2; exit 1; }
+[[ "$(sudo sha256sum /var/lib/agentnet/agentnet.json | cut -d' ' -f1)" == "$CORE_CONFIG_1" ]] || { echo "ordinary server setup E2E: Core config changed on retry" >&2; exit 1; }
+[[ "$(sudo sha256sum /var/lib/agentnet-approval/config.json | cut -d' ' -f1)" == "$APPROVAL_CONFIG_1" ]] || { echo "ordinary server setup E2E: Approval config changed on retry" >&2; exit 1; }
+[[ "$(sudo sha256sum /etc/systemd/system/agentnet-core.service | cut -d' ' -f1)" == "$CORE_UNIT_1" ]] || { echo "ordinary server setup E2E: Core unit changed on retry" >&2; exit 1; }
+[[ "$(sudo sha256sum /etc/systemd/system/agentnet-approval.service | cut -d' ' -f1)" == "$APPROVAL_UNIT_1" ]] || { echo "ordinary server setup E2E: Approval unit changed on retry" >&2; exit 1; }
 REVISION_2="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
-[[ "$REVISION_2" -eq "$REVISION_1" ]]
-[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_1" ]]
+[[ "$REVISION_2" -eq "$REVISION_1" ]] || { echo "ordinary server setup E2E: marker revision evolved on retry" >&2; exit 1; }
+[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_1" ]] || { echo "ordinary server setup E2E: marker bytes changed on retry" >&2; exit 1; }
 
 # Output must not contain synthetic credential values.
-! grep -Fq "$TOKEN" "$PLAN" "$APPLY_BLOCKED" "$APPLY1" "$APPLY2"
+! grep -Fq "$TOKEN" "$PLAN" "$APPLY_BLOCKED" "$APPLY1" "$APPLY2" || { echo "ordinary server setup E2E: credential appeared in output" >&2; exit 1; }
 echo "ordinary server setup E2E: PASS"
