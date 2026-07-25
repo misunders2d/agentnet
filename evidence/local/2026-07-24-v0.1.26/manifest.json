@@ -1,12 +1,12 @@
 {
   "run_id": "2026-07-24-v0.1.26",
-  "evaluated_at": "2026-07-25T11:02:13+00:00",
+  "evaluated_at": "2026-07-25T11:12:51+00:00",
   "scope": "v0_1_26_ordinary_server_setup_convergence_candidate",
   "release_certified": false,
   "release_source_tree_sha256": "f0f7cacda014980783aecb1550c0d5c4e72eb73008d411e2a02f9255cd00018b",
   "prior_runtime_evidence": "evidence/local/2026-07-24-v0.1.25/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-24-v0.1.25/manifest.json",
-  "change_boundary": "Correct the fixed ordinary Linux setup path: approval digest v2 binds stable no-follow Node.js/uv/AgentNet/systemctl/useradd executables plus the deterministic full executed root-owned package tree; locked Python reread rejects drift; exact network-create rc=1, bounded redacted product/systemd execution, inherited-pipe cleanup, semantic broker preflight, exact service-identity PostgreSQL peer and parsed HBA/ident reload gate, complete Approval trust reread, managed-child custody, marker-v2 CAS/retry with deterministic persisted-config hashes across fresh Python processes, persistent setup lock custody, installer-agent workflow, and Windows import portability are regressed. PostgreSQL administration, identity, authority, G04, production durability, publication, and clean-host CI remain separate and unpromoted.",
+  "change_boundary": "Correct the fixed ordinary Linux setup path: approval digest v2 binds stable no-follow Node.js/uv/AgentNet/systemctl/useradd executables plus the deterministic full executed root-owned package tree; locked Python reread rejects drift; exact network-create rc=1, bounded redacted product/systemd execution, inherited-pipe cleanup, semantic broker preflight, exact service-identity PostgreSQL peer and parsed HBA/ident reload gate, complete Approval trust reread, managed-child custody, marker-v2 CAS/retry with deterministic persisted-config hashes across fresh Python processes, persistent setup lock custody, installer-agent workflow, and Windows import portability are regressed. PostgreSQL administration outside the ephemeral test boundary, identity, authority, G04, production durability, publication, and external deployment remain separate and unpromoted.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q -p no:cacheprovider tests/platform/test_host_support.py tests/operations/test_server_setup.py tests/cli/test_server_agent_activation.py tests/conformance/test_npm_package.py tests/conformance/test_release_manifest.py",
@@ -34,17 +34,25 @@
     },
     {
       "command": "bash -n scripts/ci/ordinary-server-setup-e2e.sh",
-      "result": "PASS; real Ubuntu 24.04/PostgreSQL 18 workflow execution pending"
+      "result": "PASS"
+    },
+    {
+      "command": "GitHub Actions Ordinary server setup E2E run 30155733937 at 58a13dd3bfb81d66cc21b18878fafb58fdaef8d4",
+      "result": "PASS: clean Ubuntu 24.04/PostgreSQL 18 plan, expected PostgreSQL blocker, separate PostgreSQL boundary, installed-artifact apply/start, unchanged retry with setup_marker already_satisfied, and always-run cleanup"
+    },
+    {
+      "command": "GitHub Actions Cross-platform package conformance run 30155733938 at 58a13dd3bfb81d66cc21b18878fafb58fdaef8d4",
+      "result": "PASS: Ubuntu, macOS, and Windows package contracts plus pack/install/launch from unrelated directories"
     }
   ],
   "artifacts": [
     {
       "path": "evidence/local/2026-07-24-v0.1.26/artifacts/agentnet-0.1.26.tar.gz",
-      "sha256": "c81660c6bb759b4ec4f807f9c2c52cd75e1c43bbe27527e659fde51d2d07c811"
+      "sha256": "586819fbafd4c020d3c264f64972344e76734c9ad436393886167b3aaca3e979"
     },
     {
       "path": "evidence/local/2026-07-24-v0.1.26/artifacts/agentnet-0.1.26-py3-none-any.whl",
-      "sha256": "155e5abe03d06489a2b04f41b406614488a395a2ee9cea6c812ebf9dd08bc653"
+      "sha256": "8dc818e5c7e6b0bc93f8117dd1c4aae0f37073563343623d51d1b04752eb939c"
     }
   ]
 }

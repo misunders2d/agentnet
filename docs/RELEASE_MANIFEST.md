@@ -200,9 +200,12 @@ release and `1433 passed, 16 expected platform/dedicated-PostgreSQL skips` for
 source regression excluding installed-harness and release-manifest gates; source
 and both recursive installed npm generations report `1386 passed, 16 expected
 skips`. The release verifier, byte-identical wheel/sdist build, recursive package
-gate, and source/fresh-packed Pi skill loaders pass. Corrected clean Ubuntu
-24.04/PostgreSQL 18 workflow result, current-tree cross-platform CI, final review
-closure, and Sergey-only publication remain pending.
+gate, and source/fresh-packed Pi skill loaders pass. At commit `58a13dd`, GitHub
+run `30155733937` passed clean Ubuntu 24.04/PostgreSQL 18 plan, expected database
+blocker, separate PostgreSQL boundary, apply/start, unchanged stable retry, and
+cleanup; run `30155733938` passed package conformance on Ubuntu, macOS, and
+Windows. Final current-tree review closure and Sergey-only publication remain
+pending.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
