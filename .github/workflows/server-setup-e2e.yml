@@ -69,7 +69,10 @@ jobs:
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get update
           sudo apt-get install -y postgresql-18
-          sudo systemctl start postgresql
+          while read -r version cluster _; do
+            sudo pg_dropcluster --stop "$version" "$cluster"
+          done < <(pg_lsclusters --no-header)
+          sudo pg_createcluster 18 main --port 5432 --start
           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
 
       - name: Run clean installed-artifact setup lifecycle

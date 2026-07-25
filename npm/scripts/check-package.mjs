@@ -259,6 +259,7 @@ if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
 }
 for (const marker of [
   "privilegedSetupApply",
+  "PATHEXT",
   'from "../lib/server-setup-preflight.mjs"',
   "privilegedApprovalDigest(userArguments, digestEnvironment)",
   "requireRootOwnedPath(packageRoot, { recursive: true })",

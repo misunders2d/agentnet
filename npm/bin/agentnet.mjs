@@ -41,9 +41,15 @@ const privilegedSetupApply = process.platform === "linux" &&
 
 const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const resolveCommand = (command, searchPath = process.env.PATH ?? "") => {
+  const suffixes = process.platform === "win32" && path.extname(command) === ""
+    ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(path.delimiter).filter(Boolean)]
+    : [""];
+  const names = [...new Set(suffixes.map((suffix) => `${command}${suffix}`))];
   const candidates = path.isAbsolute(command)
-    ? [command]
-    : searchPath.split(path.delimiter).filter(Boolean).map((entry) => path.join(entry, command));
+    ? names
+    : searchPath.split(path.delimiter).filter(Boolean).flatMap(
+      (entry) => names.map((name) => path.join(entry, name)),
+    );
   for (const candidate of candidates) {
     try {
       accessSync(candidate, fsConstants.X_OK);
