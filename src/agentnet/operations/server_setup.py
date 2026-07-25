@@ -1941,6 +1941,27 @@ def _read_private_managed_file(
         os.close(descriptor)
 
 
+def _managed_config_digest(
+    path: Path,
+    account: pwd.struct_passwd,
+    *,
+    blocker: str,
+    exclude_top_level: frozenset[str] = frozenset(),
+) -> str:
+    value = _strict_json_bytes(
+        _read_private_managed_file(
+            path,
+            account,
+            blocker=blocker,
+            max_bytes=1_048_576,
+        ),
+        label="managed AgentNet configuration",
+    )
+    for key in exclude_top_level:
+        value.pop(key, None)
+    return canonical_digest(value)
+
+
 def _require_private_directory(path: Path, account: pwd.struct_passwd, *, blocker: str) -> None:
     try:
         metadata = path.lstat()
@@ -2520,12 +2541,18 @@ def apply_server_setup(
                     existing_payload=existing_marker_payload,
                     existing_marker=existing_marker,
                     request_digest=approved_digest,
-                    approval_config_digest=canonical_digest(approval_config.model_dump(mode="json")),
-                    core_config_digest=canonical_digest(
-                        config.model_dump(
-                            mode="json",
-                            exclude={"enrolled_harness_id", "enrolled_credential_id"},
-                        )
+                    approval_config_digest=_managed_config_digest(
+                        approval_config_path,
+                        approval_account,
+                        blocker="approval_config",
+                    ),
+                    core_config_digest=_managed_config_digest(
+                        core_config_path,
+                        core_account,
+                        blocker="core_custody",
+                        exclude_top_level=frozenset(
+                            {"enrolled_harness_id", "enrolled_credential_id"}
+                        ),
                     ),
                     unit_payloads=unit_payloads,
                     uid=root_uid,

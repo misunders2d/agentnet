@@ -197,7 +197,7 @@
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "4f9efed2516aa024cf6ddd2c7e7c717f37468004169af01aa1ee353e7582f071"
+      "sha256": "529600e0093e44cdea2e507c8e54a134571247569f34e26b2d826684004c9ddc"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "730f88401bea7d62c8e16918151a36017de3853c2187b94f18a197f4398df41d"
+      "sha256": "a227a50cc2e36cbc7eed783aa6489bde620dc18b2543868c5e94ccbcec2d110f"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "2578fc86f46b32779af0d485b14000ca0c9a29eae886697aef89401c7e25087b"
+      "sha256": "d50e277f6c146eebab5a8aed646e46dda9e705ad2f576dc7b111de8099a56144"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -251,7 +251,7 @@
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "f871821eb22626249ee6e2b44aacd83383db487c778915cba977c8fd4f1b4417"
+    "sha256": "f0f7cacda014980783aecb1550c0d5c4e72eb73008d411e2a02f9255cd00018b"
   },
   "protocols": {
     "a2a": {

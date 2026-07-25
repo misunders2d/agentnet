@@ -191,17 +191,18 @@ truthfulness: approval digest v2 binds exact service-visible Node/uv/launcher/
 broker semantics and locked preflight precede managed writes; the
 fixed PostgreSQL profile verifies service-identity Unix-socket peer access,
 parsed HBA/ident rules, and config-load freshness; marker v2 uses same-request
-prior-byte compare-and-swap and never substitutes for realized-state bootstrap,
-health, identity, or authority. It also incorporates the Windows CLI import
-correction and one ordered operator procedure. Current local evidence is `151
-passed, 9 expected platform skips` for platform/setup/activation/package/release
-and `1432 passed, 16 expected platform/dedicated-PostgreSQL skips` for source
-regression excluding installed-harness and release-manifest gates; source and
-both recursive installed npm generations report `1385 passed, 16 expected
-skips`. The release verifier, byte-identical wheel/sdist build, recursive
-package gate, and source/fresh-packed Pi skill loaders pass. Clean Ubuntu
-24.04/PostgreSQL 18 workflow result, cross-platform CI, review closure, and
-Sergey-only publication remain pending.
+prior-byte compare-and-swap, hashes stable persisted config JSON rather than
+process-randomized set serialization, and never substitutes for realized-state
+bootstrap, health, identity, or authority. It also incorporates the Windows CLI
+import correction and one ordered operator procedure. Current local evidence is
+`152 passed, 9 expected platform skips` for platform/setup/activation/package/
+release and `1433 passed, 16 expected platform/dedicated-PostgreSQL skips` for
+source regression excluding installed-harness and release-manifest gates; source
+and both recursive installed npm generations report `1386 passed, 16 expected
+skips`. The release verifier, byte-identical wheel/sdist build, recursive package
+gate, and source/fresh-packed Pi skill loaders pass. Corrected clean Ubuntu
+24.04/PostgreSQL 18 workflow result, current-tree cross-platform CI, final review
+closure, and Sergey-only publication remain pending.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

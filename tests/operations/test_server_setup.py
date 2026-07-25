@@ -1816,6 +1816,37 @@ def test_bounded_product_process_rejects_inherited_pipe_eof_stall(
     assert time.monotonic() - started < 5
 
 
+def test_managed_config_digest_uses_stable_persisted_json(
+    tmp_path: Path,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    path = tmp_path / "config.json"
+    payload = {
+        "allowed_purposes": ["purpose.z", "purpose.a"],
+        "enrolled_harness_id": "harness-changing-after-ceremony",
+        "enrolled_credential_id": "credential-changing-after-ceremony",
+        "schema_version": "1.0",
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path.chmod(0o600)
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+
+    assert setup._managed_config_digest(
+        path,
+        account,
+        blocker="test_config",
+        exclude_top_level=frozenset(
+            {"enrolled_harness_id", "enrolled_credential_id"}
+        ),
+    ) == setup.canonical_digest(
+        {
+            "allowed_purposes": ["purpose.z", "purpose.a"],
+            "schema_version": "1.0",
+        }
+    )
+
+
 def test_setup_marker_migrates_and_revisions_same_request_state(
     tmp_path: Path,
 ) -> None:
@@ -2103,6 +2134,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         if command[0] == "bootstrap-server-agent":
             if mutate_bootstrap_once:
                 config_generation += 1
+                config_path = Path(argv[argv.index("--config") + 1])
+                config_path.write_text(
+                    json.dumps({"generation": config_generation}),
+                    encoding="utf-8",
+                )
                 mutate_bootstrap_once = False
             return {"ready": True}
         raise AssertionError(argv)
