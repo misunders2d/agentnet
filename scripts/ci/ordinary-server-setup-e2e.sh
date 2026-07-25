@@ -175,11 +175,13 @@ chmod 600 "$INPUTS"/* "$WORK/scanner.key" "$WORK/scanner.pub"
 # No privileged or managed-host writes; caller-owned npm runtime is allowed.
 run_evidence "$PLAN" env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_PREFIX/bin/agentnet" server-agent setup --request "$INPUTS/server-setup.json"
+echo "ordinary server setup E2E: plan command complete"
 jq -e '.schema == "agentnet.server-setup.evidence.v1" and .status == "planned" and .identity_enrolled == false and .authority_granted == false and .prerequisites.postgresql.hba_rule == "local agentnet agentnet peer"' "$PLAN" >/dev/null
 for user in agentnet agentnet-approval; do ! getent passwd "$user" >/dev/null; done
 for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-setup /etc/agentnet-secrets; do ! sudo test -e "$path"; done
 DIGEST="$(jq -r '.request_digest' "$PLAN")"
 [[ "$DIGEST" =~ ^[a-f0-9]{64}$ ]]
+echo "ordinary server setup E2E: plan assertions complete"
 
 # First approved apply may create fixed Core identity plus root-owned setup
 # runtime/lock, then must block before AgentNet config/schema/unit/service writes.
@@ -198,6 +200,7 @@ for path in /var/lib/agentnet /var/lib/agentnet-approval /etc/agentnet-secrets; 
 sudo test -d /var/lib/agentnet-setup/npm-runtime
 sudo test -f /var/lib/agentnet-setup/setup.lock
 ! sudo test -e /var/lib/agentnet-setup/setup.json
+echo "ordinary server setup E2E: expected PostgreSQL blocker complete"
 
 # Separate operator-owned PostgreSQL approval boundary: exact role, database,
 # unshadowed peer rule, reload, and parsed live-file evidence.
@@ -220,6 +223,7 @@ done
 sudo -u postgres psql -Atq --dbname=postgres -c \
   "SELECT count(*) FROM pg_hba_file_rules WHERE type='local' AND database=ARRAY['agentnet'] AND user_name=ARRAY['agentnet'] AND auth_method='peer' AND error IS NULL" \
   | grep -qx '1'
+echo "ordinary server setup E2E: PostgreSQL boundary complete"
 
 # Same approved digest resumes, starts services, and proves exact public health
 # without granting identity, authority, or production durability.
@@ -239,6 +243,7 @@ CORE_UNIT_1="$(sudo sha256sum /etc/systemd/system/agentnet-core.service | cut -d
 APPROVAL_UNIT_1="$(sudo sha256sum /etc/systemd/system/agentnet-approval.service | cut -d' ' -f1)"
 REVISION_1="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 MARKER_1="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
+echo "ordinary server setup E2E: first converged apply complete"
 
 # Same-digest retry revalidates realized state; configs/units remain exact.
 run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
