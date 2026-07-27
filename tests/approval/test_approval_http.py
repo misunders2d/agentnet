@@ -41,7 +41,10 @@ class FakeOwnerSessions:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
         self.provider = SimpleNamespace(
-            config=SimpleNamespace(authorization_ttl_seconds=300)
+            config=SimpleNamespace(
+                authorization_ttl_seconds=300,
+                issuer="https://idp.example",
+            )
         )
 
     def create_preauth(self):
@@ -62,6 +65,9 @@ class FakeOwnerSessions:
             csrf_token="N" * 43,
             expires_at=NOW + 900,
         )
+
+    def fail_oidc_login(self, **kwargs):
+        self.calls.append(("fail_oidc_login", kwargs))
 
     def session_status(self, session_token: str):
         self.calls.append(("session_status", session_token))
@@ -205,6 +211,100 @@ def test_owner_oidc_app_requires_matching_owner_session_service() -> None:
         create_approval_app(service)
 
 
+def test_owner_oidc_callback_accepts_unique_extensions_and_rejects_ambiguous_shapes() -> None:
+    async def exercise() -> None:
+        success_owner = FakeOwnerSessions()
+        success_app = create_approval_app(FakeApprovalService(owner_sessions=success_owner))
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=success_app, raise_app_exceptions=False),
+            base_url="https://approval.corp.example",
+        ) as client:
+            await client.get("/v1/approval/owner/session")
+            success = await client.get(
+                "/v1/approval/owner/oidc/callback",
+                params={
+                    "state": "T" * 43,
+                    "code": "authorization-code",
+                    "scope": "openid email",
+                    "authuser": "0",
+                    "prompt": "consent",
+                },
+                follow_redirects=False,
+            )
+            assert success.status_code == 303
+            assert success_owner.calls[-1] == (
+                "complete_oidc_login",
+                {
+                    "preauth_cookie": "P" * 43,
+                    "state": "T" * 43,
+                    "code": "authorization-code",
+                },
+            )
+
+        error_owner = FakeOwnerSessions()
+        error_app = create_approval_app(FakeApprovalService(owner_sessions=error_owner))
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=error_app, raise_app_exceptions=False),
+            base_url="https://approval.corp.example",
+        ) as client:
+            await client.get("/v1/approval/owner/session")
+            malformed_queries = (
+                [
+                    ("state", "T" * 43),
+                    ("code", "authorization-code"),
+                    ("scope", "openid"),
+                    ("scope", "email"),
+                ],
+                [
+                    ("state", "T" * 43),
+                    ("code", "authorization-code"),
+                    ("error", "access_denied"),
+                ],
+                [
+                    ("state", "T" * 43),
+                    ("code", "authorization-code"),
+                    ("error_description", "denied"),
+                ],
+                [
+                    ("state", "T" * 43),
+                    ("error", "access_denied"),
+                    ("error", "server_error"),
+                ],
+            )
+            for query in malformed_queries:
+                denied = await client.get(
+                    "/v1/approval/owner/oidc/callback",
+                    params=query,
+                    follow_redirects=False,
+                )
+                assert denied.status_code == 400
+            assert not any(call[0] == "complete_oidc_login" for call in error_owner.calls)
+            assert not any(call[0] == "fail_oidc_login" for call in error_owner.calls)
+
+            provider_error = await client.get(
+                "/v1/approval/owner/oidc/callback",
+                params={
+                    "state": "T" * 43,
+                    "error": "access_denied_sensitive",
+                    "error_description": "owner-canceled-sensitive",
+                    "error_uri": "https://idp.example/errors/private-sensitive",
+                    "authuser": "0",
+                },
+                follow_redirects=False,
+            )
+            assert provider_error.status_code == 400
+            assert "access_denied_sensitive" not in provider_error.text
+            assert "owner-canceled-sensitive" not in provider_error.text
+            assert "private-sensitive" not in provider_error.text
+            assert error_owner.calls[-1] == (
+                "fail_oidc_login",
+                {"preauth_cookie": "P" * 43, "state": "T" * 43},
+            )
+            assert not any(call[0] == "complete_oidc_login" for call in error_owner.calls)
+
+    asyncio.run(exercise())
+
+
 def test_browser_page_uses_stable_owner_session_without_fragment_capability() -> None:
     async def exercise() -> None:
         owner = FakeOwnerSessions()
@@ -281,20 +381,14 @@ def test_browser_page_uses_stable_owner_session_without_fragment_capability() ->
             assert started.status_code == 200
             assert started.json()["authorization_url"].startswith("https://idp.example/")
 
-            extra_query = await client.get(
+            callback = await client.get(
                 "/v1/approval/owner/oidc/callback",
                 params={
                     "state": "T" * 43,
                     "code": "authorization-code",
-                    "unexpected": "value",
+                    "scope": "openid email",
+                    "authuser": "0",
                 },
-                follow_redirects=False,
-            )
-            assert extra_query.status_code == 400
-
-            callback = await client.get(
-                "/v1/approval/owner/oidc/callback",
-                params={"state": "T" * 43, "code": "authorization-code"},
                 follow_redirects=False,
             )
             assert callback.status_code == 303

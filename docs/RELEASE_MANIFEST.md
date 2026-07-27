@@ -1,9 +1,9 @@
 # Release Manifest
 
 Snapshot: 2026-07-27
-Candidate: `agentnet 0.1.28`
-Latest published package: `agentnet 0.1.27`
-Evidence profile: root-installed communication-only proof repair candidate
+Candidate: `agentnet 0.1.29`
+Latest published package: `agentnet 0.1.28`
+Evidence profile: OIDC callback interoperability repair candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `853e0aa30d06750d62cbf23d0c713d335e78558cc1ace8963c0eb5c0339115e9` |
-| `pyproject.toml` | SHA-256 `c378dc3191bb44db07a732ad00ff1048b31d4bf1a30d06d2caa371564c677ba3` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `7be97ebc73c2ff70486aa60e019d7bbfa4bb05addb618ac338ab258c23f9b1a3` |
+| `pyproject.toml` | SHA-256 `1ffbf4bfaf9ab9b9a85d913e8ac555c4323d27a12adfd7871b623107f1c9fcbe` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -193,7 +193,7 @@ and public npm package bind commit
 `4641503ac6ee398db44f2c3fffe4c639b7c60561`. That evidence does not prove a
 created network, fresh-laptop enrollment, or native cross-host message.
 
-Candidate `0.1.28` repairs three failures exposed only by the Hub's root-installed
+Published `0.1.28` repairs three failures exposed only by the Hub's root-installed
 `0.1.27` verifier. Python and Node privileged setup-input readers now take two
 bounded content snapshots, accumulate short reads, retain metadata/path custody
 checks, and fail closed when snapshots differ even if a filesystem does not
@@ -208,8 +208,26 @@ recursive-package, and byte-identical wheel/sdist checks pass. Those lanes
 exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence
 files; the two installed-harness pin failures remain non-green and were not
 rerun or waived. The UID-0 lane uses a Linux user namespace and is not external
-privileged-host qualification. Exact public-package root-installed Hub evidence
-remains pending.
+privileged-host qualification. Exact public-package root-installed Hub verification later passed, after which a
+real owner Google OIDC attempt exposed callback-shape rejection before transaction
+claim; owner binding and passkey counts remained zero.
+
+Candidate `0.1.29` replaces exact-two-total-parameter callback parsing with one
+shared strict parser. Decoded names remain distinct through duplicate rejection,
+including unknown names. Success is exactly recognized `code`+`state`; provider
+failure is exactly recognized `error`+`state` with optional bounded metadata;
+mixed/orphan shapes deny. Unique unrecognized OAuth response extensions are
+ignored, never trusted or rendered. Bound provider errors terminally consume
+only the matching pending owner, enrollment, or recovery transaction without
+token exchange. Existing cookie/state, PKCE, nonce, issuer/audience/signature,
+expiry, replay, and owner-binding checks remain in force. The failed public
+callback URL is not retried or reused. Focused callback checks report `92
+passed`; source and both clean recursively packed npm generations each report
+`1443 passed, 16 expected platform/dedicated-PostgreSQL skips`. Release verifier,
+`agentnet verify`, package checks, Codex/Claude/constitution reviews, and two
+byte-identical wheel/sdist builds pass. External installation and live enrollment
+evidence remain absent until exact public-package deployment and a fresh OIDC
+transaction complete.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

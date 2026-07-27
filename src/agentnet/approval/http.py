@@ -23,7 +23,6 @@ from agentnet.approval.owner_session import (
     OWNER_SESSION_COOKIE_NAME,
     OwnerApprovalCompleteRequest,
     OwnerApprovalSelectRequest,
-    OwnerOIDCCallbackQuery,
     OwnerOIDCStartRequest,
     OwnerRegistrationBeginRequest,
     OwnerRegistrationCompleteRequest,
@@ -37,6 +36,7 @@ from agentnet.approval.internal_broker import (
 )
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
 from agentnet.errors import AuthenticationError, ValidationError
+from agentnet.identity.oidc_callback import OIDCCallbackError, parse_oidc_callback_pairs
 from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_json
 
 
@@ -831,13 +831,16 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
 
     async def owner_oidc_callback(request: Request) -> Response:
         try:
-            pairs = list(request.query_params.multi_items())
-            if len(pairs) != 2 or {key for key, _value in pairs} != {"code", "state"}:
-                raise AuthenticationError("approval request denied")
-            query = OwnerOIDCCallbackQuery.model_validate(dict(pairs))
+            query = parse_oidc_callback_pairs(request.query_params.multi_items())
             preauth_cookie = _optional_cookie(request, OWNER_PREAUTH_COOKIE_NAME)
             if preauth_cookie is None:
                 raise AuthenticationError("approval request denied")
+            if isinstance(query, OIDCCallbackError):
+                owner_sessions.fail_oidc_login(
+                    preauth_cookie=preauth_cookie,
+                    state=query.state,
+                )
+                return _denied()
             completed = owner_sessions.complete_oidc_login(
                 preauth_cookie=preauth_cookie,
                 state=query.state,

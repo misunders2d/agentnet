@@ -100,7 +100,7 @@ published and historical release evidence:
   G13, production, ship, real-network, fresh-laptop enrollment, or native
   cross-host evidence. Hub root-installed verification subsequently exposed
   three portability failures before any setup or network mutation.
-- Candidate `0.1.28` affects `ARC-001`, `SEC-007`, `OPS-006`, and `OPS-007`.
+- Published `0.1.28` affects `ARC-001`, `SEC-007`, `OPS-006`, and `OPS-007`.
   Python and Node privileged setup-input readers now accumulate bounded short
   reads and compare two content snapshots while retaining metadata/path custody
   checks, so same-size mutation rejection does not depend on filesystem timestamp
@@ -116,6 +116,21 @@ published and historical release evidence:
   non-green and were not rerun or waived. The UID-0 lane is a Linux user
   namespace, not external privileged-host evidence. No requirement or gate
   status is promoted.
+- Candidate `0.1.29` affects `ID-002`, `ID-003`, `ID-004`, `AUTH-001`,
+  `AUTH-003`, `SEC-002`, `SEC-005`, `OPS-006`, and `OPS-007`. A real public
+  `0.1.28` owner Google OIDC attempt exposed pre-claim callback rejection of
+  valid unique provider metadata. Shared callback parsing now rejects duplicate
+  decoded names globally, separates strict success/error recognized fields,
+  ignores only unique unrecognized OAuth extensions, and consumes only the
+  exact bound pending owner/enrollment/recovery transaction on provider error
+  without token exchange. Existing cookie/state, PKCE, nonce,
+  issuer/audience/signature, expiry, replay, and owner-binding checks remain.
+  Focused callback checks report `92 passed`; source and both recursively packed
+  generations each report `1443 passed, 16 expected skips`; release, package,
+  reviewer, and reproducible-build gates pass. The failed callback URL is not
+  retried or reused. This repair changes no
+  requirement or gate status; real fresh-laptop completion remains external
+  evidence.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

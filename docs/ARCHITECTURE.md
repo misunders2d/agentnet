@@ -405,8 +405,13 @@ Ordinary self-hosted onboarding uses one stable `/approval` origin. The owner
 starts OIDC Authorization Code + PKCE from that page, returns through one
 preauth cookie that is Secure, HttpOnly, `__Host-`, and `SameSite=Lax`, and
 rotates into authenticated owner-session and CSRF cookies that remain
-`SameSite=Strict`. Approval atomically claims then consumes the callback,
-permanently pins the preapproved issuer+subject or verified alias, and binds
+`SameSite=Strict`. Callback parsing retains decoded query pairs until every
+name, including extension names, is proven unique. It strictly projects either
+`code`+`state` success or `error`+`state` failure, rejects mixed/orphan shapes,
+and ignores only unique unrecognized OAuth response extensions. A bound provider
+error terminally fails the exact pending transaction without token exchange.
+Approval atomically claims then consumes a successful callback, permanently
+pins the preapproved issuer+subject or verified alias, and binds
 every session to the exact RP ID, public origin, verifier ID, owner principal,
 and domain. The owner registers a passkey and reviews requests without a secret
 URL. Stable request selection resolves encrypted capabilities only inside

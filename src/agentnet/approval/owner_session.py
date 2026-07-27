@@ -24,6 +24,7 @@ from webauthn.helpers.structs import (
 from agentnet.approval.store import ApprovalStore
 from agentnet.errors import AuthenticationError, ConflictError
 from agentnet.identity.enrollment import VerifiedOIDCIdentity
+from agentnet.identity.oidc_callback import OIDCCallbackSuccess
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import b64url_decode, b64url_encode, canonical_json
 
@@ -59,11 +60,8 @@ class OwnerOIDCStartRequest(BaseModel):
     csrf_token: str = Field(min_length=32, max_length=256)
 
 
-class OwnerOIDCCallbackQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    code: str = Field(min_length=1, max_length=4096)
-    state: str = Field(min_length=32, max_length=512)
+# Backward-compatible name for the strict recognized success projection.
+OwnerOIDCCallbackQuery = OIDCCallbackSuccess
 
 
 class OwnerRegistrationBeginRequest(BaseModel):
@@ -228,7 +226,10 @@ class OwnerSessionService:
         login_id = str(uuid4())
         expires_at = now + int(self.provider.config.authorization_ttl_seconds)
         encrypted = self.cipher.encrypt_json(
-            {"code_verifier": code_verifier},
+            {
+                "code_verifier": code_verifier,
+                "provider_audience": self.provider.config.audience,
+            },
             purpose=f"approval-owner-oidc:{login_id}",
         )
         try:
@@ -265,6 +266,44 @@ class OwnerSessionService:
             expires_at,
         )
 
+    def fail_oidc_login(
+        self,
+        *,
+        preauth_cookie: str,
+        state: str,
+    ) -> None:
+        """Atomically terminate one browser-bound pending login after provider denial."""
+
+        preauth_hash = _secret_hash(preauth_cookie)
+        state_hash = _secret_hash(state)
+        now = self.clock()
+        self._commit_expirations(at=now)
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                """SELECT * FROM approval_oidc_login_transactions
+                    WHERE state_hash=? AND preauth_session_hash=?""",
+                (state_hash, preauth_hash),
+            ).fetchone()
+            if row is None or row["state"] != "pending" or now >= int(row["expires_at"]):
+                raise AuthenticationError("owner session denied")
+            if (
+                row["oidc_issuer"] != self.provider.config.issuer
+                or row["client_id"] != self.provider.config.client_id
+                or row["redirect_uri"] != self.provider.config.redirect_uri
+            ):
+                raise AuthenticationError("owner session denied")
+            protected = self._decrypt_oidc_login(row)
+            if protected.get("provider_audience") != self.provider.config.audience:
+                raise AuthenticationError("owner session denied")
+            updated = connection.execute(
+                """UPDATE approval_oidc_login_transactions
+                      SET state='failed',callback_claimed_at=?,failure_code='provider_denied'
+                    WHERE login_id=? AND state='pending'""",
+                (now, row["login_id"]),
+            )
+            if updated.rowcount != 1:
+                raise AuthenticationError("owner session denied")
+
     def complete_oidc_login(
         self,
         *,
@@ -292,17 +331,18 @@ class OwnerSessionService:
                 or row["redirect_uri"] != self.provider.config.redirect_uri
             ):
                 raise AuthenticationError("owner session denied")
-            connection.execute(
+            protected = self._decrypt_oidc_login(row)
+            if protected.get("provider_audience") != self.provider.config.audience:
+                raise AuthenticationError("owner session denied")
+            updated = connection.execute(
                 """UPDATE approval_oidc_login_transactions
                       SET state='callback_claimed',callback_claimed_at=?
                     WHERE login_id=? AND state='pending'""",
                 (now, row["login_id"]),
             )
+            if updated.rowcount != 1:
+                raise AuthenticationError("owner session denied")
         try:
-            protected = self.cipher.decrypt_json(
-                row["code_verifier_encrypted"],
-                purpose=f"approval-owner-oidc:{row['login_id']}",
-            )
             code_verifier = protected["code_verifier"]
             if not isinstance(code_verifier, str):
                 raise TypeError("missing verifier")
@@ -916,6 +956,18 @@ class OwnerSessionService:
     def _commit_expirations(self, *, at: int) -> None:
         with self.store.transaction() as connection:
             self._expire(connection, at=at)
+
+    def _decrypt_oidc_login(self, row: sqlite3.Row) -> dict[str, object]:
+        try:
+            protected = self.cipher.decrypt_json(
+                row["code_verifier_encrypted"],
+                purpose=f"approval-owner-oidc:{row['login_id']}",
+            )
+        except Exception as exc:
+            raise AuthenticationError("owner session denied") from exc
+        if not isinstance(protected, dict):
+            raise AuthenticationError("owner session denied")
+        return protected
 
     def _expire(self, connection: sqlite3.Connection, *, at: int) -> None:
         connection.execute(

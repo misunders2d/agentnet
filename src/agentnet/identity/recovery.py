@@ -449,6 +449,42 @@ class OIDCCredentialRecoveryCoordinator:
             (hashlib.sha256(state.encode("utf-8")).hexdigest(),),
         ) is not None
 
+    def fail_authorization(self, *, state: str) -> None:
+        """Consume one exact pending recovery authorization after provider denial."""
+
+        if not isinstance(state, str) or len(state) < 32 or len(state) > 256:
+            raise AuthenticationError("OIDC recovery state is invalid")
+        now = self.provider.clock()
+        state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+        expired = False
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM oidc_recovery_transactions WHERE state_hash=?",
+                (state_hash,),
+            ).fetchone()
+            if row is None:
+                raise AuthenticationError("OIDC recovery state is unavailable")
+            if row["status"] != "pending":
+                raise ReplayError("OIDC recovery state was already consumed")
+            self._require_provider_binding(row)
+            expired = now >= int(row["expires_at"])
+            updated = connection.execute(
+                """UPDATE oidc_recovery_transactions SET status='failed',consumed_at=?
+                     WHERE transaction_id=? AND status='pending'""",
+                (now, row["transaction_id"]),
+            )
+            if updated.rowcount != 1:
+                raise ReplayError("OIDC recovery state was already consumed")
+            self.store.append_audit(
+                connection,
+                {
+                    "action": "oidc.recovery.authorization.failed",
+                    "transaction_id": row["transaction_id"],
+                },
+            )
+        if expired:
+            raise AuthenticationError("OIDC recovery state is expired")
+
     def complete_authorization(self, *, state: str, code: str) -> VerifiedRecoveryAuthorization:
         if not isinstance(state, str) or len(state) < 32 or len(state) > 256:
             raise AuthenticationError("OIDC recovery state is invalid")

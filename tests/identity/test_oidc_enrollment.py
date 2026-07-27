@@ -726,6 +726,63 @@ def test_state_code_and_token_are_single_use(oidc_stack: OIDCStack) -> None:
     assert challenge.challenge_id
 
 
+def test_provider_error_consumes_exact_pending_state_without_token_exchange(
+    oidc_stack: OIDCStack,
+) -> None:
+    authorization = oidc_stack.begin(P256KeyPair.generate())
+    with pytest.raises(AuthenticationError, match="state"):
+        oidc_stack.coordinator.fail_authorization(state="x" * 43)
+    assert oidc_stack.store.fetch_one(
+        "SELECT status FROM oidc_enrollment_transactions WHERE transaction_id=?",
+        (authorization.transaction_id,),
+    )["status"] == "pending"
+
+    oidc_stack.coordinator.fail_authorization(state=authorization.state)
+    row = oidc_stack.store.fetch_one(
+        "SELECT status,consumed_at FROM oidc_enrollment_transactions WHERE transaction_id=?",
+        (authorization.transaction_id,),
+    )
+    assert row["status"] == "failed"
+    assert row["consumed_at"] is not None
+    assert oidc_stack.transport.token_posts == 0
+    with pytest.raises(ReplayError):
+        oidc_stack.coordinator.fail_authorization(state=authorization.state)
+    with pytest.raises(ReplayError):
+        oidc_stack.coordinator.complete_authorization(
+            state=authorization.state,
+            code="code-after-provider-error",
+        )
+    assert oidc_stack.transport.token_posts == 0
+
+
+def test_provider_error_rejects_config_drift_and_expires_without_token_exchange(
+    oidc_stack: OIDCStack,
+) -> None:
+    drifted = oidc_stack.begin(P256KeyPair.generate(), name="drifted workstation")
+    with oidc_stack.store.transaction() as connection:
+        connection.execute(
+            "UPDATE oidc_enrollment_transactions SET audience=? WHERE transaction_id=?",
+            ("different-audience", drifted.transaction_id),
+        )
+    with pytest.raises(AuthenticationError, match="binding"):
+        oidc_stack.coordinator.fail_authorization(state=drifted.state)
+    assert oidc_stack.store.fetch_one(
+        "SELECT status FROM oidc_enrollment_transactions WHERE transaction_id=?",
+        (drifted.transaction_id,),
+    )["status"] == "pending"
+    assert oidc_stack.transport.token_posts == 0
+
+    expired = oidc_stack.begin(P256KeyPair.generate(), name="expired workstation")
+    oidc_stack.clock.value = expired.expires_at
+    with pytest.raises(AuthenticationError, match="expired"):
+        oidc_stack.coordinator.fail_authorization(state=expired.state)
+    assert oidc_stack.store.fetch_one(
+        "SELECT status FROM oidc_enrollment_transactions WHERE transaction_id=?",
+        (expired.transaction_id,),
+    )["status"] == "failed"
+    assert oidc_stack.transport.token_posts == 0
+
+
 def test_wrong_state_does_not_consume_the_real_transaction(oidc_stack: OIDCStack) -> None:
     authorization = oidc_stack.begin(P256KeyPair.generate())
     with pytest.raises(AuthenticationError, match="state"):

@@ -6,8 +6,13 @@ from pathlib import Path
 
 import httpx
 import pytest
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from agentnet.core.app import CommunicationCore
+from agentnet.enrollment_http import create_enrollment_routes
+from agentnet.errors import AuthenticationError
 from agentnet.http_api import create_app
 from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentResult
 from agentnet.identity.oidc import OIDCGuidedAuthorizationRequest, OIDCPollResult
@@ -25,12 +30,27 @@ class FakeEnrollment:
         return self.result
 
 
+class FakeRecoveryCoordinator:
+    def __init__(self, state: str) -> None:
+        self.state = state
+        self.authorization_failures: list[str] = []
+
+    def has_state(self, state: str) -> bool:
+        return state == self.state
+
+    def fail_authorization(self, *, state: str) -> None:
+        assert state == self.state
+        self.authorization_failures.append(state)
+
+
 class FakeCoordinator:
     def __init__(self, store, result: EnrollmentResult) -> None:
         self.store = store
         self.enrollment = FakeEnrollment(result)
         self.begun: dict | None = None
         self.guided_completed: dict | None = None
+        self.authorization_completions: list[tuple[str, str]] = []
+        self.authorization_failures: list[str] = []
 
     def begin_authorization(self, **kwargs):
         self.begun = kwargs
@@ -61,9 +81,14 @@ class FakeCoordinator:
         self.guided_completed = kwargs
         return self.enrollment.result
 
+    def fail_authorization(self, *, state: str) -> None:
+        assert state == "s" * 43
+        self.authorization_failures.append(state)
+
     def complete_authorization(self, *, state: str, code: str):
         assert state == "s" * 43
         assert code == "authorization-code-http"
+        self.authorization_completions.append((state, code))
         return EnrollmentChallenge(
             challenge_id="enrollment-challenge-http-0001",
             nonce="n" * 43,
@@ -129,19 +154,64 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         }
         assert "identity" not in begin.text and "email" not in begin.text
 
-        duplicate_state = await client.get(
-            "/v1/enrollment/oidc/callback",
-            params=[
+        malformed_queries = (
+            [
                 ("state", "s" * 43),
                 ("state", "s" * 43),
                 ("code", "authorization-code-http"),
             ],
+            [
+                ("state", "s" * 43),
+                ("code", "authorization-code-http"),
+                ("scope", "openid"),
+                ("scope", "email"),
+            ],
+            [
+                ("state", "s" * 43),
+                ("code", "authorization-code-http"),
+                ("error", "access_denied"),
+            ],
+            [
+                ("state", "s" * 43),
+                ("code", "authorization-code-http"),
+                ("error_description", "denied"),
+            ],
         )
-        assert duplicate_state.status_code == 401
+        for query in malformed_queries:
+            denied = await client.get(
+                "/v1/enrollment/oidc/callback",
+                params=query,
+            )
+            assert denied.status_code == 401
+        assert coordinator.authorization_completions == []
+        assert coordinator.authorization_failures == []
+
+        provider_error = await client.get(
+            "/v1/enrollment/oidc/callback",
+            params={
+                "state": "s" * 43,
+                "error": "access_denied_sensitive",
+                "error_description": "owner-canceled-sensitive",
+                "error_uri": "https://idp.example/errors/private-sensitive",
+                "authuser": "0",
+            },
+        )
+        assert provider_error.status_code == 401
+        assert "access_denied_sensitive" not in provider_error.text
+        assert "owner-canceled-sensitive" not in provider_error.text
+        assert "private-sensitive" not in provider_error.text
+        assert coordinator.authorization_failures == ["s" * 43]
+        assert coordinator.authorization_completions == []
 
         callback = await client.get(
             "/v1/enrollment/oidc/callback",
-            params={"state": "s" * 43, "code": "authorization-code-http"},
+            params={
+                "state": "s" * 43,
+                "code": "authorization-code-http",
+                "scope": "openid email",
+                "authuser": "0",
+                "prompt": "consent",
+            },
             headers={"Accept": "application/json"},
         )
         assert callback.status_code == 200, callback.text
@@ -228,3 +298,76 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
             headers={"Content-Type": "application/json"},
         )
         assert injected.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_provider_error_routes_exact_recovery_state_without_metadata_leak(
+    store,
+    identity_factory,
+    tmp_path: Path,
+) -> None:
+    actor, _actor_key = identity_factory(binding_assurance="os_bound")
+    core = CommunicationCore(
+        ExtensionConfig(
+            domain_id=actor.domain_id,
+            data_dir=tmp_path / "data",
+            database_url=f"sqlite:///{tmp_path / 'unused.sqlite3'}",
+            artifact_dir=tmp_path / "artifacts",
+            public_base_url="http://127.0.0.1",
+        ),
+        store,
+    )
+    result = EnrollmentResult(
+        principal_id=actor.principal_id or "",
+        harness_id=actor.harness_id or "",
+        credential_id=actor.credential_id or "",
+        key_id="candidate-key-http",
+        credential_epoch=1,
+        harness_status="active",
+        actor=actor,
+    )
+    coordinator = FakeCoordinator(store, result)
+    recovery_state = "r" * 43
+    recovery = FakeRecoveryCoordinator(recovery_state)
+
+    async def denied(_request: Request, exc: Exception):
+        assert isinstance(exc, AuthenticationError)
+        return JSONResponse(
+            {"code": "request_denied", "message": "request denied"},
+            status_code=401,
+        )
+
+    app = Starlette(
+        routes=create_enrollment_routes(
+            core,
+            coordinator,
+            recovery_coordinator=recovery,  # type: ignore[arg-type]
+        ),
+        exception_handlers={Exception: denied},
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://127.0.0.1",
+    ) as client:
+        response = await client.get(
+            "/v1/enrollment/oidc/callback",
+            params={
+                "state": recovery_state,
+                "error": "access_denied_sensitive",
+                "error_description": "recovery-owner-canceled-sensitive",
+                "error_uri": "https://idp.example/errors/recovery-private-sensitive",
+                "extension": "ignored-sensitive-extension",
+            },
+        )
+
+    assert response.status_code == 401
+    assert recovery.authorization_failures == [recovery_state]
+    assert coordinator.authorization_failures == []
+    assert coordinator.authorization_completions == []
+    for forbidden in (
+        "access_denied_sensitive",
+        "recovery-owner-canceled-sensitive",
+        "recovery-private-sensitive",
+        "ignored-sensitive-extension",
+    ):
+        assert forbidden not in response.text

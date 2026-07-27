@@ -309,7 +309,11 @@ cross-device response-loss drills.
 Test exact transaction hashing, OIDC issuer/audience/state/nonce/PKCE, WebAuthn
 origin/RP/user verification, proof of possession, DPoP
 method/URI/audience/domain/jti, key epochs, refresh rotation, recovery, device
-loss, and offline revocation. Attack mix-up, code/OOB substitution, reused
+loss, and offline revocation. OIDC callback tests preserve decoded pairs through
+global duplicate-name rejection, accept unique provider extension parameters,
+reject mixed success/error and orphan metadata, terminally consume only the exact
+bound provider-error transaction, and prove zero token exchange on every error
+or malformed response. Attack mix-up, code/OOB substitution, reused
 challenges, duplicate JSON, oversized streaming bodies, copied identifiers,
 stolen capabilities/tokens, sibling/cross-domain replay, response loss,
 Core→Approval Bearer-only downgrade, duplicate/ambiguous proof headers,

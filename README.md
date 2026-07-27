@@ -327,10 +327,10 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.27` at commit `4641503ac6ee398db44f2c3fffe4c639b7c60561`.
-Candidate `0.1.28` repairs three root-installed verifier portability failures
-exposed before the Hub performed any setup or network mutation. Neither release
-proves an actual AgentNet network, fresh-laptop enrollment, native cross-host
+`0.1.28` at commit `b10a9fb8e390cdff5f7efe2175a12fb2f960c76e`.
+Candidate `0.1.29` repairs the owner and enrollment OIDC callback parsers after a
+real Google owner login exposed rejection of valid unique response extensions.
+Neither release proves completed fresh-laptop enrollment, a native cross-host
 message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
@@ -366,7 +366,7 @@ immutable tag resolves through tag object
 Published `0.1.27` adds the explicit communication-only ordinary-server profile
 for first-message testing while retaining fail-closed artifact boundaries. It
 permits exactly `offline_custody`, creates no scanner/artifact state, and does
-not convert local signed-message evidence into a real-network claim. Candidate
+not convert local signed-message evidence into a real-network claim. Published
 `0.1.28` makes Python and Node privileged setup-input verification independent
 of same-size timestamp advancement, accumulates bounded short reads, separates
 structured launcher rejection states, and rejects pending release evidence.
@@ -374,8 +374,20 @@ Its final source and two clean recursively packed npm generations each report
 `1418 passed, 16 expected platform/dedicated-PostgreSQL skips`; those lanes
 exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence
 files. The two installed-harness pin failures remain non-green and are not
-waived. Exact public `0.1.28` root-installed Hub verification, network creation,
-fresh-laptop enrollment, and native cross-host message/ACK remain pending.
+waived.
+
+Candidate `0.1.29` retains decoded callback pairs until every known or unknown
+name is proven unique, strictly separates success and provider-error shapes,
+ignores only unique unrecognized OAuth extensions, and terminally fails only the
+exact state-bound pending owner/enrollment/recovery transaction on provider
+error without token exchange. Existing cookie/state, PKCE, nonce, issuer,
+audience, signature, expiry, and replay checks remain unchanged. Focused checks
+report `92 passed`; source and both clean recursively packed npm generations
+each report `1443 passed, 16 expected platform/dedicated-PostgreSQL skips`;
+release, package, reviewer, and byte-identical archive gates pass. The failed
+real callback was not retried or reused. Fresh-laptop enrollment and native
+cross-host message/ACK remain pending until the exact public package is installed
+and a new OIDC transaction completes.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

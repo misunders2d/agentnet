@@ -139,6 +139,7 @@ class FakeRecoveryProvider:
         self.identity = identity
         self.value = now
         self.nonce: str | None = None
+        self.exchanges = 0
         self.config = type(
             "Config",
             (),
@@ -162,6 +163,7 @@ class FakeRecoveryProvider:
     def exchange_and_verify(self, *, code: str, code_verifier: str, expected_nonce_hash: str):
         import hashlib
 
+        self.exchanges += 1
         assert code == "recovery-code-0001"
         assert len(code_verifier) >= 64
         assert self.nonce is not None
@@ -430,6 +432,77 @@ def test_oidc_recovery_coordinator_never_accepts_identity_claims_and_consumes_on
     now = int(datetime.now(UTC).timestamp())
     provider = FakeRecoveryProvider(identity, now)
     coordinator = OIDCCredentialRecoveryCoordinator(store, provider, recovery)
+
+    drifted_key = P256KeyPair.generate()
+    drifted = coordinator.begin_authorization(
+        domain_id=beneficiary.domain_id,
+        old_harness_id=beneficiary.harness_id,
+        new_harness_kind="codex",
+        new_harness_name="drifted recovery workstation",
+        new_binding_assurance="hardware_bound",
+        new_public_key_pem=drifted_key.public_pem,
+    )
+    provider.config.audience = "different-recovery-audience"
+    with pytest.raises(AuthenticationError, match="binding"):
+        coordinator.fail_authorization(state=drifted.state)
+    assert store.fetch_one(
+        "SELECT status FROM oidc_recovery_transactions WHERE transaction_id=?",
+        (drifted.transaction_id,),
+    )["status"] == "pending"
+    assert provider.exchanges == 0
+    provider.config.audience = "recovery-client"
+
+    expired_key = P256KeyPair.generate()
+    expired = coordinator.begin_authorization(
+        domain_id=beneficiary.domain_id,
+        old_harness_id=beneficiary.harness_id,
+        new_harness_kind="codex",
+        new_harness_name="expired recovery workstation",
+        new_binding_assurance="hardware_bound",
+        new_public_key_pem=expired_key.public_pem,
+    )
+    provider.value = expired.expires_at
+    with pytest.raises(AuthenticationError, match="expired"):
+        coordinator.fail_authorization(state=expired.state)
+    assert store.fetch_one(
+        "SELECT status FROM oidc_recovery_transactions WHERE transaction_id=?",
+        (expired.transaction_id,),
+    )["status"] == "failed"
+    assert provider.exchanges == 0
+    provider.value = now
+
+    denied_key = P256KeyPair.generate()
+    denied = coordinator.begin_authorization(
+        domain_id=beneficiary.domain_id,
+        old_harness_id=beneficiary.harness_id,
+        new_harness_kind="codex",
+        new_harness_name="denied recovery workstation",
+        new_binding_assurance="hardware_bound",
+        new_public_key_pem=denied_key.public_pem,
+    )
+    with pytest.raises(AuthenticationError, match="state"):
+        coordinator.fail_authorization(state="x" * 43)
+    assert store.fetch_one(
+        "SELECT status FROM oidc_recovery_transactions WHERE transaction_id=?",
+        (denied.transaction_id,),
+    )["status"] == "pending"
+    coordinator.fail_authorization(state=denied.state)
+    denied_row = store.fetch_one(
+        "SELECT status,consumed_at FROM oidc_recovery_transactions WHERE transaction_id=?",
+        (denied.transaction_id,),
+    )
+    assert denied_row["status"] == "failed"
+    assert denied_row["consumed_at"] is not None
+    assert provider.exchanges == 0
+    with pytest.raises(ReplayError):
+        coordinator.fail_authorization(state=denied.state)
+    with pytest.raises(ReplayError):
+        coordinator.complete_authorization(
+            state=denied.state,
+            code="recovery-code-0001",
+        )
+    assert provider.exchanges == 0
+
     new_key = P256KeyPair.generate()
     authorization = coordinator.begin_authorization(
         domain_id=beneficiary.domain_id,

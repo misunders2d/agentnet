@@ -1260,6 +1260,48 @@ class OIDCEnrollmentCoordinator:
             )
         return result
 
+    def fail_authorization(self, *, state: str) -> None:
+        """Consume one exact pending authorization after a provider error response."""
+
+        if not isinstance(state, str) or len(state) < 32 or len(state) > 256:
+            raise AuthenticationError("OIDC authorization state is invalid")
+        now = self.provider.clock()
+        state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+        expired = False
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM oidc_enrollment_transactions WHERE state_hash=?",
+                (state_hash,),
+            ).fetchone()
+            if row is None:
+                raise AuthenticationError("OIDC authorization state is unavailable")
+            if row["status"] != "pending":
+                raise ReplayError("OIDC authorization state was already consumed")
+            self._require_provider_binding(row)
+            expired = now >= int(row["expires_at"])
+            updated = connection.execute(
+                """UPDATE oidc_enrollment_transactions SET status='failed',consumed_at=?
+                   WHERE transaction_id=? AND status='pending'""",
+                (now, row["transaction_id"]),
+            )
+            if updated.rowcount != 1:
+                raise ReplayError("OIDC authorization state was already consumed")
+            connection.execute(
+                """UPDATE oidc_enrollment_continuations
+                      SET status=?,updated_at=?
+                    WHERE transaction_id=? AND status='awaiting_oidc'""",
+                ("expired" if expired else "failed", now, row["transaction_id"]),
+            )
+            self.store.append_audit(
+                connection,
+                {
+                    "action": "oidc.authorization.failed",
+                    "transaction_id": row["transaction_id"],
+                },
+            )
+        if expired:
+            raise AuthenticationError("OIDC authorization state is expired")
+
     def complete_authorization(self, *, state: str, code: str) -> EnrollmentChallenge:
         if self.enrollment.outage_gate is not None:
             self.enrollment.outage_gate.require_issuance()

@@ -20,6 +20,7 @@ from starlette.routing import Route
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.identity.oidc import OIDCEnrollmentCoordinator
+from agentnet.identity.oidc_callback import OIDCCallbackError, parse_oidc_callback_pairs
 from agentnet.identity.recovery import OIDCCredentialRecoveryCoordinator
 
 
@@ -113,17 +114,17 @@ def create_enrollment_routes(
 
     async def callback(request: Request) -> Response:
         _rate_limit(core, request)
-        pairs = request.query_params.multi_items()
-        if any(key not in {"state", "code"} for key, _value in pairs):
+        query = parse_oidc_callback_pairs(request.query_params.multi_items())
+        if isinstance(query, OIDCCallbackError):
+            if recovery_coordinator is not None and recovery_coordinator.has_state(query.state):
+                recovery_coordinator.fail_authorization(state=query.state)
+            else:
+                coordinator.fail_authorization(state=query.state)
             raise AuthenticationError("OIDC callback parameters are invalid")
-        state_values = [value for key, value in pairs if key == "state"]
-        code_values = [value for key, value in pairs if key == "code"]
-        if len(state_values) != 1 or len(code_values) != 1:
-            raise AuthenticationError("OIDC callback parameters are invalid")
-        if recovery_coordinator is not None and recovery_coordinator.has_state(state_values[0]):
+        if recovery_coordinator is not None and recovery_coordinator.has_state(query.state):
             recovery = recovery_coordinator.complete_authorization(
-                state=state_values[0],
-                code=code_values[0],
+                state=query.state,
+                code=query.code,
             )
             return JSONResponse(
                 {
@@ -132,7 +133,7 @@ def create_enrollment_routes(
                 },
                 headers=_public_headers(),
             )
-        challenge = coordinator.complete_authorization(state=state_values[0], code=code_values[0])
+        challenge = coordinator.complete_authorization(state=query.state, code=query.code)
         if "application/json" in request.headers.get("accept", "").lower():
             return JSONResponse(
                 {

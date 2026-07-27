@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -135,6 +136,7 @@ class FakeOIDCProvider:
             issuer="https://idp.example",
             client_id="approval-client",
             redirect_uri="https://approval.corp.example/v1/approval/owner/oidc/callback",
+            audience="approval-audience",
             authorization_ttl_seconds=300,
         )
         self.exchanges: list[dict[str, str]] = []
@@ -472,6 +474,201 @@ def test_oidc_csrf_state_and_preauth_mixups_fail_without_consuming_valid_login(
         )
         assert stack.service.session_status(completed.session_token).authenticated is True
         assert len(stack.provider.exchanges) == 1
+    finally:
+        stack.store.close()
+
+
+def test_provider_error_fails_only_matching_pending_oidc_login_without_exchange(
+    tmp_path: Path,
+) -> None:
+    stack = _service(tmp_path)
+    try:
+        preauth = stack.service.create_preauth()
+        started = stack.service.begin_oidc_login(
+            preauth_cookie=preauth.session_token,
+            csrf_cookie=preauth.csrf_token,
+            csrf_token=preauth.csrf_token,
+        )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.fail_oidc_login(
+                preauth_cookie="W" * 43,
+                state=state,
+            )
+        assert stack.store.fetch_one(
+            "SELECT state FROM approval_oidc_login_transactions WHERE state_hash=?",
+            (hashlib.sha256(state.encode("ascii")).hexdigest(),),
+        )["state"] == "pending"
+
+        stack.service.fail_oidc_login(
+            preauth_cookie=preauth.session_token,
+            state=state,
+        )
+        failed = stack.store.fetch_one(
+            "SELECT state,failure_code,callback_claimed_at "
+            "FROM approval_oidc_login_transactions WHERE state_hash=?",
+            (hashlib.sha256(state.encode("ascii")).hexdigest(),),
+        )
+        assert (failed["state"], failed["failure_code"]) == (
+            "failed",
+            "provider_denied",
+        )
+        assert failed["callback_claimed_at"] is not None
+        assert stack.provider.exchanges == []
+
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.fail_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+            )
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.complete_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+                code="replayed-code",
+            )
+        assert stack.provider.exchanges == []
+    finally:
+        stack.store.close()
+
+
+def test_owner_oidc_audience_drift_and_legacy_payload_fail_without_consumption(
+    tmp_path: Path,
+) -> None:
+    stack = _service(tmp_path)
+    try:
+        preauth = stack.service.create_preauth()
+        started = stack.service.begin_oidc_login(
+            preauth_cookie=preauth.session_token,
+            csrf_cookie=preauth.csrf_token,
+            csrf_token=preauth.csrf_token,
+        )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+        state_hash = hashlib.sha256(state.encode("ascii")).hexdigest()
+
+        stack.provider.config.audience = "changed-audience"
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.fail_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+            )
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.complete_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+                code="drifted-code",
+            )
+        assert stack.store.fetch_one(
+            "SELECT state FROM approval_oidc_login_transactions WHERE state_hash=?",
+            (state_hash,),
+        )["state"] == "pending"
+        assert stack.provider.exchanges == []
+
+        stack.provider.config.audience = "approval-audience"
+        row = stack.store.fetch_one(
+            "SELECT * FROM approval_oidc_login_transactions WHERE state_hash=?",
+            (state_hash,),
+        )
+        legacy_payload = stack.service.cipher.encrypt_json(
+            {"code_verifier": "legacy-verifier"},
+            purpose=f"approval-owner-oidc:{row['login_id']}",
+        )
+        with stack.store.transaction() as connection:
+            connection.execute(
+                "UPDATE approval_oidc_login_transactions SET code_verifier_encrypted=? "
+                "WHERE login_id=?",
+                (legacy_payload, row["login_id"]),
+            )
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.fail_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+            )
+        assert stack.store.fetch_one(
+            "SELECT state FROM approval_oidc_login_transactions WHERE state_hash=?",
+            (state_hash,),
+        )["state"] == "pending"
+        assert stack.provider.exchanges == []
+    finally:
+        stack.store.close()
+
+
+def test_provider_error_and_success_race_has_one_terminal_winner(tmp_path: Path) -> None:
+    stack = _service(tmp_path)
+    try:
+        preauth = stack.service.create_preauth()
+        started = stack.service.begin_oidc_login(
+            preauth_cookie=preauth.session_token,
+            csrf_cookie=preauth.csrf_token,
+            csrf_token=preauth.csrf_token,
+        )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+
+        def succeed():
+            return stack.service.complete_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+                code="racing-code",
+            )
+
+        def deny():
+            return stack.service.fail_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(succeed), executor.submit(deny)]
+            outcomes: list[object] = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except AuthenticationError:
+                    outcomes.append("denied")
+
+        row = stack.store.fetch_one(
+            "SELECT state,failure_code FROM approval_oidc_login_transactions"
+        )
+        assert row["state"] in {"callback_consumed", "failed"}
+        assert sum(outcome != "denied" for outcome in outcomes) == 1
+        if row["state"] == "callback_consumed":
+            assert len(stack.provider.exchanges) == 1
+            assert stack.store.fetch_one(
+                "SELECT COUNT(*) AS n FROM approval_browser_sessions"
+            )["n"] == 1
+        else:
+            assert row["failure_code"] == "provider_denied"
+            assert stack.provider.exchanges == []
+            assert stack.store.fetch_one(
+                "SELECT COUNT(*) AS n FROM approval_browser_sessions"
+            )["n"] == 0
+    finally:
+        stack.store.close()
+
+
+def test_expired_owner_provider_error_fails_closed_without_exchange(tmp_path: Path) -> None:
+    clock = [NOW]
+    stack = _service(tmp_path, clock=clock)
+    try:
+        preauth = stack.service.create_preauth()
+        started = stack.service.begin_oidc_login(
+            preauth_cookie=preauth.session_token,
+            csrf_cookie=preauth.csrf_token,
+            csrf_token=preauth.csrf_token,
+        )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+        clock[0] = started.expires_at
+        with pytest.raises(AuthenticationError, match="owner session denied"):
+            stack.service.fail_oidc_login(
+                preauth_cookie=preauth.session_token,
+                state=state,
+            )
+        row = stack.store.fetch_one(
+            "SELECT state,failure_code FROM approval_oidc_login_transactions"
+        )
+        assert (row["state"], row["failure_code"]) == ("expired", "expired")
+        assert stack.provider.exchanges == []
     finally:
         stack.store.close()
 

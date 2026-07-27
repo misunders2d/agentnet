@@ -115,7 +115,7 @@ fragment-based legacy profile gets no broker surface.
 |---|---|
 | `GET /approval` / `GET /approval.js` | no-store CSP-constrained UI; stable mode uses authenticated owner session, lab mode reads then removes fragment capability |
 | `GET /v1/approval/owner/session` | stable preauth/session state; preauth cookie is Secure/HttpOnly/SameSite=Lax for the cross-site OIDC callback, while authenticated session and CSRF cookies remain SameSite=Strict |
-| `POST /v1/approval/owner/oidc/start` / `GET .../callback` | exact preauth+CSRF+PKCE/state/nonce login; callback atomically claims then consumes one transaction and rotates to a pinned owner session |
+| `POST /v1/approval/owner/oidc/start` / `GET .../callback` | exact preauth+CSRF+PKCE/state/nonce login; decoded names must be globally unique; strict success/error projections ignore only unique unknown OAuth extensions; provider error terminally fails the matching browser-bound transaction without token exchange; success atomically claims/consumes and rotates to a pinned owner session |
 | `POST /v1/approval/owner/registration/begin` / `.../complete` | session-bound, isolated WebAuthn UV registration with cumulative owner budgets |
 | `GET /v1/approval/owner/requests` | exact owner/domain pending and approved-unretrieved requests; no capability, receipt, transaction, or claim code |
 | `POST /v1/approval/owner/requests/options` | exact owner session/request selection; server resolves encrypted capability and returns a purpose-specific bounded summary plus session-bound assertion options |
@@ -220,7 +220,7 @@ The guided-enrollment public routes are:
 | Route | Input/effect |
 |---|---|
 | `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata; creates OIDC transaction plus hash-only continuation |
-| `GET /v1/enrollment/oidc/callback` | exact state/code; stores challenge atomically and returns safe HTML unless explicit JSON compatibility is requested |
+| `GET /v1/enrollment/oidc/callback` | one strict `code`+`state` success or `error`+`state` failure; duplicate/mixed/orphan recognized shapes deny, unique unrecognized OAuth extensions are ignored, bound errors terminally consume the matching enrollment/recovery transaction without token exchange, and success stores the challenge atomically before safe HTML unless explicit JSON compatibility is requested |
 | `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling and Core-side approval staging |
 | `POST /v1/enrollment/oidc/complete` | continuation, human claim code, and candidate PoP; Core retrieves receipt and atomically consumes enrollment challenge |
 
