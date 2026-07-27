@@ -673,6 +673,7 @@ class ExtensionConfig(BaseModel):
     data_dir: Path = Path(".agentnet")
     database_url: str = "sqlite:///.agentnet/core.sqlite3"
     database_url_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{2,127}$")
+    artifact_mode: Literal["enabled", "disabled"] = "enabled"
     artifact_backend: Literal["filesystem", "postgres-manifest"] = "filesystem"
     artifact_dir: Path = Path(".agentnet/artifacts")
     public_base_url: str = "http://127.0.0.1:8080"
@@ -747,6 +748,11 @@ class ExtensionConfig(BaseModel):
                 or any(ord(character) < 0x21 for character in self.service_audience)
             ):
                 raise ValueError("service_audience is not canonical")
+        if (
+            self.artifact_mode == "disabled"
+            and self.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+        ):
+            raise ValueError("artifact_mode=disabled is available only for always_on_server_agent")
         if self.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
             if not self.database_url.startswith("postgresql://"):
                 raise ValueError("always_on_server_agent requires PostgreSQL")
@@ -769,12 +775,20 @@ class ExtensionConfig(BaseModel):
                 not self.enrolled_harness_id or not self.enrolled_credential_id
             ) and self.oidc_enrollment is None:
                 raise ValueError("always_on_server_agent requires an externally enrolled harness and credential")
-            required_capabilities = {
-                ServerAgentCapability.OFFLINE_CUSTODY,
-                ServerAgentCapability.ARTIFACT_STORAGE,
-            }
+            required_capabilities = {ServerAgentCapability.OFFLINE_CUSTODY}
+            if self.artifact_mode == "enabled":
+                required_capabilities.add(ServerAgentCapability.ARTIFACT_STORAGE)
             if not required_capabilities <= self.server_agent_capabilities:
-                raise ValueError("always_on_server_agent requires mailbox custody and artifact recovery capability limits")
+                raise ValueError("always_on_server_agent requires its explicit mailbox/artifact capability limits")
+            if self.artifact_mode == "disabled":
+                if self.server_agent_capabilities != {
+                    ServerAgentCapability.OFFLINE_CUSTODY
+                }:
+                    raise ValueError(
+                        "artifact_mode=disabled requires exactly the offline_custody capability"
+                    )
+                if self.scanner_trust is not None:
+                    raise ValueError("artifact_mode=disabled forbids inert scanner trust")
             if self.features.protected_effects and ServerAgentCapability.EFFECT_EXECUTOR not in self.server_agent_capabilities:
                 raise ValueError("protected_effects requires the explicit effect_executor capability limit")
         if self.features.public_a2a:

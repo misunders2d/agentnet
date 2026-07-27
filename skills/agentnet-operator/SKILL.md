@@ -26,7 +26,7 @@ The authoritative scope is the stable requirement set in [`../../docs/requiremen
 
 “Install and use” means AgentNet must ship or explicitly provision the maintained components, adapters, manifests, and preflight checks needed by its supported profile. The operator may supply hosts, secrets, policy decisions, trust roots, and required human ceremonies; the operator must not have to write integration code, build an approval application, design receipt formats, or manually assemble undocumented infrastructure.
 
-Until a required product component is shipped and its applicable gate passes, report **blocked: product component not yet shipped**. Never offer local synthetic C0, same-boundary approval, or a reduced communication subset as the product substitute.
+Until a required product component is shipped and its applicable gate passes, report **blocked: product component not yet shipped**. Never offer local synthetic C0, same-boundary approval, or communication-only mode as proof of full AgentNet, artifact support, FILE/G13, or production/ship readiness. Communication-only is eligible only when the user explicitly selects the shipped restricted ordinary-server profile to test messaging/task custody while artifact release remains disabled fail-closed.
 
 ## Fresh-laptop onboarding is human-mediated
 
@@ -127,7 +127,7 @@ For the default Linux profile, the fixed CLI surface is `agentnet server-agent s
 sudo -- <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json --expected-request-digest <approved-request-digest> --apply --start
 ```
 
-First command performs no privileged or managed-host write; npm may materialize its caller-owned Python runtime. It requires system-wide root-owned Node/uv/AgentNet runtime visible to hardened services. Approval digest v2 binds exact executable paths/content for Node.js, uv, AgentNet, `systemctl`, and `useradd`, plus one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`. Second follows one frozen AgentNet setup approval, repeats preflight under setup lock, and manages only AgentNet identities, private roots, environment custody, and two systemd units. Exact reruns revalidate realized state; marker is provenance and never causes bootstrap skip. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual AgentNet `useradd`, directory, unit, marker, `network create`, Approval-provision, or service-start assembly.
+First command performs no privileged or managed-host write; npm may materialize its caller-owned Python runtime. It requires system-wide root-owned Node/uv/AgentNet runtime visible to hardened services. Select artifact mode before creating the request: request-v1 is immutable scanner-backed legacy; request-v2 requires explicit `enabled` or `disabled`. Request-v2 disabled is communication-only: scanner input must be absent, only `offline_custody` is configured, and artifact state/bindings remain unavailable. Request-v1 uses approval-digest-v2/marker-v2; request-v2 uses approval-digest-v3/marker-v3 binding exact mode. Both digest versions bind exact executable paths/content for Node.js, uv, AgentNet, `systemctl`, and `useradd`, plus one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`. Second command follows one frozen AgentNet setup approval, repeats preflight under setup lock, and manages only AgentNet identities, private roots, environment custody, and two systemd units. Exact reruns revalidate realized state; marker is provenance and never causes bootstrap skip. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual AgentNet `useradd`, directory, unit, marker, `network create`, Approval-provision, or service-start assembly.
 
 Before apply, require these host and policy inputs. PostgreSQL role/database/HBA may be prepared first; on a clean host, the first approved apply may instead create only the fixed Core OS identity plus `/var/lib/agentnet-setup` runtime/lock and stop at `postgres_auth_not_ready`:
 
@@ -136,7 +136,7 @@ Before apply, require these host and policy inputs. PostgreSQL role/database/HBA
 - dedicated HTTPS/TLS endpoints and exact service audience;
 - workforce OIDC provider with exact issuer, callbacks, endpoint origins, signing algorithms, and token-endpoint authentication method;
 - for confidential OIDC, public `client_secret_env` references plus private runtime values; never a secret in config, commands, logs, evidence, or chat;
-- exact owner/approver identity policy, mandatory approval purposes, scanner trust, capabilities, retention, recovery, and evidence policy.
+- exact owner/approver identity policy, mandatory approval purposes, selected artifact mode, mode-applicable scanner trust, capabilities, retention, recovery, and evidence policy.
 
 Setup intentionally precedes server-harness enrollment. Only after setup reports `waiting_owner_oidc_or_passkey` require owner-controlled WebAuthn user verification, per-harness keys, proof of possession, and exact revocation/recovery procedures for guided enrollment and offline activation.
 
@@ -172,6 +172,7 @@ Always distinguish:
 - transport/A2A acknowledgement vs AgentNet-native processing or business effect;
 - local synthetic C0 mechanics vs real cross-host communication;
 - transport/task custody (`accepted_queued`) vs authorized payload release and execution;
+- communication-only `artifact_mode=disabled` vs scanner-backed artifact support; disabled mode creates no scanner/artifact key and proves no FILE/G13 outcome;
 - artifact promotion into `quarantined` vs independent scanner attestation and policy release;
 - released-artifact download vs task-grant payload/data/effect authority.
 
@@ -190,7 +191,7 @@ Do not print secrets, private keys, credential-bearing DSNs, reusable approval m
 
 ## Use references
 
-- Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) and its [strict request example](references/examples/ordinary-server-setup-request.json) for the default always-on profile.
+- Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md), the unchanged [scanner-backed request-v1 example](references/examples/ordinary-server-setup-request.json), and the restricted [communication-only request-v2 example](references/examples/ordinary-server-communication-only-setup-request.json) before selecting an always-on profile.
 - Read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and issue only the resolved [single-paste example](references/examples/fresh-laptop-single-prompt.md) for human-copyable bootstrap instructions.
 - Read [required communication scope](references/required-communication-scope.md) before judging installation or network readiness; one direct-message round trip is not full requirement coverage.
 - Read [safe commands](references/safe-commands.md) for installation, local examples, package checks, supervisor validation, and server preflight.

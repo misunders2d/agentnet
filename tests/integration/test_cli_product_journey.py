@@ -9,12 +9,18 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from agentnet._terminal_handoff import TerminalHandoffError
-from agentnet.cli import _authority_command, _write_private_config, build_parser
+from agentnet.cli import (
+    _authority_command,
+    _write_private_config,
+    build_parser,
+    command_bootstrap_server_agent,
+)
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
@@ -27,9 +33,107 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
+def test_network_create_rejects_incoherent_artifact_inputs_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.cli as cli
+
+    mutated = False
+
+    def mutation_probe(_path: Path) -> None:
+        nonlocal mutated
+        mutated = True
+        raise AssertionError("mutation must not start")
+
+    monkeypatch.setattr(cli, "_owner_only_directory", mutation_probe)
+    parser = build_parser()
+    missing_scanner = parser.parse_args(
+        [
+            "network",
+            "create",
+            "--config",
+            str(tmp_path / "agentnet.json"),
+            "--data-dir",
+            str(tmp_path / "data"),
+            "--public-base-url",
+            "https://agents.example",
+            "--oidc-config",
+            str(tmp_path / "missing-oidc.json"),
+        ]
+    )
+    with pytest.raises(SystemExit, match="requires scanner trust"):
+        missing_scanner.func(missing_scanner)
+    assert mutated is False
+    assert not (tmp_path / "data").exists()
+
+    forbidden_scanner = parser.parse_args(
+        [
+            "network",
+            "create",
+            "--config",
+            str(tmp_path / "agentnet.json"),
+            "--data-dir",
+            str(tmp_path / "data"),
+            "--public-base-url",
+            "https://agents.example",
+            "--oidc-config",
+            str(tmp_path / "missing-oidc.json"),
+            "--artifact-mode",
+            "disabled",
+            "--scanner-trust-config",
+            str(tmp_path / "scanner.json"),
+        ]
+    )
+    with pytest.raises(SystemExit, match="forbids scanner trust"):
+        forbidden_scanner.func(forbidden_scanner)
+    assert mutated is False
+    assert not (tmp_path / "data").exists()
+
+
+def test_communication_only_bootstrap_never_provisions_artifact_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import agentnet.cli as cli
+    from agentnet.operations.config import RuntimeProfile
+
+    data_dir = tmp_path / "data"
+    config = SimpleNamespace(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        artifact_mode="disabled",
+        data_dir=data_dir,
+    )
+    provisioned: list[Path] = []
+    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+    monkeypatch.setattr(
+        cli,
+        "_provision_owner_only_key",
+        lambda path: provisioned.append(path),
+    )
+    core = SimpleNamespace(
+        bootstrap_domain=lambda: {"domain_id": "corp.example"},
+        recovery_status=lambda **_kwargs: {"ready": True},
+        store=SimpleNamespace(readiness=lambda: {"ready": True}),
+        audit=SimpleNamespace(verify=lambda: {"valid": True}),
+        server_agent_binding_status=lambda: {"ready": False, "required": True},
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        cli.CommunicationCore,
+        "open",
+        lambda _config, **_kwargs: core,
+    )
+
+    assert command_bootstrap_server_agent(SimpleNamespace(config="agentnet.json")) == 0
+    assert provisioned == [data_dir / "secrets" / "records.key"]
+    assert "artifact.key" not in capsys.readouterr().out
+
+
 def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
     parser = build_parser()
-    assert parser.parse_args(
+    network_create = parser.parse_args(
         [
             "network",
             "create",
@@ -38,7 +142,23 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "--oidc-config",
             "oidc.json",
         ]
-    ).func.__name__ == "command_network_create"
+    )
+    assert network_create.func.__name__ == "command_network_create"
+    assert network_create.artifact_mode == "enabled"
+    communication_only = parser.parse_args(
+        [
+            "network",
+            "create",
+            "--public-base-url",
+            "https://agents.example",
+            "--oidc-config",
+            "oidc.json",
+            "--artifact-mode",
+            "disabled",
+        ]
+    )
+    assert communication_only.artifact_mode == "disabled"
+    assert communication_only.scanner_trust_config is None
     assert parser.parse_args(
         [
             "server-agent",

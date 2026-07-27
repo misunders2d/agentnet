@@ -343,9 +343,19 @@ class CommunicationCore:
                 required_profile_digest=scanner.required_profile_digest,
                 revoked_key_epochs=scanner.revoked_key_epochs,
             )
+        artifacts_enabled = config.artifact_mode == "enabled"
+        artifact_objects = (
+            FilesystemArtifactStore(
+                config.artifact_dir,
+                config.data_dir / "secrets" / "artifact.key",
+            )
+            if artifacts_enabled
+            else None
+        )
         self.artifacts = ArtifactService(
             store,
-            FilesystemArtifactStore(config.artifact_dir, config.data_dir / "secrets" / "artifact.key"),
+            artifact_objects,
+            enabled=artifacts_enabled,
             trusted_scanner_keys=scanner_keys,
             scanner_policy=scanner_policy,
             operations_policy=config.policies.operations,
@@ -445,9 +455,24 @@ class CommunicationCore:
         record_key = config.data_dir / "secrets" / "records.key"
         artifact_key = config.data_dir / "secrets" / "artifact.key"
         if config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+            if config.artifact_mode == "disabled":
+                forbidden_artifact_state = [
+                    str(path)
+                    for path in (artifact_key, config.artifact_dir)
+                    if path.exists() or path.is_symlink()
+                ]
+                if forbidden_artifact_state:
+                    raise GateBlocked(
+                        "artifacts_disabled",
+                        "communication-only runtime contains forbidden artifact state: "
+                        + ", ".join(forbidden_artifact_state),
+                    )
+            required_keys = [record_key]
+            if config.artifact_mode == "enabled":
+                required_keys.append(artifact_key)
             missing = [
                 str(path)
-                for path in (record_key, artifact_key)
+                for path in required_keys
                 if path.is_symlink() or not path.is_file()
             ]
             if missing:
@@ -484,14 +509,16 @@ class CommunicationCore:
             if config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
                 if validate_deployment_identity:
                     core._require_enrolled_server_agent_binding()
-                    core._require_server_agent_capability(ServerAgentCapability.ARTIFACT_STORAGE)
-            recovery_limit = min(config.artifact_recovery_scan_limit, 1_000)
-            core.artifacts.reconcile_quota_accounting()
-            core.artifacts.recover_expired_reservations(limit=recovery_limit)
-            if config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
-                if validate_deployment_identity:
-                    core.artifacts.recover_release_outbox(limit=1_000)
-                    core.artifacts.recover_deletion_outbox(limit=1_000)
+                    if config.artifact_mode == "enabled":
+                        core._require_server_agent_capability(ServerAgentCapability.ARTIFACT_STORAGE)
+            if config.artifact_mode == "enabled":
+                recovery_limit = min(config.artifact_recovery_scan_limit, 1_000)
+                core.artifacts.reconcile_quota_accounting()
+                core.artifacts.recover_expired_reservations(limit=recovery_limit)
+                if config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+                    if validate_deployment_identity:
+                        core.artifacts.recover_release_outbox(limit=1_000)
+                        core.artifacts.recover_deletion_outbox(limit=1_000)
             return core
         except Exception:
             store.close()
@@ -967,6 +994,7 @@ class CommunicationCore:
             envelope = EventEnvelope.model_validate(event)
             if envelope.domain_id != self.config.domain_id:
                 raise AuthorizationError("unsupported-event replay crossed the local domain")
+            self.artifacts.require_event_artifacts(envelope)
             self.mailboxes.accept(envelope)
 
         return self.versioning.replay_supported(
@@ -1023,6 +1051,11 @@ class CommunicationCore:
                 raise AuthorizationError("C3 content requires an explicitly enabled validated-MLS room")
             if room_id is None and expected_room_control_sequence is not None:
                 raise AuthorizationError("room control sequence cannot be supplied without a room")
+            if released_artifacts and self.config.artifact_mode == "disabled":
+                raise GateBlocked(
+                    "artifacts_disabled",
+                    "artifact bindings are disabled for this communication-only server profile",
+                )
             for binding in released_artifacts:
                 self.artifacts.require_released_binding(
                     binding,
@@ -1320,6 +1353,11 @@ class CommunicationCore:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
         if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
             self._require_enrolled_server_agent_binding()
+        if released_artifacts and self.config.artifact_mode == "disabled":
+            raise GateBlocked(
+                "artifacts_disabled",
+                "artifact bindings are disabled for this communication-only server profile",
+            )
         request = request.model_copy(
             update={"policy_revision": self.policy.current_policy_revision(request.actor)}
         )
@@ -1675,19 +1713,26 @@ class CommunicationCore:
                 require_a2a_schema(self.store)
             except Exception as exc:
                 a2a_schema = {"ready": False, "required": True, "reason": type(exc).__name__}
+        artifacts_enabled = self.config.artifact_mode == "enabled"
         scanner_trust = {
-            "ready": bool(self.config.scanner_trust)
-            or self.config.profile is RuntimeProfile.LOCAL_CONFORMANCE,
-            "required": self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+            "enabled": artifacts_enabled,
+            "ready": (
+                bool(self.config.scanner_trust)
+                or self.config.profile is RuntimeProfile.LOCAL_CONFORMANCE
+            )
+            if artifacts_enabled
+            else False,
+            "required": artifacts_enabled
+            and self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
             "trusted_key_count": len(self.artifacts.trusted_scanner_keys),
         }
         operational = bool(
             storage.get("ready")
             and audit.get("valid")
-            and artifacts.get("ready")
             and deployment_binding.get("ready")
             and a2a_schema.get("ready")
-            and scanner_trust.get("ready")
+            and (not artifacts_enabled or artifacts.get("ready"))
+            and (not scanner_trust.get("required") or scanner_trust.get("ready"))
         )
         try:
             self.telemetry.set_gauge("storage_ready", int(bool(storage.get("ready"))))
@@ -1707,6 +1752,7 @@ class CommunicationCore:
             "version": package_version("agentnet"),
             "ready": operational,
             "profile": self.config.profile.value,
+            "artifact_mode": self.config.artifact_mode,
             "public_origin": self.config.public_base_url,
             "service_audience": self.config.effective_service_audience,
             "runtime_instance_id": self.config.runtime_instance_id,
@@ -1740,6 +1786,10 @@ class CommunicationCore:
             "version": package_version("agentnet"),
             "status": "alive",
             "profile": self.config.profile.value,
+            "artifact_mode": self.config.artifact_mode,
+            "server_agent_capabilities": sorted(
+                capability.value for capability in self.config.server_agent_capabilities
+            ),
             "domain_id": self.config.domain_id,
             "public_origin": self.config.public_base_url,
             "service_audience": self.config.effective_service_audience,
@@ -1747,6 +1797,19 @@ class CommunicationCore:
         }
 
     def recovery_status(self, *, record_observation: bool = False) -> dict[str, Any]:
+        if self.config.artifact_mode == "disabled":
+            artifacts = {
+                "enabled": False,
+                "required": False,
+                "ready": False,
+                "reason": "disabled",
+            }
+            return {
+                "ready": True,
+                "artifacts": artifacts,
+                "restore_tested": False,
+                "ha_claimed": False,
+            }
         artifacts = probe_filesystem_artifact_recovery(
             self.store,
             self.config.artifact_dir,

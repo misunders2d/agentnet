@@ -165,6 +165,23 @@ def _request(tmp_path: Path) -> Path:
     )
 
 
+def _artifact_enabled_v2_request(tmp_path: Path) -> Path:
+    request_path = _request(tmp_path)
+    value = json.loads(request_path.read_text(encoding="utf-8"))
+    value["schema"] = "agentnet.server-setup.request.v2"
+    value["artifact_mode"] = "enabled"
+    return _private_json(request_path, value)
+
+
+def _communication_only_request(tmp_path: Path) -> Path:
+    request_path = _request(tmp_path)
+    value = json.loads(request_path.read_text(encoding="utf-8"))
+    value["schema"] = "agentnet.server-setup.request.v2"
+    value["artifact_mode"] = "disabled"
+    value.pop("scanner_trust_file")
+    return _private_json(request_path, value)
+
+
 def test_server_setup_is_one_fixed_public_cli_surface(tmp_path: Path) -> None:
     request = _request(tmp_path)
     parser = build_parser()
@@ -193,8 +210,18 @@ def test_launcher_preflight_digest_matches_python_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request_path = _request(tmp_path)
-    request = load_server_setup_request(request_path)
+    v1_root = tmp_path / "v1"
+    v2_enabled_root = tmp_path / "v2-enabled"
+    v2_disabled_root = tmp_path / "v2-disabled"
+    v1_root.mkdir()
+    v2_enabled_root.mkdir()
+    v2_disabled_root.mkdir()
+    request_paths = (
+        _request(v1_root),
+        _artifact_enabled_v2_request(v2_enabled_root),
+        _communication_only_request(v2_disabled_root),
+    )
+    requests = tuple(load_server_setup_request(path) for path in request_paths)
     import agentnet.operations.server_setup as setup
 
     node = Path(str(shutil.which("node"))).resolve()
@@ -227,7 +254,6 @@ def test_launcher_preflight_digest_matches_python_plan(
         "_sha256_stable_file",
         lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
     )
-    expected = plan_server_setup(request)["request_digest"]
     module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
     script = f"""
       import {{ privilegedApprovalDigest }} from {json.dumps(module)};
@@ -246,31 +272,57 @@ def test_launcher_preflight_digest_matches_python_plan(
         "AGENTNET_USERADD": str(useradd),
         "AGENTNET_UV": str(uv),
     }
-    completed = subprocess.run(
-        [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
-        env=digest_environment,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == expected
+    expected_by_path: dict[Path, str] = {}
+    for request_path, request in zip(request_paths, requests, strict=True):
+        planned = plan_server_setup(request)
+        expected = planned["request_digest"]
+        expected_by_path[request_path] = expected
+        assert planned["artifact_mode"] == request.effective_artifact_mode
+        assert planned["prerequisites"]["artifact_scanner"] == (
+            "validated_required"
+            if request.effective_artifact_mode == "enabled"
+            else "disabled_not_required"
+        )
+        completed = subprocess.run(
+            [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
+            env=digest_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == expected
 
     runtime_file = package_root / "src/agentnet/runtime.py"
     runtime_file.write_text("RUNTIME = 'changed'\n", encoding="utf-8")
-    changed = plan_server_setup(request)["request_digest"]
-    changed_completed = subprocess.run(
-        [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
+    for request_path, request in zip(request_paths, requests, strict=True):
+        changed = plan_server_setup(request)["request_digest"]
+        changed_completed = subprocess.run(
+            [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_path)],
+            env=digest_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert changed != expected_by_path[request_path]
+        assert changed_completed.returncode == 0, changed_completed.stderr
+        assert changed_completed.stdout.strip() == changed
+
+    missing_schema = json.loads(request_paths[0].read_text(encoding="utf-8"))
+    missing_schema.pop("schema")
+    _private_json(request_paths[0], missing_schema)
+    rejected = subprocess.run(
+        [str(shutil.which("node")), "--input-type=module", "-e", script, str(request_paths[0])],
         env=digest_environment,
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
     )
-    assert changed != expected
-    assert changed_completed.returncode == 0, changed_completed.stderr
-    assert changed_completed.stdout.strip() == changed
+    assert rejected.returncode != 0
+    assert "setup request schema is invalid" in rejected.stderr
 
 
 def test_package_tree_digest_rejects_symlinks_and_changes_with_content(tmp_path: Path) -> None:
@@ -505,6 +557,109 @@ def test_executable_lineage_accepts_traversable_nonwritable_directories(
     monkeypatch.setattr(setup.os, "access", lambda *_args: True)
 
     assert setup._require_root_owned_executable(target, label="Node.js") == target
+
+
+def test_request_versions_bind_artifact_mode_without_reinterpreting_v1(tmp_path: Path) -> None:
+    legacy_root = tmp_path / "legacy"
+    enabled_root = tmp_path / "enabled"
+    communication_root = tmp_path / "communication"
+    legacy_root.mkdir()
+    enabled_root.mkdir()
+    communication_root.mkdir()
+    legacy_path = _request(legacy_root)
+    legacy = load_server_setup_request(legacy_path)
+    assert legacy.schema_version == "agentnet.server-setup.request.v1"
+    assert legacy.effective_artifact_mode == "enabled"
+    assert legacy.scanner_trust_file is not None
+
+    enabled_path = _artifact_enabled_v2_request(enabled_root)
+    enabled = load_server_setup_request(enabled_path)
+    assert enabled.schema_version == "agentnet.server-setup.request.v2"
+    assert enabled.artifact_mode == "enabled"
+    assert enabled.effective_artifact_mode == "enabled"
+    assert enabled.scanner_trust_file is not None
+
+    communication_path = _communication_only_request(communication_root)
+    communication = load_server_setup_request(communication_path)
+    assert communication.schema_version == "agentnet.server-setup.request.v2"
+    assert communication.artifact_mode == "disabled"
+    assert communication.effective_artifact_mode == "disabled"
+    assert communication.scanner_trust_file is None
+
+    communication_value = json.loads(communication_path.read_text(encoding="utf-8"))
+    invalid = dict(communication_value)
+    invalid["scanner_trust_file"] = str(communication_root / "scanner-trust.json")
+    _private_json(communication_path, invalid)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(communication_path)
+
+    invalid = dict(communication_value)
+    invalid["scanner_trust_file"] = None
+    _private_json(communication_path, invalid)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(communication_path)
+
+    invalid = json.loads(legacy_path.read_text(encoding="utf-8"))
+    invalid["artifact_mode"] = None
+    _private_json(legacy_path, invalid)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(legacy_path)
+
+    invalid["artifact_mode"] = "disabled"
+    _private_json(legacy_path, invalid)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(legacy_path)
+
+    enabled_value = json.loads(enabled_path.read_text(encoding="utf-8"))
+    enabled_value.pop("scanner_trust_file")
+    _private_json(enabled_path, enabled_value)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(enabled_path)
+
+    invalid.pop("artifact_mode")
+    invalid.pop("schema")
+    _private_json(legacy_path, invalid)
+    with pytest.raises(ServerSetupError, match="setup request is invalid"):
+        load_server_setup_request(legacy_path)
+
+
+def test_core_create_arguments_omit_scanner_only_for_communication_v2(tmp_path: Path) -> None:
+    import agentnet.operations.server_setup as setup
+
+    legacy_root = tmp_path / "legacy"
+    communication_root = tmp_path / "communication"
+    legacy_root.mkdir()
+    communication_root.mkdir()
+    legacy = load_server_setup_request(_request(legacy_root))
+    communication = load_server_setup_request(_communication_only_request(communication_root))
+    scanner = setup.ScannerTrustConfig.model_validate_json(
+        legacy.scanner_trust_file.read_text(encoding="utf-8")
+    )
+    common = {
+        "node_executable": Path("/usr/bin/node"),
+        "executable": Path("/opt/agentnet/bin/agentnet"),
+        "core_config_path": Path("/var/lib/agentnet/agentnet.json"),
+        "core_data": Path("/var/lib/agentnet"),
+        "oidc_path": Path("/var/lib/agentnet/oidc.json"),
+        "scanner_path": Path("/var/lib/agentnet/scanner-trust.json"),
+    }
+    legacy_arguments = setup._core_create_arguments(
+        legacy,
+        scanner_trust=scanner,
+        **common,
+    )
+    assert legacy_arguments[legacy_arguments.index("--artifact-mode") + 1] == "enabled"
+    assert "--scanner-trust-config" in legacy_arguments
+
+    communication_arguments = setup._core_create_arguments(
+        communication,
+        scanner_trust=None,
+        **common,
+    )
+    assert communication_arguments[
+        communication_arguments.index("--artifact-mode") + 1
+    ] == "disabled"
+    assert "--scanner-trust-config" not in communication_arguments
 
 
 def test_request_is_strict_non_secret_and_callback_bound(tmp_path: Path) -> None:
@@ -1642,6 +1797,7 @@ def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() 
         "local_readiness": {
             "schema": "agentnet.core.readiness.v1",
             "ready": False,
+            "artifact_mode": "enabled",
             "storage": {"ready": True},
             "audit": {"valid": True},
             "artifacts": {"ready": True},
@@ -1650,7 +1806,11 @@ def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() 
             "scanner_trust": {"ready": True},
         },
     }
-    setup._require_core_create_evidence(evidence, config_path)
+    setup._require_core_create_evidence(
+        evidence,
+        config_path,
+        artifact_mode="enabled",
+    )
 
     mutations = (
         lambda item: item.update({"config": "/wrong/config.json"}),
@@ -1668,8 +1828,33 @@ def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() 
         changed = json.loads(json.dumps(evidence))
         mutate(changed)
         with pytest.raises(ServerSetupError) as exc_info:
-            setup._require_core_create_evidence(changed, config_path)
+            setup._require_core_create_evidence(
+                changed,
+                config_path,
+                artifact_mode="enabled",
+            )
         assert exc_info.value.blocker == "core_evidence"
+
+    communication_only = json.loads(json.dumps(evidence))
+    readiness = communication_only["local_readiness"]
+    readiness["artifact_mode"] = "disabled"
+    readiness["artifacts"] = {
+        "enabled": False,
+        "required": False,
+        "ready": False,
+        "reason": "disabled",
+    }
+    readiness["scanner_trust"] = {
+        "enabled": False,
+        "ready": False,
+        "required": False,
+        "trusted_key_count": 0,
+    }
+    setup._require_core_create_evidence(
+        communication_only,
+        config_path,
+        artifact_mode="disabled",
+    )
 
 
 @pytest.mark.parametrize(
@@ -1964,6 +2149,61 @@ def test_setup_marker_rejects_unknown_or_tampered_provenance(
     assert exc_info.value.blocker == "setup_marker_conflict"
 
 
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
+    tmp_path: Path,
+    artifact_mode: str,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    marker_path = tmp_path / "setup.json"
+    units = {
+        setup.APPROVAL_UNIT: b"approval-unit\n",
+        setup.CORE_UNIT: b"core-unit\n",
+    }
+    assert setup._commit_setup_marker(
+        marker_path,
+        existing_payload=None,
+        existing_marker=None,
+        request_digest="4" * 64,
+        approval_config_digest="5" * 64,
+        core_config_digest="6" * 64,
+        unit_payloads=units,
+        artifact_mode=artifact_mode,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    ) == "completed"
+    payload = marker_path.read_bytes()
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="4" * 64,
+        legacy_request_digest="",
+        artifact_mode=artifact_mode,
+    )
+    assert marker is not None
+    assert marker["schema"] == "agentnet.server-setup.marker.v3"
+    assert marker["artifact_mode"] == artifact_mode
+
+    with pytest.raises(ServerSetupError, match="version or provenance"):
+        setup._validated_setup_marker(
+            payload,
+            request_digest="4" * 64,
+            legacy_request_digest="",
+            artifact_mode="disabled" if artifact_mode == "enabled" else "enabled",
+        )
+
+    legacy = dict(marker)
+    legacy.pop("artifact_mode")
+    legacy["schema"] = "agentnet.server-setup.marker.v2"
+    with pytest.raises(ServerSetupError, match="version or provenance"):
+        setup._validated_setup_marker(
+            json.dumps(legacy, sort_keys=True).encode() + b"\n",
+            request_digest="4" * 64,
+            legacy_request_digest="",
+            artifact_mode=artifact_mode,
+        )
+
+
 def test_setup_marker_compare_and_swap_detects_external_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1997,11 +2237,18 @@ def test_setup_marker_compare_and_swap_detects_external_change(
     assert path.read_bytes() == expected
 
 
+@pytest.mark.parametrize("request_version", ["v1", "v2-disabled"])
 def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    request_version: str,
 ) -> None:
-    request = load_server_setup_request(_request(tmp_path))
+    request_path = (
+        _request(tmp_path)
+        if request_version == "v1"
+        else _communication_only_request(tmp_path)
+    )
+    request = load_server_setup_request(request_path)
     layout = SetupLayout(tmp_path / "host")
     layout.root.mkdir()
     import agentnet.operations.server_setup as setup
@@ -2068,13 +2315,22 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             data_dir=layout.host(setup.CORE_DATA) / "core",
             database_url=request.database_url,
             database_url_env=request.database_url_env,
+            artifact_mode=request.effective_artifact_mode,
             artifact_backend="postgres-manifest",
             artifact_dir=layout.host(setup.CORE_DATA) / "core" / "artifacts",
             public_base_url=request.core_public_origin,
             effective_service_audience=request.service_audience,
             runtime_instance_id="drifted-runtime" if config_drift else request.runtime_instance_id,
             oidc_enrollment=_Equal(),
-            scanner_trust=_Equal(),
+            scanner_trust=_Equal() if request.effective_artifact_mode == "enabled" else None,
+            server_agent_capabilities=(
+                {
+                    setup.ServerAgentCapability.OFFLINE_CUSTODY,
+                    setup.ServerAgentCapability.ARTIFACT_STORAGE,
+                }
+                if request.effective_artifact_mode == "enabled"
+                else {setup.ServerAgentCapability.OFFLINE_CUSTODY}
+            ),
             a2a=None,
             local_bindings=None,
             relay=None,
@@ -2123,12 +2379,31 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
                 "local_readiness": {
                     "schema": "agentnet.core.readiness.v1",
                     "ready": False,
+                    "artifact_mode": request.effective_artifact_mode,
                     "storage": {"ready": True},
                     "audit": {"valid": True},
-                    "artifacts": {"ready": True},
+                    "artifacts": (
+                        {"ready": True}
+                        if request.effective_artifact_mode == "enabled"
+                        else {
+                            "enabled": False,
+                            "required": False,
+                            "ready": False,
+                            "reason": "disabled",
+                        }
+                    ),
                     "deployment_binding": {"ready": False, "required": True},
                     "a2a_schema": {"ready": True},
-                    "scanner_trust": {"ready": True},
+                    "scanner_trust": (
+                        {"ready": True}
+                        if request.effective_artifact_mode == "enabled"
+                        else {
+                            "enabled": False,
+                            "required": False,
+                            "ready": False,
+                            "trusted_key_count": 0,
+                        }
+                    ),
                 },
             }
         if command[0] == "bootstrap-server-agent":
@@ -2227,10 +2502,60 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         step["id"] == "setup_marker" and step["status"] == "already_satisfied"
         for step in stable_rerun["steps"]
     )
+    if request.effective_artifact_mode == "disabled":
+        artifact_key = layout.host(setup.CORE_DATA) / "core" / "secrets" / "artifact.key"
+        artifact_key.parent.mkdir(parents=True, exist_ok=True)
+        artifact_key.parent.chmod(0o700)
+        artifact_key.write_bytes(b"x" * 32)
+        artifact_key.chmod(0o600)
+        with pytest.raises(ServerSetupError, match="forbidden artifact state"):
+            apply_server_setup(
+                request,
+                start=False,
+                expected_request_digest=approved_digest,
+                layout=layout,
+                _allow_test_layout=True,
+            )
+        artifact_key.unlink()
+        artifact_key.symlink_to(tmp_path / "missing-artifact-key")
+        with pytest.raises(ServerSetupError, match="forbidden artifact state"):
+            apply_server_setup(
+                request,
+                start=False,
+                expected_request_digest=approved_digest,
+                layout=layout,
+                _allow_test_layout=True,
+            )
+        artifact_key.unlink()
+        artifact_dir = layout.host(setup.CORE_DATA) / "core" / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        artifact_dir.chmod(0o700)
+        with pytest.raises(ServerSetupError, match="forbidden artifact state"):
+            apply_server_setup(
+                request,
+                start=False,
+                expected_request_digest=approved_digest,
+                layout=layout,
+                _allow_test_layout=True,
+            )
+        artifact_dir.rmdir()
     assert all(argv[:2] == ["/usr/bin/node", "/usr/local/bin/agentnet"] for argv in product_calls)
     network_call = next(argv for argv in product_calls if argv[2:4] == ["network", "create"])
     assert "--database-url-from-env" in network_call
     assert request.database_url not in network_call
+    assert network_call[network_call.index("--artifact-mode") + 1] == request.effective_artifact_mode
+    if request.effective_artifact_mode == "enabled":
+        assert "--scanner-trust-config" in network_call
+        assert layout.host(setup.CORE_DATA / "scanner-trust.json").is_file()
+    else:
+        assert "--scanner-trust-config" not in network_call
+        assert not layout.host(setup.CORE_DATA / "scanner-trust.json").exists()
+        assert json.loads(marker.read_text(encoding="utf-8"))["schema"] == "agentnet.server-setup.marker.v3"
+        assert json.loads(marker.read_text(encoding="utf-8"))["artifact_mode"] == "disabled"
+        assert not (
+            layout.host(setup.CORE_DATA) / "core" / "secrets" / "artifact.key"
+        ).exists()
+        assert not (layout.host(setup.CORE_DATA) / "core" / "artifacts").exists()
 
     bootstrap_calls = sum(argv[2] == "bootstrap-server-agent" for argv in product_calls)
     drift_trust_during_apply = True
@@ -2328,7 +2653,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     enrolled = True
     systemctl_calls: list[list[str]] = []
-    health_urls: list[str] = []
+    health_requests: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(
         setup.subprocess,
         "run",
@@ -2341,7 +2666,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         if fail_health_once:
             fail_health_once = False
             raise ServerSetupError("service_health", "injected health interruption")
-        health_urls.append(url)
+        health_requests.append((url, dict(_kwargs["expected"])))
 
     monkeypatch.setattr(setup, "_health", health_with_interruption)
     with pytest.raises(ServerSetupError, match="injected health interruption"):
@@ -2353,7 +2678,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     systemctl_calls.clear()
-    health_urls.clear()
+    health_requests.clear()
     started = apply_server_setup(
         request,
         start=True,
@@ -2372,7 +2697,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.CORE_UNIT],
     ]
-    assert health_urls == [
+    assert [url for url, _expected in health_requests] == [
         "http://127.0.0.1:8090/healthz",
         "http://127.0.0.1:8080/healthz",
         "https://approval.corp.example/healthz",
@@ -2380,6 +2705,19 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "http://127.0.0.1:8080/readyz",
         "https://core.corp.example/readyz",
     ]
+    core_expected = [
+        expected
+        for url, expected in health_requests
+        if "127.0.0.1:8080" in url or url.startswith(request.core_public_origin)
+    ]
+    assert core_expected
+    for expected in core_expected:
+        assert expected["artifact_mode"] == request.effective_artifact_mode
+        assert expected["server_agent_capabilities"] == (
+            ["artifact_storage", "offline_custody"]
+            if request.effective_artifact_mode == "enabled"
+            else ["offline_custody"]
+        )
 
 
 def test_unexpected_setup_error_is_redacted(

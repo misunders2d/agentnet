@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +14,7 @@ from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
 from agentnet.http_api import create_app
+from agentnet.messaging.events import new_event
 from agentnet.operations.config import (
     ApprovalServiceClientConfig,
     BackupSealKeyConfig,
@@ -23,6 +27,11 @@ from agentnet.operations.config import (
     RuntimeProfile,
 )
 from agentnet.operations.config_migration import load_config_json
+from agentnet.protocol.models import (
+    Classification,
+    EventType,
+    ReleasedArtifactBinding,
+)
 from agentnet.security.signatures import P256KeyPair
 
 
@@ -161,6 +170,218 @@ def test_server_agent_capabilities_use_one_enum_and_are_attenuating_prerequisite
         ExtensionConfig(**base, features=FeatureFlags(public_a2a=True))
     with pytest.raises(ValidationError):
         ExtensionConfig(**base, owner_decisions={"PD-001": "legacy-placeholder"})
+
+
+def test_communication_only_server_profile_is_explicit_and_fail_closed() -> None:
+    base = {
+        "profile": RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        "database_url": "postgresql://agentnet@postgres/agentnet",
+        "artifact_backend": "postgres-manifest",
+        "enrolled_harness_id": "harness-1",
+        "enrolled_credential_id": "credential-1",
+        "public_base_url": "https://agent.example",
+    }
+
+    default = ExtensionConfig(**base)
+    assert default.artifact_mode == "enabled"
+    assert default.server_agent_capabilities == {
+        ServerAgentCapability.OFFLINE_CUSTODY,
+        ServerAgentCapability.ARTIFACT_STORAGE,
+    }
+
+    communication_only = ExtensionConfig(
+        **base,
+        artifact_mode="disabled",
+        server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
+    )
+    assert communication_only.artifact_mode == "disabled"
+    assert communication_only.scanner_trust is None
+    assert ServerAgentCapability.ARTIFACT_STORAGE not in communication_only.server_agent_capabilities
+
+    with pytest.raises(ValidationError, match="exactly.*offline_custody"):
+        ExtensionConfig(
+            **base,
+            artifact_mode="disabled",
+            server_agent_capabilities={
+                ServerAgentCapability.OFFLINE_CUSTODY,
+                ServerAgentCapability.ARTIFACT_STORAGE,
+            },
+        )
+    with pytest.raises(ValidationError, match="only.*always_on_server_agent"):
+        ExtensionConfig(artifact_mode="disabled")
+
+
+@pytest.mark.parametrize(
+    "extra_capability",
+    [
+        capability
+        for capability in ServerAgentCapability
+        if capability is not ServerAgentCapability.OFFLINE_CUSTODY
+    ],
+)
+def test_communication_only_server_rejects_every_extra_capability(
+    extra_capability: ServerAgentCapability,
+) -> None:
+    with pytest.raises(ValidationError, match="exactly.*offline_custody"):
+        ExtensionConfig(
+            profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+            database_url="postgresql://agentnet@postgres/agentnet",
+            artifact_backend="postgres-manifest",
+            artifact_mode="disabled",
+            enrolled_harness_id="harness-1",
+            enrolled_credential_id="credential-1",
+            public_base_url="https://agent.example",
+            server_agent_capabilities={
+                ServerAgentCapability.OFFLINE_CUSTODY,
+                extra_capability,
+            },
+        )
+
+
+@pytest.mark.parametrize("residue", ["artifact-key", "artifact-key-symlink", "artifact-directory"])
+def test_communication_only_open_rejects_preexisting_artifact_state(
+    tmp_path: Path,
+    residue: str,
+) -> None:
+    data_dir = tmp_path / "data"
+    artifact_dir = data_dir / "artifacts"
+    artifact_key = data_dir / "secrets" / "artifact.key"
+    if residue == "artifact-directory":
+        artifact_dir.mkdir(parents=True)
+    else:
+        artifact_key.parent.mkdir(parents=True)
+        if residue == "artifact-key":
+            artifact_key.write_bytes(b"x" * 32)
+        else:
+            artifact_key.symlink_to(tmp_path / "missing-artifact-key")
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        artifact_mode="disabled",
+        artifact_dir=artifact_dir,
+        data_dir=data_dir,
+        enrolled_harness_id="server-harness",
+        enrolled_credential_id="server-credential",
+        server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
+        public_base_url="https://agent.example",
+    )
+
+    with pytest.raises(GateBlocked, match="forbidden artifact state") as denied:
+        CommunicationCore.open(config, validate_deployment_identity=False)
+
+    assert denied.value.gate == "artifacts_disabled"
+
+
+def test_communication_only_unsupported_replay_rejects_artifact_bindings_before_custody(
+    store,
+    identity_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor, _key = identity_factory(binding_assurance="os_bound")
+    recipient, _recipient_key = identity_factory(binding_assurance="os_bound")
+    monkeypatch.setattr("agentnet.core.app.is_verified_postgresql_store", lambda _store: True)
+    core = CommunicationCore(
+        ExtensionConfig(
+            profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+            domain_id=actor.domain_id,
+            database_url="postgresql://agentnet@postgres/agentnet",
+            artifact_backend="postgres-manifest",
+            artifact_mode="disabled",
+            artifact_dir=tmp_path / "artifacts",
+            data_dir=tmp_path / "data",
+            enrolled_harness_id="server-harness",
+            enrolled_credential_id="server-credential",
+            server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
+            public_base_url="https://agent.example",
+        ),
+        store,
+    )
+    binding = ReleasedArtifactBinding(
+        artifact_id=str(uuid4()),
+        domain_id=actor.domain_id,
+        object_version="a" * 64,
+        size=1,
+        media_type="text/plain",
+        classification=Classification.C1_INTERNAL,
+        release_intent_id=str(uuid4()),
+        released_at=datetime.now(UTC),
+    )
+    event = new_event(
+        domain_id=actor.domain_id,
+        actor=actor,
+        event_type=EventType.MESSAGE,
+        classification=Classification.C1_INTERNAL,
+        payload={"kind": "unsupported-artifact-bound-message"},
+        idempotency_key="unsupported-artifact-replay-0001",
+        recipients=(recipient.harness_id,),
+        released_artifacts=(binding,),
+    )
+    monkeypatch.setattr(core, "_require", lambda **_kwargs: None)
+
+    def replay_supported(_peer, handler, *, limit):
+        assert limit == 10
+        handler(event.model_dump(mode="json"), "b" * 64)
+        return {"replayed": 1, "still_queued": 0}
+
+    monkeypatch.setattr(core.versioning, "replay_supported", replay_supported)
+
+    with pytest.raises(GateBlocked, match="artifact operations are disabled") as denied:
+        core.replay_unsupported_events(
+            actor=actor,
+            peer_namespace="future-peer.example",
+            limit=10,
+        )
+
+    assert denied.value.gate == "artifacts_disabled"
+    assert core.mailboxes.reconcile(recipient.harness_id) == []
+
+
+def test_communication_only_server_readiness_does_not_probe_artifacts(
+    store,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    artifact_dir = tmp_path / "artifacts-must-not-exist"
+    monkeypatch.setattr("agentnet.core.app.is_verified_postgresql_store", lambda _store: True)
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        artifact_mode="disabled",
+        artifact_dir=artifact_dir,
+        data_dir=tmp_path / "data",
+        enrolled_harness_id="server-harness",
+        enrolled_credential_id="server-credential",
+        server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
+        public_base_url="https://agent.example",
+    )
+    core = CommunicationCore(config, store)
+    monkeypatch.setattr(
+        core,
+        "server_agent_binding_status",
+        lambda: {"ready": True, "required": True},
+    )
+
+    status = core.readiness()
+
+    assert status["ready"] is True
+    assert status["artifact_mode"] == "disabled"
+    assert status["artifacts"] == {
+        "enabled": False,
+        "required": False,
+        "ready": False,
+        "reason": "disabled",
+    }
+    assert status["scanner_trust"] == {
+        "enabled": False,
+        "ready": False,
+        "required": False,
+        "trusted_key_count": 0,
+    }
+    assert not artifact_dir.exists()
+    assert not (config.data_dir / "secrets" / "artifact.key").exists()
 
 
 def _confidential_oidc_config(

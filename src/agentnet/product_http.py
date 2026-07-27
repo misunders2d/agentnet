@@ -1169,6 +1169,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse({"records": [record.model_dump(mode="json") for record in records]})
 
     async def reserve_artifact(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactReserveBody.model_validate_json(body)
         exact = {
@@ -1200,6 +1201,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse(result, status_code=200 if result["duplicate"] else 201)
 
     async def upload_artifact(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
         if content_type == "application/octet-stream":
@@ -1233,6 +1235,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse(result)
 
     async def abort_artifact_reservation(request: Request) -> Response:
+        core.artifacts.require_enabled()
         _body, actor = await body_and_actor(request, core)
         reservation_id = request.path_params["reservation_id"]
         row = core.store.fetch_one(
@@ -1258,6 +1261,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
 
     async def promote_artifact(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactPromoteBody.model_validate_json(body)
         reservation_id = request.path_params["reservation_id"]
@@ -1290,6 +1294,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse(result, status_code=200 if result["duplicate"] else 201)
 
     async def record_artifact_scan(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactScanBody.model_validate_json(body)
         artifact_id = request.path_params["artifact_id"]
@@ -1303,6 +1308,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse(core.artifacts.record_scan(artifact_id, parsed.attestation))
 
     async def release_artifact(request: Request) -> Response:
+        core.artifacts.require_enabled()
         _body, actor = await body_and_actor(request, core)
         artifact_id = request.path_params["artifact_id"]
         decision = core._require(
@@ -1319,6 +1325,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
 
     async def issue_download_capability(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactDownloadCapabilityBody.model_validate_json(body)
         artifact_id = request.path_params["artifact_id"]
@@ -1341,18 +1348,21 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse({"artifact_id": artifact_id, "capability": token})
 
     async def consume_download(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactDownloadBody.model_validate_json(body)
         content = core.artifacts.consume_download(parsed.token, actor=actor)
         return Response(content, media_type="application/octet-stream")
 
     async def artifact_lifecycle(request: Request) -> Response:
+        core.artifacts.require_enabled()
         _body, actor = await body_and_actor(request, core)
         artifact_id = request.path_params["artifact_id"]
         core._require(actor=actor, action="artifact.lifecycle.read", resource=artifact_id)
         return JSONResponse(core.artifacts.lifecycle_status(artifact_id, actor=actor))
 
     async def set_artifact_legal_hold(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactLifecycleMutationBody.model_validate_json(body)
         artifact_id = request.path_params["artifact_id"]
@@ -1379,6 +1389,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
 
     async def clear_artifact_legal_hold(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactLifecycleMutationBody.model_validate_json(body)
         artifact_id = request.path_params["artifact_id"]
@@ -1405,6 +1416,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
 
     async def delete_artifact(request: Request) -> Response:
+        core.artifacts.require_enabled()
         body, actor = await body_and_actor(request, core)
         parsed = ArtifactLifecycleMutationBody.model_validate_json(body)
         artifact_id = request.path_params["artifact_id"]

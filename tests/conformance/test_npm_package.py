@@ -38,7 +38,7 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-24-v0.1.26/artifacts/RETENTION.md",
+        "evidence/local/2026-07-26-v0.1.27/artifacts/RETENTION.md",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
@@ -65,6 +65,8 @@ def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
         "skills/agentnet-operator/references/required-communication-scope.md",
         "skills/agentnet-operator/references/fresh-laptop-onboarding.md",
         "skills/agentnet-operator/references/examples/fresh-laptop-single-prompt.md",
+        "skills/agentnet-operator/references/examples/ordinary-server-setup-request.json",
+        "skills/agentnet-operator/references/examples/ordinary-server-communication-only-setup-request.json",
         "skills/agentnet-operator/evals/evals.json",
         "src/agentnet/bindings/pi_extension.ts",
         "src/agentnet/adapters/claude.py",
@@ -159,6 +161,26 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
     ):
         assert removed_placeholder not in example
 
+    scanner_backed_request = json.loads(
+        (
+            ROOT
+            / "skills/agentnet-operator/references/examples/ordinary-server-setup-request.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert scanner_backed_request["schema"] == "agentnet.server-setup.request.v1"
+    assert "artifact_mode" not in scanner_backed_request
+    assert isinstance(scanner_backed_request["scanner_trust_file"], str)
+
+    communication_only_request = json.loads(
+        (
+            ROOT
+            / "skills/agentnet-operator/references/examples/ordinary-server-communication-only-setup-request.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert communication_only_request["schema"] == "agentnet.server-setup.request.v2"
+    assert communication_only_request["artifact_mode"] == "disabled"
+    assert "scanner_trust_file" not in communication_only_request
+
     evals = json.loads(
         (ROOT / "skills/agentnet-operator/evals/evals.json").read_text(encoding="utf-8")
     )
@@ -178,6 +200,7 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "ordinary-server-uses-product-owned-setup",
         "ordinary-server-remote-manager-never-shells",
         "ordinary-server-missing-route-blocks",
+        "ordinary-server-request-v2-requires-explicit-artifact-mode",
         "ordinary-server-resumes-exact-request",
         "ordinary-server-rejects-home-runtime",
         "ordinary-server-invalid-broker-blocks-before-mutation",
@@ -186,6 +209,10 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "ordinary-server-configured-not-started-resume",
         "ordinary-server-runtime-drift-invalidates-digest",
         "ordinary-server-marker-never-proves-readiness",
+        "ordinary-server-communication-only-explicit-v2",
+        "ordinary-server-communication-only-rejects-legacy-evidence",
+        "ordinary-server-disabled-mode-rejects-null-scanner-field",
+        "ordinary-server-enabled-mode-requires-scanner-before-mutation",
         "ordinary-server-human-ceremony-remains-explicit",
         "headless-server-uses-private-terminal-browser-handoff",
         "fresh-laptop-rejects-three-grant-c0-fallback",
@@ -481,7 +508,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-24-v0.1.26/artifacts/RETENTION.md",
+        "evidence/local/2026-07-26-v0.1.27/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

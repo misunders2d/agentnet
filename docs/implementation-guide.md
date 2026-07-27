@@ -114,11 +114,18 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
 ```
 
 The strict request contains public metadata and absolute references only. Secret
-values remain in owner-only Core and Approval environment files. The no-managed-host-write plan
-validates semantic broker-credential policy, OIDC callbacks, approver policy,
-scanner trust, fixed local PostgreSQL peer contract, and exact service-visible
-Node/uv/AgentNet/`systemctl`/`useradd` paths. Approval digest v2 binds request/input fingerprints,
-stable no-follow executable hashes, and one hash computed from deterministic
+values remain in owner-only Core and Approval environment files. Request-v1 is
+an immutable scanner-backed compatibility contract: it omits `artifact_mode`,
+requires `scanner_trust_file`, and uses approval-digest-v2 plus marker-v2.
+Request-v2 requires explicit `artifact_mode`, uses approval-digest-v3 plus
+marker-v3, and cannot reuse request-v1 approval or marker evidence. In v2,
+`enabled` requires scanner trust; `disabled` forbids that field, including JSON
+`null`, and selects exactly the `offline_custody` capability. The
+no-managed-host-write plan validates semantic broker-credential policy, OIDC
+callbacks, approver policy, mode-dependent scanner trust, fixed local PostgreSQL
+peer contract, and exact service-visible Node/uv/AgentNet/`systemctl`/`useradd`
+paths. The versioned approval digest binds request/input fingerprints, stable
+no-follow executable hashes, and one hash computed from deterministic
 path/type/size/content records for the exact root-owned AgentNet package tree
 executed through `uv run --project`. Privileged apply reproduces the digest in
 the npm launcher, repeats full Python preflight under the setup lock, and blocks
@@ -161,8 +168,34 @@ nonregular, ownership, and mode conflicts at fixed config/state/data child
 paths. Existing service state and newly realized Core state are recursively
 custody-checked before further product writes or unit/marker commit. Retry never skips bootstrap
 from old marker data: it reloads Core after bootstrap, revalidates Approval,
-writes exact units, then commits marker v2 through same-request, prior-byte
-compare-and-swap. Manual marker/config/unit surgery is unsupported.
+writes exact units, then commits the request-versioned marker through
+same-request, prior-byte compare-and-swap. Manual marker/config/unit surgery is
+unsupported.
+
+### Communication-only request-v2
+
+Use
+`skills/agentnet-operator/references/examples/ordinary-server-communication-only-setup-request.json`
+only when signed communication testing must proceed before a maintained scanner
+producer exists. It declares `artifact_mode: "disabled"`, omits
+`scanner_trust_file`, provisions no scanner trust, artifact key, or artifact
+directory, and accepts exactly `offline_custody`. Existing or symlinked artifact
+key/directory residue blocks setup and runtime; AgentNet never deletes or
+silently reinterprets it.
+
+All artifact service methods and artifact HTTP routes fail with
+`artifacts_disabled` before request-body parsing, identity/policy decisions,
+metadata lookup, audit/capability issuance, object bytes, mailbox custody, or
+task custody. Unsupported-event replay applies the same artifact-binding gate.
+Empty-artifact signed messages, conversations, response obligations, and scoped
+downward task custody remain available. Task testing stops at
+`accepted_queued`; payload release, semantic execution, data access, tools, and
+business effects require separate authority.
+
+This restricted profile is for first-message testing. It does not satisfy any
+`FILE-*` requirement, G13, production durability, production certification, or
+ship readiness. Artifact-enabled request-v1 and request-v2 behavior remains
+scanner-backed and unchanged.
 
 A remote Manager does not execute target-host commands. Target coding agent
 follows bundled
@@ -407,8 +440,10 @@ independent approval deployment, production key custody, or owner-policy gates.
 
 `agentnet server-agent setup` is the ordinary entry point and composes the
 lower-level `network create` primitive. It provisions the namespace, PostgreSQL
-schema, scanner trust, Approval and owner-only software-key files, but it does
-not invent an enrolled identity or authority. For a release that ships the guided flow, complete exact OIDC, candidate-key
+schema, Approval and owner-only software-key files plus scanner/artifact state
+only when artifact mode is enabled. Communication-only mode provisions neither
+scanner trust nor artifact state. Setup does not invent an enrolled identity or
+authority. For a release that ships the guided flow, complete exact OIDC, candidate-key
 possession, and WebAuthn human-approval enrollment with one resumable command,
 then bind the offline configuration explicitly:
 
@@ -555,6 +590,10 @@ task payload release, or a business effect. Harness-local tools expose the same
 operation as `agentnet.inbox.acknowledge`.
 
 ## Upload and download bounded artifacts
+
+These commands require artifact mode `enabled`. Communication-only servers
+return `artifacts_disabled`; operators must not create artifact keys/directories
+or add scanner trust manually to bypass the approved setup request.
 
 An enrolled operator can place one explicit local file into the existing staged
 artifact lifecycle without granting scanner or release authority:

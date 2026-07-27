@@ -59,7 +59,7 @@ published and historical release evidence:
   reports **3 passed**, but the full MUST lane remains non-green at **50 passed,
   11 failed, 174 skipped**. G04 remains `FAILED`; no requirement, production,
   deployment, cutover, or gate status is promoted by those results.
-- Unreleased `0.1.26` working candidate repairs ordinary Linux setup convergence.
+- Published `0.1.26` repairs ordinary Linux setup convergence.
   Affected stable IDs: `ARC-001`, `ID-001`, `ID-002`, `ID-003`, `ID-006`,
   `SEC-005`, `SEC-007`, `OPS-003`, `OPS-006`, and `OPS-007`. The candidate's
   approval digest v2 binds exact service-visible Node/uv/AgentNet/`systemctl`/
@@ -78,8 +78,27 @@ published and historical release evidence:
   `30155733937` passed the clean Ubuntu 24.04/PostgreSQL 18 installed-artifact
   plan/blocker/apply/start/stable-retry lifecycle and always-run cleanup; run
   `30155733938` passed package conformance on Ubuntu, macOS, and Windows.
-  Publication and external deployment evidence remain pending; no requirement or
-  gate status is promoted.
+  Immutable tag object `c481d850ba4933abbb77191a763a7c4e0817bc32` resolves to
+  commit `a7da3aa945c0b2f25fdb06803b80529f89bf8242`; public npm `gitHead`
+  matches. External deployment evidence remains pending; no requirement or gate
+  status is promoted.
+- The `0.1.27` communication-only proof candidate affects `ARC-001`,
+  `AUTH-001`, `AUTH-002`, `AUTH-004`, `AUTH-007`, `ORG-002`, `ORG-005`,
+  `COM-001`, `COM-006`, `COM-007`, `COM-011`, `FILE-001..006`, `AVL-003`,
+  `AVL-005`, `AVL-006`, `OPS-003`, `OPS-006`, and `OPS-007`. It adds a
+  request-v2 `artifact_mode=disabled` ordinary-server profile with exact
+  `offline_custody`, version-disjoint approval/marker evidence, no
+  scanner/artifact state, pre-custody artifact denial (including replay), and
+  local signed message/conversation/obligation/downward-task evidence through
+  `accepted_queued`; request-v1 remains scanner-backed. Constitution and code
+  reviews pass. The affected suite reports **215 passed**. `npm run check`
+  reports source and two recursively packed generations at **1412 passed with
+  16 expected platform/dedicated-PostgreSQL skips**; package, release-verifier,
+  and reproducible wheel/sdist checks pass. The unfiltered pre-refresh run
+  preserved two installed-harness pin gate failures; no gate is waived. This
+  candidate changes no requirement or gate status and supplies no `FILE-*`,
+  G13, production, ship, public-package, real-network, fresh-laptop enrollment,
+  or native cross-host evidence.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

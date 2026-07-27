@@ -39,6 +39,7 @@ from agentnet.approval.config import (
     ApprovalServiceConfig,
     MANDATORY_APPROVAL_PURPOSES,
 )
+from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.operations.config import (
     ApprovalServiceClientConfig,
     IndependentApproverConfig,
@@ -188,10 +189,10 @@ class ServerSetupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
     _source_sha256: str = PrivateAttr(default="")
 
-    schema_version: Literal["agentnet.server-setup.request.v1"] = Field(
-        default="agentnet.server-setup.request.v1",
-        alias="schema",
-    )
+    schema_version: Literal[
+        "agentnet.server-setup.request.v1",
+        "agentnet.server-setup.request.v2",
+    ] = Field(alias="schema")
     profile: Literal["always_on_server_agent"] = "always_on_server_agent"
     domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
     service_audience: str = Field(min_length=8, max_length=512)
@@ -205,7 +206,8 @@ class ServerSetupRequest(BaseModel):
     oidc_provider_file: Path
     approval_owner_oidc_file: Path
     approval_approvers_file: Path
-    scanner_trust_file: Path
+    artifact_mode: Literal["enabled", "disabled"] | None = None
+    scanner_trust_file: Path | None = None
     approval_approver_principal_id: str = Field(min_length=1, max_length=256)
     approval_verifier_id: str = Field(min_length=1, max_length=128)
 
@@ -256,19 +258,37 @@ class ServerSetupRequest(BaseModel):
             raise ValueError(
                 "database_url must use the fixed local PostgreSQL peer-auth contract"
             ) from exc
-        for path in (
+        fields_set = self.model_fields_set
+        if self.schema_version == "agentnet.server-setup.request.v1":
+            if "artifact_mode" in fields_set or self.scanner_trust_file is None:
+                raise ValueError("request.v1 requires the original scanner-backed artifact profile")
+        elif self.artifact_mode == "enabled":
+            if "artifact_mode" not in fields_set or self.scanner_trust_file is None:
+                raise ValueError("request.v2 artifact mode enabled requires scanner_trust_file")
+        elif self.artifact_mode == "disabled":
+            if "artifact_mode" not in fields_set or "scanner_trust_file" in fields_set:
+                raise ValueError("request.v2 artifact mode disabled forbids scanner_trust_file")
+        else:
+            raise ValueError("request.v2 requires explicit artifact_mode")
+        paths = [
             self.core_environment_file,
             self.approval_environment_file,
             self.oidc_provider_file,
             self.approval_owner_oidc_file,
             self.approval_approvers_file,
-            self.scanner_trust_file,
-        ):
+        ]
+        if self.scanner_trust_file is not None:
+            paths.append(self.scanner_trust_file)
+        for path in paths:
             if not path.is_absolute() or ".." in path.parts:
                 raise ValueError("server setup input files must use absolute canonical paths")
         if self.core_public_origin == self.approval_public_origin:
             raise ValueError("Core and Approval require distinct public HTTPS origins")
         return self
+
+    @property
+    def effective_artifact_mode(self) -> Literal["enabled", "disabled"]:
+        return "enabled" if self.schema_version == "agentnet.server-setup.request.v1" else self.artifact_mode  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
@@ -316,7 +336,7 @@ class ServerSetupPreflight:
     oidc_provider: SetupOIDCProvider
     owner_oidc: ApprovalOwnerOIDCConfig
     approvers: tuple[SetupApprover, ...]
-    scanner_trust: ScannerTrustConfig
+    scanner_trust: ScannerTrustConfig | None
     core_values: dict[str, str]
     approval_values: dict[str, str]
     core_environment: dict[str, str]
@@ -440,14 +460,20 @@ def _parse_environment_file(path: Path, *, label: str) -> dict[str, str]:
     )
 
 
-_INPUT_FIELDS = (
+_BASE_INPUT_FIELDS = (
     "core_environment_file",
     "approval_environment_file",
     "oidc_provider_file",
     "approval_owner_oidc_file",
     "approval_approvers_file",
-    "scanner_trust_file",
 )
+
+
+def _input_fields(request: ServerSetupRequest) -> tuple[str, ...]:
+    return (
+        *_BASE_INPUT_FIELDS,
+        *(("scanner_trust_file",) if request.effective_artifact_mode == "enabled" else ()),
+    )
 
 
 def _read_input_bundle(request: ServerSetupRequest) -> dict[str, bytes]:
@@ -458,7 +484,7 @@ def _read_input_bundle(request: ServerSetupRequest) -> dict[str, bytes]:
             label=f"{key} input",
             max_bytes=262_144 if key in {"core_environment_file", "approval_environment_file"} else 1_048_576,
         )
-        for key in _INPUT_FIELDS
+        for key in _input_fields(request)
     }
 
 
@@ -470,7 +496,7 @@ def _request_references(
         raise ServerSetupError("invalid_request", "setup request source binding is unavailable")
     public = request.model_dump(mode="json", by_alias=True)
     references: dict[str, dict[str, str]] = {}
-    for key in _INPUT_FIELDS:
+    for key in _input_fields(request):
         path = Path(str(public[key]))
         raw = inputs[key]
         if key in {"core_environment_file", "approval_environment_file"}:
@@ -502,9 +528,14 @@ def _request_digest(
     runtime: SetupRuntimeIdentity,
 ) -> str:
     inputs = dict(bundle) if bundle is not None else _read_input_bundle(request)
+    digest_schema = (
+        "agentnet.server-setup.approval-digest.v2"
+        if request.schema_version == "agentnet.server-setup.request.v1"
+        else "agentnet.server-setup.approval-digest.v3"
+    )
     return canonical_digest(
         {
-            "schema": "agentnet.server-setup.approval-digest.v2",
+            "schema": digest_schema,
             "request_file_sha256": request._source_sha256,
             "referenced_inputs": _request_references(request, inputs),
             "runtime_identity": {
@@ -829,7 +860,12 @@ def _resolve_executable(node_executable: Path, uv_executable: Path) -> Path:
 def _validate_inputs(
     request: ServerSetupRequest,
     bundle: Mapping[str, bytes] | None = None,
-) -> tuple[SetupOIDCProvider, ApprovalOwnerOIDCConfig, tuple[SetupApprover, ...], ScannerTrustConfig]:
+) -> tuple[
+    SetupOIDCProvider,
+    ApprovalOwnerOIDCConfig,
+    tuple[SetupApprover, ...],
+    ScannerTrustConfig | None,
+]:
     inputs = dict(bundle) if bundle is not None else _read_input_bundle(request)
     try:
         oidc = SetupOIDCProvider.model_validate(
@@ -842,14 +878,16 @@ def _validate_inputs(
         raise
     except Exception as exc:
         raise ServerSetupError("invalid_oidc_input", "OIDC setup input is invalid") from exc
-    try:
-        scanner_trust = ScannerTrustConfig.model_validate(
-            _strict_json_bytes(inputs["scanner_trust_file"], label="scanner trust input")
-        )
-    except ServerSetupError:
-        raise
-    except Exception as exc:
-        raise ServerSetupError("invalid_scanner_trust", "scanner trust input is invalid") from exc
+    scanner_trust: ScannerTrustConfig | None = None
+    if request.effective_artifact_mode == "enabled":
+        try:
+            scanner_trust = ScannerTrustConfig.model_validate(
+                _strict_json_bytes(inputs["scanner_trust_file"], label="scanner trust input")
+            )
+        except ServerSetupError:
+            raise
+        except Exception as exc:
+            raise ServerSetupError("invalid_scanner_trust", "scanner trust input is invalid") from exc
     approver_value = _strict_json_bytes(inputs["approval_approvers_file"], label="Approval approver input")
     entries = approver_value.get("approvers")
     if set(approver_value) != {"approvers"} or not isinstance(entries, list) or not entries:
@@ -1129,7 +1167,11 @@ def _server_setup_preflight(
         core_environment=core_environment,
         approval_environment=approval_environment,
         request_digest=_request_digest(request, input_bundle, runtime=runtime),
-        legacy_request_digest=_legacy_request_digest(request, input_bundle),
+        legacy_request_digest=(
+            _legacy_request_digest(request, input_bundle)
+            if request.schema_version == "agentnet.server-setup.request.v1"
+            else ""
+        ),
     )
 
 
@@ -1157,6 +1199,7 @@ def _planned_setup_evidence(
         "schema": "agentnet.server-setup.evidence.v1",
         "status": "planned",
         "profile": request.profile,
+        "artifact_mode": request.effective_artifact_mode,
         "request_digest": preflight.request_digest,
         "package_version": __version__,
         "managed_units": sorted(units),
@@ -1166,6 +1209,11 @@ def _planned_setup_evidence(
             "host": "validated_linux_systemd",
             "runtime": "validated_service_visible_and_digest_bound",
             "inputs": "validated_owner_only",
+            "artifact_scanner": (
+                "validated_required"
+                if request.effective_artifact_mode == "enabled"
+                else "disabled_not_required"
+            ),
             "broker_credential": "validated_redacted_runtime_policy",
             "database_reference": "validated_fixed_local_peer_contract_service_canary_pending_apply",
             "postgresql": {
@@ -1312,6 +1360,7 @@ def _validated_setup_marker(
     *,
     request_digest: str,
     legacy_request_digest: str,
+    artifact_mode: Literal["enabled", "disabled"] | None = None,
 ) -> dict[str, Any] | None:
     if payload is None:
         return None
@@ -1330,7 +1379,12 @@ def _validated_setup_marker(
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker does not match the fixed profile")
     if marker.get("schema") == "agentnet.server-setup.marker.v1":
-        if set(marker) != common or marker.get("request_digest") != legacy_request_digest:
+        if (
+            artifact_mode is not None
+            or not legacy_request_digest
+            or set(marker) != common
+            or marker.get("request_digest") != legacy_request_digest
+        ):
             raise ServerSetupError("setup_marker_conflict", "legacy setup marker does not match this request")
         return marker
     v2_keys = common | {
@@ -1341,9 +1395,28 @@ def _validated_setup_marker(
     }
     previous = marker.get("previous_marker_digest")
     unit_digests = marker.get("unit_digests")
+    if marker.get("schema") == "agentnet.server-setup.marker.v2":
+        if (
+            artifact_mode is not None
+            or not legacy_request_digest
+            or set(marker) != v2_keys
+            or marker.get("request_digest") != request_digest
+            or not isinstance(marker.get("revision"), int)
+            or marker["revision"] < 1
+            or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
+            or not isinstance(marker.get("package_version"), str)
+            or not isinstance(unit_digests, dict)
+            or set(unit_digests) != {APPROVAL_UNIT, CORE_UNIT}
+            or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
+        ):
+            raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
+        return marker
+    v3_keys = v2_keys | {"artifact_mode"}
     if (
-        marker.get("schema") != "agentnet.server-setup.marker.v2"
-        or set(marker) != v2_keys
+        marker.get("schema") != "agentnet.server-setup.marker.v3"
+        or artifact_mode is None
+        or set(marker) != v3_keys
+        or marker.get("artifact_mode") != artifact_mode
         or marker.get("request_digest") != request_digest
         or not isinstance(marker.get("revision"), int)
         or marker["revision"] < 1
@@ -1413,6 +1486,7 @@ def _commit_setup_marker(
     approval_config_digest: str,
     core_config_digest: str,
     unit_payloads: Mapping[str, bytes],
+    artifact_mode: Literal["enabled", "disabled"] | None = None,
     uid: int,
     gid: int,
 ) -> str:
@@ -1420,6 +1494,11 @@ def _commit_setup_marker(
         unit: hashlib.sha256(unit_payloads[unit]).hexdigest()
         for unit in (APPROVAL_UNIT, CORE_UNIT)
     }
+    marker_schema = (
+        "agentnet.server-setup.marker.v3"
+        if artifact_mode is not None
+        else "agentnet.server-setup.marker.v2"
+    )
     realized = {
         "approval_config_digest": approval_config_digest,
         "core_config_digest": core_config_digest,
@@ -1428,14 +1507,16 @@ def _commit_setup_marker(
         "unit_digests": unit_digests,
         "units": [APPROVAL_UNIT, CORE_UNIT],
     }
-    if existing_marker is not None and existing_marker.get("schema") == "agentnet.server-setup.marker.v2":
+    if artifact_mode is not None:
+        realized["artifact_mode"] = artifact_mode
+    if existing_marker is not None and existing_marker.get("schema") == marker_schema:
         if all(existing_marker.get(key) == value for key, value in realized.items()):
             return _atomic_write(path, existing_payload or b"", mode=0o600, uid=uid, gid=gid)
         revision = int(existing_marker["revision"]) + 1
     else:
         revision = 1
     marker = {
-        "schema": "agentnet.server-setup.marker.v2",
+        "schema": marker_schema,
         "revision": revision,
         "previous_marker_digest": hashlib.sha256(existing_payload).hexdigest() if existing_payload is not None else None,
         **realized,
@@ -1876,6 +1957,18 @@ def _private_entry_exists(
     return True
 
 
+def _require_communication_only_artifact_absence(core_runtime: Path) -> None:
+    forbidden = (
+        core_runtime / "secrets" / "artifact.key",
+        core_runtime / "artifacts",
+    )
+    if any(path.exists() or path.is_symlink() for path in forbidden):
+        raise ServerSetupError(
+            "core_conflict",
+            "communication-only Core state contains forbidden artifact state",
+        )
+
+
 def _require_private_file(path: Path, account: pwd.struct_passwd, *, blocker: str) -> None:
     try:
         metadata = path.lstat()
@@ -2133,8 +2226,69 @@ def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> 
     raise ServerSetupError("service_health", "AgentNet service did not return exact healthy identity evidence")
 
 
-def _require_core_create_evidence(result: Mapping[str, Any], core_config_path: Path) -> None:
+def _core_create_arguments(
+    request: ServerSetupRequest,
+    *,
+    node_executable: Path,
+    executable: Path,
+    core_config_path: Path,
+    core_data: Path,
+    oidc_path: Path,
+    scanner_path: Path,
+    scanner_trust: ScannerTrustConfig | None,
+) -> list[str]:
+    arguments = [
+        str(node_executable), str(executable), "network", "create",
+        "--config", str(core_config_path),
+        "--data-dir", str(core_data / "core"),
+        "--domain", request.domain_id,
+        "--database-url-env", request.database_url_env,
+        "--database-url-from-env",
+        "--public-base-url", request.core_public_origin,
+        "--oidc-config", str(oidc_path),
+        "--artifact-mode", request.effective_artifact_mode,
+        "--runtime-instance-id", request.runtime_instance_id,
+    ]
+    if scanner_trust is not None:
+        arguments.extend(["--scanner-trust-config", str(scanner_path)])
+    return arguments
+
+
+def _require_core_create_evidence(
+    result: Mapping[str, Any],
+    core_config_path: Path,
+    *,
+    artifact_mode: Literal["enabled", "disabled"],
+) -> None:
     readiness = result.get("local_readiness")
+    artifact_evidence = readiness.get("artifacts") if isinstance(readiness, dict) else None
+    scanner_evidence = readiness.get("scanner_trust") if isinstance(readiness, dict) else None
+    artifact_ready = (
+        isinstance(artifact_evidence, dict)
+        and (
+            artifact_evidence.get("ready") is True
+            if artifact_mode == "enabled"
+            else artifact_evidence == {
+                "enabled": False,
+                "required": False,
+                "ready": False,
+                "reason": "disabled",
+            }
+        )
+    )
+    scanner_ready = (
+        isinstance(scanner_evidence, dict)
+        and (
+            scanner_evidence.get("ready") is True
+            if artifact_mode == "enabled"
+            else scanner_evidence == {
+                "enabled": False,
+                "ready": False,
+                "required": False,
+                "trusted_key_count": 0,
+            }
+        )
+    )
     if (
         result.get("config") != str(core_config_path)
         or not isinstance(readiness, dict)
@@ -2144,15 +2298,14 @@ def _require_core_create_evidence(result: Mapping[str, Any], core_config_path: P
         or readiness["storage"].get("ready") is not True
         or not isinstance(readiness.get("audit"), dict)
         or readiness["audit"].get("valid") is not True
-        or not isinstance(readiness.get("artifacts"), dict)
-        or readiness["artifacts"].get("ready") is not True
+        or readiness.get("artifact_mode") != artifact_mode
+        or not artifact_ready
         or not isinstance(readiness.get("deployment_binding"), dict)
         or readiness["deployment_binding"].get("ready") is not False
         or readiness["deployment_binding"].get("required") is not True
         or not isinstance(readiness.get("a2a_schema"), dict)
         or readiness["a2a_schema"].get("ready") is not True
-        or not isinstance(readiness.get("scanner_trust"), dict)
-        or readiness["scanner_trust"].get("ready") is not True
+        or not scanner_ready
     ):
         raise ServerSetupError(
             "core_evidence",
@@ -2167,7 +2320,7 @@ def _load_validated_core_config(
     request: ServerSetupRequest,
     core_data: Path,
     oidc: OIDCEnrollmentConfig,
-    scanner_trust: ScannerTrustConfig,
+    scanner_trust: ScannerTrustConfig | None,
 ):
     config = load_config_json(
         _read_private_managed_file(
@@ -2183,6 +2336,7 @@ def _load_validated_core_config(
         or config.data_dir != core_data / "core"
         or config.database_url != request.database_url
         or config.database_url_env != request.database_url_env
+        or config.artifact_mode != request.effective_artifact_mode
         or config.artifact_backend != "postgres-manifest"
         or config.artifact_dir != core_data / "core" / "artifacts"
         or config.public_base_url != request.core_public_origin
@@ -2190,6 +2344,12 @@ def _load_validated_core_config(
         or config.runtime_instance_id != request.runtime_instance_id
         or config.oidc_enrollment != oidc
         or config.scanner_trust != scanner_trust
+        or config.server_agent_capabilities
+        != (
+            {ServerAgentCapability.OFFLINE_CUSTODY, ServerAgentCapability.ARTIFACT_STORAGE}
+            if request.effective_artifact_mode == "enabled"
+            else {ServerAgentCapability.OFFLINE_CUSTODY}
+        )
         or config.a2a is not None
         or config.local_bindings is not None
         or config.relay is not None
@@ -2288,6 +2448,11 @@ def apply_server_setup(
             existing_marker_payload,
             request_digest=approved_digest,
             legacy_request_digest=preflight.legacy_request_digest,
+            artifact_mode=(
+                request.effective_artifact_mode
+                if request.schema_version == "agentnet.server-setup.request.v2"
+                else None
+            ),
         )
         for unit in (APPROVAL_UNIT, CORE_UNIT):
             _require_no_unit_overrides(layout, unit)
@@ -2333,6 +2498,8 @@ def apply_server_setup(
             blocker="core_custody",
         )
         core_runtime = core_data / "core"
+        if request.effective_artifact_mode == "disabled":
+            _require_communication_only_artifact_absence(core_runtime)
         core_runtime_preexisting = _private_entry_exists(
             core_runtime,
             core_account,
@@ -2456,31 +2623,56 @@ def apply_server_setup(
         oidc_payload = json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
         steps.append({"id": "core_oidc_config", "status": _atomic_write(oidc_path, oidc_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
         scanner_path = core_data / "scanner-trust.json"
-        scanner_payload = json.dumps(scanner_trust.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
-        steps.append({"id": "scanner_trust", "status": _atomic_write(scanner_path, scanner_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
+        if scanner_trust is not None:
+            scanner_payload = json.dumps(
+                scanner_trust.model_dump(mode="json"), indent=2, sort_keys=True
+            ).encode() + b"\n"
+            steps.append(
+                {
+                    "id": "scanner_trust",
+                    "status": _atomic_write(
+                        scanner_path,
+                        scanner_payload,
+                        mode=0o600,
+                        uid=core_account.pw_uid,
+                        gid=core_account.pw_gid,
+                    ),
+                }
+            )
+        else:
+            if scanner_path.exists() or scanner_path.is_symlink():
+                raise ServerSetupError(
+                    "core_conflict",
+                    "communication-only Core state contains forbidden scanner trust",
+                )
+            _require_communication_only_artifact_absence(core_runtime)
+            steps.append({"id": "scanner_trust", "status": "disabled_not_created"})
 
         core_environment = preflight.core_environment
         if not core_preexisting:
+            core_create_arguments = _core_create_arguments(
+                request,
+                node_executable=node_executable,
+                executable=executable,
+                core_config_path=core_config_path,
+                core_data=core_data,
+                oidc_path=oidc_path,
+                scanner_path=scanner_path,
+                scanner_trust=scanner_trust,
+            )
             result = _run_as(
                 core_account,
-                [
-                    str(node_executable), str(executable), "network", "create",
-                    "--config", str(core_config_path),
-                    "--data-dir", str(core_data / "core"),
-                    "--domain", request.domain_id,
-                    "--database-url-env", request.database_url_env,
-                    "--database-url-from-env",
-                    "--public-base-url", request.core_public_origin,
-                    "--oidc-config", str(oidc_path),
-                    "--scanner-trust-config", str(scanner_path),
-                    "--runtime-instance-id", request.runtime_instance_id,
-                ],
+                core_create_arguments,
                 environment=core_environment,
                 stage="core_create",
                 accepted_returncodes=frozenset({1}),
             )
             _require_private_file(core_config_path, core_account, blocker="core_custody")
-            _require_core_create_evidence(result, core_config_path)
+            _require_core_create_evidence(
+                result,
+                core_config_path,
+                artifact_mode=request.effective_artifact_mode,
+            )
             bootstrap_status = "completed"
         else:
             _require_private_file(core_config_path, core_account, blocker="core_custody")
@@ -2555,6 +2747,11 @@ def apply_server_setup(
                         ),
                     ),
                     unit_payloads=unit_payloads,
+                    artifact_mode=(
+                        request.effective_artifact_mode
+                        if request.schema_version == "agentnet.server-setup.request.v2"
+                        else None
+                    ),
                     uid=root_uid,
                     gid=root_gid,
                 ),
@@ -2592,6 +2789,15 @@ def apply_server_setup(
                 "version": __version__,
                 "status": "alive",
                 "profile": request.profile,
+                "artifact_mode": request.effective_artifact_mode,
+                "server_agent_capabilities": sorted(
+                    capability.value
+                    for capability in (
+                        {ServerAgentCapability.OFFLINE_CUSTODY, ServerAgentCapability.ARTIFACT_STORAGE}
+                        if request.effective_artifact_mode == "enabled"
+                        else {ServerAgentCapability.OFFLINE_CUSTODY}
+                    )
+                ),
                 "domain_id": request.domain_id,
                 "public_origin": request.core_public_origin,
                 "service_audience": request.service_audience,
@@ -2610,6 +2816,15 @@ def apply_server_setup(
                     "version": __version__,
                     "ready": True,
                     "profile": request.profile,
+                    "artifact_mode": request.effective_artifact_mode,
+                    "server_agent_capabilities": sorted(
+                        capability.value
+                        for capability in (
+                            {ServerAgentCapability.OFFLINE_CUSTODY, ServerAgentCapability.ARTIFACT_STORAGE}
+                            if request.effective_artifact_mode == "enabled"
+                            else {ServerAgentCapability.OFFLINE_CUSTODY}
+                        )
+                    ),
                     "domain_id": request.domain_id,
                     "public_origin": request.core_public_origin,
                     "service_audience": request.service_audience,

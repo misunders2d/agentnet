@@ -202,9 +202,10 @@ Follow the bundled canonical checklist in
 [`skills/agentnet-operator/references/ordinary-server-setup.md`](skills/agentnet-operator/references/ordinary-server-setup.md).
 First verify system-wide root-owned AgentNet, Node.js, and `uv` executables whose
 resolved paths are outside `/root`, `/home`, and `/run/user`. Prepare exact
-owner-only OIDC/scanner/environment inputs and the fixed local PostgreSQL peer
-contract (`agentnet` OS user → `agentnet` role/database through
-`/var/run/postgresql`). Then plan without privileged or managed-host writes (the npm launcher may materialize its caller-owned Python runtime):
+owner-only OIDC/environment inputs, mode-dependent scanner input, and the fixed
+local PostgreSQL peer contract (`agentnet` OS user → `agentnet` role/database
+through `/var/run/postgresql`). Then plan without privileged or managed-host
+writes (the npm launcher may materialize its caller-owned Python runtime):
 
 ```bash
 <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
@@ -219,9 +220,21 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
+Request-v1 remains the scanner-backed artifact-enabled compatibility contract:
+it omits `artifact_mode`, requires `scanner_trust_file`, and binds approval
+digest v2 plus marker v2. Request-v2 requires explicit `artifact_mode`.
+`enabled` still requires scanner trust; `disabled` forbids the scanner field,
+permits exactly `offline_custody`, and creates no scanner file, artifact key, or
+artifact directory. See the unchanged
+[request-v1 example](skills/agentnet-operator/references/examples/ordinary-server-setup-request.json)
+and separate
+[communication-only request-v2 example](skills/agentnet-operator/references/examples/ordinary-server-communication-only-setup-request.json).
+Request-v2 binds approval digest v3 and marker v3; old approval/marker evidence
+cannot authorize it.
+
 Plan and apply bind exact Node/uv/launcher/`systemctl`/`useradd` paths and
 content hashes plus the canonical full AgentNet package-tree content hash to
-approval digest v2. Apply
+the request-versioned approval digest. Apply
 repeats preflight under an exclusive lock, may create the fixed Core OS identity
 plus root-owned setup runtime/lock, and then blocks before AgentNet
 environments/config/database writes
@@ -232,13 +245,21 @@ role/database/HBA edits and reload remain a separate operator-owned approval;
 rerun the same AgentNet digest afterward.
 
 The wrapper then owns only AgentNet's two locked identities, private roots,
-Approval/Core state, scanner trust, two hardened systemd units, bounded start,
-and exact loopback/public health. Retry reloads realized state and commits
-marker v2 only through same-request compare-and-swap; manual marker/unit surgery
-is unsupported. It never mutates DNS, TLS, proxy/firewall policy, PostgreSQL
+Approval/Core state, mode-dependent scanner trust, two hardened systemd units,
+bounded start, and exact loopback/public health. Retry reloads realized state
+and commits the request-versioned marker only through same-request
+compare-and-swap; manual marker/unit surgery is unsupported. It never mutates
+DNS, TLS, proxy/firewall policy, PostgreSQL
 administration, identity, or authority. Human OIDC/WebAuthn and offline
 activation remain explicit. Final setup status is `operational` with identity
 enrolled and authority still false.
+
+Communication-only request-v2 is a restricted first-message/testing profile,
+not a substitute for full AgentNet. Artifact HTTP/CLI/service operations and
+non-empty message/task artifact bindings fail with `artifacts_disabled` before
+body, metadata, capability, or custody effects. It supports signed
+communication and task custody only; it does not satisfy `FILE-*`, G13,
+production durability, production certification, or ship readiness.
 
 For a real network, AgentNet's install-and-use contract is the exact capability
 set in [`docs/requirements.md`](docs/requirements.md)—no reduced messaging
@@ -306,8 +327,10 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; latest published package is
-`0.1.25`. The current unpublished `0.1.26` candidate corrects ordinary Linux
-server setup convergence. The earlier `0.1.24` release introduced product-owned ordinary Linux server setup:
+`0.1.26`. Current unversioned work adds an explicit communication-only
+ordinary-server profile for first-message testing while retaining fail-closed
+artifact boundaries. It is not yet a release candidate. The earlier `0.1.24`
+release introduced product-owned ordinary Linux server setup:
 fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
 exact public HTTPS health identity, interruption recovery, redacted evidence,
 and bundled operator workflow. Setup grants neither identity nor authority.
@@ -331,14 +354,16 @@ MUST run remains non-green at `50 passed, 11 failed, 174 skipped`; G04 therefore
 remains `FAILED`. Exact prepublication, retained-artifact, recursive packed, and
 Pi-loader checks are recorded in its immutable evidence.
 
-Unpublished `0.1.26` repairs runtime-bound setup approval, semantic broker
+Published `0.1.26` repairs runtime-bound setup approval, semantic broker
 preflight, exact PostgreSQL service-identity peer validation, safe same-digest
-resume, marker provenance/CAS, Windows CLI imports, and installer guidance.
-Local source/package evidence is recorded as working-candidate evidence only;
-clean Ubuntu 24.04/PostgreSQL 18 CI, cross-platform CI, retained-artifact refresh,
-Sergey-only publication, and independent public-artifact deployment remain
-pending. Cross-SDK/public-peer evidence and live OIDC/WebAuthn ceremony remain
-separately gated. Repository
+resume, marker provenance/CAS, Windows CLI imports, and installer guidance. Its
+immutable tag resolves through tag object
+`c481d850ba4933abbb77191a763a7c4e0817bc32` to commit
+`a7da3aa945c0b2f25fdb06803b80529f89bf8242`; public npm `gitHead` matches.
+Cross-SDK/public-peer evidence and live OIDC/WebAuthn ceremony remain separately
+gated. Current unversioned communication-only changes have focused local
+evidence only; broad, verifier, release, public-artifact, and native cross-host
+evidence remain pending. Repository
 evidence is not a completed live cross-host journey or production certification.
 
 Production adoption still requires deployment-specific evidence such as a real

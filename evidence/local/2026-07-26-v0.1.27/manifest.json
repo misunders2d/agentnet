@@ -1,0 +1,38 @@
+{
+  "run_id": "2026-07-26-v0.1.27",
+  "evaluated_at": "2026-07-26T19:10:00+00:00",
+  "scope": "v0_1_27_communication_only_network_poc_candidate",
+  "release_certified": false,
+  "release_source_tree_sha256": "94db0479d1687265767e976472788001dcd04e545b6499ce3fd8c1dbfdb41a2f",
+  "prior_runtime_evidence": "evidence/local/2026-07-24-v0.1.26/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-24-v0.1.26/manifest.json",
+  "change_boundary": "Explicit non-production communication-only ordinary-server mode with exact offline-custody capability, version-disjoint setup approval evidence, no scanner/artifact state, fail-closed artifact surfaces and bindings, and signed message/mailbox/ACK/task-custody local evidence. Real network creation, fresh-laptop enrollment, native cross-host messaging, FILE/G13, production durability, and ship eligibility remain unproven.",
+  "commands": [
+    {
+      "command": "affected communication-only suite",
+      "result": "215 passed, 0 failed"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and recursive packed generations 1 and 2 each 1412 passed, 16 expected platform/dedicated-PostgreSQL skips; package and release checks passed"
+    },
+    {
+      "command": "two reproducible uv builds",
+      "result": "PASS: byte-identical 0.1.27 sdist and wheel archives"
+    },
+    {
+      "command": "unfiltered pre-release-refresh suite",
+      "result": "1488 passed, 16 expected skips, 3 failed; two preserved exact installed-harness pin gates and one expected release-manifest drift repaired before candidate build"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-26-v0.1.27/artifacts/agentnet-0.1.27.tar.gz",
+      "sha256": "c9e8fd368926cae681a2e8b9dc92d49c47039199f03b14a508e1354f1606e685"
+    },
+    {
+      "path": "evidence/local/2026-07-26-v0.1.27/artifacts/agentnet-0.1.27-py3-none-any.whl",
+      "sha256": "c8402368e8c252cdb8b9125df9e40d3142340f1ba72a7c568d7efc7ade34f149"
+    }
+  ]
+}

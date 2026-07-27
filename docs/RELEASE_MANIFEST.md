@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-24
-Candidate: `agentnet 0.1.26`
-Latest published package: `agentnet 0.1.25`
-Evidence profile: self-hosted local conformance release
+Snapshot: 2026-07-26
+Candidate: `agentnet 0.1.27`
+Latest published package: `agentnet 0.1.26`
+Evidence profile: self-hosted communication-only proof candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `0435578badd41758f98601e69c8910b519c712110261f2997dccf58b6f374e11` |
-| `pyproject.toml` | SHA-256 `a9d2dde83596edafaeefa7bcfbfed7435d8ecc18380b4e5f5731d14949978470` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `10498247ba9b459d8a9f8e932dadbddb54e1b8d419129ac91a701e511a7e9baa` |
+| `pyproject.toml` | SHA-256 `10525f566ff36aec203ff2dfedf4d6ed02417927dab82558d7e158b13a99a5d7` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -185,7 +185,7 @@ skipped`, so G04 remains `FAILED`. Exact prepublication, retained-artifact,
 recursive packed, Pi-loader, and public-package identity results are recorded in
 the immutable `0.1.25` package evidence manifest.
 
-Unreleased `0.1.26` corrects ordinary-server setup convergence and installer
+Unreleased `0.1.27` corrects ordinary-server setup convergence and installer
 truthfulness: approval digest v2 binds exact service-visible Node/uv/launcher/
 `systemctl`/`useradd` paths/content plus the deterministic full executed AgentNet package-tree hash;
 broker semantics and locked preflight precede managed writes; the

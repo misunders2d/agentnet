@@ -25,14 +25,44 @@ const canonicalize = (value) => {
 const canonicalDigest = (value) => sha256(
   Buffer.from(JSON.stringify(canonicalize(value)), "utf8"),
 );
-const inputFields = [
+const baseInputFields = [
   "core_environment_file",
   "approval_environment_file",
   "oidc_provider_file",
   "approval_owner_oidc_file",
   "approval_approvers_file",
-  "scanner_trust_file",
 ];
+
+const requestEvidenceProfile = (request) => {
+  if (request.schema === "agentnet.server-setup.request.v1") {
+    if (request.artifact_mode !== undefined || typeof request.scanner_trust_file !== "string") {
+      throw new Error("setup request artifact profile is invalid");
+    }
+    return {
+      artifactMode: "enabled",
+      digestSchema: "agentnet.server-setup.approval-digest.v2",
+      inputFields: [...baseInputFields, "scanner_trust_file"],
+    };
+  }
+  if (request.schema !== "agentnet.server-setup.request.v2") {
+    throw new Error("setup request schema is invalid");
+  }
+  if (request.artifact_mode === "enabled" && typeof request.scanner_trust_file === "string") {
+    return {
+      artifactMode: "enabled",
+      digestSchema: "agentnet.server-setup.approval-digest.v3",
+      inputFields: [...baseInputFields, "scanner_trust_file"],
+    };
+  }
+  if (request.artifact_mode === "disabled" && request.scanner_trust_file === undefined) {
+    return {
+      artifactMode: "disabled",
+      digestSchema: "agentnet.server-setup.approval-digest.v3",
+      inputFields: baseInputFields,
+    };
+  }
+  throw new Error("setup request artifact profile is invalid");
+};
 
 export const argumentValue = (userArguments, name) => {
   const indexes = userArguments.flatMap((value, index) => value === name ? [index] : []);
@@ -252,8 +282,9 @@ export const privilegedApprovalDigest = (
   if (request === null || Array.isArray(request) || typeof request !== "object") {
     throw new Error("setup request is invalid");
   }
+  const evidenceProfile = requestEvidenceProfile(request);
   const references = {};
-  for (const field of inputFields) {
+  for (const field of evidenceProfile.inputFields) {
     const filename = request[field];
     if (typeof filename !== "string") throw new Error("setup request reference is invalid");
     const payload = readPrivateSetupInput(
@@ -267,7 +298,7 @@ export const privilegedApprovalDigest = (
     references[field] = { path: filename, fingerprint };
   }
   return canonicalDigest({
-    schema: "agentnet.server-setup.approval-digest.v2",
+    schema: evidenceProfile.digestSchema,
     request_file_sha256: sha256(requestPayload),
     referenced_inputs: references,
     runtime_identity: runtimeIdentity(environment),

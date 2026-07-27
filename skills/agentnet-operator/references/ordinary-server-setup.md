@@ -19,7 +19,7 @@ Operator-owned prerequisites remain:
 - local PostgreSQL cluster, role/database, exact peer-auth rule, and PostgreSQL reload;
 - distinct public DNS/TLS reverse-proxy routes;
 - workforce OIDC registrations and owner-only runtime secret files;
-- maintained scanner public trust;
+- maintained scanner public trust when artifacts are enabled; no scanner input when communication-only mode is selected;
 - human OIDC/WebAuthn ceremonies and policy decisions.
 
 Setup verifies those boundaries but never edits PostgreSQL authentication files, DNS, certificates, reverse proxy, firewall, unrelated services, identity, or authority. PostgreSQL administration/reload, setup apply/start, enrollment, activation, and authority are separate approval boundaries.
@@ -37,7 +37,7 @@ package verification
   -> create Approval identity if absent
   -> AgentNet private roots/env/config/bootstrap
   -> exact unit write
-  -> marker-v2 compare-and-swap commit
+  -> version-selected marker compare-and-swap commit
   -> optional bounded service start
   -> loopback/public health
   -> human OIDC/WebAuthn
@@ -77,17 +77,16 @@ If current Node/uv/package resolves under a protected home, stop during plan. In
 
 ## Phase 2 — prepare owner-only inputs
 
-Use one owner-only staging directory. Prepare seven canonical regular files, mode `0600`, link count `1`, outside repositories/chat/logs:
+Use one owner-only staging directory. Every staged file is canonical, regular, mode `0600`, link count `1`, and outside repositories/chat/logs. Select one profile before creating request bytes:
 
-1. `core.env`
-2. `approval.env`
-3. `core-oidc.json`
-4. `approval-owner-oidc.json`
-5. `approvers.json`
-6. `scanner-trust.json`
-7. `server-setup.json`
+| Profile | Request | Files | Capabilities and artifact boundary |
+|---|---|---|---|
+| scanner-backed request-v1 | [`request.v1` example](examples/ordinary-server-setup-request.json) | `core.env`, `approval.env`, `core-oidc.json`, `approval-owner-oidc.json`, `approvers.json`, `scanner-trust.json`, `server-setup.json` | `offline_custody`, `artifact_storage`; scanner trust required |
+| communication-only restricted | [`request.v2` example](examples/ordinary-server-communication-only-setup-request.json) | same set except no `scanner-trust.json` | only `offline_custody`; artifact routes and non-empty message/task artifact bindings fail before custody |
 
-Copy [`examples/ordinary-server-setup-request.json`](examples/ordinary-server-setup-request.json) and replace every illustrative value with exact approved local metadata.
+Request-v1 forbids `artifact_mode` and retains original scanner-backed meaning. Request-v2 requires explicit `artifact_mode`; `disabled` forbids `scanner_trust_file`, including JSON `null`, while `enabled` requires it. Never edit the v1 example into v2 or reuse old approval/marker evidence across versions. Communication-only mode is for native messaging and task-custody testing while artifacts are unavailable; it does not satisfy FILE-001..006, G13, production, or ship readiness.
+
+Copy the exact mode-matching example and replace every illustrative value with approved local metadata.
 
 `core.env` contains:
 
@@ -148,7 +147,7 @@ Require:
 - `schema=agentnet.server-setup.evidence.v1`;
 - `status=planned`;
 - one 64-hex `request_digest`;
-- request bytes, canonical input references, and non-secret fingerprints are bound. Approval digest v2 binds exact Node.js, uv, AgentNet, `systemctl`, and `useradd` executable paths/content and one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`;
+- request bytes, canonical mode-applicable input references, and non-secret fingerprints are bound. Request-v1 uses approval digest v2; request-v2 uses approval digest v3 and binds explicit artifact mode. Both bind exact Node.js, uv, AgentNet, `systemctl`, and `useradd` executable paths/content and one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`;
 - `managed_units` exactly `agentnet-approval.service` and `agentnet-core.service`;
 - fixed loopback ports;
 - PostgreSQL prerequisite manifest showing exact peer contract and apply-time canary pending;
@@ -156,7 +155,7 @@ Require:
 - `authority_granted=false`;
 - `production_durability_proven=false`.
 
-Plan performs no privileged or managed-host mutation: it does not create service identities, AgentNet roots, secret copies, database schema/config, units, or services. The npm launcher may materialize its caller-owned Python runtime before Python preflight; that is code-install/runtime state, not server setup state. Any invalid runtime, input custody, secret policy, OIDC contract, callback, scanner trust, DB contract, or digest blocks before managed-host mutation.
+Plan performs no privileged or managed-host mutation: it does not create service identities, AgentNet roots, secret copies, database schema/config, units, or services. The npm launcher may materialize its caller-owned Python runtime before Python preflight; that is code-install/runtime state, not server setup state. Any invalid runtime, input custody, secret policy, OIDC contract, callback, mode-applicable scanner trust, DB contract, or digest blocks before managed-host mutation.
 
 Show human concise frozen scope. Ask again when scope or executable bytes change, or when a separate destructive/restart/privilege-expanding/high-risk action appears. PostgreSQL administration/reload remains separate even when plan describes exact required rule.
 
@@ -198,9 +197,9 @@ Same approved request is deliberately retryable.
 - Core config is reloaded after bootstrap.
 - Approval trust is reloaded and revalidated.
 - Exact unit bytes are written before marker commit.
-- Marker v2 records request/config/unit/package provenance, revision, and previous marker digest.
+- Request-v1 writes marker-v2 and retains same-request marker-v1 migration.
+- Request-v2 writes marker-v3 binding exact `artifact_mode`; marker-v1/v2 cannot satisfy request-v2.
 - Marker update requires same request and exact prior-byte compare-and-swap under setup lock.
-- Legacy marker v1 may be read only for same-request migration; all new writes are v2.
 - Marker is provenance only. It never proves identity, authority, service health, readiness, PostgreSQL durability, or business effect.
 
 For a failure, preserve named blocker and stage. Nonzero product commands report bounded stage/exit/stderr-presence evidence; raw stderr/env/arguments are never emitted. Timeout/start failures remain typed. Fix only named external prerequisite, then rerun exact request. Never manually edit/delete marker, config, keys, DB, identities, or units; never use `--force`.
@@ -253,4 +252,4 @@ Final setup must report `operational`, `identity_enrolled=true`, exact public Co
 
 Keep only redacted structured evidence needed for audit: request digest, package version, public origins, fixed prerequisite facts, stage/status, units, and non-secret blockers. Never retain environment values, reusable secret hashes, raw stderr, private enrollment material, or credential-bearing URLs.
 
-Setup does not prove HA, PITR, KMS/HSM custody, independent shared-host protection, external conformance, production certification, native cross-host messaging, or authority. Clean-host testing must separately prove package install, plan, PostgreSQL gate, apply, start, health, identity false, authority false, injected retries, and complete test-fixture cleanup.
+Setup does not prove HA, PITR, KMS/HSM custody, independent shared-host protection, external conformance, production certification, native cross-host messaging, or authority. Communication-only setup also proves no artifact, scanner, FILE/G13, or ship outcome. Clean-host testing must separately prove package install, plan, PostgreSQL gate, apply, start, health, identity false, authority false, injected retries, exact mode/capabilities, mode-applicable scanner/artifact absence or readiness, and complete test-fixture cleanup.

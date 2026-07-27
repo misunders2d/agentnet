@@ -112,7 +112,7 @@ Only after enrollment and explicit approval may an operator run the supervisor w
 
 ## Always-on server setup
 
-This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Resolve the strict non-secret [request example](examples/ordinary-server-setup-request.json), whose sensitive values remain owner-only file references, then run the no-managed-host-write plan (npm may materialize its caller-owned Python runtime):
+This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Select either the unchanged scanner-backed [request-v1 example](examples/ordinary-server-setup-request.json) or restricted communication-only [request-v2 example](examples/ordinary-server-communication-only-setup-request.json). Sensitive values remain owner-only file references. Then run the no-managed-host-write plan (npm may materialize its caller-owned Python runtime):
 
 ```bash
 <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
@@ -127,7 +127,7 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
-The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, scanner trust, hardened units, bounded start/restart, and redacted evidence. It verifies existing operator-owned HTTPS routes to loopback Core and Approval. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
+The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, mode-applicable scanner trust, hardened units, bounded start/restart, and redacted evidence. Communication-only mode carries only `offline_custody`, creates no scanner trust/artifact key, and rejects artifact routes/bindings before custody; it does not prove FILE/G13 or ship readiness. It verifies existing operator-owned HTTPS routes to loopback Core and Approval. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
 
 OIDC discovery is public-only by default. A private/non-global provider is allowed only when configuration pins its exact HTTPS origin, exact JWK thumbprints, and explicit canonical private CIDRs and/or endpoint addresses; the direct TLS transport may connect only to the validated address tuple. Loopback, link-local, multicast, reserved, documentation, benchmark, transition/softwire, and IPv4-mapped addresses remain forbidden. Do not suggest hosts-file tricks, DNS rebinding, proxy mirrors, or weakened SSRF checks.
 
@@ -137,7 +137,7 @@ Before creating server state, verify that operator has approved values for:
 - distinct Core and Approval HTTPS origins plus exact service audience;
 - ordinary profile's fixed local PostgreSQL role/database `agentnet`, socket `/var/run/postgresql`, exact unshadowed `local agentnet agentnet peer` rule, and environment reference containing canonical peer DSN;
 - Core and Approval OIDC policy files;
-- exact owner/approver policy, scanner trust, retention, and recovery policy.
+- exact owner/approver policy, selected artifact mode, mode-applicable scanner trust, retention, and recovery policy.
 
 No server-harness identity profile exists yet. Setup creates state first and reports `waiting_owner_oidc_or_passkey`; guided enrollment then produces exact identity used by offline activation.
 
@@ -150,10 +150,27 @@ agentnet network create \
   --domain corp.example \
   --public-base-url https://agentnet.example \
   --oidc-config oidc-enrollment.json \
+  --artifact-mode enabled \
   --scanner-trust-config scanner-trust.json \
   --database-url postgresql://agentnet@db.example/agentnet \
   --database-url-env AGENTNET_DATABASE_URL
 ```
+
+Restricted expert communication-only primitive requires explicit mode and forbids scanner input:
+
+```bash
+agentnet network create \
+  --config agentnet.json \
+  --data-dir .agentnet/server \
+  --domain corp.example \
+  --public-base-url https://agentnet.example \
+  --oidc-config oidc-enrollment.json \
+  --artifact-mode disabled \
+  --database-url postgresql://agentnet@db.example/agentnet \
+  --database-url-env AGENTNET_DATABASE_URL
+```
+
+Enabled-without-scanner and disabled-with-scanner inputs fail before config, key, or data-directory mutation.
 
 For an existing config that was not created by `network create`, provision its
 schema/keys without inventing identity or authority:

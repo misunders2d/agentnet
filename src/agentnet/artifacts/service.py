@@ -25,7 +25,7 @@ from agentnet.artifacts.scanner import (
     LocalPrefilter,
     ScannerTrustPolicy,
 )
-from agentnet.errors import AuthorizationError, ConflictError, IdempotencyConflict, ValidationError
+from agentnet.errors import AuthorizationError, ConflictError, GateBlocked, IdempotencyConflict, ValidationError
 from agentnet.authorization.policy import validate_actor_state
 from agentnet.identity.actors import VerifiedActor
 from agentnet.operations.outage import OutageGate
@@ -270,8 +270,9 @@ class ArtifactService:
     def __init__(
         self,
         store: SQLiteStore,
-        objects: FilesystemArtifactStore,
+        objects: FilesystemArtifactStore | None,
         *,
+        enabled: bool = True,
         trusted_scanner_keys: Mapping[str, str] | None = None,
         scanner_policy: ScannerTrustPolicy | None = None,
         local_prefilter: LocalPrefilter | None = None,
@@ -280,8 +281,11 @@ class ArtifactService:
         provenance: ProvenanceService | None = None,
         clock: Callable[[], int] | None = None,
     ) -> None:
+        if enabled != (objects is not None):
+            raise ValueError("artifact service enablement and object storage must agree")
         self.store = store
         self.objects = objects
+        self.enabled = enabled
         self.trusted_scanner_keys = dict(trusted_scanner_keys or {})
         self.scanner_policy = scanner_policy or ScannerTrustPolicy()
         self.local_prefilter = local_prefilter or LocalPrefilter()
@@ -291,6 +295,18 @@ class ArtifactService:
         if self.provenance.store is not store:
             raise ValueError("artifact and provenance services must share one transactional store")
         self.clock = clock or (lambda: int(time.time()))
+
+    def _require_enabled(self) -> None:
+        if not self.enabled:
+            raise GateBlocked(
+                "artifacts_disabled",
+                "artifact operations are disabled for this communication-only server profile",
+            )
+
+    def require_enabled(self) -> None:
+        """Fail before route parsing, authorization, metadata, or byte access."""
+
+        self._require_enabled()
 
     @staticmethod
     def _parse_stored_provenance(value: object) -> ArtifactManifestProvenanceV1:
@@ -621,6 +637,7 @@ class ArtifactService:
     def reconcile_quota_accounting(self) -> dict[str, int]:
         """Rebuild cumulative counters from the exact charge ledger atomically."""
 
+        self._require_enabled()
         now = self.clock()
         with self.store.transaction() as connection:
             connection.execute("UPDATE artifact_byte_accounts SET used_bytes=0,updated_at=?", (now,))
@@ -680,6 +697,7 @@ class ArtifactService:
         policy_decision_id: str,
         ttl_seconds: int = 3600,
     ) -> dict[str, Any]:
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_low_risk_continuity()
         if not SHA256_DIGEST.fullmatch(expected_digest):
@@ -786,6 +804,7 @@ class ArtifactService:
     ) -> dict[str, Any]:
         """Abort an unpromoted reservation without releasing quota before bytes."""
 
+        self._require_enabled()
         actor_json = canonical_json(actor.audit_view()).decode("utf-8")
         now = self.clock()
         with self.store.transaction() as connection:
@@ -883,6 +902,7 @@ class ArtifactService:
         *,
         phase_hook: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
+        self._require_enabled()
         row = self.store.fetch_one(
             """SELECT r.*,c.state AS charge_state,c.release_reason
                  FROM artifact_reservations r
@@ -962,6 +982,7 @@ class ArtifactService:
         domain_id: str | None = None,
         actor_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        self._require_enabled()
         if limit < 1 or limit > 1_000:
             raise ValidationError("artifact reservation recovery limit is invalid")
         now = self.clock()
@@ -998,6 +1019,7 @@ class ArtifactService:
         binding suitable for an event envelope.
         """
 
+        self._require_enabled()
         state = self.store.fetch_one(
             "SELECT state FROM artifact_manifests WHERE artifact_id=?",
             (artifact_id,),
@@ -1057,6 +1079,7 @@ class ArtifactService:
     ) -> ReleasedArtifactBinding:
         """Fail closed unless every supplied field equals current manifest truth."""
 
+        self._require_enabled()
         if binding.domain_id != domain_id:
             raise AuthorizationError("released artifact binding crossed the event trust domain")
         rank = {
@@ -1078,6 +1101,9 @@ class ArtifactService:
     def require_event_artifacts(self, event: EventEnvelope) -> tuple[ReleasedArtifactBinding, ...]:
         """Validate all typed artifact bindings before mailbox acceptance."""
 
+        if not event.released_artifacts:
+            return ()
+        self._require_enabled()
         return tuple(
             self.require_released_binding(
                 binding,
@@ -1095,6 +1121,7 @@ class ArtifactService:
         actor: VerifiedActor,
         policy_decision_id: str,
     ) -> dict[str, Any]:
+        self._require_enabled()
         denied_reason: str | None = None
         with self.store.transaction() as connection:
             row = connection.execute("SELECT * FROM artifact_reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
@@ -1179,6 +1206,7 @@ class ArtifactService:
         actor: VerifiedActor,
         policy_decision_id: str,
     ) -> dict[str, Any]:
+        self._require_enabled()
         parsed_provenance = ArtifactProvenanceV1.parse_boundary(provenance)
         parsed_derivation = (
             ArtifactDerivationV1.parse_boundary(derivation) if derivation is not None else None
@@ -1388,6 +1416,7 @@ class ArtifactService:
         }
 
     def record_scan(self, artifact_id: str, attestation: object) -> dict[str, Any]:
+        self._require_enabled()
         parsed = self._validate_attestation_shape_and_time(attestation)
         exact_attestation = parsed.model_dump(mode="json")
         if parsed.artifact_id != artifact_id:
@@ -1467,6 +1496,7 @@ class ArtifactService:
         policy_decision_id: str,
         phase_hook: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         """Authorize and durably stage release before touching released bytes."""
@@ -1565,6 +1595,7 @@ class ArtifactService:
     ) -> dict[str, Any]:
         """Idempotently promote one authorized release and commit its result."""
 
+        self._require_enabled()
         try:
             self._require_fresh_scan(artifact_id)
         except Exception as exc:
@@ -1659,6 +1690,7 @@ class ArtifactService:
         return {"artifact_id": artifact_id, "state": "released", "audit_hash": audit_hash, "duplicate": False}
 
     def recover_release_outbox(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        self._require_enabled()
         if limit < 1 or limit > 1_000:
             raise ValidationError("artifact release recovery limit is invalid")
         rows = self.store.fetch_all(
@@ -1688,6 +1720,7 @@ class ArtifactService:
     def lifecycle_status(self, artifact_id: str, *, actor: VerifiedActor) -> dict[str, Any]:
         """Return authorized content-free lifecycle/version metadata."""
 
+        self._require_enabled()
         now = int(time.time())
         with self.store.transaction() as connection:
             manifest = connection.execute(
@@ -1720,6 +1753,7 @@ class ArtifactService:
     ) -> dict[str, Any]:
         """Set or clear an exact revision-fenced legal hold."""
 
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         reason = self._validate_lifecycle_reason(reason)
@@ -1838,6 +1872,7 @@ class ArtifactService:
     ) -> dict[str, Any]:
         """Stage exact deletion before unlinking bytes; legal/retention holds win."""
 
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         reason = self._validate_lifecycle_reason(reason)
@@ -1971,6 +2006,7 @@ class ArtifactService:
         *,
         phase_hook: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
+        self._require_enabled()
         row = self.store.fetch_one(
             """SELECT o.*,l.status AS lifecycle_state,l.revision,m.state AS manifest_state
                  FROM artifact_deletion_outbox o
@@ -2093,6 +2129,7 @@ class ArtifactService:
         }
 
     def recover_deletion_outbox(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        self._require_enabled()
         if limit < 1 or limit > 1_000:
             raise ValidationError("artifact deletion recovery limit is invalid")
         rows = self.store.fetch_all(
@@ -2111,6 +2148,7 @@ class ArtifactService:
         policy_decision_id: str,
         ttl_seconds: int = 60,
     ) -> str:
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         visible = self.store.fetch_one(
@@ -2152,6 +2190,7 @@ class ArtifactService:
         return token
 
     def consume_download(self, token: str, *, actor: VerifiedActor) -> bytes:
+        self._require_enabled()
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()

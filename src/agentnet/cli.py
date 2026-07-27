@@ -1005,6 +1005,10 @@ def command_network_create(args: argparse.Namespace) -> int:
     """Create one production server-agent namespace without inventing a founder."""
 
     path = Path(args.config)
+    if args.artifact_mode == "enabled" and not args.scanner_trust_config:
+        raise SystemExit("artifact_mode=enabled requires scanner trust configuration")
+    if args.artifact_mode == "disabled" and args.scanner_trust_config:
+        raise SystemExit("artifact_mode=disabled forbids scanner trust configuration")
     oidc_value = Path(args.oidc_config).read_text(encoding="utf-8")
     try:
         oidc = OIDCEnrollmentConfig.model_validate_json(oidc_value)
@@ -1035,12 +1039,21 @@ def command_network_create(args: argparse.Namespace) -> int:
         data_dir=data_dir,
         database_url=database_url,
         database_url_env=args.database_url_env,
+        artifact_mode=args.artifact_mode,
         artifact_backend="postgres-manifest",
         artifact_dir=data_dir / "artifacts",
         public_base_url=args.public_base_url,
         runtime_instance_id=args.runtime_instance_id,
         oidc_enrollment=oidc,
         scanner_trust=scanner_trust,
+        server_agent_capabilities=(
+            {ServerAgentCapability.OFFLINE_CUSTODY}
+            if args.artifact_mode == "disabled"
+            else {
+                ServerAgentCapability.OFFLINE_CUSTODY,
+                ServerAgentCapability.ARTIFACT_STORAGE,
+            }
+        ),
         postgres_recovery_topology=args.postgres_recovery_topology,
         backup_trust=BackupTrustConfig(
             domain_id=domain_id,
@@ -1058,7 +1071,8 @@ def command_network_create(args: argparse.Namespace) -> int:
         ),
     )
     _provision_owner_only_key(data_dir / "secrets" / "records.key")
-    _provision_owner_only_key(data_dir / "secrets" / "artifact.key")
+    if args.artifact_mode == "enabled":
+        _provision_owner_only_key(data_dir / "secrets" / "artifact.key")
     _write_private_config(path, config.redacted_export(), force=args.force)
     core = CommunicationCore.open(config, validate_deployment_identity=False)
     try:
@@ -3324,7 +3338,8 @@ def command_bootstrap_server_agent(args: argparse.Namespace) -> int:
         raise SystemExit("bootstrap-server-agent requires always_on_server_agent profile")
     secrets_dir = config.data_dir / "secrets"
     _provision_owner_only_key(secrets_dir / "records.key")
-    _provision_owner_only_key(secrets_dir / "artifact.key")
+    if config.artifact_mode == "enabled":
+        _provision_owner_only_key(secrets_dir / "artifact.key")
     core = CommunicationCore.open(config, validate_deployment_identity=False)
     try:
         domain = core.bootstrap_domain()
@@ -3605,8 +3620,14 @@ def build_parser() -> argparse.ArgumentParser:
     network_create.add_argument("--public-base-url", required=True)
     network_create.add_argument("--oidc-config", required=True)
     network_create.add_argument(
+        "--artifact-mode",
+        choices=("enabled", "disabled"),
+        default="enabled",
+        help="enabled keeps scanner-backed artifacts; disabled permits communication only",
+    )
+    network_create.add_argument(
         "--scanner-trust-config",
-        help="public maintained-scanner trust configuration required for operational readiness",
+        help="public maintained-scanner trust configuration required when artifacts are enabled",
     )
     network_create.add_argument("--runtime-instance-id", default="agentnet-server-1")
     network_create.add_argument("--postgres-recovery-topology", action="store_true")

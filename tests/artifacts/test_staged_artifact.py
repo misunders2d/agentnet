@@ -22,13 +22,14 @@ from agentnet.errors import (
     AuthenticationError,
     AuthorizationError,
     ConflictError,
+    GateBlocked,
     IdempotencyConflict,
     ValidationError,
 )
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
 from agentnet.operations.policy_defaults import OperationsPolicy
-from agentnet.protocol.models import Classification, EventType
+from agentnet.protocol.models import Classification, EventType, ReleasedArtifactBinding
 from agentnet.provenance import (
     OriginKind,
     OriginRegistration,
@@ -43,6 +44,146 @@ from agentnet.security.signatures import P256KeyPair, canonical_digest
 
 class InjectedReleaseCrash(RuntimeError):
     pass
+
+
+def test_disabled_artifact_service_rejects_every_public_surface_before_state_access(
+    store,
+    identity_factory,
+    tmp_path: Path,
+) -> None:
+    actor, _ = identity_factory()
+    recipient, _ = identity_factory()
+    objects_root = tmp_path / "objects"
+    service = ArtifactService(store, None, enabled=False)
+    binding = ReleasedArtifactBinding(
+        artifact_id=str(uuid4()),
+        domain_id=actor.domain_id,
+        object_version="a" * 64,
+        size=1,
+        media_type="text/plain",
+        classification=Classification.C1_INTERNAL,
+        release_intent_id=str(uuid4()),
+        released_at=datetime.now(UTC),
+    )
+    event = new_event(
+        domain_id=actor.domain_id,
+        actor=actor,
+        event_type=EventType.MESSAGE,
+        classification=Classification.C1_INTERNAL,
+        payload={"kind": "disabled-artifact-surface-matrix"},
+        idempotency_key="disabled-artifact-surface-0001",
+        recipients=(recipient.harness_id,),
+        released_artifacts=(binding,),
+    )
+    operations = {
+        "require_enabled": lambda: service.require_enabled(),
+        "reconcile_quota_accounting": lambda: service.reconcile_quota_accounting(),
+        "reserve": lambda: service.reserve(
+            actor=actor,
+            idempotency_key="communication-only-artifact-reservation",
+            expected_digest="0" * 64,
+            expected_size=0,
+            media_type="text/plain",
+            classification=Classification.C1_INTERNAL,
+            required_attachment=False,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "abort_reservation": lambda: service.abort_reservation(
+            "reservation-disabled",
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "process_reservation_release": lambda: service.process_reservation_release(
+            "reservation-disabled"
+        ),
+        "recover_expired_reservations": lambda: service.recover_expired_reservations(),
+        "resolve_released_binding": lambda: service.resolve_released_binding(binding.artifact_id),
+        "require_released_binding": lambda: service.require_released_binding(
+            binding,
+            domain_id=actor.domain_id,
+            event_classification=Classification.C1_INTERNAL,
+        ),
+        "require_event_artifacts": lambda: service.require_event_artifacts(event),
+        "upload": lambda: service.upload(
+            "reservation-disabled",
+            b"must-not-be-read",
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "promote_manifest": lambda: service.promote_manifest(
+            reservation_id="reservation-disabled",
+            object_version="a" * 64,
+            provenance={},
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "record_scan": lambda: service.record_scan(binding.artifact_id, {}),
+        "release": lambda: service.release(
+            binding.artifact_id,
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "process_release_outbox": lambda: service.process_release_outbox(binding.artifact_id),
+        "recover_release_outbox": lambda: service.recover_release_outbox(),
+        "lifecycle_status": lambda: service.lifecycle_status(binding.artifact_id, actor=actor),
+        "set_legal_hold": lambda: service.set_legal_hold(
+            binding.artifact_id,
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+            expected_revision=1,
+            reason="disabled",
+            enabled=True,
+        ),
+        "delete": lambda: service.delete(
+            binding.artifact_id,
+            actor=actor,
+            policy_decision_id="unused-because-disabled",
+            expected_revision=1,
+            reason="disabled",
+        ),
+        "process_deletion_outbox": lambda: service.process_deletion_outbox(binding.artifact_id),
+        "recover_deletion_outbox": lambda: service.recover_deletion_outbox(),
+        "issue_download_capability": lambda: service.issue_download_capability(
+            binding.artifact_id,
+            actor=actor,
+            audience_harness_id=actor.harness_id,
+            policy_decision_id="unused-because-disabled",
+        ),
+        "consume_download": lambda: service.consume_download("disabled-token", actor=actor),
+    }
+    public_surfaces = {
+        name
+        for name, value in ArtifactService.__dict__.items()
+        if callable(value) and not name.startswith("_")
+    }
+    assert set(operations) == public_surfaces
+    artifact_tables = (
+        "artifact_reservations",
+        "artifact_manifests",
+        "artifact_release_outbox",
+        "artifact_byte_accounts",
+        "artifact_byte_charges",
+        "artifact_lifecycle",
+        "artifact_deletion_outbox",
+        "download_capabilities",
+    )
+    before = {
+        table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+        for table in artifact_tables
+    }
+
+    for name, operation in operations.items():
+        with pytest.raises(GateBlocked, match="artifact operations are disabled") as denied:
+            operation()
+        assert denied.value.gate == "artifacts_disabled", name
+
+    after = {
+        table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+        for table in artifact_tables
+    }
+    assert after == before
+    assert not objects_root.exists()
+    assert store.fetch_one("SELECT reservation_id FROM artifact_reservations LIMIT 1") is None
 
 
 def authorize(

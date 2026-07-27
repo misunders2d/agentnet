@@ -30,6 +30,7 @@ from agentnet.authorization import (
 )
 from agentnet.authorization.decision import AuthorizationDecision, DecisionRecorder
 from agentnet.core.app import CommunicationCore
+from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.discovery.directory import DirectoryRecord
 from agentnet.effects.reservations import (
     EffectExecutionEvidence,
@@ -49,7 +50,7 @@ from agentnet.organization import (
     RelationshipPolicyException,
     TaskConflictAdjudication,
 )
-from agentnet.operations.config import ExtensionConfig, FeatureFlags
+from agentnet.operations.config import ExtensionConfig, FeatureFlags, RuntimeProfile
 from agentnet.operations.incident import IncidentMode, IncidentModeChange
 from agentnet.operations.versioning import (
     CompatibilityRequirement,
@@ -226,6 +227,81 @@ def _command(*, key, actor, action: str, resource: str, request: dict[str, objec
         **fields,
         signature=key.sign(AUTHORITY_COMMAND_PURPOSE, fields),
     )
+
+
+@pytest.mark.anyio
+async def test_communication_only_artifact_routes_fail_before_body_auth_metadata_or_audit(
+    store,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("agentnet.core.app.is_verified_postgresql_store", lambda _store: True)
+    artifact_dir = tmp_path / "artifacts-must-not-exist"
+    core = CommunicationCore(
+        ExtensionConfig(
+            profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+            domain_id="corp.example",
+            data_dir=tmp_path / "data",
+            database_url="postgresql://agentnet@postgres/agentnet",
+            artifact_backend="postgres-manifest",
+            artifact_mode="disabled",
+            artifact_dir=artifact_dir,
+            public_base_url="https://core.corp.example",
+            enrolled_harness_id="server-harness",
+            enrolled_credential_id="server-credential",
+            server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
+        ),
+        store,
+    )
+    routes = (
+        ("POST", "/v1/artifacts/reservations", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/reservations/missing/bytes", b"secret-bytes", "application/octet-stream"),
+        ("POST", "/v1/artifacts/reservations/missing/abort", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/reservations/missing/promote", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/missing/scan", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/missing/release", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/missing/download-capabilities", b"not-json", "application/json"),
+        ("GET", "/v1/artifacts/missing/lifecycle", b"", "application/json"),
+        ("POST", "/v1/artifacts/missing/legal-hold", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/missing/legal-hold/clear", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/missing/delete", b"not-json", "application/json"),
+        ("POST", "/v1/artifacts/download", b"not-json", "application/json"),
+    )
+    observed_tables = (
+        "artifact_reservations",
+        "artifact_manifests",
+        "artifact_release_outbox",
+        "artifact_lifecycle",
+        "artifact_deletion_outbox",
+        "download_capabilities",
+        "audit_intents",
+        "audit_log",
+    )
+    before = {
+        table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+        for table in observed_tables
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(core), raise_app_exceptions=False),
+        base_url="http://127.0.0.1",
+    ) as client:
+        for method, path, body, content_type in routes:
+            response = await client.request(
+                method,
+                path,
+                content=body,
+                headers={"Content-Type": content_type},
+            )
+            assert response.status_code == 503, (method, path, response.text)
+            assert response.json()["gate"] == "artifacts_disabled"
+
+    after = {
+        table: int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
+        for table in observed_tables
+    }
+    assert after == before
+    assert not artifact_dir.exists()
 
 
 @pytest.mark.anyio
