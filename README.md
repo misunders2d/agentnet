@@ -326,14 +326,16 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 
 ## Project status
 
-AgentNet is an early public implementation; latest published package is
-`0.1.26`. Current unversioned work adds an explicit communication-only
-ordinary-server profile for first-message testing while retaining fail-closed
-artifact boundaries. It is not yet a release candidate. The earlier `0.1.24`
-release introduced product-owned ordinary Linux server setup:
-fixed plan/apply/start convergence, Approval/Core separation, scanner trust,
-exact public HTTPS health identity, interruption recovery, redacted evidence,
-and bundled operator workflow. Setup grants neither identity nor authority.
+AgentNet is an early public implementation; the latest published package is
+`0.1.27` at commit `4641503ac6ee398db44f2c3fffe4c639b7c60561`.
+Candidate `0.1.28` repairs three root-installed verifier portability failures
+exposed before the Hub performed any setup or network mutation. Neither release
+proves an actual AgentNet network, fresh-laptop enrollment, native cross-host
+message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
+release introduced product-owned ordinary Linux server setup: fixed
+plan/apply/start convergence, Approval/Core separation, scanner trust, exact
+public HTTPS health identity, interruption recovery, redacted evidence, and
+bundled operator workflow. Setup grants neither identity nor authority.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
@@ -360,11 +362,20 @@ resume, marker provenance/CAS, Windows CLI imports, and installer guidance. Its
 immutable tag resolves through tag object
 `c481d850ba4933abbb77191a763a7c4e0817bc32` to commit
 `a7da3aa945c0b2f25fdb06803b80529f89bf8242`; public npm `gitHead` matches.
-Cross-SDK/public-peer evidence and live OIDC/WebAuthn ceremony remain separately
-gated. Current unversioned communication-only changes have focused local
-evidence only; broad, verifier, release, public-artifact, and native cross-host
-evidence remain pending. Repository
-evidence is not a completed live cross-host journey or production certification.
+
+Published `0.1.27` adds the explicit communication-only ordinary-server profile
+for first-message testing while retaining fail-closed artifact boundaries. It
+permits exactly `offline_custody`, creates no scanner/artifact state, and does
+not convert local signed-message evidence into a real-network claim. Candidate
+`0.1.28` makes Python and Node privileged setup-input verification independent
+of same-size timestamp advancement, accumulates bounded short reads, separates
+structured launcher rejection states, and rejects pending release evidence.
+Its final source and two clean recursively packed npm generations each report
+`1418 passed, 16 expected platform/dedicated-PostgreSQL skips`; those lanes
+exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence
+files. The two installed-harness pin failures remain non-green and are not
+waived. Exact public `0.1.28` root-installed Hub verification, network creation,
+fresh-laptop enrollment, and native cross-host message/ACK remain pending.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

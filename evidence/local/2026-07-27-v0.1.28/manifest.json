@@ -1,0 +1,54 @@
+{
+  "run_id": "2026-07-27-v0.1.28",
+  "evaluated_at": "2026-07-27T10:15:00+00:00",
+  "scope": "v0_1_28_root_installed_verifier_portability_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "1eea9d1c34901b827f87ce50d1975784345896c06e61e3ce675f924d90a11280",
+  "prior_runtime_evidence": "evidence/local/2026-07-26-v0.1.27/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-26-v0.1.27/manifest.json",
+  "change_boundary": "Root-installed setup verifier portability repair: bounded double content snapshots for Python and Node privileged setup inputs, short-read/error handling, deterministic coarse-filesystem mutation detection, and UID-independent structured launcher rejection tests. Real network creation, fresh-laptop enrollment, native cross-host messaging, FILE/G13, production durability, and ship eligibility remain unproven.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository",
+    "uid_zero_regression": "Linux user namespace created by unshare -Ur --map-root-user; not privileged external-host evidence",
+    "packed_generations": "two clean temporary npm installation prefixes with separate uv virtual environments",
+    "root_installed_external_host": "pending Hub installation of the exact public package"
+  },
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/operations/test_server_setup.py::test_private_input_detects_same_size_in_place_change tests/operations/test_server_setup.py::test_private_input_accumulates_short_reads tests/operations/test_server_setup.py::test_private_input_seek_error_fails_closed tests/operations/test_server_setup.py::test_private_managed_read_detects_same_size_change tests/operations/test_server_setup.py::test_node_private_input_detects_same_size_change tests/operations/test_server_setup.py::test_non_root_owned_launcher_is_rejected_deterministically tests/operations/test_server_setup.py::test_root_owned_nontraversable_launcher_is_rejected_deterministically",
+      "result": "PASS: 7 passed as ordinary user"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy unshare -Ur --map-root-user -- uv run pytest -q tests/operations/test_server_setup.py::test_private_input_detects_same_size_in_place_change tests/operations/test_server_setup.py::test_private_input_accumulates_short_reads tests/operations/test_server_setup.py::test_private_input_seek_error_fails_closed tests/operations/test_server_setup.py::test_private_managed_read_detects_same_size_change tests/operations/test_server_setup.py::test_node_private_input_detects_same_size_change tests/operations/test_server_setup.py::test_non_root_owned_launcher_is_rejected_deterministically tests/operations/test_server_setup.py::test_root_owned_nontraversable_launcher_is_rejected_deterministically",
+      "result": "PASS: 7 passed in a UID-0 Linux user namespace"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/operations/test_server_setup.py",
+      "result": "PASS: 92 passed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/conformance/test_npm_package.py",
+      "result": "PASS: 10 passed"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1418 passed and 16 expected platform/dedicated-PostgreSQL skips; the package script excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; two installed-harness pin failures remain non-green and were not rerun or waived; package check, release verifier, launcher check, and recursive package check passed"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds produced byte-identical 0.1.28 sdist and wheel archives"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-27-v0.1.28/artifacts/agentnet-0.1.28.tar.gz",
+      "sha256": "06bdfaa9c43416e647a0c528caba58ce6625112365d3da5deb428293dbb52f4d"
+    },
+    {
+      "path": "evidence/local/2026-07-27-v0.1.28/artifacts/agentnet-0.1.28-py3-none-any.whl",
+      "sha256": "9d6c15b90fb7ff327f8222932ecd880de627d83f5e7b4a45925e7bf3664a2d84"
+    }
+  ]
+}

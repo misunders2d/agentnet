@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-26
-Candidate: `agentnet 0.1.27`
-Latest published package: `agentnet 0.1.26`
-Evidence profile: self-hosted communication-only proof candidate
+Snapshot: 2026-07-27
+Candidate: `agentnet 0.1.28`
+Latest published package: `agentnet 0.1.27`
+Evidence profile: root-installed communication-only proof repair candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `10498247ba9b459d8a9f8e932dadbddb54e1b8d419129ac91a701e511a7e9baa` |
-| `pyproject.toml` | SHA-256 `10525f566ff36aec203ff2dfedf4d6ed02417927dab82558d7e158b13a99a5d7` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `853e0aa30d06750d62cbf23d0c713d335e78558cc1ace8963c0eb5c0339115e9` |
+| `pyproject.toml` | SHA-256 `c378dc3191bb44db07a732ad00ff1048b31d4bf1a30d06d2caa371564c677ba3` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -185,27 +185,31 @@ skipped`, so G04 remains `FAILED`. Exact prepublication, retained-artifact,
 recursive packed, Pi-loader, and public-package identity results are recorded in
 the immutable `0.1.25` package evidence manifest.
 
-Unreleased `0.1.27` corrects ordinary-server setup convergence and installer
-truthfulness: approval digest v2 binds exact service-visible Node/uv/launcher/
-`systemctl`/`useradd` paths/content plus the deterministic full executed AgentNet package-tree hash;
-broker semantics and locked preflight precede managed writes; the
-fixed PostgreSQL profile verifies service-identity Unix-socket peer access,
-parsed HBA/ident rules, and config-load freshness; marker v2 uses same-request
-prior-byte compare-and-swap, hashes stable persisted config JSON rather than
-process-randomized set serialization, and never substitutes for realized-state
-bootstrap, health, identity, or authority. It also incorporates the Windows CLI
-import correction and one ordered operator procedure. Current local evidence is
-`152 passed, 9 expected platform skips` for platform/setup/activation/package/
-release and `1433 passed, 16 expected platform/dedicated-PostgreSQL skips` for
-source regression excluding installed-harness and release-manifest gates; source
-and both recursive installed npm generations report `1386 passed, 16 expected
-skips`. The release verifier, byte-identical wheel/sdist build, recursive package
-gate, and source/fresh-packed Pi skill loaders pass. At commit `58a13dd`, GitHub
-run `30155733937` passed clean Ubuntu 24.04/PostgreSQL 18 plan, expected database
-blocker, separate PostgreSQL boundary, apply/start, unchanged stable retry, and
-cleanup; run `30155733938` passed package conformance on Ubuntu, macOS, and
-Windows. Final current-tree review closure and Sergey-only publication remain
-pending.
+Published `0.1.27` adds the explicit request-v2 communication-only ordinary-
+server profile: exact `offline_custody`, version-disjoint digest-v3/marker-v3,
+no scanner or artifact state, fail-closed artifact services/routes/bindings,
+and signed local message/mailbox/ACK/task-custody evidence. Its immutable tag
+and public npm package bind commit
+`4641503ac6ee398db44f2c3fffe4c639b7c60561`. That evidence does not prove a
+created network, fresh-laptop enrollment, or native cross-host message.
+
+Candidate `0.1.28` repairs three failures exposed only by the Hub's root-installed
+`0.1.27` verifier. Python and Node privileged setup-input readers now take two
+bounded content snapshots, accumulate short reads, retain metadata/path custody
+checks, and fail closed when snapshots differ even if a filesystem does not
+advance same-size rewrite timestamps. Launcher tests separately prove the
+structured non-root-ownership and root-owned/non-traversable rejection states
+instead of matching caller-dependent English text. Ordinary-user and UID-0
+user-namespace focused runs each report `7 passed`; the full server-setup and npm
+conformance lanes report `92 passed` and `10 passed`. The final source and two
+clean recursively packed npm generations each report `1418 passed, 16 expected
+platform/dedicated-PostgreSQL skips`; package, release-verifier, launcher,
+recursive-package, and byte-identical wheel/sdist checks pass. Those lanes
+exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence
+files; the two installed-harness pin failures remain non-green and were not
+rerun or waived. The UID-0 lane uses a Linux user namespace and is not external
+privileged-host qualification. Exact public-package root-installed Hub evidence
+remains pending.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

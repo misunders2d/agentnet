@@ -5,7 +5,6 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
   readdirSync,
   readSync,
   realpathSync,
@@ -72,7 +71,30 @@ export const argumentValue = (userArguments, name) => {
   return userArguments[indexes[0] + 1];
 };
 
-const readPrivateSetupInput = (filename, maximum, environment) => {
+const readBoundedSnapshot = (descriptor, expectedSize, reader) => {
+  const payload = Buffer.alloc(expectedSize + 1);
+  let offset = 0;
+  while (offset < payload.length) {
+    const count = reader(
+      descriptor,
+      payload,
+      offset,
+      payload.length - offset,
+      offset,
+    );
+    if (count === 0) break;
+    offset += count;
+  }
+  return payload.subarray(0, offset);
+};
+
+export const readPrivateSetupInput = (
+  filename,
+  maximum,
+  environment,
+  reader = readSync,
+  statReader = fstatSync,
+) => {
   if (!path.isAbsolute(filename) || path.normalize(filename) !== filename || realpathSync(filename) !== filename) {
     throw new Error("setup input path is not canonical");
   }
@@ -84,7 +106,7 @@ const readPrivateSetupInput = (filename, maximum, environment) => {
     fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
   );
   try {
-    const before = fstatSync(descriptor, { bigint: true });
+    const before = statReader(descriptor, { bigint: true });
     if (
       !before.isFile() || ![0, sudoUid].includes(Number(before.uid)) ||
       before.nlink !== 1n || (before.mode & 0o77n) !== 0n ||
@@ -92,16 +114,30 @@ const readPrivateSetupInput = (filename, maximum, environment) => {
     ) {
       throw new Error("setup input custody is unsafe");
     }
-    const payload = readFileSync(descriptor);
-    const after = fstatSync(descriptor, { bigint: true });
+    const expectedSize = Number(before.size);
+    let first;
+    let middle;
+    let second;
+    let after;
+    try {
+      first = readBoundedSnapshot(descriptor, expectedSize, reader);
+      middle = statReader(descriptor, { bigint: true });
+      second = readBoundedSnapshot(descriptor, expectedSize, reader);
+      after = statReader(descriptor, { bigint: true });
+    } catch {
+      throw new Error("setup input changed while being read");
+    }
     if (
-      BigInt(payload.length) !== before.size || after.dev !== before.dev ||
-      after.ino !== before.ino || after.size !== before.size ||
-      after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs
+      first.length !== expectedSize || !first.equals(second) ||
+      [middle, after].some((snapshot) =>
+        snapshot.dev !== before.dev || snapshot.ino !== before.ino ||
+        snapshot.size !== before.size || snapshot.mtimeNs !== before.mtimeNs ||
+        snapshot.ctimeNs !== before.ctimeNs
+      )
     ) {
       throw new Error("setup input changed while being read");
     }
-    return payload;
+    return first;
   } finally {
     closeSync(descriptor);
   }

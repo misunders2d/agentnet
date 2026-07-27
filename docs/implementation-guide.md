@@ -129,7 +129,10 @@ no-follow executable hashes, and one hash computed from deterministic
 path/type/size/content records for the exact root-owned AgentNet package tree
 executed through `uv run --project`. Privileged apply reproduces the digest in
 the npm launcher, repeats full Python preflight under the setup lock, and blocks
-if any descriptor metadata or package-tree content changed. Setup disables
+if any descriptor metadata or package-tree content changed. Node and Python each
+compare two bounded descriptor snapshots for privileged setup inputs, accumulate
+partial reads, and retain metadata/path custody checks so same-size drift does
+not depend on filesystem timestamp advancement. Setup disables
 Python bytecode writes so execution cannot alter the approved package tree. It
 also re-reads full effective Approval trust after Core bootstrap, including
 signer key IDs/public keys, and blocks before unit/marker commit on drift.

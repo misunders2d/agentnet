@@ -372,6 +372,28 @@ def _allowed_input_owners() -> set[int]:
     return owners
 
 
+def _read_bounded_snapshot(
+    descriptor: int,
+    expected_size: int,
+    *,
+    blocker: str,
+    message: str,
+) -> bytes:
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = expected_size + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 262_144))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ServerSetupError(blocker, message) from exc
+
+
 def _read_private_input(path: Path, *, label: str, max_bytes: int = 1_048_576) -> bytes:
     try:
         canonical = path.resolve(strict=True)
@@ -399,18 +421,38 @@ def _read_private_input(path: Path, *, label: str, max_bytes: int = 1_048_576) -
             or not 1 <= before.st_size <= max_bytes
         ):
             raise ServerSetupError("unsafe_input", f"{label} must be one bounded owner-only file")
-        data = os.read(descriptor, before.st_size + 1)
+        changed_message = f"{label} changed while being read"
+        first = _read_bounded_snapshot(
+            descriptor,
+            before.st_size,
+            blocker="unsafe_input",
+            message=changed_message,
+        )
+        middle = os.fstat(descriptor)
+        second = _read_bounded_snapshot(
+            descriptor,
+            before.st_size,
+            blocker="unsafe_input",
+            message=changed_message,
+        )
         after = os.fstat(descriptor)
         if (
-            len(data) != before.st_size
-            or after.st_dev != before.st_dev
-            or after.st_ino != before.st_ino
-            or after.st_size != before.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_ctime_ns != before.st_ctime_ns
+            len(first) != before.st_size
+            or first != second
+            or any(
+                getattr(snapshot, field) != getattr(before, field)
+                for snapshot in (middle, after)
+                for field in (
+                    "st_dev",
+                    "st_ino",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+            )
         ):
-            raise ServerSetupError("unsafe_input", f"{label} changed while being read")
-        return data
+            raise ServerSetupError("unsafe_input", changed_message)
+        return first
     finally:
         os.close(descriptor)
 
@@ -2015,21 +2057,41 @@ def _read_private_managed_file(
             or not 1 <= before.st_size <= max_bytes
         ):
             raise ServerSetupError(blocker, "managed private file size or custody conflicts with fixed profile")
-        payload = os.read(descriptor, before.st_size + 1)
+        changed_message = "managed private file changed while being read"
+        first = _read_bounded_snapshot(
+            descriptor,
+            before.st_size,
+            blocker=blocker,
+            message=changed_message,
+        )
+        middle = os.fstat(descriptor)
+        second = _read_bounded_snapshot(
+            descriptor,
+            before.st_size,
+            blocker=blocker,
+            message=changed_message,
+        )
         after = os.fstat(descriptor)
         current = path.lstat()
         if (
-            len(payload) != before.st_size
-            or after.st_dev != before.st_dev
-            or after.st_ino != before.st_ino
-            or after.st_size != before.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_ctime_ns != before.st_ctime_ns
+            len(first) != before.st_size
+            or first != second
+            or any(
+                getattr(snapshot, field) != getattr(before, field)
+                for snapshot in (middle, after)
+                for field in (
+                    "st_dev",
+                    "st_ino",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+            )
             or current.st_dev != before.st_dev
             or current.st_ino != before.st_ino
         ):
-            raise ServerSetupError(blocker, "managed private file changed while being read")
-        return payload
+            raise ServerSetupError(blocker, changed_message)
+        return first
     finally:
         os.close(descriptor)
 

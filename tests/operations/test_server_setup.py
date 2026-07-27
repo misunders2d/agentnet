@@ -392,17 +392,78 @@ def test_private_input_detects_same_size_in_place_change(
     path = tmp_path / "input.json"
     path.write_bytes(b'{"a":1}')
     path.chmod(0o600)
+    metadata = path.stat()
+    stable_metadata = SimpleNamespace(
+        **{
+            field: getattr(metadata, field)
+            for field in (
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_nlink",
+                "st_size",
+                "st_dev",
+                "st_ino",
+                "st_mtime_ns",
+                "st_ctime_ns",
+            )
+        }
+    )
     original_read = setup.os.read
+    changed = False
 
     def mutate_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal changed
         payload = original_read(descriptor, size)
-        path.write_bytes(b'{"b":2}')
-        path.chmod(0o600)
+        if payload and not changed:
+            changed = True
+            path.write_bytes(b'{"b":2}')
+            path.chmod(0o600)
         return payload
 
+    monkeypatch.setattr(setup.os, "fstat", lambda _descriptor: stable_metadata)
     monkeypatch.setattr(setup.os, "read", mutate_after_read)
     with pytest.raises(ServerSetupError, match="changed while being read"):
         setup._read_private_input(path, label="test input")
+
+
+def test_private_input_accumulates_short_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    path = tmp_path / "input.json"
+    path.write_bytes(b'{"stable":true}')
+    path.chmod(0o600)
+    original_read = setup.os.read
+    monkeypatch.setattr(
+        setup.os,
+        "read",
+        lambda descriptor, size: original_read(descriptor, min(size, 2)),
+    )
+
+    assert setup._read_private_input(path, label="test input") == b'{"stable":true}'
+
+
+def test_private_input_seek_error_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    path = tmp_path / "input.json"
+    path.write_bytes(b'{"stable":true}')
+    path.chmod(0o600)
+    monkeypatch.setattr(
+        setup.os,
+        "lseek",
+        lambda *_args: (_ for _ in ()).throw(OSError("synthetic seek failure")),
+    )
+
+    with pytest.raises(ServerSetupError, match="changed while being read") as exc_info:
+        setup._read_private_input(path, label="test input")
+    assert exc_info.value.blocker == "unsafe_input"
 
 
 def test_account_requires_one_private_nonprivileged_group(
@@ -509,14 +570,36 @@ def test_private_managed_read_detects_same_size_change(
     path = tmp_path / "managed.json"
     path.write_bytes(b'{"a":1}')
     path.chmod(0o600)
+    metadata = path.stat()
+    stable_metadata = SimpleNamespace(
+        **{
+            field: getattr(metadata, field)
+            for field in (
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_nlink",
+                "st_size",
+                "st_dev",
+                "st_ino",
+                "st_mtime_ns",
+                "st_ctime_ns",
+            )
+        }
+    )
     original_read = setup.os.read
+    changed = False
 
     def mutate_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal changed
         payload = original_read(descriptor, size)
-        path.write_bytes(b'{"b":2}')
-        path.chmod(0o600)
+        if payload and not changed:
+            changed = True
+            path.write_bytes(b'{"b":2}')
+            path.chmod(0o600)
         return payload
 
+    monkeypatch.setattr(setup.os, "fstat", lambda _descriptor: stable_metadata)
     monkeypatch.setattr(setup.os, "read", mutate_after_read)
     with pytest.raises(ServerSetupError, match="changed while being read"):
         setup._read_private_managed_file(
@@ -527,14 +610,115 @@ def test_private_managed_read_detects_same_size_change(
         )
 
 
-def test_temporary_or_user_owned_launcher_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_node_private_input_detects_same_size_change(tmp_path: Path) -> None:
+    path = tmp_path / "input.json"
+    path.write_bytes(b'{"a":1}')
+    path.chmod(0o600)
+    module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
+    script = f"""
+      import {{ chmodSync, fstatSync, readSync, writeFileSync }} from 'node:fs';
+      import {{ readPrivateSetupInput }} from {json.dumps(module)};
+      const target = process.argv.at(-1);
+      const environment = {{ SUDO_UID: String(process.getuid?.() ?? 0) }};
+      const stable = readPrivateSetupInput(
+        target,
+        1024,
+        environment,
+        (descriptor, buffer, offset, length, position) => readSync(
+          descriptor,
+          buffer,
+          offset,
+          Math.min(length, 2),
+          position,
+        ),
+      );
+      console.log(stable.toString('utf8'));
+      let changed = false;
+      let frozenMetadata;
+      const stableStat = (descriptor, options) => {{
+        frozenMetadata ??= fstatSync(descriptor, options);
+        return frozenMetadata;
+      }};
+      try {{
+        readPrivateSetupInput(
+          target,
+          1024,
+          environment,
+          (...args) => {{
+            const count = readSync(...args);
+            if (count > 0 && !changed) {{
+              changed = true;
+              writeFileSync(target, Buffer.from('{{"b":2}}'));
+              chmodSync(target, 0o600);
+            }}
+            return count;
+          }},
+          stableStat,
+        );
+      }} catch (error) {{
+        console.log(error.message);
+      }}
+    """
+    completed = subprocess.run(
+        [str(shutil.which("node")), "--input-type=module", "-e", script, str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        '{"a":1}',
+        "setup input changed while being read",
+    ]
+
+
+def test_non_root_owned_launcher_is_rejected_deterministically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import agentnet.operations.server_setup as setup
 
     launcher = tmp_path / "agentnet"
     launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     launcher.chmod(0o755)
-    with pytest.raises(ServerSetupError, match="unsafe"):
+    original_stat = Path.stat
+
+    def user_owned_stat(target: Path, *args: object, **kwargs: object) -> object:
+        metadata = original_stat(target, *args, **kwargs)
+        if target == launcher:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=1234)
+        return metadata
+
+    monkeypatch.setattr(Path, "stat", user_owned_stat)
+    with pytest.raises(ServerSetupError, match="ownership is unsafe") as exc_info:
         setup._require_root_owned_executable(launcher, label="agentnet")
+    assert exc_info.value.blocker == "unsafe_executable"
+
+
+def test_root_owned_nontraversable_launcher_is_rejected_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    target = Path("/opt/agentnet-runtime/bin/agentnet")
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=True: self)
+    monkeypatch.setattr(Path, "is_file", lambda self: self == target)
+    monkeypatch.setattr(Path, "is_dir", lambda self: self != target)
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self: SimpleNamespace(
+            st_uid=0,
+            st_mode=(stat.S_IFREG | 0o755) if self == target else (stat.S_IFDIR | 0o700),
+        ),
+    )
+    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
+
+    with pytest.raises(ServerSetupError, match="dedicated service identities") as exc_info:
+        setup._require_root_owned_executable(target, label="agentnet")
+    assert exc_info.value.blocker == "service_executable_inaccessible"
 
 
 def test_executable_lineage_accepts_traversable_nonwritable_directories(

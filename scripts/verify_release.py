@@ -304,7 +304,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
 
 
 def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
-    base = "evidence/local/2026-07-26-v0.1.27/artifacts"
+    base = "evidence/local/2026-07-27-v0.1.28/artifacts"
     ignore_path = root / base / ".gitignore"
     retention_path = root / base / "RETENTION.md"
     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
@@ -321,8 +321,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
     elif (root / ".git").exists():
         failures.append("final package artifact ignore policy does not retain its archives")
     expected_paths = {
-        f"{base}/agentnet-0.1.27.tar.gz",
-        f"{base}/agentnet-0.1.27-py3-none-any.whl",
+        f"{base}/agentnet-0.1.28.tar.gz",
+        f"{base}/agentnet-0.1.28-py3-none-any.whl",
     }
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         failures.append("final package evidence must contain exactly the sdist and wheel")
@@ -375,8 +375,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
             names = set(listed_names)
             if len(names) != len(listed_names):
                 failures.append("wheel contains duplicate archive member names")
-            dist_info = "agentnet-0.1.27.dist-info"
-            shared = "agentnet-0.1.27.data/data/share/agentnet"
+            dist_info = "agentnet-0.1.28.dist-info"
+            shared = "agentnet-0.1.28.data/data/share/agentnet"
             expected_payloads = dict(source_files)
             expected_payloads.update(
                 {
@@ -431,7 +431,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
                 wheel_metadata = archive.read(metadata_name)
                 if (
                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
-                    or b"\nVersion: 0.1.27\n" not in b"\n" + wheel_metadata
+                    or b"\nVersion: 0.1.28\n" not in b"\n" + wheel_metadata
                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
                 ):
                     failures.append("wheel core metadata differs from the release identity/runtime")
@@ -458,7 +458,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
         failures.append(f"final wheel is unreadable or malformed: {exc}")
 
     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
-    prefix = "agentnet-0.1.27/"
+    prefix = "agentnet-0.1.28/"
     try:
         with tarfile.open(sdist_path, mode="r:gz") as archive:
             all_members = archive.getmembers()
@@ -718,6 +718,28 @@ def _verify_release_inputs(manifest: dict[str, Any], root: Path, failures: list[
         failures.append("release source tree drifted")
 
 
+def _verify_public_readme(root: Path, failures: list[str]) -> None:
+    readme_path = root / "README.md"
+    if not readme_path.is_file():
+        return
+    normalized = re.sub(r"\s+", " ", readme_path.read_text(encoding="utf-8"))
+    required_claims = (
+        "latest published package is `0.1.27`",
+        "Candidate `0.1.28`",
+        "two installed-harness pin failures remain non-green and are not waived",
+        "fresh-laptop enrollment",
+    )
+    for claim in required_claims:
+        if claim not in normalized:
+            failures.append(f"public README release status is stale or incomplete: {claim}")
+    for stale_claim in (
+        "latest published package is `0.1.26`",
+        "Current unversioned communication-only changes",
+    ):
+        if stale_claim in normalized:
+            failures.append(f"public README retains stale release status: {stale_claim}")
+
+
 def _load_generator_catalog(root: Path) -> dict[str, Any]:
     generator_path = root / "scripts/export_schemas.py"
     module_name = f"_agentnet_export_schemas_{hash(root)}"
@@ -860,6 +882,17 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     }
     if actual_status_counts != expected_status_counts:
         failures.append("requirements ledger status totals drifted")
+    expected_summary = (
+        "Requirement totals: **33 local-tested, 42 partial-external, 10 owner-blocked, "
+        "0 implementation-gap = 85 unique requirements**."
+    )
+    if expected_summary not in re.sub(r"\s+", " ", requirements):
+        failures.append("requirements ledger human status summary differs from its rows")
+    snapshot_date = manifest.get("snapshot_date")
+    if not isinstance(snapshot_date, str) or f"Snapshot: {snapshot_date}." not in requirements:
+        failures.append("requirements ledger snapshot date differs from the release manifest")
+    if not isinstance(snapshot_date, str) or f"Current ledger update: {snapshot_date}." not in gate_text:
+        failures.append("gate evidence ledger date differs from the release manifest")
     pd_ids = re.findall(r"^\| (PD-[0-9]{3}) \|", requirements, re.MULTILINE)
     if set(pd_ids) != {f"PD-{index:03d}" for index in range(1, 12)} or len(pd_ids) != 11:
         failures.append("requirements ledger does not contain exactly PD-001 through PD-011")
@@ -946,12 +979,62 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     ):
         failures.append("final clean-install status does not preserve the local blocked-release boundary")
     package_evidence = _load_json(
-        root / "evidence/local/2026-07-26-v0.1.27/manifest.json",
+        root / "evidence/local/2026-07-27-v0.1.28/manifest.json",
         failures,
-        "0.1.27 package evidence manifest",
+        "0.1.28 package evidence manifest",
     )
     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
-        failures.append("0.1.27 package evidence is not bound to the current source tree")
+        failures.append("0.1.28 package evidence is not bound to the current source tree")
+    if package_evidence.get("verification_status") != "PASS":
+        failures.append("0.1.28 package evidence must record completed PASS verification")
+    command_records = package_evidence.get("commands")
+    if not isinstance(command_records, list) or any(
+        not isinstance(record, dict)
+        or not isinstance(record.get("command"), str)
+        or not isinstance(record.get("result"), str)
+        for record in command_records
+    ):
+        failures.append("0.1.28 package evidence commands are malformed")
+    else:
+        command_results = {
+            record["command"]: record["result"]
+            for record in command_records
+        }
+        npm_result = command_results.get("npm run check", "")
+        if (
+            not npm_result.startswith("PASS:")
+            or "1418 passed and 16 expected" not in npm_result
+            or "generations 1 and 2" not in npm_result
+            or "excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence" not in npm_result
+            or "two installed-harness pin failures remain non-green" not in npm_result
+            or "not rerun or waived" not in npm_result
+        ):
+            failures.append("0.1.28 npm source and recursive packed evidence is incomplete")
+        if not any(
+            command.startswith("UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy unshare -Ur --map-root-user -- uv ")
+            and result.startswith("PASS: 7 passed")
+            for command, result in command_results.items()
+        ):
+            failures.append("0.1.28 UID-0 user-namespace regression evidence is incomplete")
+        if not any(
+            command.startswith("SOURCE_DATE_EPOCH=1580601600 ")
+            and result.startswith("PASS: two independent builds")
+            for command, result in command_results.items()
+        ):
+            failures.append("0.1.28 reproducible build evidence is incomplete")
+        if any("PENDING" in result for result in command_results.values()):
+            failures.append("0.1.28 package evidence cannot retain pending command results")
+    execution_context = package_evidence.get("execution_context")
+    if not isinstance(execution_context, dict) or not all(
+        isinstance(execution_context.get(key), str) and execution_context[key]
+        for key in (
+            "source",
+            "uid_zero_regression",
+            "packed_generations",
+            "root_installed_external_host",
+        )
+    ):
+        failures.append("0.1.28 package evidence execution context is incomplete")
     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
 
@@ -1097,6 +1180,7 @@ def verify(*, root: Path = ROOT, manifest_path: Path | None = None) -> list[str]
     _verify_sources(manifest, root, failures)
     _verify_dependencies(manifest, root, failures)
     _verify_release_inputs(manifest, root, failures)
+    _verify_public_readme(root, failures)
     _verify_schemas(manifest, root, failures)
     _verify_decisions_and_gates(manifest, failures)
     _verify_evidence_ledgers(manifest, root, failures)
