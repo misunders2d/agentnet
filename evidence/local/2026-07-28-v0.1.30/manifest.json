@@ -1,0 +1,58 @@
+{
+  "run_id": "2026-07-28-v0.1.30",
+  "evaluated_at": "2026-07-28T07:15:00+00:00",
+  "scope": "v0_1_30_installed_verifier_custody_repair_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "af4f23bb91084c2213c4bd89998598ee59facc88e70f12488cfea55905d87c39",
+  "prior_runtime_evidence": "evidence/local/2026-07-27-v0.1.29/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-27-v0.1.29/manifest.json",
+  "change_boundary": "Minimal first-message blocker repair: agentnet verify runs the packaged suite from a bounded disposable package copy, redirects Hypothesis and Python bytecode state outside both source trees, disables pytest cache writes, clears inherited pytest plugin controls, and rejects all caller pytest arguments. Recursive packed npm verification must prove the immutable installed package tree has the same complete content digest before and after verification and contains no .hypothesis, .pytest_cache, __pycache__, or .pyc residue. Fresh Hub installation, laptop enrollment, native cross-host message, and recipient ACK remain pending.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository",
+    "packed_generations": "two clean temporary npm installation prefixes with separate uv virtual environments; both completed with identical suite counts and clean package trees",
+    "root_installed_external_host": "exact public 0.1.30 Hub installation and first-message journey pending",
+    "callback_incident": "exact public 0.1.29 verifier created 416 service-inaccessible cache entries under the installed package tree; sanitized Hub probe recorded no mutation"
+  },
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/cli/test_cli_diagnostics.py",
+      "result": "PASS: 11 passed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -q tests/identity/test_oidc_callback.py tests/identity/test_oidc_enrollment.py tests/identity/test_recovery.py tests/approval/test_approval_http.py tests/approval/test_owner_session_service.py tests/integration/test_enrollment_http.py",
+      "result": "PASS: 92 passed"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1449 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds produced byte-identical 0.1.30 sdist and wheel archives"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Codex verifier-custody review",
+      "model": "gpt-5.4 and gpt-5.6-sol",
+      "result": "PASS after two REVISE rounds; final closure review independently reproduced release-verifier PASS and byte-identical retained artifacts"
+    },
+    {
+      "review": "Constitution and security review",
+      "model": "claude-opus-5",
+      "result": "PASS with no required fixes; claims remain bounded to installed-verifier custody repair"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-28-v0.1.30/artifacts/agentnet-0.1.30.tar.gz",
+      "sha256": "775d860eb4157aedac3aebf3f14dcf6d4fae06f7119c16801a9074851cdbdf68"
+    },
+    {
+      "path": "evidence/local/2026-07-28-v0.1.30/artifacts/agentnet-0.1.30-py3-none-any.whl",
+      "sha256": "ee55afd71749b63a091a1b39ab7aef95335cd1fc98921e9e6b9c742abddf8e11"
+    }
+  ]
+}

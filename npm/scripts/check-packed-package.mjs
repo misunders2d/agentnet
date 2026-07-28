@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stablePackageTreeSha256 } from "../lib/server-setup-preflight.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temporary = mkdtempSync(path.join(os.tmpdir(), "agentnet-packed-check-"));
@@ -36,6 +37,7 @@ const run = (command, arguments_, options = {}) => {
     env: options.env ?? process.env,
     encoding: options.capture ? "utf8" : undefined,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    maxBuffer: 128 * 1024 * 1024,
     timeout,
     shell: false,
   });
@@ -48,6 +50,26 @@ const run = (command, arguments_, options = {}) => {
     throw new Error(`${command} exited with status ${completed.status}`);
   }
   return completed;
+};
+
+const requireNoVerificationResidue = (packageRoot) => {
+  const violations = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (
+        entry.name === ".hypothesis" || entry.name === ".pytest_cache" ||
+        entry.name === "__pycache__" || entry.name.endsWith(".pyc")
+      ) {
+        violations.push(path.relative(packageRoot, child));
+      }
+      if (entry.isDirectory()) visit(child);
+    }
+  };
+  visit(packageRoot);
+  if (violations.length !== 0) {
+    throw new Error(`installed verification polluted package tree: ${violations.slice(0, 10).join(", ")}`);
+  }
 };
 
 const requireBlockedSetup = (launcher, request, options) => {
@@ -149,7 +171,14 @@ try {
     }
 
     const launcher = path.join(prefix, "node_modules", ".bin", "agentnet");
+    requireNoVerificationResidue(packageRoot);
+    const packageTreeBeforeVerify = stablePackageTreeSha256(packageRoot);
     run(launcher, ["verify"], { cwd: unrelated, env: environment });
+    requireNoVerificationResidue(packageRoot);
+    const packageTreeAfterVerify = stablePackageTreeSha256(packageRoot);
+    if (packageTreeAfterVerify !== packageTreeBeforeVerify) {
+      throw new Error("installed verification mutated package tree contents");
+    }
     run(launcher, ["server-agent", "setup", "--help"], { cwd: unrelated, env: environment });
 
     const initName = process.platform === "linux" && (() => {

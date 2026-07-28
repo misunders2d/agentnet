@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-27
-Candidate: `agentnet 0.1.29`
-Latest published package: `agentnet 0.1.28`
-Evidence profile: OIDC callback interoperability repair candidate
+Snapshot: 2026-07-28
+Candidate: `agentnet 0.1.30`
+Latest published package: `agentnet 0.1.29`
+Evidence profile: installed-verifier custody repair candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `7be97ebc73c2ff70486aa60e019d7bbfa4bb05addb618ac338ab258c23f9b1a3` |
-| `pyproject.toml` | SHA-256 `1ffbf4bfaf9ab9b9a85d913e8ac555c4323d27a12adfd7871b623107f1c9fcbe` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `11636d7ea858b7abe9f650d9b73c754446c518db8d6ad731f4d4870ac910eb2e` |
+| `pyproject.toml` | SHA-256 `a2e2544d27b23edd7b70747881d2b706e11db635a8f9e76e2a07280f1f950b35` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -212,7 +212,7 @@ privileged-host qualification. Exact public-package root-installed Hub verificat
 real owner Google OIDC attempt exposed callback-shape rejection before transaction
 claim; owner binding and passkey counts remained zero.
 
-Candidate `0.1.29` replaces exact-two-total-parameter callback parsing with one
+Published `0.1.29` replaces exact-two-total-parameter callback parsing with one
 shared strict parser. Decoded names remain distinct through duplicate rejection,
 including unknown names. Success is exactly recognized `code`+`state`; provider
 failure is exactly recognized `error`+`state` with optional bounded metadata;
@@ -228,6 +228,17 @@ passed`; source and both clean recursively packed npm generations each report
 byte-identical wheel/sdist builds pass. External installation and live enrollment
 evidence remain absent until exact public-package deployment and a fresh OIDC
 transaction complete.
+
+Candidate `0.1.30` repairs the installed-verifier custody blocker exposed on the
+Hub after exact public `0.1.29` verification. The verifier copies the complete
+package into a bounded temporary runtime, excludes cache/build/dependency roots,
+runs the suite only against that disposable copy, clears inherited pytest
+controls, rejects all caller pytest arguments, and redirects Hypothesis and
+Python bytecode state. Two recursive packed npm generations require both exact
+installed-tree content-digest equality before/after verification and absence of
+`.hypothesis`, `.pytest_cache`, `__pycache__`, and `.pyc` residue. This is a
+package-custody repair only; no live Hub replacement, enrollment, message, ACK,
+or gate-promotion claim is added.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

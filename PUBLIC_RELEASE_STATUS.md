@@ -1,9 +1,9 @@
 # Public Package Status
 
-Snapshot: 2026-07-27
+Snapshot: 2026-07-28
 
 This additive status note reconciles public package availability with AgentNet's
-frozen `0.1.28` release evidence and the `0.1.29` callback repair candidate. It
+published `0.1.29` callback repair and the `0.1.30` verifier-custody candidate. It
 does not replace requirements, gate ledgers, or accountable-owner evidence.
 
 ## Current public package
@@ -11,9 +11,9 @@ does not replace requirements, gate ledgers, or accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.28`
-- published package `gitHead`: `b10a9fb8e390cdff5f7efe2175a12fb2f960c76e`
-- annotated tag `v0.1.28` peels to the same commit
+- latest published version: `0.1.29`
+- published package `gitHead`: `2044224b26b2d7ddcab735be5ebe782989f313ab`
+- annotated tag `v0.1.29` peels to the same commit
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -40,6 +40,8 @@ package, reviewer, and reproducible-build gates pass. The exposed callback URL
 is not reusable and must not be retried. Fresh-laptop
 enrollment resumes only after reviewed public `0.1.29` installation and a new
 OIDC transaction; native cross-host message/ACK remains pending.
+
+Exact public `0.1.29` then passed installed verification on the Hub, but that verifier wrote `.hypothesis`, `.pytest_cache`, and Python bytecode caches into the immutable package tree. A read-only Hub probe counted 416 custody violations among 1,069 descendants; no setup or host mutation occurred. Candidate `0.1.30` runs verification from a bounded disposable copy, rejects caller pytest arguments, and adds recursive complete-tree digest plus no-residue checks. Fresh-laptop enrollment and native message/ACK remain the sole next runtime objective.
 
 ## Release and gate posture
 

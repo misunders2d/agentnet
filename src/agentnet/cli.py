@@ -11,9 +11,11 @@ import ipaddress
 import json
 import os
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
 from datetime import UTC, datetime, timedelta
@@ -3420,25 +3422,67 @@ def _verification_package_root() -> Path:
 
 
 def command_verify(args: argparse.Namespace) -> int:
+    pytest_arguments = tuple(args.pytest_args)
+    if pytest_arguments:
+        raise SystemExit("agentnet verify does not permit pytest arguments")
     package_root = _verification_package_root()
-    tests_root = package_root / "tests"
-    host_specific = (
-        tests_root / "adapters/test_installed_live_inference.py",
-        tests_root / "adapters/test_subprocess_lifecycle.py",
-        tests_root / "components/test_bakeoff_evidence.py",
-    )
-    return subprocess.call(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            str(tests_root),
-            *(f"--ignore={path}" for path in host_specific),
-            *args.pytest_args,
-        ],
-        cwd=package_root,
-    )
+    with tempfile.TemporaryDirectory(prefix="agentnet-verify-") as runtime_directory:
+        runtime_root = Path(runtime_directory)
+        verification_root = runtime_root / "package"
+        shutil.copytree(
+            package_root,
+            verification_root,
+            symlinks=True,
+            ignore=shutil.ignore_patterns(
+                ".agentnet",
+                ".git",
+                ".hypothesis",
+                ".pi",
+                ".pytest_cache",
+                ".venv",
+                "__pycache__",
+                "*.pyc",
+                "*.pyo",
+                "build",
+                "dist",
+                "node_modules",
+            ),
+        )
+        tests_root = verification_root / "tests"
+        host_specific = (
+            tests_root / "adapters/test_installed_live_inference.py",
+            tests_root / "adapters/test_subprocess_lifecycle.py",
+            tests_root / "components/test_bakeoff_evidence.py",
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "AGENTNET_PACKAGE_ROOT": str(verification_root),
+                "HYPOTHESIS_STORAGE_DIRECTORY": str(runtime_root / "hypothesis"),
+                "PYTEST_ADDOPTS": "",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": os.pathsep.join(
+                    (str(verification_root / "src"), str(verification_root))
+                ),
+                "PYTHONPYCACHEPREFIX": str(runtime_root / "pycache"),
+            }
+        )
+        environment.pop("PYTEST_PLUGINS", None)
+        return subprocess.call(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                str(tests_root),
+                *(f"--ignore={path}" for path in host_specific),
+                *pytest_arguments,
+            ],
+            cwd=verification_root,
+            env=environment,
+        )
 
 
 def command_harness_probe(args: argparse.Namespace) -> int:

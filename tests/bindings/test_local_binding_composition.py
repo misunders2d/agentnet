@@ -131,6 +131,7 @@ def _child() -> subprocess.Popen[str]:
         "LANG": "C.UTF-8",
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONPATH": str(Path.cwd() / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
     }
     return subprocess.Popen(
@@ -149,6 +150,7 @@ def _mcp_parent(state_dir: Path) -> subprocess.Popen[str]:
         "LANG": "C.UTF-8",
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONPATH": str(Path.cwd() / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
     }
     return subprocess.Popen(

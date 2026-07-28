@@ -327,8 +327,8 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.28` at commit `b10a9fb8e390cdff5f7efe2175a12fb2f960c76e`.
-Candidate `0.1.29` repairs the owner and enrollment OIDC callback parsers after a
+`0.1.29` at commit `2044224b26b2d7ddcab735be5ebe782989f313ab`.
+Published `0.1.29` repairs the owner and enrollment OIDC callback parsers after a
 real Google owner login exposed rejection of valid unique response extensions.
 Neither release proves completed fresh-laptop enrollment, a native cross-host
 message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
@@ -388,6 +388,8 @@ release, package, reviewer, and byte-identical archive gates pass. The failed
 real callback was not retried or reused. Fresh-laptop enrollment and native
 cross-host message/ACK remain pending until the exact public package is installed
 and a new OIDC transaction completes.
+
+Candidate `0.1.30` fixes the only current first-message setup blocker: installed verification runs from a bounded disposable package copy and rejects caller pytest arguments, while packed verification requires the immutable npm package tree to retain the same complete content digest and contain no Hypothesis, pytest, or Python bytecode residue. No broader feature or production claim is added; the next runtime proof is fresh-laptop enrollment followed by one native signed message and recipient ACK.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

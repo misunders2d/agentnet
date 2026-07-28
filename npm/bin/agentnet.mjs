@@ -276,6 +276,7 @@ const child = spawn(uvExecutable, uvArguments, {
     AGENTNET_UV: uvExecutable,
     AGENTNET_NPM_RUNTIME_DIR: runtimeRoot,
     PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONPYCACHEPREFIX: path.join(runtimeRoot, "pycache"),
     UV_NO_MODIFY_PATH: "1",
     UV_PROJECT_ENVIRONMENT: runtimeRoot,
   },

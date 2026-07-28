@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,30 +28,107 @@ def test_verify_targets_packaged_tests_with_package_cwd(
     monkeypatch.setenv("AGENTNET_PACKAGE_ROOT", str(tmp_path))
     observed: dict[str, object] = {}
 
-    def fake_call(arguments: list[str], *, cwd: Path) -> int:
-        observed.update({"arguments": arguments, "cwd": cwd})
+    def fake_call(arguments: list[str], *, cwd: Path, env: dict[str, str]) -> int:
+        observed.update(
+            {
+                "arguments": arguments,
+                "cwd": cwd,
+                "agentnet_package_root": env["AGENTNET_PACKAGE_ROOT"],
+                "hypothesis_storage": env["HYPOTHESIS_STORAGE_DIRECTORY"],
+                "pytest_addopts": env["PYTEST_ADDOPTS"],
+                "pytest_plugins_present": "PYTEST_PLUGINS" in env,
+                "python_dont_write_bytecode": env["PYTHONDONTWRITEBYTECODE"],
+                "python_pycache_prefix": env["PYTHONPYCACHEPREFIX"],
+                "pythonpath": env["PYTHONPATH"],
+            }
+        )
         return 7
 
     monkeypatch.setattr(subprocess, "call", fake_call)
 
-    result = cli.command_verify(SimpleNamespace(pytest_args=["-k", "focused"]))
+    result = cli.command_verify(SimpleNamespace(pytest_args=[]))
 
     assert result == 7
-    assert observed == {
-        "arguments": [
-            cli.sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            str(tmp_path / "tests"),
-            f"--ignore={tmp_path / 'tests/adapters/test_installed_live_inference.py'}",
-            f"--ignore={tmp_path / 'tests/adapters/test_subprocess_lifecycle.py'}",
-            f"--ignore={tmp_path / 'tests/components/test_bakeoff_evidence.py'}",
-            "-k",
-            "focused",
-        ],
-        "cwd": tmp_path,
-    }
+    verification_root = Path(str(observed["cwd"]))
+    assert Path(str(observed["agentnet_package_root"])) == verification_root
+    assert observed["arguments"] == [
+        cli.sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        str(verification_root / "tests"),
+        f"--ignore={verification_root / 'tests/adapters/test_installed_live_inference.py'}",
+        f"--ignore={verification_root / 'tests/adapters/test_subprocess_lifecycle.py'}",
+        f"--ignore={verification_root / 'tests/components/test_bakeoff_evidence.py'}",
+    ]
+    assert observed["pytest_addopts"] == ""
+    assert observed["pytest_plugins_present"] is False
+    assert observed["python_dont_write_bytecode"] == "1"
+    assert observed["pythonpath"] == os.pathsep.join(
+        (str(verification_root / "src"), str(verification_root))
+    )
+    hypothesis_storage = Path(str(observed["hypothesis_storage"]))
+    assert hypothesis_storage.name == "hypothesis"
+    assert hypothesis_storage.parent.name.startswith("agentnet-verify-")
+    pycache_prefix = Path(str(observed["python_pycache_prefix"]))
+    assert pycache_prefix == hypothesis_storage.parent / "pycache"
+    assert not hypothesis_storage.parent.exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["-p", "cacheprovider"],
+        ["-pcacheprovider"],
+        ["-k", "focused"],
+        ["--basetemp=/tmp/unsafe"],
+        ["--junitxml=/tmp/unsafe.xml"],
+    ],
+)
+def test_verify_rejects_all_pytest_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+) -> None:
+    (tmp_path / "tests").mkdir()
+    monkeypatch.setenv("AGENTNET_PACKAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-p cacheprovider")
+    monkeypatch.setenv("PYTEST_PLUGINS", "_pytest.cacheprovider")
+    monkeypatch.setattr(
+        subprocess,
+        "call",
+        lambda *_args, **_kwargs: pytest.fail("unsafe pytest argument reached pytest"),
+    )
+
+    with pytest.raises(SystemExit, match="does not permit pytest arguments"):
+        cli.command_verify(SimpleNamespace(pytest_args=arguments))
+
+
+def test_verify_does_not_write_runtime_cache_into_package_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tests_root = tmp_path / "tests"
+    tests_root.mkdir()
+    (tests_root / "test_property.py").write_text(
+        "from hypothesis import given, strategies as st\n"
+        "@given(st.integers())\n"
+        "def test_property(value):\n"
+        "    assert isinstance(value, int)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTNET_PACKAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-p cacheprovider")
+    monkeypatch.setenv("PYTEST_PLUGINS", "_pytest.cacheprovider")
+
+    assert cli.command_verify(SimpleNamespace(pytest_args=[])) == 0
+
+    assert not (tmp_path / ".hypothesis").exists()
+    assert not (tmp_path / ".pytest_cache").exists()
+    assert not list(tmp_path.rglob("__pycache__"))
+    assert not list(tmp_path.rglob("*.pyc"))
 
 
 def test_verify_fails_when_packaged_tests_are_absent(
