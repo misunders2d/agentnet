@@ -44,6 +44,14 @@ class IdentityPolicy(_Policy):
     preserve_alias_history: Literal[True] = True
     ambiguous_mapping_action: Literal["quarantine"] = "quarantine"
     credential_ttl_seconds: int = Field(default=3_600, ge=300, le=86_400)
+    always_on_credential_ttl_seconds: int = Field(default=86_400, ge=3_600, le=604_800)
+    credential_renewal_window_seconds: int = Field(default=21_600, ge=300, le=86_400)
+
+    @model_validator(mode="after")
+    def _renewal_window_precedes_expiry(self) -> "IdentityPolicy":
+        if self.credential_renewal_window_seconds >= self.always_on_credential_ttl_seconds:
+            raise ValueError("credential renewal window must be shorter than always-on TTL")
+        return self
 
 
 class EnrollmentApprovalPolicy(_Policy):

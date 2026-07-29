@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from cryptography.hazmat.primitives import serialization
@@ -14,7 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.outage import OutageGate
-from agentnet.security.signatures import b64url_encode, load_public_key, verify_signature
+from agentnet.security.signatures import (
+    b64url_encode,
+    canonical_digest,
+    load_public_key,
+    verify_signature,
+)
 from agentnet.storage.backend import StoreBackend
 
 
@@ -345,9 +350,153 @@ class CredentialRotationService:
         )
 
 
+class CredentialRenewalRequest(BaseModel):
+    """Selector-free idempotent renewal request for current signed actor."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agentnet.credential-renewal.v1"] = Field(
+        default="agentnet.credential-renewal.v1", alias="schema"
+    )
+    request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=36, max_length=36)
+
+
+class CredentialRenewalResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agentnet.credential-renewal-result.v1"] = Field(
+        default="agentnet.credential-renewal-result.v1", alias="schema"
+    )
+    status: Literal["current", "renewed"]
+    expires_at: int
+
+
+class CredentialRenewalService:
+    """Extend one exact still-current server credential within bounded window."""
+
+    def __init__(
+        self,
+        store: StoreBackend,
+        *,
+        credential_ttl_seconds: int = 86_400,
+        renewal_window_seconds: int = 21_600,
+        outage_gate: OutageGate | None = None,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
+        if not 3_600 <= credential_ttl_seconds <= 604_800:
+            raise ValueError("always-on credential TTL is outside the supported range")
+        if not 300 <= renewal_window_seconds < credential_ttl_seconds:
+            raise ValueError("credential renewal window is outside the supported range")
+        self.store = store
+        self.credential_ttl_seconds = credential_ttl_seconds
+        self.renewal_window_seconds = renewal_window_seconds
+        self.outage_gate = outage_gate
+        self.clock = clock or (lambda: int(time.time()))
+
+    def renew(
+        self,
+        *,
+        actor: VerifiedActor,
+        request: CredentialRenewalRequest,
+    ) -> CredentialRenewalResult:
+        if actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS:
+            raise AuthorizationError("credential renewal requires current human harness actor")
+        if actor.harness_id is None or actor.credential_id is None or actor.credential_epoch is None:
+            raise AuthenticationError("credential renewal requires current credential binding")
+        now = self.clock()
+        if now < 0:
+            raise ValidationError("credential renewal time is invalid")
+        request_digest = canonical_digest(
+            {
+                "schema": request.schema_version,
+                "request_id": request.request_id,
+                "domain_id": actor.domain_id,
+                "principal_id": actor.principal_id,
+                "harness_id": actor.harness_id,
+                "credential_id": actor.credential_id,
+                "credential_epoch": actor.credential_epoch,
+            }
+        )
+        with self.store.transaction() as connection:
+            current = load_credential_binding_from_connection(connection, actor.credential_id)
+            current.require_active(now=now)
+            if (
+                current.domain_id != actor.domain_id
+                or current.principal_id != actor.principal_id
+                or current.harness_id != actor.harness_id
+                or current.credential_id != actor.credential_id
+                or current.credential_epoch != actor.credential_epoch
+                or current.harness_credential_epoch != actor.credential_epoch
+            ):
+                raise ConflictError("credential renewal authenticated binding changed")
+            previous = connection.execute(
+                """SELECT request_digest,result_status,new_expires_at
+                     FROM credential_renewal_requests WHERE request_id=?""",
+                (request.request_id,),
+            ).fetchone()
+            if previous is not None:
+                if previous["request_digest"] != request_digest:
+                    raise ConflictError("credential renewal request identifier conflicts")
+                return CredentialRenewalResult(
+                    status=previous["result_status"],
+                    expires_at=int(previous["new_expires_at"]),
+                )
+            if self.outage_gate is not None:
+                self.outage_gate.require_issuance()
+            old_expires_at = int(current.expires_at)
+            in_window = old_expires_at - now <= self.renewal_window_seconds
+            status = "renewed" if in_window else "current"
+            new_expires_at = now + self.credential_ttl_seconds if in_window else old_expires_at
+            if in_window:
+                updated = connection.execute(
+                    """UPDATE credentials SET expires_at=?
+                         WHERE credential_id=? AND status='active' AND epoch=? AND expires_at=?""",
+                    (
+                        new_expires_at,
+                        current.credential_id,
+                        current.credential_epoch,
+                        old_expires_at,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise ConflictError("credential renewal validity changed concurrently")
+            connection.execute(
+                """INSERT INTO credential_renewal_requests(
+                       request_id,request_digest,credential_id,result_status,
+                       old_expires_at,new_expires_at,committed_at
+                   ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    request.request_id,
+                    request_digest,
+                    current.credential_id,
+                    status,
+                    old_expires_at,
+                    new_expires_at,
+                    now,
+                ),
+            )
+            self.store.append_audit(
+                connection,
+                {
+                    "action": f"credential.renewal.{status}",
+                    "domain_id": current.domain_id,
+                    "harness_id": current.harness_id,
+                    "credential_id": current.credential_id,
+                    "credential_epoch": current.credential_epoch,
+                    "request_digest": request_digest,
+                    "old_expires_at": old_expires_at,
+                    "new_expires_at": new_expires_at,
+                },
+            )
+        return CredentialRenewalResult(status=status, expires_at=new_expires_at)
+
+
 __all__ = [
     "CREDENTIAL_ROTATION_POP_PURPOSE",
     "CredentialBinding",
+    "CredentialRenewalRequest",
+    "CredentialRenewalResult",
+    "CredentialRenewalService",
     "CredentialRotationRequest",
     "CredentialRotationResult",
     "CredentialRotationService",

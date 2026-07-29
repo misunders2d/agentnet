@@ -30,6 +30,7 @@ from agentnet.identity.recovery import OIDCCredentialRecoveryCoordinator
 class OIDCBeginBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    idempotency_key: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
     harness_kind: str = Field(min_length=1, max_length=64)
     harness_name: str = Field(min_length=1, max_length=128)
     public_key_pem: str = Field(min_length=128, max_length=16_384)
@@ -113,6 +114,7 @@ def create_enrollment_routes(
             harness_name=parsed.harness_name,
             public_key_pem=parsed.public_key_pem,
             remote_activation=parsed.activation_mode == "remote_browser",
+            idempotency_key=parsed.idempotency_key,
         )
         return JSONResponse(asdict(authorization), status_code=201, headers=_public_headers())
 

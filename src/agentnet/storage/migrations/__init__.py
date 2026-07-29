@@ -13,6 +13,7 @@ from agentnet.storage.bootstrap_plan_schema import BOOTSTRAP_PLAN_SCHEMA
 from agentnet.storage.credential_recovery_schema import CREDENTIAL_RECOVERY_SCHEMA
 from agentnet.storage.effect_lifecycle_schema import EFFECT_LIFECYCLE_SCHEMA
 from agentnet.storage.guided_enrollment_schema import GUIDED_ENROLLMENT_SCHEMA
+from agentnet.storage.identity_lifecycle_schema import IDENTITY_LIFECYCLE_SCHEMA
 from agentnet.storage.identity_schema import IDENTITY_SCHEMA
 from agentnet.storage.ipc_schema import IPC_SCHEMA
 from agentnet.storage.operational_control_schema import OPERATIONAL_CONTROL_SCHEMA
@@ -129,6 +130,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         4,
         "bounded_c0_bootstrap_plan",
         BOOTSTRAP_PLAN_SCHEMA.replace(" INTEGER", " BIGINT"),
+    ),
+    Migration(
+        5,
+        "identity_begin_idempotency_and_credential_renewal",
+        IDENTITY_LIFECYCLE_SCHEMA.replace(" INTEGER", " BIGINT"),
     ),
 )
 

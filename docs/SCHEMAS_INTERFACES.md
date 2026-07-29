@@ -108,7 +108,7 @@ expiration and audit evidence survive the failed request.
 
 Browser/API routes are isolated from Core routes and selected by exact profile.
 Stable owner-OIDC profiles mount only stable routes; explicit lab profiles mount
-only legacy capability routes. The three internal broker routes mount only when
+only legacy capability routes. The four internal broker routes mount only when
 both the runtime credential and stable owner-OIDC session service exist; a
 fragment-based legacy profile gets no broker surface.
 
@@ -124,6 +124,7 @@ fragment-based legacy profile gets no broker surface.
 | `POST /v1/approval/owner/requests/regenerate-code` | legacy-only; possession-bound requests deny regeneration; otherwise rotates only a current, unretrieved, nonterminal code within cumulative limits and receipt expiry |
 | `POST /v1/approval/registration/options` / `.../verify` | lab-only fragment registration flow |
 | `POST /v1/approval/requests/options` / `.../verify` / `.../reject` | lab-only exact fragment request flow |
+| `POST /v1/approval/internal/readiness` | runtime Bearer plus purpose-specific signed one-use broker proof; non-mutating proof of the configured public reverse-proxy path and broker authentication |
 | `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; strict v2 binds exact SHA-256 possession hash, idempotent Core request, and challenge expiry; never returns approval URL or claim code |
 | `POST /v1/approval/internal/requests/status` | runtime Bearer plus signed one-use broker proof; request/digest status |
 | `POST /v1/approval/internal/receipts/retrieve` | runtime Bearer plus signed one-use broker proof and exactly one possession secret or legacy claim code, with exact domain/purpose/digest binding; signed canonical body hashes possession secret; exact retry returns same receipt and conflicting digest fails |
@@ -193,7 +194,10 @@ exact approval request ID/digest/expiry, completion request digest, and encrypte
 completion response. Core migration 4 adds the bounded C0 bootstrap-plan
 contract: `bootstrap_grant_plans`, `bootstrap_grant_plan_items`,
 `c0_plan_guards`, `c0_plan_guard_entitlements`, `c0_pilot_attempts`, and
-`c0_pilot_facts`. The plan binds one exact principal, two distinct enrolled
+`c0_pilot_facts`. Core migration 5 adds recoverable OIDC-begin idempotency
+(hash-only public key, exact request digest, and encrypted exact response) plus
+`credential_renewal_requests` for selector-free finite server-credential renewal.
+The plan binds one exact principal, two distinct enrolled
 harnesses and credential epochs, policy/revocation epochs, one-use profile,
 expiry, idempotency digest, and encrypted committed result. Its ten deterministic
 items are exactly five communication entitlements plus five entitlement-specific
@@ -222,15 +226,24 @@ The guided-enrollment public routes are:
 |---|---|
 | `GET /activate` | unauthenticated, world-reachable fixed no-store Core entry page for human-reviewed headless server activation; page body contains no transaction, state, authorization URL, code, receipt, identity, or secret and its only action targets fixed internal activation route |
 | `GET /v1/enrollment/oidc/activate` | unauthenticated, rate-limited route that selects exactly one waiting nonexpired `remote_browser` transaction from encrypted Core custody and 303-redirects to OIDC authorization URL; redirect necessarily publishes OIDC `state`, `nonce`, and PKCE `code_challenge` to browser/provider but never verifier, continuation, receipt, possession secret, or authority; zero/multiple/local requests deny and callback requires exact server-staged approved owner identity |
-| `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata plus optional exact `local_browser|remote_browser`; creates OIDC transaction plus hash-only continuation; remote mode stores authorization URL only in purpose-encrypted continuation custody |
+| `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata, exact 32-byte base64url idempotency key, plus optional exact `local_browser|remote_browser`; atomically creates OIDC transaction plus hash-only continuation and stores the encrypted exact response; same-key/same-request response-loss retry returns that winner, drift conflicts, and unrelated integrity faults propagate |
 | `GET /v1/enrollment/oidc/callback` | one strict `code`+`state` success or `error`+`state` failure; duplicate/mixed/orphan recognized shapes deny, unique unrecognized OAuth extensions are ignored, bound errors terminally consume matching enrollment/recovery transaction without token exchange, and success atomically replaces remote activation custody with challenge custody before safe local HTML or fixed Approval redirect |
 | `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling, Core-side approval staging, and `approval_ready` only after remote Approval is ready; 60-poll anti-abuse budget applies only to pre-callback `awaiting_oidc`, while callback/Approval stages remain rate-controlled until fresh challenge expiry |
 | `POST /v1/enrollment/oidc/complete` | opaque Core continuation plus candidate PoP; Core retrieves receipt automatically with distinct transaction-derived Approval possession secret and atomically consumes enrollment challenge; no human claim code |
+
+`POST /v1/credentials/current/renew` is selector-free signed renewal for the
+current authenticated always-on binding. Its strict body contains only schema
+plus UUID request ID. Before the six-hour window it returns the unchanged finite
+expiry; inside the window it compare-and-swaps to `now + 24 hours`; exact retries
+return the persisted result; expired, revoked, rotated, wrong-profile, or stale
+bindings fail closed. `agentnet credential renew` stores the request ID in one
+owner-only file before network and rotates it only after an exact response.
 
 The signed selector-free C0 routes are:
 
 | Route | Exact request/effect |
 |---|---|
+| `POST /v1/c0-pilot/readiness` | body is only `agentnet.c0-pilot.readiness.v1`; exact current managed owner binding receives only `ready|waiting_plan`, before any plan exists |
 | `POST /v1/c0-pilot/start` | body is only `agentnet.c0-pilot.start.v1`; exact fresh actor starts or reconstructs the fixed request phase |
 | `POST /v1/c0-pilot/respond` | body is only `agentnet.c0-pilot.respond.v1`; exact owner actor performs the no-model request ACK/fixed reply phase |
 | `POST /v1/c0-pilot/complete` | body is only `agentnet.c0-pilot.complete.v1`; exact fresh actor verifies reply ACK plus seven facts and atomically cleans up five communication powers |
@@ -239,9 +252,11 @@ The signed selector-free C0 routes are:
 Bodies are canonical JSON with duplicate keys, unknown fields, non-finite values,
 and caller selectors rejected. Every response is non-cacheable. Generic integrity
 conflicts are non-retryable; only typed transaction races return retryable 409.
-CLI exposes only `agentnet c0-pilot start|status|complete`; the owner side runs
-through `agentnet supervisor-run --c0-pilot-responder` and the internal respond
-route. Neither surface prints protected identifiers or evidence.
+CLI exposes `agentnet c0-pilot start|status|complete`; package setup owns the
+isolated owner side through `agentnet c0-pilot responder --config ...
+--credential ... --check|--run` under the dedicated `agentnet-c0` identity and
+the internal respond route. Generic supervisor configuration cannot select this
+mode. Neither surface prints protected identifiers or evidence.
 
 Receipt bytes never appear in candidate responses. Core reserves an exact
 completion digest around PoP and possession-bound retrieval. Exact retry
@@ -254,16 +269,18 @@ laptop default. `remote` is server-only, opens/discloses nothing, marks only the
 purpose-encrypted pre-callback continuation, and requires fixed public `/activate`.
 Marker is replaced by challenge custody after callback and never enters identity,
 approval, or public audit schemas. New pending local state uses
-`agentnet.guided-join.v2` to bind exact identity path and browser mode in addition
-to server/domain/harness/name and candidate key; legacy v1 remains resumable but
-is not eligible for terminal replacement because those arguments were unbound.
+`agentnet.guided-join.v3` to bind exact identity path, browser mode, and the
+precommitted begin idempotency key in addition to server/domain/harness/name and
+candidate key. It is written with `authorization=null` before network I/O;
+response-loss retry reuses the same key and exact encrypted Core response.
+Legacy v1/v2 remain resumable but are not eligible for v3 begin recovery.
 Exact nonterminal owner-only state resumes with the same command.
 `--replace-terminal-state` first polls Core with the stored
 continuation and proceeds only for `expired|failed`; it refuses absent, completed,
 malformed, argument-drifted, or nonterminal state, reuses the candidate key, and
-atomically stores one fresh OIDC authorization before continuing. A lost begin
-response can leave an orphan Core transaction, so activation ambiguity still
-fails closed rather than claiming exactly-once recovery. `terminal` remains
+stores the next begin key before network and then atomically stores the returned
+OIDC authorization before continuing. A lost begin response returns the exact
+Core winner instead of creating an orphan transaction. `terminal` remains
 explicit POSIX compatibility, not ordinary onboarding. `approval open` and
 `approval watch --open` retain their separate presentation options. Browser mode
 and terminal recovery create no identity or authority.
@@ -350,10 +367,11 @@ Schema migration 2 adds `task_payload_releases`, one row per
 local queue, TaskGrant and policy-decision IDs, intent/payload/envelope digests,
 policy/credential/domain epochs, authorization expiry, release time, and one
 unique receipt ID. Migration 3 is the guided-enrollment continuation table described above;
-migration 4 is the bounded C0 bootstrap-plan contract. SQLite permits only the
-exact N/N-1 v3→v4 Core upgrade in one transaction; PostgreSQL requires the same
-contiguous checksums plus an exact live table/column/default/constraint/index
-catalog before v3 migration, after migration, and on v4 open. Unknown, future, prototype, altered, partial,
+migration 4 is the bounded C0 bootstrap-plan contract; migration 5 is the OIDC
+begin/credential-renewal lifecycle. SQLite permits only the exact N/N-1 v4→v5
+Core upgrade in one transaction; PostgreSQL requires the same contiguous
+checksums plus an exact live table/column/default/constraint/index catalog before
+v4 migration, after migration, and on v5 open. Unknown, future, prototype, altered, partial,
 noncontiguous, or unsupported pre-v3 Core state fails closed. Immutable
 migrations 1 through 3 remain unchanged.
 
@@ -462,10 +480,12 @@ intermediaries never strip unknown signed fields.
 
 AgentNet's immutable first-release baseline is migration 1 and already includes
 the response-obligation, relationship-governance, and policy-exception tables.
-The current Core schema is v4: migration 2 adds protected task-payload release,
-migration 3 adds guided OIDC enrollment continuation, and migration 4 adds the
-bounded C0 bootstrap-plan contract. Fresh SQLite and PostgreSQL stores initialize
-the same complete v4 catalog. Startup fails closed on a missing or altered
+The current Core schema is v5: migration 2 adds protected task-payload release,
+migration 3 adds guided OIDC enrollment continuation, migration 4 adds the
+bounded C0 bootstrap-plan contract, and migration 5 adds OIDC-begin replay
+recovery plus finite current-credential renewal custody. Fresh SQLite and
+PostgreSQL stores initialize the same complete v5 catalog. Startup fails closed
+on a missing or altered
 migration, table, index, trigger/constraint, noncontiguous history, future
 version, or unsupported older version.
 
@@ -510,6 +530,6 @@ Plan performs no privileged or managed-host mutation: no service identities, Age
 
 After fixed Core account exists, apply requires two bounded read-only PostgreSQL probes before AgentNet environment/config/database write: exact service-identity socket connection proving current role/database and writable-primary state, then parsed current-file HBA/ident inspection proving exact unshadowed `local agentnet agentnet peer` with no map or parse error, plus `pg_conf_load_time()` freshness against both auth-file modification times. Failure emits `status=blocked` with `blocker=postgres_auth_not_ready`; PostgreSQL administration/reload remains external and separately approved. After that gate and before any Approval/Core product subprocess, setup uses `lstat` to reject symlink, dangling-symlink, nonregular, ownership, or mode conflicts at fixed config/state/data child paths. Existing and newly realized service-owned state trees are recursively custody-checked before later product writes, unit commit, or marker commit.
 
-`agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal` is the explicit destructive recovery surface. Both flags are required. It creates/acquires and validates the permanent root-only setup lock before inventory; any managed deployment state without a pre-existing package lock fails custody; exact clean-host retry may create the lock/root. It requires exact owner/group/mode/type/link custody for managed roots and files, stops/disables and proves both managed units inactive, rejects unexpected secret-root entries, and requires symlink-attack-resistant recursive removal. It removes only allowlisted package deployment units/state while preserving coordination lock/root, then reloads systemd even on exact retry after prior response loss. It emits `agentnet.server-setup.reset-evidence.v1`; exact retry reports `already_absent` and proves deployment-path absence, not lock/root absence. PostgreSQL, runtimes, installed package, proxy/TLS/DNS/firewall, operator inputs, and locked service identities are retained. Reset grants no authority, enrolls no identity, proves no durability, cannot remove external prerequisites, and is not a secret-rotation path.
+`agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal` is the explicit destructive recovery surface. Both flags are required. It creates/acquires and validates the permanent root-only setup lock before inventory; any managed deployment state without a pre-existing package lock fails custody; exact clean-host retry may create the lock/root. It requires exact owner/group/mode/type/link custody for managed roots and files; stops/disables the renewal timer, isolated C0 responder, static renewal oneshot, Core, and Approval in dependency order; proves all five managed units inactive; rejects unexpected secret-root entries; and requires symlink-attack-resistant recursive removal. It removes only allowlisted package deployment units/state while preserving coordination lock/root, then reloads systemd even on exact retry after prior response loss. It emits `agentnet.server-setup.reset-evidence.v1`; exact retry reports `already_absent` and proves deployment-path absence, not lock/root absence. PostgreSQL, runtimes, installed package, proxy/TLS/DNS/firewall, operator inputs, and locked `agentnet`, `agentnet-approval`, and `agentnet-c0` service identities are retained. Reset grants no authority, enrolls no identity, proves no durability, cannot remove external prerequisites, and is not a secret-rotation path.
 
-Apply reruns bootstrap and validates realized Core/Approval state; marker never skips it. Request-v1 writes root-only marker-v2, retaining original meaning and same-request v1→v2 migration. Request-v2 writes marker-v3, which additionally binds exact `artifact_mode`; marker-v1/v2 cannot satisfy request-v2. Both bind request, package, units, non-secret Approval/Core config digests, revision, and previous-marker digest while excluding only offline-activation enrollment labels. Marker replacement uses exact prior-byte compare-and-swap under setup lock. Marker is provenance, not health/readiness/identity/authority/durability evidence. Existing Approval policy must match exact owner OIDC and complete approver set—extra trust anchors block. Start is valid only with apply and affects only daemon reload, Approval enable/start, Core enable/restart, and exact active-state/local/public probes. Core health/readiness bind exact artifact mode and capability set; Approval health returns `agentnet.approval.health.v1`. Setup validates exact service role, version, origin/domain/profile/runtime identity and rejects generic HTTP 200. `operational` requires exact enrolled binding and public Core readiness; pre-enrollment start reports `waiting_owner_oidc_or_passkey`.
+Apply reruns bootstrap and validates realized Core/Approval state; marker never skips it. Request-v1 writes root-only marker-v2, retaining original meaning and same-request v1→v2 migration. Request-v2 writes marker-v3, which additionally binds exact `artifact_mode`; marker-v1/v2 cannot satisfy request-v2. Both bind request, package, units, non-secret Approval/Core config digests, revision, and previous-marker digest while excluding only offline-activation enrollment labels. Marker replacement uses exact prior-byte compare-and-swap under setup lock. Marker is provenance, not health/readiness/identity/authority/durability evidence. Existing Approval policy must match exact owner OIDC and complete approver set—extra trust anchors block. Start is valid only with apply. It converges five package units: Approval and Core; an isolated `agentnet-c0` responder using systemd credential delivery; a static selector-free credential-renewal oneshot; and its hourly persistent timer. Pre-enrollment start proves responder/timer disabled and renewal oneshot inactive. Activated start validates exact managed identity/key binding, starts timer and nonterminal responder only after Core, and never recreates responder config after a signed terminal status has produced the exact owner-only terminal marker. Core configured readiness also requires a signed non-mutating Approval broker-readiness request through the configured public origin; generic health cannot substitute. Core health/readiness bind exact artifact mode and capability set; Approval health returns `agentnet.approval.health.v1`. Setup validates exact service role, version, origin/domain/profile/runtime identity and rejects generic HTTP 200. `operational` requires exact enrolled binding, `credential_state=current|renewal_needed`, broker readiness, and public Core readiness; pre-enrollment start reports `waiting_owner_oidc_or_passkey`. A current-package owner-only attempt marker permits interruption recovery, while pre-existing package state without exact current attempt/marker custody fails `clean_state_required`; 0.1.31 state is not migrated in the first-C0 path.

@@ -14,6 +14,7 @@ from agentnet.authorization.c0_pilot import C0_PILOT_SUCCESS, c0_result
 from agentnet.authorization.policy import C0GuardedOperation, PolicyEngine, validate_actor_state
 from agentnet.errors import AuthorizationError, ConflictError, RetryableConflictError
 from agentnet.identity.actors import ActorKind, VerifiedActor
+from agentnet.identity.credentials import load_credential_binding_from_connection
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
 from agentnet.protocol.models import (
@@ -1027,6 +1028,34 @@ class C0PilotService:
             self._phase("before_complete_commit")
             return c0_result(C0_PILOT_SUCCESS)
 
+    def readiness(self, *, actor: VerifiedActor) -> dict[str, str]:
+        """Validate exact current signed actor without requiring plan creation."""
+
+        self._require_actor(actor)
+        now = int(self.clock())
+        with self.store.transaction() as connection:
+            binding = load_credential_binding_from_connection(
+                connection, str(actor.credential_id)
+            )
+            binding.require_active(now=now)
+            if (
+                binding.domain_id != actor.domain_id
+                or binding.principal_id != actor.principal_id
+                or binding.harness_id != actor.harness_id
+                or binding.credential_epoch != actor.credential_epoch
+            ):
+                raise AuthorizationError("C0 responder actor binding is not current")
+            count = connection.execute(
+                """SELECT COUNT(*) AS n FROM bootstrap_grant_plans
+                    WHERE state='committed' AND domain_id=? AND principal_id=?
+                      AND (owner_harness_id=? OR fresh_harness_id=?)""",
+                (actor.domain_id, actor.principal_id, actor.harness_id, actor.harness_id),
+            ).fetchone()
+        return {
+            "schema": "agentnet.c0-pilot.readiness-result.v1",
+            "status": "ready" if count is not None and int(count["n"]) > 0 else "waiting_plan",
+        }
+
     def status(self, *, actor: VerifiedActor) -> dict[str, str]:
         self._require_actor(actor)
         now = int(self.clock())
@@ -1043,6 +1072,8 @@ class C0PilotService:
                 return c0_result("expired")
             if row["attempt_id"] is None:
                 return c0_result("prepared_unusable")
+            if row["attempt_state"] == "failed":
+                return c0_result("failed")
             if row["attempt_state"] != "active" or row["guard_state"] != "active":
                 raise ConflictError("C0 pilot durable state is inconsistent")
             attempt_id = str(row["attempt_id"])

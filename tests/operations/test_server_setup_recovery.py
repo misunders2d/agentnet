@@ -189,6 +189,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     accounts = {
         setup.CORE_USER: SimpleNamespace(pw_name=setup.CORE_USER, pw_uid=uid, pw_gid=gid),
         setup.APPROVAL_USER: SimpleNamespace(pw_name=setup.APPROVAL_USER, pw_uid=uid, pw_gid=gid),
+        setup.C0_RESPONDER_USER: SimpleNamespace(pw_name=setup.C0_RESPONDER_USER, pw_uid=uid, pw_gid=gid),
     }
     generation = [0]
 
@@ -495,11 +496,11 @@ def _marker_payload(
         "request_digest": request_digest,
         "approval_config_digest": "2" * 64,
         "core_config_digest": "3" * 64,
-        "units": [setup.APPROVAL_UNIT, setup.CORE_UNIT],
+        "units": list(setup.MANAGED_UNITS),
         "package_version": package_version,
         "previous_marker_digest": None,
         "revision": 7,
-        "unit_digests": {setup.APPROVAL_UNIT: "4" * 64, setup.CORE_UNIT: "5" * 64},
+        "unit_digests": {unit: "4" * 64 for unit in setup.MANAGED_UNITS},
     }
     if artifact_mode is not None:
         value["artifact_mode"] = artifact_mode
@@ -515,8 +516,8 @@ def test_pre_upgrade_gate_requires_the_exact_recorded_realized_state(tmp_path: P
     approval = tmp_path / "approval.json"
     core = tmp_path / "core.json"
     units = {
-        setup.APPROVAL_UNIT: tmp_path / setup.APPROVAL_UNIT,
-        setup.CORE_UNIT: tmp_path / setup.CORE_UNIT,
+        unit: tmp_path / unit
+        for unit in setup.MANAGED_UNITS
     }
     for unit, path in units.items():
         path.write_bytes(f"[Unit]\n{unit}\n".encode())
@@ -1227,7 +1228,11 @@ def test_lost_systemctl_response_succeeds_only_on_verified_live_evidence(
         reconcile=lambda: reconciled.append(1),
     ) == "reconciled_after_response_loss"
     assert len(reconciled) == 1
-    assert actions == [["daemon-reload"], ["enable", "--now", setup.APPROVAL_UNIT]]
+    assert actions == [
+        ["daemon-reload"],
+        ["enable", "--now", setup.APPROVAL_UNIT],
+        ["restart", setup.CORE_UNIT],
+    ]
 
 
 def test_failed_enable_with_running_but_disabled_unit_cannot_reconcile(
@@ -1428,11 +1433,12 @@ def test_launcher_digest_refuses_a_runtime_hidden_by_the_managed_sandbox(
 
 def _realized_paths(layout: SetupLayout) -> tuple[Path, ...]:
     return (
-        layout.core_unit,
-        layout.approval_unit,
+        *(layout.unit(unit) for unit in setup.MANAGED_UNITS),
         layout.host(setup.CORE_DATA),
         layout.host(setup.APPROVAL_DATA),
+        layout.host(setup.C0_RESPONDER_DATA),
         layout.host(setup.SETUP_MARKER),
+        layout.host(setup.SETUP_ATTEMPT),
         layout.host(setup.SETUP_RUNTIME_ROOT),
         layout.host(setup.SETUP_UPGRADE_JOURNAL),
         layout.host(setup.SECRET_ROOT),
@@ -1446,6 +1452,7 @@ def _fake_realized_deployment(layout: SetupLayout) -> tuple[Path, Path]:
     for root in (
         layout.host(setup.CORE_DATA),
         layout.host(setup.APPROVAL_DATA),
+        layout.host(setup.C0_RESPONDER_DATA),
         layout.host(setup.SETUP_RUNTIME_ROOT),
     ):
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1458,6 +1465,9 @@ def _fake_realized_deployment(layout: SetupLayout) -> tuple[Path, Path]:
     marker = layout.host(setup.SETUP_MARKER)
     marker.write_text("{}", encoding="utf-8")
     marker.chmod(0o600)
+    attempt = layout.host(setup.SETUP_ATTEMPT)
+    attempt.write_text("{}", encoding="utf-8")
+    attempt.chmod(0o600)
     journal = layout.host(setup.SETUP_UPGRADE_JOURNAL)
     journal.write_text("{}", encoding="utf-8")
     journal.chmod(0o600)
@@ -1468,8 +1478,8 @@ def _fake_realized_deployment(layout: SetupLayout) -> tuple[Path, Path]:
         secret.write_text("AGENTNET_APPROVAL_CORE_TOKEN=synthetic\n", encoding="utf-8")
         secret.chmod(0o600)
     layout.core_unit.parent.mkdir(parents=True, exist_ok=True)
-    layout.core_unit.write_text("[Unit]\ncore\n", encoding="utf-8")
-    layout.approval_unit.write_text("[Unit]\napproval\n", encoding="utf-8")
+    for unit in setup.MANAGED_UNITS:
+        layout.unit(unit).write_text(f"[Unit]\n{unit}\n", encoding="utf-8")
 
     unrelated = layout.host(Path("/etc/unrelated-operator.conf"))
     unrelated.write_text("keep", encoding="utf-8")
@@ -1490,10 +1500,22 @@ def test_reset_proves_units_inactive_before_state_removal(
 
     monkeypatch.setattr(reset.subprocess, "run", run)
     assert reset._stop_managed_units(Path("/usr/bin/systemctl")) == [
+        setup.CREDENTIAL_RENEW_TIMER,
+        setup.C0_RESPONDER_UNIT,
+        setup.CREDENTIAL_RENEW_UNIT,
         setup.CORE_UNIT,
         setup.APPROVAL_UNIT,
     ]
     assert [call[1:] for call in calls] == [
+        ["disable", "--now", setup.CREDENTIAL_RENEW_TIMER],
+        ["is-active", "--quiet", setup.CREDENTIAL_RENEW_TIMER],
+        ["reset-failed", setup.CREDENTIAL_RENEW_TIMER],
+        ["disable", "--now", setup.C0_RESPONDER_UNIT],
+        ["is-active", "--quiet", setup.C0_RESPONDER_UNIT],
+        ["reset-failed", setup.C0_RESPONDER_UNIT],
+        ["stop", setup.CREDENTIAL_RENEW_UNIT],
+        ["is-active", "--quiet", setup.CREDENTIAL_RENEW_UNIT],
+        ["reset-failed", setup.CREDENTIAL_RENEW_UNIT],
         ["disable", "--now", setup.CORE_UNIT],
         ["is-active", "--quiet", setup.CORE_UNIT],
         ["reset-failed", setup.CORE_UNIT],
@@ -1526,7 +1548,8 @@ def test_reset_is_idempotent_and_retains_every_external_prerequisite(tmp_path: P
     assert first["state"] == "reset"
     assert second["state"] == "already_absent"
     assert first["external_prerequisites"] == "retained"
-    assert first["removed_units"] == sorted([setup.APPROVAL_UNIT, setup.CORE_UNIT])
+    assert first["removed_units"] == sorted(setup.MANAGED_UNITS)
+    assert first["retained_service_identities"] == ["agentnet", "agentnet-approval", "agentnet-c0"]
     assert first["authority_granted"] is False
     assert unrelated.read_text(encoding="utf-8") == "keep"
     assert (postgres / "PG_VERSION").read_text(encoding="utf-8") == "16\n"
@@ -1534,6 +1557,20 @@ def test_reset_is_idempotent_and_retains_every_external_prerequisite(tmp_path: P
         assert not os.path.lexists(target)
     assert layout.lock.is_file()
     assert sorted(first["absence_proven_paths"]) == sorted(str(path) for path in _realized_paths(layout))
+
+
+def test_clean_setup_rejects_unowned_c0_responder_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    responder_config = harness.layout.host(setup.C0_RESPONDER_CONFIG)
+    responder_config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    responder_config.parent.chmod(0o700)
+    responder_config.write_text("{}", encoding="utf-8")
+    responder_config.chmod(0o600)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+    assert exc_info.value.blocker == "clean_state_required"
+    assert not harness.layout.host(setup.SETUP_ATTEMPT).exists()
 
 
 def test_reset_refuses_managed_state_without_package_lock(tmp_path: Path) -> None:

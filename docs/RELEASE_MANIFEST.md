@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-28
-Candidate: `agentnet 0.1.31`
-Latest published package: `agentnet 0.1.30`
-Evidence profile: first-message onboarding and recovery candidate
+Snapshot: 2026-07-29
+Candidate: `agentnet 0.1.32`
+Latest published package: `agentnet 0.1.31`
+Evidence profile: coordinated first-C0 release-blocker candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `ffc44ebf4b6f30309f3a1c8864ab4127f16410c09a22b2b850777794e1b1dc0b` |
-| `pyproject.toml` | SHA-256 `649031f992ea27965c3285bc31ae82596b107b3bcfecc115934568166e6ad13b` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `58245ee0d1147734744fd7a9bef85baa18ecab9680163c6c92bf15299d2e8f85` |
+| `pyproject.toml` | SHA-256 `e66a7bed77bf852509934edfee7c20f369db4372dbd38454c32a1ec34957ee12` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -240,7 +240,7 @@ installed-tree content-digest equality before/after verification and absence of
 package-custody repair only; no enrollment, message, ACK, or gate-promotion
 claim is added.
 
-Candidate `0.1.31` addresses the first-message blockers known before its live
+Published `0.1.31` addresses the first-message blockers known before its live
 server ceremony: fixed browser-only remote activation bound to one server-staged
 approved OIDC owner; purpose-separated automatic Approval delivery; exact
 supported `0.1.28/0.1.30` migration and response-loss recovery; enabled-unit
@@ -254,8 +254,24 @@ reports no blockers and PASS for skill architecture, code security, and
 Constitution. The later live server ceremony exposed MEL-216 (owner-passkey
 registration ordering) and MEL-217 (false final setup health/identity status);
 both remain unresolved in `0.1.31` and are assigned to the next release. Final
-replacement-package verification and fresh-laptop message/ACK/revocation proof
-remain pending.
+fresh-laptop message/ACK/revocation proof remains pending.
+
+Candidate `0.1.32` repairs these blockers as one release boundary: signed
+Approval broker readiness through the configured public path; authoritative
+post-enrollment setup evidence; recoverable OIDC begin; finite current credential
+renewal; Core schema v5; current-package clean-state custody; an isolated
+package-owned C0 responder; and exact five-unit setup/reset lifecycle. Current
+affected source lane reports `585 passed, 7 expected dedicated-PostgreSQL skips`.
+The source regression lane excluding only installed-harness pins and release
+manifest self-check reports `1622 passed, 16 expected platform/dedicated-
+PostgreSQL skips`. The unfiltered run reports `1655 passed, 16 expected skips,
+2 installed-harness G01 failures`; both failures remain non-green and unwaived.
+Source and both recursive packed generations each report
+`1578 passed, 16 expected skips`; release verifier, package-tree digest/no-residue
+checks, source/packed Pi skill loaders, retained byte-identical archives, and code
+and skill rereviews pass; final Constitution evidence-only closure also passes.
+Mutation-authorized PostgreSQL, cross-platform CI, and external host/C0 evidence
+remain absent. No gate is promoted.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

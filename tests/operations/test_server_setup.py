@@ -26,6 +26,10 @@ from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 from agentnet.operations.server_setup import (
     APPROVAL_UNIT,
     CORE_UNIT,
+    C0_RESPONDER_UNIT,
+    CREDENTIAL_RENEW_TIMER,
+    CREDENTIAL_RENEW_UNIT,
+    MANAGED_UNITS,
     ServerSetupError,
     SetupApprover,
     SetupLayout,
@@ -953,7 +957,7 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
         Path("/usr/local/bin/agentnet"),
         Path("/usr/local/bin/uv"),
     )
-    assert set(units) == {APPROVAL_UNIT, CORE_UNIT}
+    assert set(units) == set(MANAGED_UNITS)
     rendered = b"\n".join(units.values()).decode("utf-8")
     assert '"/usr/bin/node" "/usr/local/bin/agentnet"' in rendered
     assert "--host 127.0.0.1 --port 8080" in rendered
@@ -968,6 +972,11 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert "UnsetEnvironment=NODE_OPTIONS NODE_PATH PYTHONPATH" in rendered
     assert "synthetic-test-secret" not in rendered
     assert "AGENTNET_APPROVAL_CORE_TOKEN=" not in rendered
+    assert "ConditionPathExists=/var/lib/agentnet-c0/config.json" in units[C0_RESPONDER_UNIT].decode()
+    assert "LoadCredential=signing-key.pem:/var/lib/agentnet/guided-join.key.pem" in units[C0_RESPONDER_UNIT].decode()
+    assert "c0-pilot responder --run" in units[C0_RESPONDER_UNIT].decode()
+    assert 'credential renew --identity "/var/lib/agentnet/server-agent-identity.json"' in units[CREDENTIAL_RENEW_UNIT].decode()
+    assert f"Unit={CREDENTIAL_RENEW_UNIT}" in units[CREDENTIAL_RENEW_TIMER].decode()
 
 
 def test_plan_is_read_only_and_emits_redacted_fixed_steps(
@@ -984,7 +993,7 @@ def test_plan_is_read_only_and_emits_redacted_fixed_steps(
     report = plan_server_setup(request)
     assert report["schema"] == "agentnet.server-setup.evidence.v1"
     assert report["status"] == "planned"
-    assert report["managed_units"] == [APPROVAL_UNIT, CORE_UNIT]
+    assert report["managed_units"] == sorted(MANAGED_UNITS)
     assert report["https_topology"] == "external_self_hosted_reverse_proxy_to_loopback"
     assert report["package_version"]
     assert report["prerequisites"]["database_reference"] == (
@@ -1320,6 +1329,35 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
     setup._health(
         "https://core.corp.example/healthz",
         expected={"service": "agentnet-core", "status": "alive"},
+        attempts=1,
+    )
+
+    monkeypatch.setattr(
+        setup.urllib.request,
+        "build_opener",
+        lambda *_args: Opener(
+            {
+                "service": "agentnet-core",
+                "ready": True,
+                "deployment_binding": {
+                    "ready": True,
+                    "required": True,
+                    "credential_state": "renewal_needed",
+                },
+            }
+        ),
+    )
+    setup._health(
+        "https://core.corp.example/readyz",
+        expected={
+            "service": "agentnet-core",
+            "ready": True,
+            "deployment_binding": {
+                "ready": True,
+                "required": True,
+                "credential_state": ("current", "renewal_needed"),
+            },
+        },
         attempts=1,
     )
 
@@ -2305,7 +2343,7 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
         "request_digest": "1" * 64,
         "approval_config_digest": "2" * 64,
         "core_config_digest": "3" * 64,
-        "units": [setup.APPROVAL_UNIT, setup.CORE_UNIT],
+        "units": list(setup.MANAGED_UNITS),
     }
     legacy_payload = json.dumps(legacy, sort_keys=True).encode() + b"\n"
     marker_path.write_bytes(legacy_payload)
@@ -2316,8 +2354,8 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
         legacy_request_digest="1" * 64,
     )
     units = {
-        setup.APPROVAL_UNIT: b"approval-unit\n",
-        setup.CORE_UNIT: b"core-unit\n",
+        unit: f"{unit}\n".encode()
+        for unit in setup.MANAGED_UNITS
     }
     status = setup._commit_setup_marker(
         marker_path,
@@ -2379,8 +2417,8 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
     [
         {"schema": "agentnet.server-setup.marker.v3"},
         {"request_digest": "9" * 64},
-        {"units": [CORE_UNIT, APPROVAL_UNIT]},
-        {"unit_digests": {APPROVAL_UNIT: "8" * 64, CORE_UNIT: "invalid"}},
+        {"units": list(reversed(MANAGED_UNITS))},
+        {"unit_digests": {unit: ("invalid" if unit == CORE_UNIT else "8" * 64) for unit in MANAGED_UNITS}},
         {"unexpected": True},
     ],
 )
@@ -2394,11 +2432,11 @@ def test_setup_marker_rejects_unknown_or_tampered_provenance(
         "request_digest": "4" * 64,
         "approval_config_digest": "5" * 64,
         "core_config_digest": "6" * 64,
-        "units": [APPROVAL_UNIT, CORE_UNIT],
+        "units": list(MANAGED_UNITS),
         "package_version": "0.1.test",
         "previous_marker_digest": None,
         "revision": 1,
-        "unit_digests": {APPROVAL_UNIT: "7" * 64, CORE_UNIT: "8" * 64},
+        "unit_digests": {unit: "7" * 64 for unit in MANAGED_UNITS},
     }
     marker.update(mutation)
     payload = json.dumps(marker, sort_keys=True).encode() + b"\n"
@@ -2420,8 +2458,8 @@ def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
 
     marker_path = tmp_path / "setup.json"
     units = {
-        setup.APPROVAL_UNIT: b"approval-unit\n",
-        setup.CORE_UNIT: b"core-unit\n",
+        unit: f"{unit}\n".encode()
+        for unit in setup.MANAGED_UNITS
     }
     assert setup._commit_setup_marker(
         marker_path,
@@ -2520,6 +2558,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     accounts = {
         setup.CORE_USER: SimpleNamespace(pw_name=setup.CORE_USER, pw_uid=uid, pw_gid=gid),
         setup.APPROVAL_USER: SimpleNamespace(pw_name=setup.APPROVAL_USER, pw_uid=uid, pw_gid=gid),
+        setup.C0_RESPONDER_USER: SimpleNamespace(pw_name=setup.C0_RESPONDER_USER, pw_uid=uid, pw_gid=gid),
     }
     monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
     monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
@@ -2914,6 +2953,19 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 4
 
     enrolled = True
+    monkeypatch.setattr(setup, "_validated_managed_identity_profile", lambda *_args, **_kwargs: {})
+
+    class ReadyBrokerClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def readiness(self):
+            return {"schema": "agentnet.approval.internal-readiness-result.v1", "status": "ready"}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
     systemctl_calls: list[list[str]] = []
     health_requests: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(
@@ -2921,7 +2973,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "run",
         lambda argv, **_kwargs: systemctl_calls.append(argv) or SimpleNamespace(returncode=0),
     )
-    live_pids = {setup.APPROVAL_UNIT: 4321, setup.CORE_UNIT: 4322}
+    live_pids = {
+        setup.APPROVAL_UNIT: 4321,
+        setup.CORE_UNIT: 4322,
+        setup.C0_RESPONDER_UNIT: 4323,
+    }
     live_argv = {
         setup.APPROVAL_UNIT: (
             "/usr/bin/node", "/usr/local/bin/agentnet", "approval", "serve",
@@ -2933,26 +2989,48 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             "--config", str(layout.host(setup.CORE_CONFIG)),
             "--host", "127.0.0.1", "--port", str(setup.CORE_PORT),
         ),
+        setup.C0_RESPONDER_UNIT: (
+            "/usr/bin/node", "/usr/local/bin/agentnet", "c0-pilot", "responder",
+            "--run", "--config", str(layout.host(setup.C0_RESPONDER_CONFIG)),
+            "--credential", "/run/credentials/agentnet-c0-responder.service/signing-key.pem",
+        ),
     }
+    disabled_units: set[str] = set()
     monkeypatch.setattr(
         setup,
         "_systemd_show",
         lambda _executable, unit: {
             "LoadState": "loaded",
-            "UnitFileState": "enabled",
+            "UnitFileState": (
+                "static"
+                if unit == setup.CREDENTIAL_RENEW_UNIT
+                else "disabled" if unit in disabled_units else "enabled"
+            ),
             "FragmentPath": str(layout.unit(unit)),
             "DropInPaths": "",
-            "User": setup.APPROVAL_USER if unit == setup.APPROVAL_UNIT else setup.CORE_USER,
-            "Group": setup.APPROVAL_USER if unit == setup.APPROVAL_UNIT else setup.CORE_USER,
+            "User": (
+                setup.APPROVAL_USER
+                if unit == setup.APPROVAL_UNIT
+                else setup.C0_RESPONDER_USER if unit == setup.C0_RESPONDER_UNIT else setup.CORE_USER
+            ),
+            "Group": (
+                setup.APPROVAL_USER
+                if unit == setup.APPROVAL_UNIT
+                else setup.C0_RESPONDER_USER if unit == setup.C0_RESPONDER_UNIT else setup.CORE_USER
+            ),
             "NoNewPrivileges": "yes",
             "PrivateDevices": "yes",
             "PrivateTmp": "yes",
             "ProtectHome": "yes",
             "ProtectSystem": "strict",
-            "MainPID": str(live_pids[unit]),
+            "MainPID": str(live_pids.get(unit, 0)),
             "Environment": "AGENTNET_UV=/usr/local/bin/uv",
             "ReadWritePaths": str(
-                layout.host(setup.APPROVAL_DATA if unit == setup.APPROVAL_UNIT else setup.CORE_DATA)
+                layout.host(
+                    setup.APPROVAL_DATA
+                    if unit == setup.APPROVAL_UNIT
+                    else setup.C0_RESPONDER_DATA if unit == setup.C0_RESPONDER_UNIT else setup.CORE_DATA
+                )
             ),
         },
     )
@@ -2961,9 +3039,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "_read_live_process_identity",
         lambda pid: (
             Path("/usr/bin/node"),
-            live_argv[
-                setup.APPROVAL_UNIT if pid == live_pids[setup.APPROVAL_UNIT] else setup.CORE_UNIT
-            ],
+            live_argv[next(unit for unit, live_pid in live_pids.items() if live_pid == pid)],
         ),
     )
     fail_health_once = True
@@ -2976,7 +3052,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         health_requests.append((url, dict(_kwargs["expected"])))
 
     monkeypatch.setattr(setup, "_health", health_with_interruption)
-    with pytest.raises(ServerSetupError, match="injected health interruption"):
+    with pytest.raises(ServerSetupError, match="injected health interruption") as exc_info:
         apply_server_setup(
             request,
             start=True,
@@ -2984,6 +3060,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             layout=layout,
             _allow_test_layout=True,
         )
+    assert exc_info.value.identity_enrolled is True
     systemctl_calls.clear()
     health_requests.clear()
     started = apply_server_setup(
@@ -2996,13 +3073,40 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert started["status"] == "operational"
     assert started["identity_enrolled"] is True
     assert started["authority_granted"] is False
+
+    successful_systemctl_calls = list(systemctl_calls)
+    successful_health_requests = list(health_requests)
+
+    class BlockedBrokerClient(ReadyBrokerClient):
+        def readiness(self):
+            raise setup.GateBlocked("approval_broker_auth", "private broker detail")
+
+    monkeypatch.setattr(setup, "ApprovalServiceClient", BlockedBrokerClient)
+    with pytest.raises(ServerSetupError, match="Approval broker readiness failed") as exc_info:
+        apply_server_setup(
+            request,
+            start=True,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.blocker == "approval_broker_auth"
+    assert exc_info.value.identity_enrolled is True
+    monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
+    systemctl_calls[:] = successful_systemctl_calls
+    health_requests[:] = successful_health_requests
     assert systemctl_calls == [
         ["/usr/bin/systemctl", "daemon-reload"],
         ["/usr/bin/systemctl", "enable", "--now", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "enable", setup.CORE_UNIT],
         ["/usr/bin/systemctl", "restart", setup.CORE_UNIT],
+        ["/usr/bin/systemctl", "enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
+        ["/usr/bin/systemctl", "enable", "--now", setup.C0_RESPONDER_UNIT],
+        ["/usr/bin/systemctl", "stop", setup.CREDENTIAL_RENEW_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.CORE_UNIT],
+        ["/usr/bin/systemctl", "is-active", "--quiet", setup.CREDENTIAL_RENEW_TIMER],
+        ["/usr/bin/systemctl", "is-active", "--quiet", setup.C0_RESPONDER_UNIT],
     ]
     assert [url for url, _expected in health_requests] == [
         "http://127.0.0.1:8090/healthz",
@@ -3025,6 +3129,102 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             if request.effective_artifact_mode == "enabled"
             else ["offline_custody"]
         )
+        if "deployment_binding" in expected:
+            assert expected["deployment_binding"]["credential_state"] == (
+                "current",
+                "renewal_needed",
+            )
+
+    responder_config = layout.host(setup.C0_RESPONDER_CONFIG)
+    responder_terminal = layout.host(setup.C0_RESPONDER_TERMINAL)
+    responder_terminal.write_text(
+        json.dumps(
+            {
+                "schema": "agentnet.c0-pilot-responder.terminal.v1",
+                "status": "COMPLETED_C0_ROUND_TRIP",
+                "domain_id": request.domain_id,
+                "harness_id": "server-harness",
+                "credential_id": "server-credential",
+            }
+        ),
+        encoding="utf-8",
+    )
+    responder_terminal.chmod(0o600)
+    # Simulate response loss after terminal marker commit but before config cleanup.
+    # Same-digest setup must remove only the validated private responder config.
+    disabled_units.add(setup.C0_RESPONDER_UNIT)
+    live_pids.pop(setup.C0_RESPONDER_UNIT)
+    systemctl_calls.clear()
+    health_requests.clear()
+
+    terminal_rerun = apply_server_setup(
+        request,
+        start=True,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+
+    assert terminal_rerun["status"] == "operational"
+    assert not responder_config.exists()
+    assert any(
+        step == {"id": "c0_responder_config", "status": "terminal_cleanup_reconciled"}
+        for step in terminal_rerun["steps"]
+    )
+    assert ["/usr/bin/systemctl", "disable", "--now", setup.C0_RESPONDER_UNIT] in systemctl_calls
+    assert ["/usr/bin/systemctl", "enable", "--now", setup.C0_RESPONDER_UNIT] not in systemctl_calls
+
+    systemctl_calls.clear()
+    health_requests.clear()
+    terminal_retry = apply_server_setup(
+        request,
+        start=True,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+    assert terminal_retry["status"] == "operational"
+    assert any(
+        step == {"id": "c0_responder_config", "status": "terminal_not_recreated"}
+        for step in terminal_retry["steps"]
+    )
+
+
+def test_clean_state_gate_rejects_unowned_preexisting_state_and_resumes_exact_attempt(
+    tmp_path: Path,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    attempt = tmp_path / "attempt.json"
+    with pytest.raises(ServerSetupError, match="no current-package setup custody"):
+        setup._prepare_setup_attempt(
+            attempt,
+            existing_marker=None,
+            preexisting_state=True,
+            request_digest="a" * 64,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+
+    attempt.write_text(
+        json.dumps(
+            {
+                "schema": "agentnet.server-setup.attempt.v1",
+                "package_version": setup.__version__,
+                "request_digest": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    attempt.chmod(0o600)
+    assert setup._prepare_setup_attempt(
+        attempt,
+        existing_marker=None,
+        preexisting_state=True,
+        request_digest="a" * 64,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    ) == ("resumed_exact_attempt", True)
 
 
 def test_unexpected_setup_error_is_redacted(

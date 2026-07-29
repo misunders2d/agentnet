@@ -670,6 +670,44 @@ def expected_catalog(migrations: Sequence[Any]) -> CatalogSpec:
                             )
                 continue
 
+            alter_column_match = re.match(
+                r"ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s+(TEXT|BIGINT)\b(.*)$",
+                statement,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if alter_column_match is not None:
+                table_name = alter_column_match.group(1)
+                column_name = alter_column_match.group(2)
+                declared_type = alter_column_match.group(3).lower()
+                remainder = alter_column_match.group(4)
+                if table_name not in tables or any(
+                    item.table_name == table_name and item.column_name == column_name
+                    for item in columns
+                ):
+                    raise ValueError(
+                        f"unsupported migration ALTER COLUMN target: {table_name}.{column_name}"
+                    )
+                _validate_column_remainder(table_name, column_name, remainder)
+                default_match = re.search(r"\bDEFAULT\s+(-?[0-9]+)\b", remainder, re.IGNORECASE)
+                columns.append(
+                    ColumnSpec(
+                        table_name,
+                        column_name,
+                        declared_type,
+                        bool(re.search(r"\bNOT\s+NULL\b", remainder, re.IGNORECASE)),
+                        default_match.group(1) if default_match is not None else None,
+                    )
+                )
+                constraints.extend(
+                    _constraint_specs(
+                        table_name,
+                        f"{column_name} {declared_type} {remainder}",
+                        column_name,
+                    )
+                )
+                continue
+
             index_match = re.match(
                 r"CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(.*)$",
                 statement,

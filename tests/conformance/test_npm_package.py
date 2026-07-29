@@ -40,9 +40,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
         "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
         "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
-        "evidence/local/2026-07-28-v0.1.31/artifacts/RETENTION.md",
-        "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31-py3-none-any.whl",
-        "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31.tar.gz",
+        "evidence/local/2026-07-29-v0.1.32/artifacts/RETENTION.md",
+        "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32-py3-none-any.whl",
+        "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32.tar.gz",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
@@ -230,6 +230,7 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "c0-fixed-commands-and-cleanup-only",
         "identity-only-mode-skips-c0-phase",
         "fresh-laptop-rejects-invalid-onboarding-mode",
+        "v0132-c0-responder-is-package-owned-and-isolated",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 
@@ -525,7 +526,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-28-v0.1.31/artifacts/RETENTION.md",
+        "evidence/local/2026-07-29-v0.1.32/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

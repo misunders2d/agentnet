@@ -307,6 +307,14 @@ def validate_applied_migrations(
     return current
 
 
+_S5_RELATIONS = frozenset(
+    {
+        "credential_renewal_requests",
+        "idx_oidc_enrollment_begin_idempotency",
+        "idx_credential_renewal_credential",
+    }
+)
+
 _S4_TABLES = frozenset(
     {
         "bootstrap_grant_plans",
@@ -464,10 +472,10 @@ def apply_postgres_migrations(connection: Any) -> int:
                     "schema_migration_history",
                     "an empty PostgreSQL migration catalog is not a released schema",
                 )
-            if current == CURRENT_SCHEMA_VERSION - 1 and relation_names & _S4_TABLES:
+            if current == CURRENT_SCHEMA_VERSION - 1 and relation_names & _S5_RELATIONS:
                 raise GateBlocked(
-                    "schema_s4_partial",
-                    "PostgreSQL v3 contains unsupported partial S4 relations",
+                    "schema_s5_partial",
+                    "PostgreSQL v4 contains unsupported partial S5 relations",
                 )
             require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:current])
         else:

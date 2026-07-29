@@ -12,6 +12,7 @@ from agentnet.approval.http import SECURITY_HEADERS, create_approval_app
 from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PROOF_HEADER,
     INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_READINESS,
     INTERNAL_BROKER_PURPOSE_RETRIEVE,
     INTERNAL_BROKER_PURPOSE_STATUS,
     build_internal_broker_proof,
@@ -549,6 +550,66 @@ def test_strict_json_duplicate_keys_and_generic_errors_fail_closed() -> None:
             assert malformed.status_code == 400
             assert malformed.json() == {"error": "request_denied"}
             assert service.calls == [("request_options", TOKEN)]
+
+    asyncio.run(exercise())
+
+
+def test_internal_readiness_requires_exact_fresh_proof_and_is_non_mutating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InternalService(FakeApprovalService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = SimpleNamespace(
+                max_http_body_bytes=4096,
+                internal_core_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
+                public_origin="https://approval.corp.example",
+                owner_oidc=object(),
+            )
+            self.owner_sessions = object()
+            self.clock = lambda: NOW
+            self.store = FakeReplayStore()
+
+    async def exercise() -> None:
+        secret = "S" * 43
+        monkeypatch.setenv("AGENTNET_TEST_APPROVAL_CORE_TOKEN", secret)
+        service = InternalService()
+        app = create_approval_app(service)
+        path = "/v1/approval/internal/readiness"
+        body = {"schema": "agentnet.approval.internal-readiness.v1"}
+        raw = canonical_json(body)
+        headers = {
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+            INTERNAL_BROKER_PROOF_HEADER: build_internal_broker_proof(
+                credential=secret,
+                audience="https://approval.corp.example",
+                method="POST",
+                path=path,
+                purpose=INTERNAL_BROKER_PURPOSE_READINESS,
+                raw_body=raw,
+                now=NOW,
+                nonce=b"y" * 32,
+            ),
+        }
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="https://approval.corp.example",
+        ) as client:
+            response = await client.post(path, content=raw, headers=headers)
+            assert response.status_code == 200
+            assert response.json() == {
+                "schema": "agentnet.approval.internal-readiness-result.v1",
+                "status": "ready",
+            }
+            assert service.calls == []
+            assert len(service.store.calls) == 1
+
+            replay = await client.post(path, content=raw, headers=headers)
+            assert replay.status_code == 400
+            assert replay.json() == {"error": "request_denied"}
+            assert service.calls == []
+            assert len(service.store.calls) == 1
 
     asyncio.run(exercise())
 

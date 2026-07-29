@@ -188,6 +188,7 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
             "/v1/enrollment/oidc/begin",
             content=canonical_json(
                 {
+                    "idempotency_key": "A" * 43,
                     "harness_kind": "codex",
                     "harness_name": "ordinary laptop agent",
                     "public_key_pem": candidate.public_pem,
@@ -199,6 +200,7 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         assert begin.headers["cache-control"] == "no-store"
         assert coordinator.begun == {
             "domain_id": actor.domain_id,
+            "idempotency_key": "A" * 43,
             "harness_kind": "codex",
             "harness_name": "ordinary laptop agent",
             "public_key_pem": candidate.public_pem,

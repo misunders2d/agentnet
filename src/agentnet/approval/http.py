@@ -30,6 +30,7 @@ from agentnet.approval.owner_session import (
 from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PROOF_HEADER,
     INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_READINESS,
     INTERNAL_BROKER_PURPOSE_RETRIEVE,
     INTERNAL_BROKER_PURPOSE_STATUS,
     verify_internal_broker_proof,
@@ -1065,6 +1066,28 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
         except Exception:
             return _denied()
 
+    async def internal_readiness(request: Request) -> Response:
+        try:
+            raw_body = await _bounded_body(request, service)
+            _require_internal_broker(
+                request,
+                service,
+                raw_body=raw_body,
+                path="/v1/approval/internal/readiness",
+                purpose=INTERNAL_BROKER_PURPOSE_READINESS,
+            )
+            value = _strict_json(raw_body)
+            if value != {"schema": "agentnet.approval.internal-readiness.v1"}:
+                raise AuthenticationError("approval request denied")
+            return _json(
+                {
+                    "schema": "agentnet.approval.internal-readiness-result.v1",
+                    "status": "ready",
+                }
+            )
+        except Exception as exc:
+            return _internal_failure(exc)
+
     async def internal_create(request: Request) -> Response:
         try:
             raw_body = await _bounded_body(request, service)
@@ -1272,6 +1295,7 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
     ):
         routes.extend(
             [
+                Route("/v1/approval/internal/readiness", internal_readiness, methods=["POST"]),
                 Route("/v1/approval/internal/requests", internal_create, methods=["POST"]),
                 Route("/v1/approval/internal/requests/status", internal_status, methods=["POST"]),
                 Route(

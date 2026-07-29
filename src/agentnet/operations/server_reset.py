@@ -25,10 +25,16 @@ from agentnet.operations.server_setup import (
     APPROVAL_DATA,
     APPROVAL_ENV,
     APPROVAL_UNIT,
+    C0_RESPONDER_DATA,
+    C0_RESPONDER_UNIT,
+    CREDENTIAL_RENEW_TIMER,
+    CREDENTIAL_RENEW_UNIT,
     CORE_DATA,
     CORE_ENV,
     CORE_UNIT,
+    MANAGED_UNITS,
     SECRET_ROOT,
+    SETUP_ATTEMPT,
     SETUP_MARKER,
     SETUP_ROOT,
     SETUP_RUNTIME_ROOT,
@@ -57,6 +63,7 @@ _MANAGED_SETUP_ENTRIES = frozenset(
     {
         "setup.lock",
         SETUP_MARKER.name,
+        SETUP_ATTEMPT.name,
         SETUP_RUNTIME_ROOT.name,
         SETUP_UPGRADE_JOURNAL.name,
     }
@@ -242,8 +249,15 @@ def _stop_managed_units(systemctl_executable: Path) -> list[str]:
     """Stop and disable managed units, then prove no managed process remains active."""
 
     stopped: list[str] = []
-    for unit in (CORE_UNIT, APPROVAL_UNIT):
-        _run_systemctl_reset(systemctl_executable, ["disable", "--now", unit])
+    actions = (
+        (CREDENTIAL_RENEW_TIMER, ["disable", "--now", CREDENTIAL_RENEW_TIMER]),
+        (C0_RESPONDER_UNIT, ["disable", "--now", C0_RESPONDER_UNIT]),
+        (CREDENTIAL_RENEW_UNIT, ["stop", CREDENTIAL_RENEW_UNIT]),
+        (CORE_UNIT, ["disable", "--now", CORE_UNIT]),
+        (APPROVAL_UNIT, ["disable", "--now", APPROVAL_UNIT]),
+    )
+    for unit, action in actions:
+        _run_systemctl_reset(systemctl_executable, action)
         active_status = _run_systemctl_reset(systemctl_executable, ["is-active", "--quiet", unit])
         if active_status not in {3, 4}:
             raise ServerSetupResetError(
@@ -280,14 +294,16 @@ def reset_server_setup(
     if not _allow_test_layout and os.geteuid() != 0:
         raise ServerSetupResetError("privilege_required", "server setup reset requires root")
 
-    unit_paths = {CORE_UNIT: layout.core_unit, APPROVAL_UNIT: layout.approval_unit}
+    unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
     directory_roots = {
         "core_state": layout.host(CORE_DATA),
         "approval_state": layout.host(APPROVAL_DATA),
+        "c0_responder_state": layout.host(C0_RESPONDER_DATA),
         "setup_runtime": layout.host(SETUP_RUNTIME_ROOT),
     }
     setup_files = {
         "setup_marker": layout.host(SETUP_MARKER),
+        "setup_attempt": layout.host(SETUP_ATTEMPT),
         "upgrade_journal": layout.host(SETUP_UPGRADE_JOURNAL),
     }
     secret_root = layout.host(SECRET_ROOT)
@@ -316,6 +332,7 @@ def reset_server_setup(
                 *unit_paths.values(),
                 directory_roots["core_state"],
                 directory_roots["approval_state"],
+                directory_roots["c0_responder_state"],
                 secret_root,
             )
         )
@@ -331,6 +348,7 @@ def reset_server_setup(
             for label, account_name in (
                 ("core_state", "agentnet"),
                 ("approval_state", "agentnet-approval"),
+                ("c0_responder_state", "agentnet-c0"),
             ):
                 if not os.path.lexists(directory_roots[label]):
                     directory_owners[label] = (root_uid, root_gid)
@@ -463,7 +481,7 @@ def reset_server_setup(
         "package_version": __version__,
         "external_prerequisites": "retained",
         "retained_external_prerequisites": list(_RETAINED_EXTERNAL_PREREQUISITES),
-        "retained_service_identities": ["agentnet", "agentnet-approval"],
+        "retained_service_identities": ["agentnet", "agentnet-approval", "agentnet-c0"],
         "removed_units": sorted(present_units),
         "stopped_units": sorted(stopped),
         "absence_proven_paths": sorted(

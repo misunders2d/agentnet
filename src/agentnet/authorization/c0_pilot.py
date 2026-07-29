@@ -16,9 +16,15 @@ C0_PILOT_STAGES = frozenset(
         "waiting_fresh",
         "expired",
         "invalidated",
+        "failed",
         C0_PILOT_SUCCESS,
     }
 )
+
+
+class C0PilotReadinessRequest(BaseModel):
+    model_config = _STRICT
+    schema_id: Literal["agentnet.c0-pilot.readiness.v1"] = Field(alias="schema")
 
 
 class C0PilotStartRequest(BaseModel):
@@ -50,6 +56,7 @@ class C0PilotResult(BaseModel):
         "waiting_fresh",
         "expired",
         "invalidated",
+        "failed",
         "COMPLETED_C0_ROUND_TRIP",
     ]
 
@@ -64,6 +71,7 @@ __all__ = [
     "C0_PILOT_STAGES",
     "C0_PILOT_SUCCESS",
     "C0PilotCompleteRequest",
+    "C0PilotReadinessRequest",
     "C0PilotRespondRequest",
     "C0PilotResult",
     "C0PilotStartRequest",

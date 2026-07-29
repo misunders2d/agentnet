@@ -9,6 +9,7 @@ import pytest
 from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PROOF_HEADER,
     INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_READINESS,
     INTERNAL_BROKER_PURPOSE_RETRIEVE,
     INTERNAL_BROKER_PURPOSE_STATUS,
     verify_internal_broker_proof,
@@ -40,12 +41,12 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == f"Bearer {secret}"
-        assert request.url.host == "approval.corp.example"
+        assert request.url.host == "approval-public.corp.example"
         proof = request.headers[INTERNAL_BROKER_PROOF_HEADER]
         verified = verify_internal_broker_proof(
             credential=secret,
             header_value=proof,
-            audience="https://approval.corp.example",
+            audience="https://approval-public.corp.example",
             method="POST",
             path=request.url.path,
             purpose=purposes[request.url.path],
@@ -142,6 +143,73 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
         "/v1/approval/internal/receipts/retrieve",
     ]
     assert len(set(proofs)) == 3
+
+
+def test_internal_client_readiness_uses_public_topology_and_exact_proof() -> None:
+    secret = "S" * 43
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "approval-public.corp.example"
+        assert request.content == b'{"schema":"agentnet.approval.internal-readiness.v1"}'
+        verify_internal_broker_proof(
+            credential=secret,
+            header_value=request.headers[INTERNAL_BROKER_PROOF_HEADER],
+            audience="https://approval-public.corp.example",
+            method="POST",
+            path="/v1/approval/internal/readiness",
+            purpose=INTERNAL_BROKER_PURPOSE_READINESS,
+            raw_body=request.content,
+        )
+        return httpx.Response(
+            200,
+            json={
+                "schema": "agentnet.approval.internal-readiness-result.v1",
+                "status": "ready",
+            },
+        )
+
+    client = ApprovalServiceClient(
+        _config(),
+        secret,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert client.readiness() == {
+            "schema": "agentnet.approval.internal-readiness-result.v1",
+            "status": "ready",
+        }
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    ("response", "gate"),
+    [
+        (httpx.Response(199), "approval_broker_auth"),
+        (httpx.Response(201, json={}), "approval_broker_auth"),
+        (httpx.Response(307), "approval_broker_auth"),
+        (httpx.Response(401), "approval_broker_auth"),
+        (httpx.Response(408), "approval_broker_unavailable"),
+        (httpx.Response(425), "approval_broker_unavailable"),
+        (httpx.Response(429), "approval_broker_unavailable"),
+        (httpx.Response(503), "approval_broker_unavailable"),
+    ],
+)
+def test_internal_client_readiness_has_total_sanitized_classification(
+    response: httpx.Response,
+    gate: str,
+) -> None:
+    client = ApprovalServiceClient(
+        _config(),
+        "S" * 43,
+        transport=httpx.MockTransport(lambda _request: response),
+    )
+    try:
+        with pytest.raises(GateBlocked) as exc_info:
+            client.readiness()
+        assert exc_info.value.gate == gate
+    finally:
+        client.close()
 
 
 def test_internal_client_uses_fresh_proof_for_same_business_retry() -> None:

@@ -149,6 +149,22 @@ class AgentNetClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def renew_current_credential(self, *, request_id: str) -> httpx.Response:
+        return self.request(
+            "POST",
+            "/v1/credentials/current/renew",
+            json_body={
+                "schema": "agentnet.credential-renewal.v1",
+                "request_id": request_id,
+            },
+        )
+
+    def c0_pilot_readiness(self) -> httpx.Response:
+        return self.request(
+            "POST", "/v1/c0-pilot/readiness",
+            json_body={"schema": "agentnet.c0-pilot.readiness.v1"},
+        )
+
     def c0_pilot_start(self) -> httpx.Response:
         return self.request(
             "POST", "/v1/c0-pilot/start",

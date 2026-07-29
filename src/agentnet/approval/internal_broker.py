@@ -21,11 +21,13 @@ INTERNAL_BROKER_ALGORITHM = "hmac-sha256-v1"
 INTERNAL_BROKER_PURPOSE_CREATE = "agentnet.approval.internal-broker.create.v1"
 INTERNAL_BROKER_PURPOSE_STATUS = "agentnet.approval.internal-broker.status.v1"
 INTERNAL_BROKER_PURPOSE_RETRIEVE = "agentnet.approval.internal-broker.retrieve.v1"
+INTERNAL_BROKER_PURPOSE_READINESS = "agentnet.approval.internal.readiness.v1"
 INTERNAL_BROKER_PURPOSES = frozenset(
     {
         INTERNAL_BROKER_PURPOSE_CREATE,
         INTERNAL_BROKER_PURPOSE_STATUS,
         INTERNAL_BROKER_PURPOSE_RETRIEVE,
+        INTERNAL_BROKER_PURPOSE_READINESS,
     }
 )
 INTERNAL_BROKER_TTL_SECONDS = 30

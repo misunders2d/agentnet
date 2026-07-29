@@ -8,9 +8,9 @@ Read this file only for the default self-hosted `always_on_server_agent` profile
 
 AgentNet setup may manage only:
 
-- locked `agentnet` and `agentnet-approval` OS identities;
-- `/var/lib/agentnet`, `/var/lib/agentnet-approval`, root-only `/var/lib/agentnet-setup`, and `/etc/agentnet-secrets`;
-- `agentnet-core.service` and `agentnet-approval.service`;
+- locked `agentnet`, `agentnet-approval`, and isolated `agentnet-c0` OS identities;
+- `/var/lib/agentnet`, `/var/lib/agentnet-approval`, `/var/lib/agentnet-c0`, root-only `/var/lib/agentnet-setup`, and `/etc/agentnet-secrets`;
+- `agentnet-core.service`, `agentnet-approval.service`, `agentnet-c0-responder.service`, `agentnet-credential-renew.service`, and `agentnet-credential-renew.timer`;
 - loopback Core `127.0.0.1:8080` and Approval `127.0.0.1:8090`.
 
 Operator-owned prerequisites remain:
@@ -99,7 +99,7 @@ Copy the exact mode-matching example and replace every illustrative value with a
 - confidential Approval OIDC secret only when selected method requires it;
 - same `AGENTNET_APPROVAL_CORE_TOKEN` value.
 
-Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.31 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
+Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.32 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
 
 Environment syntax is strict unquoted `NAME=value`. Whitespace, shell quoting, backslashes, duplicate names, empty values, or setup-owned interpreter variables are rejected.
 
@@ -148,7 +148,7 @@ Require:
 - `status=planned`;
 - one 64-hex `request_digest`;
 - request bytes, canonical mode-applicable input references, and non-secret fingerprints are bound. Request-v1 uses approval digest v2; request-v2 uses approval digest v3 and binds explicit artifact mode. Both bind exact Node.js, uv, AgentNet, `systemctl`, and `useradd` executable paths/content and one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`;
-- `managed_units` exactly `agentnet-approval.service` and `agentnet-core.service`;
+- `managed_units` exactly Approval, Core, C0 responder, credential-renewal oneshot, and credential-renewal timer units;
 - fixed loopback ports;
 - PostgreSQL prerequisite manifest showing exact peer contract and apply-time canary pending;
 - `identity_enrolled=false`;
@@ -183,16 +183,19 @@ Start scope is limited to:
 
 1. systemd daemon reload;
 2. Approval enable/start;
-3. Core enable;
-4. Core restart;
-5. exact active-state checks;
-6. loopback and public `/healthz` identity checks;
-7. Core loopback/public `/readyz` only after identity activation.
+3. Core enable/restart;
+4. before enrollment, prove responder/timer disabled and renewal oneshot inactive;
+5. after activation, enable the hourly renewal timer and only the nonterminal isolated C0 responder;
+6. exact active/inactive unit and process-binding checks;
+7. loopback and public `/healthz` identity checks;
+8. signed Approval broker readiness through the configured public origin;
+9. Core loopback/public `/readyz` only after exact current identity activation.
 
 ## Retry, marker, and failure rules
 
 Same approved request is deliberately retryable.
 
+- Fresh 0.1.32 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`. First-C0 setup does not migrate or reuse 0.1.31 state.
 - Bootstrap is rerun/revalidated for preexisting Core state; old marker never causes bootstrap skip.
 - Core config is reloaded after bootstrap.
 - Approval trust is reloaded and revalidated.
@@ -220,15 +223,15 @@ Setup never automates owner OIDC or WebAuthn. Human work is browser-only. Never 
 
 Remote activation fails closed with `remote_activation_unavailable` when zero, multiple, expired, rejected, locally initiated, or conflicted transactions exist. Recovery is server-manager-only. For pending nonterminal state, rerun the exact `join guided --browser remote` command and have owner retry only fixed `/activate`; never send private URL/state. If Core reports that exact continuation `expired` or `failed`, rerun the exact command with `--replace-terminal-state`. That flag refuses absent, completed, malformed, argument-drifted, or nonterminal state, reuses the same candidate key, and starts a fresh OIDC transaction; never delete or edit guided state manually. The 60-poll anti-abuse budget applies only before OIDC callback; callback/Approval polling is bounded by the fresh challenge expiry. Failed PKCE, candidate possession failure, missing WebAuthn UV, broker denial, and response-loss conflicts never activate identity.
 
-Final setup must report `operational`, `identity_enrolled=true`, exact public Core readiness, and `authority_granted=false`. Enrollment remains identity-only.
+Final setup must report `operational`, `identity_enrolled=true`, exact public Core readiness with `credential_state=current|renewal_needed` and broker readiness, and `authority_granted=false`. Enrollment remains identity-only. The package-owned responder waits before plan creation, replies exactly once when `waiting_owner`, remains active through `waiting_fresh`, and durably records an owner-only terminal marker before removing its config for `COMPLETED_C0_ROUND_TRIP|expired|invalidated|failed`. If cleanup loses its response, same-digest setup validates terminal binding and private custody, removes only the stale responder config, and never resurrects it. The managed hourly timer renews only the exact current always-on credential during its six-hour window; it cannot revive expiry or follow rotation.
 
 ## Package-owned reset recovery
 
 Reset is destructive server-manager recovery, never owner browser step and never part of canonical fresh-laptop prompt. Exact invocation and confirmation flags belong to [safe commands](safe-commands.md); use only after explicit approval to remove current AgentNet package-owned deployment state.
 
-Reset acquires/creates and validates root-only package lock before inventory, requires exact owner/group/mode/type/link custody, stops/disables both managed units, proves neither remains active, requires symlink-attack-resistant recursive removal, and removes only exact allowlisted deployment entries. Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state, preventing setup from creating a second lock inode while reset runs. Reset rejects unexpected setup/secret entries, managed state without preexisting package lock, active setup, active/unprovable unit, and any request to remove external prerequisites. It reloads systemd even on exact retry after prior response loss. It is idempotent and emits `agentnet.server-setup.reset-evidence.v1` with exact removed/absent paths and all authority, identity, and durability claims false.
+Reset acquires/creates and validates root-only package lock before inventory, requires exact owner/group/mode/type/link custody, stops/disables renewal timer, responder, renewal oneshot, Core, then Approval, proves all five inactive, requires symlink-attack-resistant recursive removal, and removes only exact allowlisted deployment entries. Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state, preventing setup from creating a second lock inode while reset runs. Reset rejects unexpected setup/secret entries, managed state without preexisting package lock, active setup, active/unprovable unit, and any request to remove external prerequisites. It reloads systemd even on exact retry after prior response loss. It is idempotent and emits `agentnet.server-setup.reset-evidence.v1` with exact removed/absent paths and all authority, identity, and durability claims false.
 
-Reset retains PostgreSQL data/role/configuration, system Node.js and `uv`, installed AgentNet package, reverse proxy/TLS/DNS/firewall, operator-owned staging/configuration, permanent coordination lock, and locked `agentnet` and `agentnet-approval` OS identities. Service identities remain because safe ownership of every file carrying reused numeric UID cannot be proven outside package roots. Reset never edits marker or external prerequisite to force retry, and is not secret rotation.
+Reset retains PostgreSQL data/role/configuration, system Node.js and `uv`, installed AgentNet package, reverse proxy/TLS/DNS/firewall, operator-owned staging/configuration, permanent coordination lock, and locked `agentnet`, `agentnet-approval`, and `agentnet-c0` OS identities. Service identities remain because safe ownership of every file carrying reused numeric UID cannot be proven outside package roots. Reset never edits marker or external prerequisite to force retry, and is not secret rotation.
 
 ## Evidence limits and cleanup
 

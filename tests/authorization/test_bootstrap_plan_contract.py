@@ -212,7 +212,7 @@ def test_bootstrap_state_machine_keeps_s4_guard_pending_until_s5() -> None:
 def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "plan-schema.sqlite3", LocalEnvelopeCipher(b"p" * 32))
     try:
-        assert store.readiness()["schema_version"] == 4
+        assert store.readiness()["schema_version"] == 5
         tables = {
             str(row["name"])
             for row in store.fetch_all(
@@ -252,9 +252,9 @@ def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -
         store.close()
 
 
-def test_postgres_catalog_keeps_one_forward_only_final_v4_migration() -> None:
-    assert CURRENT_SCHEMA_VERSION == 4
-    migration = MIGRATIONS[-1]
+def test_postgres_catalog_preserves_v4_plan_and_adds_v5_identity_lifecycle() -> None:
+    assert CURRENT_SCHEMA_VERSION == 5
+    migration = MIGRATIONS[3]
     assert migration.version == 4
     assert migration.name == "bounded_c0_bootstrap_plan"
     for table in REQUIRED_PLAN_TABLES:
@@ -266,3 +266,9 @@ def test_postgres_catalog_keeps_one_forward_only_final_v4_migration() -> None:
     assert "issuer_kind='accepting_core' AND issuer_harness_id IS NULL" in migration.sql
     assert "issuer_kind='harness' AND issuer_harness_id IS NOT NULL" in migration.sql
     assert " INTEGER" not in migration.sql
+    lifecycle = MIGRATIONS[-1]
+    assert lifecycle.version == 5
+    assert lifecycle.name == "identity_begin_idempotency_and_credential_renewal"
+    assert "begin_idempotency_key_hash" in lifecycle.sql
+    assert "credential_renewal_requests" in lifecycle.sql
+    assert " INTEGER" not in lifecycle.sql

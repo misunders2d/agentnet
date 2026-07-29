@@ -349,72 +349,6 @@ def run_supervisor_daemon(
             signal.signal(signum, handler)
 
 
-def run_c0_pilot_responder_daemon(
-    config: SupervisorDaemonConfig,
-    *,
-    stop_event: threading.Event | None = None,
-    transport: httpx.BaseTransport | None = None,
-) -> dict[str, object]:
-    """Run fixed owner response loop without queue, worker, model, task, or A2A paths."""
-
-    signing_key = _owner_private_key(config.signing_key_path)
-    requested_stop = stop_event or threading.Event()
-    previous_handlers: dict[int, object] = {}
-    client: AgentNetClient | None = None
-    try:
-        client = AgentNetClient(
-            base_url=config.core_base_url,
-            key=signing_key,
-            domain_id=config.domain_id,
-            harness_id=config.harness_id,
-            credential_id=config.credential_id,
-            audience=config.audience,
-            transport=transport,
-        )
-        core_client = AgentNetSupervisorCoreClient(client)
-        if threading.current_thread() is threading.main_thread():
-            for signum in (signal.SIGINT, signal.SIGTERM):
-                previous_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, lambda _signum, _frame: requested_stop.set())
-        delay = config.reconnect_initial_seconds
-        errors = 0
-        while not requested_stop.is_set():
-            try:
-                status = core_client.c0_pilot_status()
-                if status["status"] == "waiting_owner":
-                    status = core_client.c0_pilot_respond()
-                if status["status"] in {
-                    "waiting_fresh", "COMPLETED_C0_ROUND_TRIP", "expired", "invalidated"
-                }:
-                    return {
-                        "schema": "agentnet.c0-pilot-responder.exit.v1",
-                        "status": status["status"],
-                        "stopped": True,
-                    }
-                errors = 0
-                delay = config.reconnect_initial_seconds
-                requested_stop.wait(config.watch_wait_seconds)
-            except Exception:
-                errors += 1
-                if errors >= config.max_consecutive_cycle_errors:
-                    raise GateBlocked(
-                        "c0_pilot_responder",
-                        "C0 pilot responder reached its consecutive error ceiling",
-                    )
-                requested_stop.wait(delay)
-                delay = min(config.reconnect_max_seconds, delay * 2)
-        return {
-            "schema": "agentnet.c0-pilot-responder.exit.v1",
-            "status": "stopped",
-            "stopped": True,
-        }
-    finally:
-        if client is not None:
-            client.close()
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-
-
 def redacted_supervisor_status(config: SupervisorDaemonConfig) -> dict[str, object]:
     return {
         "schema": "agentnet.supervisor-daemon.config.v1",
@@ -437,6 +371,5 @@ __all__ = [
     "SupervisorDaemonConfig",
     "load_supervisor_config",
     "redacted_supervisor_status",
-    "run_c0_pilot_responder_daemon",
     "run_supervisor_daemon",
 ]

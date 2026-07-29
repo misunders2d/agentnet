@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from agentnet.errors import (
     AuthenticationError,
+    ConflictError,
     ExtensionError,
     GateBlocked,
     ReplayError,
@@ -687,15 +688,75 @@ class OIDCEnrollmentCoordinator:
         harness_name: str,
         public_key_pem: str,
         remote_activation: bool = False,
+        idempotency_key: str | None = None,
     ) -> OIDCGuidedAuthorizationRequest:
-        if self.enrollment.outage_gate is not None:
-            self.enrollment.outage_gate.require_issuance()
         key_id = self.enrollment.validate_begin_request(
             domain_id=domain_id,
             harness_kind=harness_kind,
             harness_name=harness_name,
             public_key_pem=public_key_pem,
         )
+        supplied_key = idempotency_key or _b64url_encode(secrets.token_bytes(32))
+        try:
+            decoded_key = _b64url_decode(supplied_key)
+        except Exception as exc:
+            raise AuthenticationError("OIDC begin idempotency key is invalid") from exc
+        if len(decoded_key) != 32 or _b64url_encode(decoded_key) != supplied_key:
+            raise AuthenticationError("OIDC begin idempotency key is invalid")
+        key_hash = hashlib.sha256(decoded_key).hexdigest()
+        request_digest = hashlib.sha256(
+            canonical_json(
+                {
+                    "schema": "agentnet.oidc.begin-request.v1",
+                    "domain_id": domain_id,
+                    "harness_kind": harness_kind,
+                    "harness_name": harness_name,
+                    "public_key_pem": public_key_pem,
+                    "key_id": key_id,
+                    "binding_assurance": self.enrollment.binding_assurance,
+                    "activation_mode": "remote_browser" if remote_activation else "local_browser",
+                    "issuer": self.provider.config.issuer,
+                    "client_id": self.provider.config.client_id,
+                    "audience": self.provider.config.audience,
+                    "redirect_uri": self.provider.config.redirect_uri,
+                    "expected_oidc_subject": self.provider.config.remote_activation_oidc_subject,
+                    "expected_verified_email_alias": self.provider.config.remote_activation_verified_email_alias,
+                }
+            )
+        ).hexdigest()
+
+        def cached_response() -> OIDCGuidedAuthorizationRequest | None:
+            row = self.store.fetch_one(
+                """SELECT transaction_id,begin_request_digest,begin_response_encrypted
+                     FROM oidc_enrollment_transactions
+                    WHERE begin_idempotency_key_hash=?""",
+                (key_hash,),
+            )
+            if row is None:
+                return None
+            if row["begin_request_digest"] != request_digest or row["begin_response_encrypted"] is None:
+                raise ConflictError("OIDC begin idempotency key request conflicts")
+            value = self.store.cipher.decrypt_json(
+                row["begin_response_encrypted"],
+                purpose=f"oidc-begin-response:{key_hash}",
+            )
+            if not isinstance(value, dict) or set(value) != {
+                "transaction_id", "authorization_url", "state", "expires_at", "continuation_token"
+            }:
+                raise AuthenticationError("OIDC begin cached response is invalid")
+            return OIDCGuidedAuthorizationRequest(
+                str(value["transaction_id"]),
+                str(value["authorization_url"]),
+                str(value["state"]),
+                int(value["expires_at"]),
+                str(value["continuation_token"]),
+            )
+
+        existing = cached_response()
+        if existing is not None:
+            return existing
+        if self.enrollment.outage_gate is not None:
+            self.enrollment.outage_gate.require_issuance()
         transaction_id = str(uuid4())
         state = secrets.token_urlsafe(32)
         continuation_token = secrets.token_urlsafe(32)
@@ -713,6 +774,23 @@ class OIDCEnrollmentCoordinator:
         verifier_encrypted = self.store.cipher.encrypt_json(
             {"code_verifier": code_verifier},
             purpose=f"oidc-pkce:{transaction_id}",
+        )
+        response = OIDCGuidedAuthorizationRequest(
+            transaction_id,
+            authorization_url,
+            state,
+            expires_at,
+            continuation_token,
+        )
+        response_encrypted = self.store.cipher.encrypt_json(
+            {
+                "transaction_id": response.transaction_id,
+                "authorization_url": response.authorization_url,
+                "state": response.state,
+                "expires_at": response.expires_at,
+                "continuation_token": response.continuation_token,
+            },
+            purpose=f"oidc-begin-response:{key_hash}",
         )
         expected_subject = self.provider.config.remote_activation_oidc_subject
         expected_email = self.provider.config.remote_activation_verified_email_alias
@@ -736,13 +814,15 @@ class OIDCEnrollmentCoordinator:
             if remote_activation
             else None
         )
-        with self.store.transaction() as connection:
-            connection.execute(
+        try:
+            with self.store.transaction() as connection:
+                connection.execute(
                 """INSERT INTO oidc_enrollment_transactions(
                     transaction_id,domain_id,issuer,client_id,audience,redirect_uri,state_hash,nonce_hash,
                     code_verifier_encrypted,harness_kind,harness_name,public_key_pem,key_id,binding_assurance,
-                    status,created_at,expires_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?)""",
+                    status,created_at,expires_at,begin_idempotency_key_hash,
+                    begin_request_digest,begin_response_encrypted
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?)""",
                 (
                     transaction_id,
                     domain_id,
@@ -761,40 +841,45 @@ class OIDCEnrollmentCoordinator:
                     "pending",
                     now,
                     expires_at,
+                    key_hash,
+                    request_digest,
+                    response_encrypted,
                 ),
             )
-            connection.execute(
-                """INSERT INTO oidc_enrollment_continuations(
-                       transaction_id,continuation_hash,status,challenge_encrypted,poll_after_at,
-                       poll_interval_seconds,poll_count,created_at,updated_at,expires_at
-                   ) VALUES(?,?,'awaiting_oidc',?,?,2,0,?,?,?)""",
-                (
-                    transaction_id,
-                    continuation_hash,
-                    activation_encrypted,
-                    now + 2,
-                    now,
-                    now,
-                    expires_at,
-                ),
-            )
-            self.store.append_audit(
-                connection,
-                {
-                    "action": "oidc.authorization.created",
-                    "domain_id": domain_id,
-                    "expires_at": expires_at,
-                    "issuer": self.provider.config.issuer,
-                    "transaction_id": transaction_id,
-                },
-            )
-        return OIDCGuidedAuthorizationRequest(
-            transaction_id,
-            authorization_url,
-            state,
-            expires_at,
-            continuation_token,
-        )
+                connection.execute(
+                    """INSERT INTO oidc_enrollment_continuations(
+                           transaction_id,continuation_hash,status,challenge_encrypted,poll_after_at,
+                           poll_interval_seconds,poll_count,created_at,updated_at,expires_at
+                       ) VALUES(?,?,'awaiting_oidc',?,?,2,0,?,?,?)""",
+                    (
+                        transaction_id,
+                        continuation_hash,
+                        activation_encrypted,
+                        now + 2,
+                        now,
+                        now,
+                        expires_at,
+                    ),
+                )
+                self.store.append_audit(
+                    connection,
+                    {
+                        "action": "oidc.authorization.created",
+                        "domain_id": domain_id,
+                        "expires_at": expires_at,
+                        "issuer": self.provider.config.issuer,
+                        "transaction_id": transaction_id,
+                    },
+                )
+        except sqlite3.IntegrityError:
+            # PostgreSQL adapter deliberately normalizes integrity errors to
+            # sqlite3.IntegrityError.  Only an exact committed winner for this
+            # key is recoverable; every unrelated constraint fault propagates.
+            winner = cached_response()
+            if winner is None:
+                raise
+            return winner
+        return response
 
     def remote_activation_authorization_url(self) -> str:
         """Return one server-staged browser authorization without exposing its state elsewhere."""

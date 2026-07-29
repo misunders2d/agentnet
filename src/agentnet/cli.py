@@ -21,7 +21,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import uvicorn
 import httpx
@@ -129,10 +129,14 @@ from agentnet.supervisor.live_gate import (
     installed_probe_report,
     run_live_harness_gate,
 )
+from agentnet.supervisor.c0_responder import (
+    check_c0_responder,
+    load_c0_responder_config,
+    run_c0_responder,
+)
 from agentnet.supervisor.daemon import (
     load_supervisor_config,
     redacted_supervisor_status,
-    run_c0_pilot_responder_daemon,
     run_supervisor_daemon,
 )
 
@@ -1149,9 +1153,11 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
     except ServerSetupError as exc:
         blocker = exc.blocker
         message = str(exc)
+        identity_enrolled = exc.identity_enrolled
     except Exception:
         blocker = "internal_setup_failure"
         message = "server setup failed before producing verified evidence"
+        identity_enrolled = False
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
@@ -1163,7 +1169,7 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
                 "blocker": blocker,
                 "message": message,
                 "authority_granted": False,
-                "identity_enrolled": False,
+                "identity_enrolled": identity_enrolled,
                 "production_durability_proven": False,
             },
             indent=2,
@@ -1575,7 +1581,14 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "approval_url",
         }
         pending_schema = pending.get("schema")
-        if pending_schema == "agentnet.guided-join.v2":
+        if pending_schema == "agentnet.guided-join.v3":
+            expected |= {
+                "identity_path",
+                "browser_mode",
+                "begin_idempotency_key",
+                "replaced_authorization",
+            }
+        elif pending_schema == "agentnet.guided-join.v2":
             expected |= {"identity_path", "browser_mode"}
         elif pending_schema != "agentnet.guided-join.v1":
             raise SystemExit("guided join state does not match the exact schema")
@@ -1587,7 +1600,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             or pending["harness_kind"] != args.harness
             or pending["harness_name"] != args.name
             or (
-                pending_schema == "agentnet.guided-join.v2"
+                pending_schema in {"agentnet.guided-join.v2", "agentnet.guided-join.v3"}
                 and (
                     pending["identity_path"] != str(identity_path)
                     or pending["browser_mode"] != args.browser
@@ -1595,7 +1608,25 @@ def command_join_guided(args: argparse.Namespace) -> int:
             )
         ):
             raise SystemExit("guided join resume arguments do not match pending state")
-        authorization = _validate_guided_authorization(pending["authorization"])
+        authorization = (
+            None
+            if pending["authorization"] is None
+            else _validate_guided_authorization(pending["authorization"])
+        )
+        if pending_schema != "agentnet.guided-join.v3" and authorization is None:
+            raise SystemExit("guided join authorization is missing")
+        if pending_schema == "agentnet.guided-join.v3":
+            begin_key = pending["begin_idempotency_key"]
+            if (
+                not isinstance(begin_key, str)
+                or len(begin_key) != 43
+                or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for character in begin_key)
+            ):
+                raise SystemExit("guided join begin idempotency state is invalid")
+            if authorization is None and (
+                pending["challenge"] is not None or pending["approval_url"] is not None
+            ):
+                raise SystemExit("guided join pre-begin state is inconsistent")
         key_path = Path(str(pending["private_key_path"]))
         key = P256KeyPair.from_private_pem(
             _owner_only_file(key_path, label="guided join private key")
@@ -1603,10 +1634,12 @@ def command_join_guided(args: argparse.Namespace) -> int:
         if key.public_pem != pending["public_key_pem"]:
             raise SystemExit("guided join private key no longer matches pending state")
         if args.replace_terminal_state:
-            if pending_schema != "agentnet.guided-join.v2":
+            if pending_schema not in {"agentnet.guided-join.v2", "agentnet.guided-join.v3"}:
                 raise SystemExit(
                     "guided join terminal replacement requires argument-bound state"
                 )
+            if authorization is None:
+                raise SystemExit("guided join terminal replacement has no prior authorization")
             _polled, terminal_status, _interval = _poll_guided_authorization(
                 server=server,
                 authorization=authorization,
@@ -1619,10 +1652,19 @@ def command_join_guided(args: argparse.Namespace) -> int:
     elif args.replace_terminal_state:
         raise SystemExit("guided join terminal replacement requires existing pending state")
 
-    if not state_exists or replace_terminal_state:
+    begin_required = (
+        not state_exists
+        or replace_terminal_state
+        or (
+            state_exists
+            and pending.get("schema") == "agentnet.guided-join.v3"
+            and pending.get("authorization") is None
+        )
+    )
+    if begin_required:
         if args.browser == "terminal":
             _require_private_terminal_or_exit()
-        if not replace_terminal_state:
+        if not state_exists:
             key_path = (
                 Path(os.path.abspath(args.private_key))
                 if args.private_key
@@ -1635,12 +1677,36 @@ def command_join_guided(args: argparse.Namespace) -> int:
             else:
                 key = P256KeyPair.generate()
                 _write_owner_only(key_path, key.private_pem)
+        if not state_exists or replace_terminal_state:
+            begin_key = secrets.token_urlsafe(32)
+            pending = {
+                "schema": "agentnet.guided-join.v3",
+                "server_base_url": server,
+                "domain_id": args.domain,
+                "harness_kind": args.harness,
+                "harness_name": args.name,
+                "private_key_path": str(key_path),
+                "public_key_pem": key.public_pem,
+                "identity_path": str(identity_path),
+                "browser_mode": args.browser,
+                "begin_idempotency_key": begin_key,
+                "authorization": None,
+                "replaced_authorization": authorization if replace_terminal_state else None,
+                "challenge": None,
+                "approval_url": None,
+            }
+            if state_exists:
+                _write_private_config(state_path, pending, force=True)
+            else:
+                _write_owner_json(state_path, pending)
+            state_exists = True
         authorization = _validate_guided_authorization(
             _public_json_request(
                 server=server,
                 method="POST",
                 path="/v1/enrollment/oidc/begin",
                 body={
+                    "idempotency_key": pending["begin_idempotency_key"],
                     "harness_kind": args.harness,
                     "harness_name": args.name,
                     "public_key_pem": key.public_pem,
@@ -1653,23 +1719,11 @@ def command_join_guided(args: argparse.Namespace) -> int:
             )
         )
         pending = {
-            "schema": "agentnet.guided-join.v2",
-            "server_base_url": server,
-            "domain_id": args.domain,
-            "harness_kind": args.harness,
-            "harness_name": args.name,
-            "private_key_path": str(key_path),
-            "public_key_pem": key.public_pem,
-            "identity_path": str(identity_path),
-            "browser_mode": args.browser,
+            **pending,
             "authorization": authorization,
-            "challenge": None,
-            "approval_url": None,
+            "replaced_authorization": None,
         }
-        if replace_terminal_state:
-            _write_private_config(state_path, pending, force=True)
-        else:
-            _write_owner_json(state_path, pending)
+        _write_private_config(state_path, pending, force=True)
         _handoff_guided_authorization(
             str(authorization["authorization_url"]),
             browser=args.browser,
@@ -1787,6 +1841,7 @@ def command_join_begin(args: argparse.Namespace) -> int:
         method="POST",
         path="/v1/enrollment/oidc/begin",
         body={
+            "idempotency_key": secrets.token_urlsafe(32),
             "harness_kind": args.harness,
             "harness_name": args.name,
             "public_key_pem": key.public_pem,
@@ -2339,6 +2394,93 @@ def command_c0_pilot(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
+    return 0
+
+
+_CREDENTIAL_RENEWAL_CLI_STATE_SCHEMA = "agentnet.credential-renewal-cli-state.v1"
+
+
+def _credential_renewal_cli_state(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    if not os.path.lexists(resolved):
+        value = {
+            "schema": _CREDENTIAL_RENEWAL_CLI_STATE_SCHEMA,
+            "request_id": str(uuid4()),
+        }
+        _write_private_config(resolved, value, force=False)
+        return value
+    try:
+        value = json.loads(_owner_only_file(resolved, label="credential renewal state"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("credential renewal state is not readable JSON") from exc
+    if not isinstance(value, dict) or set(value) != {"schema", "request_id"}:
+        raise SystemExit("credential renewal state does not match the exact schema")
+    request_id = value.get("request_id")
+    try:
+        parsed = UUID(str(request_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise SystemExit("credential renewal state does not match the exact schema") from exc
+    if value.get("schema") != _CREDENTIAL_RENEWAL_CLI_STATE_SCHEMA or str(parsed) != request_id:
+        raise SystemExit("credential renewal state does not match the exact schema")
+    return {"schema": _CREDENTIAL_RENEWAL_CLI_STATE_SCHEMA, "request_id": str(request_id)}
+
+
+def command_credential_renew(args: argparse.Namespace) -> int:
+    state_path = Path(args.state)
+    state = _credential_renewal_cli_state(state_path)
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.renew_current_credential(request_id=state["request_id"])
+    finally:
+        client.close()
+    if response.status_code != 200:
+        print(json.dumps({"schema": "agentnet.credential-renewal-cli-result.v1", "status": "blocked"}, indent=2, sort_keys=True))
+        return 1
+    try:
+        result = response.json()
+    except Exception as exc:
+        raise SystemExit("credential renewal response is invalid") from exc
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"schema", "status", "expires_at"}
+        or result.get("schema") != "agentnet.credential-renewal-result.v1"
+        or result.get("status") not in {"current", "renewed"}
+        or not isinstance(result.get("expires_at"), int)
+    ):
+        raise SystemExit("credential renewal response is invalid")
+    # Rotate only after exact response. If this local write fails, retry retains
+    # the old ID and receives the exact stored result without another mutation.
+    _write_private_config(
+        state_path.resolve(),
+        {"schema": _CREDENTIAL_RENEWAL_CLI_STATE_SCHEMA, "request_id": str(uuid4())},
+        force=True,
+    )
+    print(json.dumps({"schema": "agentnet.credential-renewal-cli-result.v1", "status": result["status"]}, indent=2, sort_keys=True))
+    return 0
+
+
+def command_c0_pilot_responder(args: argparse.Namespace) -> int:
+    config_path = Path(args.config)
+    credential_path = Path(args.credential)
+    config = load_c0_responder_config(config_path)
+    if args.check:
+        try:
+            value = check_c0_responder(config, credential_path)
+        except GateBlocked:
+            print(
+                json.dumps(
+                    {
+                        "schema": "agentnet.c0-pilot-responder.check.v1",
+                        "status": "blocked",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 1
+    else:
+        value = run_c0_responder(config, credential_path, config_path)
+    print(json.dumps(value, indent=2, sort_keys=True))
     return 0
 
 
@@ -3269,12 +3411,9 @@ def command_supervisor_run(args: argparse.Namespace) -> int:
         raise SystemExit(str(exc)) from None
     if args.check:
         status = redacted_supervisor_status(config)
-        if args.c0_pilot_responder:
-            status["mode"] = "c0_pilot_responder"
         print(json.dumps(status, indent=2, sort_keys=True))
         return 0
-    runner = run_c0_pilot_responder_daemon if args.c0_pilot_responder else run_supervisor_daemon
-    print(json.dumps(runner(config), indent=2, sort_keys=True))
+    print(json.dumps(run_supervisor_daemon(config), indent=2, sort_keys=True))
     return 0
 
 
@@ -3945,6 +4084,19 @@ def build_parser() -> argparse.ArgumentParser:
         operation.add_argument("--state", default=".agentnet/bootstrap-plan-state.json")
         operation.set_defaults(func=function)
 
+    credential = commands.add_parser(
+        "credential",
+        help="operate the exact current signed credential",
+    )
+    credential_commands = credential.add_subparsers(dest="credential_command", required=True)
+    credential_renew = credential_commands.add_parser(
+        "renew",
+        help="renew the exact configured always-on credential within policy window",
+    )
+    credential_renew.add_argument("--identity", default=".agentnet/identity.json")
+    credential_renew.add_argument("--state", default=".agentnet/credential-renewal-state.json")
+    credential_renew.set_defaults(func=command_credential_renew)
+
     c0_pilot = commands.add_parser(
         "c0-pilot",
         help="run or inspect the fixed same-principal two-harness C0 proof",
@@ -3956,6 +4108,16 @@ def build_parser() -> argparse.ArgumentParser:
         operation = c0_pilot_commands.add_parser(name)
         operation.add_argument("--identity", default=".agentnet/identity.json")
         operation.set_defaults(func=command_c0_pilot)
+    c0_responder = c0_pilot_commands.add_parser(
+        "responder",
+        help="check or run dedicated package-owned C0 responder",
+    )
+    c0_responder.add_argument("--config", required=True)
+    c0_responder.add_argument("--credential", required=True)
+    c0_responder_mode = c0_responder.add_mutually_exclusive_group(required=True)
+    c0_responder_mode.add_argument("--check", action="store_true")
+    c0_responder_mode.add_argument("--run", action="store_true")
+    c0_responder.set_defaults(func=command_c0_pilot_responder)
 
     authority = commands.add_parser(
         "authority",
@@ -4276,11 +4438,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="validate the owner-only configuration and print only non-secret fields",
-    )
-    supervisor_run.add_argument(
-        "--c0-pilot-responder",
-        action="store_true",
-        help="run only the fixed no-model owner C0 responder",
     )
     supervisor_run.set_defaults(func=command_supervisor_run)
 

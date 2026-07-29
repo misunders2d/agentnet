@@ -15,6 +15,7 @@ from starlette.routing import Route
 
 from agentnet.authorization.c0_pilot import (
     C0PilotCompleteRequest,
+    C0PilotReadinessRequest,
     C0PilotRespondRequest,
     C0PilotStartRequest,
     C0PilotStatusRequest,
@@ -119,6 +120,11 @@ def create_c0_pilot_routes(
         return route
 
     return [
+        Route(
+            "/v1/c0-pilot/readiness",
+            handler(C0PilotReadinessRequest, "c0_pilot_readiness"),
+            methods=["POST"],
+        ),
         Route(
             "/v1/c0-pilot/start",
             handler(C0PilotStartRequest, "c0_pilot_start", 201),

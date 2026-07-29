@@ -41,7 +41,7 @@ from agentnet.effects.reservations import (
 )
 from agentnet.errors import AuthenticationError, AuthorizationError, ValidationError
 from agentnet.identity.actors import ActorKind, TrustedTransportContext, VerifiedActor
-from agentnet.identity.credentials import CredentialRotationRequest
+from agentnet.identity.credentials import CredentialRenewalRequest, CredentialRotationRequest
 from agentnet.identity.workload import AuthenticatedSPIFFETransport
 from agentnet.operations.incident import IncidentModeChange
 from agentnet.operations.authority_inspection import DenialExplanationQuery
@@ -463,6 +463,12 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         if proof_actor != expected:
             raise AuthenticationError("effect proof and verified workload transport disagree")
         return actor
+
+    async def renew_current_credential(request: Request) -> Response:
+        body, actor = await body_and_actor(request, core)
+        parsed = CredentialRenewalRequest.model_validate_json(body)
+        result = core.renew_current_credential(actor=actor, request=parsed)
+        return JSONResponse(result.model_dump(mode="json", by_alias=True))
 
     async def rotate_current_credential(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
@@ -1648,6 +1654,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         return JSONResponse(core.replay_unsupported_events(actor=actor, **parsed.model_dump()))
 
     return [
+        Route("/v1/credentials/current/renew", renew_current_credential, methods=["POST"]),
         Route("/v1/credentials/current/rotate", rotate_current_credential, methods=["POST"]),
         Route("/v1/relationships", propose_relationship, methods=["POST"]),
         Route("/v1/relationships/{relationship_id}/accept", accept_relationship, methods=["POST"]),

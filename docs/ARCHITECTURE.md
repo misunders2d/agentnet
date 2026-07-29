@@ -68,9 +68,13 @@ real enrollment, `server-agent activate` holds the exact runtime lease under a
 distinct activation owner, verifies the current credential and private key
 against the same PostgreSQL authority, and atomically adds only the exact
 harness/credential labels to the offline config. Startup does not follow a
-retired label to a successor credential. These labels and server capability
-limits can only narrow process eligibility; protected operations still derive
-and authorize their exact caller independently.
+retired label to a successor credential. Always-on credentials remain finite:
+24-hour issuance with a six-hour renewal window. The hourly managed timer calls
+a selector-free signed current-binding renewal route; exact request replay
+returns the persisted result, compare-and-swap prevents expiry races, and an
+expired/revoked/rotated binding cannot renew or satisfy readiness. These labels
+and server capability limits can only narrow process eligibility; protected
+operations still derive and authorize their exact caller independently.
 
 ## Canonical state and evidence
 
@@ -273,9 +277,11 @@ adds protected task-payload disclosure receipts. Migration 3 adds
 challenge/completion state, approval-request binding, bounded polling, and
 response-loss idempotency. Migration 4 adds the bounded same-principal C0
 bootstrap-plan, exact ten-item plan/guard mapping, pilot-attempt, and seven-fact
-evidence tables. Fresh SQLite and PostgreSQL stores create v4; the tested N/N-1
-Core path accepts only an exact catalog/checksum-verified v3 store for atomic
-v3→v4 upgrade. PostgreSQL verifies the complete live v3/v4 table, column type,
+evidence tables. Migration 5 adds recoverable OIDC-begin idempotency and exact
+finite current-credential renewal request custody. Fresh SQLite and PostgreSQL
+stores create v5; the tested N/N-1 Core path accepts only an exact
+catalog/checksum-verified v4 store for atomic v4→v5 upgrade. PostgreSQL verifies
+the complete live v4/v5 table, column type,
 nullability/default, constraint-definition, and non-constraint-index catalog in
 addition to the contiguous migration checksums; any mismatch fails before use.
 
@@ -555,10 +561,10 @@ The proof uses three atomic Core transactions:
 Exact retries reconstruct from authoritative events, receipts, facts, uses, and
 cleanup state; prose, status echoes, transport ACKs, and fact rows alone cannot
 prove completion. Durable ambiguity/tamper is non-retryable; only typed
-compare-and-swap races are retryable. The dedicated supervisor mode
-`--c0-pilot-responder` calls only status/respond through the signed client. It
-does not construct semantic workers, models, queues, tasks, artifacts, effects,
-tools, or A2A services. Local acceptance remains `accepted_local`; no
+compare-and-swap races are retryable. The package-owned dedicated command
+`agentnet c0-pilot responder` calls only status/respond through the signed
+client. It does not construct semantic workers, models, queues, tasks,
+artifacts, effects, tools, or A2A services. Local acceptance remains `accepted_local`; no
 single-primary or HA durability promotion follows from this proof.
 
 ## Component seams
@@ -589,8 +595,8 @@ Approval digest v2 belongs only to request-v1. Approval digest v3 belongs to req
 
 Ordinary database contract is fixed local peer authentication: OS user, PostgreSQL role, and database are all `agentnet`; socket is `/var/run/postgresql`; DSN is `postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet`; loaded HBA must select an unshadowed `local agentnet agentnet peer` rule with no ident map. Apply may create the fixed Core OS identity, then forks a bounded read-only canary under that identity and inspects parsed current-file `pg_hba_file_rules`/`pg_ident_file_mappings` under local `postgres` identity. `pg_conf_load_time()` must be no older than both auth files, so current-file parsing plus service canary cannot masquerade as a loaded rule. Wrong transport/role/database, read-only/recovery server, parse error, mapped/broad/shadowing/non-peer rule, or stale unreloaded configuration blocks before AgentNet environment/config/database write. PostgreSQL role/database/HBA/ident administration and reload stay operator-owned separate approval boundaries.
 
-After database gate, wrapper owns only locked Approval identity, private AgentNet roots, Approval provisioning, Core schema/config bootstrap, mode-applicable scanner public trust, fixed loopback ports, two hardened systemd units, bounded service start/restart, and redacted evidence. Scanner trust is created and passed only for enabled mode; disabled mode rejects preexisting scanner trust and never provisions an artifact key. Before any Approval/Core product subprocess, direct child config/state/data paths are inspected with `lstat`; symlink, dangling-symlink, nonregular, ownership, or mode conflicts block. Existing private state trees and realized post-create/post-bootstrap Core custody are recursively revalidated as owner-only directories and single-link regular files before convergence continues. Existing operator-owned PostgreSQL administration, DNS, TLS/reverse-proxy routes, certificates, firewall, and secret injection are explicit prerequisites and never mutated. Start verifies loopback and exact public HTTPS health, including exact artifact mode and capability set; post-activation start also requires matching public Core readiness.
+After database gate, wrapper owns only locked Approval/Core/C0 service identities, private AgentNet roots, Approval provisioning, Core schema/config bootstrap, mode-applicable scanner public trust, fixed loopback ports, five hardened systemd units, bounded service start/restart, and redacted evidence. Units are Approval, Core, an isolated fixed C0 responder, a static selector-free current-credential renewal oneshot, and its hourly persistent timer. Scanner trust is created and passed only for enabled mode; disabled mode rejects preexisting scanner trust and never provisions an artifact key. Before any Approval/Core product subprocess, direct child config/state/data paths are inspected with `lstat`; symlink, dangling-symlink, nonregular, ownership, or mode conflicts block. Existing private state trees and realized post-create/post-bootstrap Core custody are recursively revalidated as owner-only directories and single-link regular files before convergence continues. Existing operator-owned PostgreSQL administration, DNS, TLS/reverse-proxy routes, certificates, firewall, and secret injection are explicit prerequisites and never mutated. Start verifies loopback and exact public HTTPS health, including exact artifact mode and capability set. Post-activation start additionally proves `credential_state=current|renewal_needed`, performs a purpose-specific signed non-mutating Approval broker-readiness request through the configured public origin, starts the renewal timer, and starts the responder only while its exact terminal marker is absent. If terminal-marker commit succeeded but responder-config removal lost its response, same-digest setup validates both files' private custody and exact terminal binding, removes only the stale responder config, fsyncs the directory, and leaves the responder disabled; later retries never recreate it.
 
-Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. Marker never proves identity, authority, service health, readiness, PostgreSQL durability, HA, or production certification. OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain explicit ceremonies. Remote Managers may provide immutable package guidance and inspect sanitized evidence only; target coding agents own host execution.
+Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. A root-owned current-package attempt record is written before first product mutation and removed only after marker commit, allowing exact interruption recovery while rejecting unowned pre-existing state; the 0.1.32 first-C0 path deliberately does not migrate 0.1.31 state. Marker never proves identity, authority, service health, readiness, PostgreSQL durability, HA, or production certification. OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain explicit ceremonies. Remote Managers may provide immutable package guidance and inspect sanitized evidence only; target coding agents own host execution.
 
-`agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and service identities. Reset is not a browser action, onboarding step, or secret-rotation path.
+`agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path.

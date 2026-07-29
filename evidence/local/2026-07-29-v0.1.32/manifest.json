@@ -1,0 +1,84 @@
+{
+  "run_id": "2026-07-29-v0.1.32",
+  "evaluated_at": "2026-07-29T23:15:00+00:00",
+  "scope": "v0_1_32_coordinated_first_c0_release_blocker_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "78b776180446264b3edad37f2b8570fa5341eca006156c4bfa8ee5c071dca678",
+  "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
+  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; and exact five-unit systemd setup/reset lifecycle. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Dedicated PostgreSQL mutation evidence, clean-host systemd deployment, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, cross-platform CI, production certification, ship eligibility, and gate promotion remain absent or separately gated.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "packed_generations": "source plus two clean recursive npm installation generations are required to report 1578 passed and 16 expected platform/dedicated-PostgreSQL skips, complete package-tree digest equality, and no named verification residue",
+    "root_installed_external_host": "NOT RUN: no 0.1.32 root-installed external-host setup, service start, enrollment, responder, timer, or C0 ceremony was authorized; prior 0.1.31 negative deployment evidence remains historical only",
+    "callback_incident": "0.1.32 stores the exact OIDC begin idempotency key before network and same-key/same-request retries return the encrypted committed Core winner; no prior callback URL, state, code, cookie, continuation, or transaction is reused",
+    "known_live_findings": "MEL-216, MEL-217, MEL-220, and MEL-226 have local source repairs; external proof is absent and no issue or release gate is promoted"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 585 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1622 passed, 16 expected platform/dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider",
+      "result": "BOUNDED NON-GREEN: 1655 passed, 16 expected platform/dedicated-PostgreSQL skips, and exactly two installed-harness G01 pin failures; failures remain non-green and are not waived or repinned"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1578 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
+    },
+    {
+      "command": "npm pack --json --ignore-scripts; clean npm install; Pi DefaultResourceLoader on packed agentnet-operator skill",
+      "result": "PASS: 0.1.32 npm tarball has 457 files, shasum d2310c29b379010bcac646d859c4f17347db76dc, integrity sha512-9W8sS7GtcE90n1IKUs09lz0cM4t+u6tplBOcb0vW95KG0slCqpPnLWSm0vtw5UmvncqL9FZ9kGhQmkRfn9rBeg==, and Pi loaded exactly one agentnet-operator skill with zero diagnostics"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds produced byte-identical 0.1.32 sdist and wheel archives"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: disposable package copy reported 1578 passed, 16 expected platform/dedicated-PostgreSQL skips and left immutable source/package custody unchanged"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production/shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform and ordinary-server setup workflows",
+      "result": "NOT RUN: candidate is uncommitted and unpushed; no CI or live systemd evidence is claimed by this local manifest"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Final code/security/reliability critic",
+      "model": "openai-codex/gpt-5.4",
+      "result": "REVISE then CONVERGE: release evidence and 0.1.32 verifier coverage were corrected; responder terminal cleanup is same-digest repairable, private-custody checked, directory-fsynced, disabled, and idempotent; narrow rereview found no blocker"
+    },
+    {
+      "review": "AgentNet operator skill Step 4a architecture review",
+      "model": "openai-codex/gpt-5.4",
+      "result": "CONVERGE: all ten categories PASS; source Pi loader found exactly one skill and zero diagnostics"
+    },
+    {
+      "review": "Constitution watcher",
+      "model": "openai-codex/gpt-5.4",
+      "result": "PASS: final retained-evidence closure found local claims narrowly scoped, verifier/ledger agreement fail-closed, no secret/private values, no unauthorized mutation, and blocked/nonproduction posture preserved"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32.tar.gz",
+      "sha256": "fc89daa75f30e1d7d4b3dfed134f12f159ffc6b48dc92c8ee5305ad301094af9"
+    },
+    {
+      "path": "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32-py3-none-any.whl",
+      "sha256": "b767ea53741850e53e0781feb712d7a44cbb787f6a6189363ad8ba1861bf22ae"
+    }
+  ]
+}

@@ -163,9 +163,9 @@ serialize setup. It creates no AgentNet environment, Core/Approval config,
 database schema, unit, Approval identity, or service. Install the exact scoped
 rule, reload PostgreSQL, and rerun the same setup digest.
 
-After the database gate, wrapper converges on Approval identity, private roots,
-Approval provisioning, Core bootstrap, fixed loopback ports, two hardened
-systemd units, and structured redacted evidence. Before any Approval/Core
+After the database gate, wrapper converges on Approval and isolated C0 responder
+identities, private roots, Approval provisioning, Core bootstrap, fixed loopback
+ports, five hardened systemd units, and structured redacted evidence. Before any Approval/Core
 product subprocess, it uses `lstat` to reject symlink, dangling-symlink,
 nonregular, ownership, and mode conflicts at fixed config/state/data child
 paths. Existing service state and newly realized Core state are recursively
@@ -518,8 +518,9 @@ the stored continuation `expired` or `failed`, rerun that exact command with
 `--replace-terminal-state`; it refuses absent, completed, malformed,
 argument-drifted, or nonterminal state, reuses the same candidate key, and starts
 a fresh OIDC transaction. Never delete/edit the state file or move it between
-systems. Begin response loss may leave an orphan server transaction; fixed
-`/activate` still fails closed on resulting ambiguity.
+systems. Begin response loss reuses the persisted exact idempotency key and
+returns the committed Core winner; request drift or ambiguous custody fails
+closed.
 
 `join begin`/`join complete` remain available only as the compatible expert
 manual ceremony.
@@ -532,19 +533,15 @@ pilot: they cannot bind the exact harness pair, C0 payloads, event lineage,
 mailbox ownership, use counts, and immediate five-entitlement cleanup required
 by `docs/ZERO_STATE_C0_PILOT.md`.
 
-The current repository candidate implements the fixed `BootstrapGrantPlan` and
-C0 service, but published `0.1.18` does not. Never issue a live packet merely
+The current repository candidate implements the fixed `BootstrapGrantPlan`, C0
+service, and package-owned isolated responder. Never issue a live packet merely
 from branch documentation: verify the installed release's actual CLI, package
-evidence, deployment, and C0 gate first. When those checks pass, the exact
-operator sequence is:
+evidence, deployment, and C0 gate first. Ordinary-server setup owns and runs the
+dedicated responder service; operators must not recreate it through generic
+`supervisor-run` or expose its private configuration or credential paths. When
+those checks pass, the exact fresh-laptop sequence is:
 
 ```bash
-# Owner laptop: validate then run the dedicated no-model responder.
-agentnet supervisor-run --config agentnet-supervisor.json \
-  --c0-pilot-responder --check
-agentnet supervisor-run --config agentnet-supervisor.json \
-  --c0-pilot-responder
-
 # Fresh laptop, only after exact WebAuthn-approved plan commit.
 agentnet c0-pilot start --identity .agentnet/identity.json
 agentnet c0-pilot status --identity .agentnet/identity.json
@@ -885,15 +882,17 @@ reconciliation evidence tracked by the release gates.
 AgentNet has no supported prototype/pre-release database format. Immutable
 migration 1 is the complete first-release schema and retains checksum
 `c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f`.
-Current unreleased Core schema v4 adds durable protected payload-release
+Current unreleased Core schema v5 adds durable protected payload-release
 receipts in migration 2, guided OIDC enrollment continuation in migration 3,
-and the bounded C0 bootstrap-plan contract in migration 4. Fresh SQLite and
-PostgreSQL stores create schema v4. An existing SQLite store upgrades only when
-metadata, every migration record/checksum, and the entire N/N-1 v3 object
-catalog match exactly; the v3→v4 change commits atomically or rolls back without
-partial objects. PostgreSQL verifies contiguous checksums and the complete live
-table, column type/null/default, constraint-definition, and non-constraint-index
-catalog before v3 migration, after migration, and on every v4 open.
+the bounded C0 bootstrap-plan contract in migration 4, and exact OIDC-begin
+response-loss recovery plus current-credential renewal custody in migration 5.
+Fresh SQLite and PostgreSQL stores create schema v5. An existing SQLite store
+upgrades only when metadata, every migration record/checksum, and the entire
+N/N-1 v4 object catalog match exactly; the v4→v5 change commits atomically or
+rolls back without partial objects. PostgreSQL verifies contiguous checksums and
+the complete live table, column type/null/default, constraint-definition, and
+non-constraint-index catalog before v4 migration, after migration, and on every
+v5 open.
 Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
 older state fails closed before use.
 

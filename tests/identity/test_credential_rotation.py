@@ -13,6 +13,9 @@ from agentnet.errors import AuthenticationError, ConflictError
 from agentnet.http_api import create_app
 from agentnet.identity.credentials import (
     CREDENTIAL_ROTATION_POP_PURPOSE,
+    CredentialRenewalRequest,
+    CredentialRenewalResult,
+    CredentialRenewalService,
     CredentialRotationRequest,
     CredentialRotationService,
 )
@@ -45,6 +48,57 @@ def _rotation_request(
             fields,
         ),
     )
+
+
+def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
+    store,
+    identity_factory,
+) -> None:
+    actor, _key = identity_factory(binding_assurance="os_bound")
+    original_expiry = int(
+        store.fetch_one(
+            "SELECT expires_at FROM credentials WHERE credential_id=?",
+            (actor.credential_id,),
+        )["expires_at"]
+    )
+    outside = CredentialRenewalService(
+        store,
+        credential_ttl_seconds=86_400,
+        renewal_window_seconds=300,
+        clock=lambda: original_expiry - 600,
+    )
+    current_request = CredentialRenewalRequest(request_id=str(uuid4()))
+    current = outside.renew(actor=actor, request=current_request)
+    assert current.status == "current"
+    assert current.expires_at == original_expiry
+    assert outside.renew(actor=actor, request=current_request) == current
+
+    inside = CredentialRenewalService(
+        store,
+        credential_ttl_seconds=86_400,
+        renewal_window_seconds=300,
+        clock=lambda: original_expiry - 100,
+    )
+    renewal_request = CredentialRenewalRequest(request_id=str(uuid4()))
+    renewed = inside.renew(actor=actor, request=renewal_request)
+    assert renewed.status == "renewed"
+    assert renewed.expires_at == original_expiry - 100 + 86_400
+    assert inside.renew(actor=actor, request=renewal_request) == renewed
+    assert store.fetch_one(
+        "SELECT COUNT(*) AS n FROM credential_renewal_requests"
+    )["n"] == 2
+
+    expired = CredentialRenewalService(
+        store,
+        credential_ttl_seconds=86_400,
+        renewal_window_seconds=300,
+        clock=lambda: renewed.expires_at,
+    )
+    with pytest.raises(AuthenticationError, match="validity interval"):
+        expired.renew(
+            actor=actor,
+            request=CredentialRenewalRequest(request_id=str(uuid4())),
+        )
 
 
 def test_rotation_atomically_retires_current_key_and_fences_replay_without_touching_sibling(
@@ -179,4 +233,70 @@ async def test_authenticated_rotation_http_has_no_target_identity_claims(
     assert rendered["key_id"] == new_key.thumbprint
     assert "principal_id" not in rendered
     assert "domain_id" not in rendered
+
+
+@pytest.mark.anyio
+async def test_authenticated_renewal_http_is_selector_free_and_actor_bound(
+    store,
+    identity_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor, key = identity_factory(binding_assurance="os_bound")
+    core = CommunicationCore(
+        ExtensionConfig(
+            domain_id=actor.domain_id,
+            data_dir=tmp_path / "data",
+            database_url=f"sqlite:///{tmp_path / 'unused.sqlite3'}",
+            artifact_dir=tmp_path / "artifacts",
+            public_base_url="http://127.0.0.1",
+        ),
+        store,
+    )
+    observed: dict[str, object] = {}
+
+    def renew_current_credential(*, actor, request):
+        observed.update(actor=actor, request=request)
+        return CredentialRenewalResult(status="renewed", expires_at=123456)
+
+    monkeypatch.setattr(core, "renew_current_credential", renew_current_credential)
+    app = create_app(core)
+    path = "/v1/credentials/current/renew"
+    request_id = str(uuid4())
+    body = canonical_json(
+        {"schema": "agentnet.credential-renewal.v1", "request_id": request_id}
+    )
+    proof = create_request_proof(
+        key,
+        harness_id=actor.harness_id,
+        credential_id=actor.credential_id,
+        domain_id=actor.domain_id,
+        audience=f"urn:agentnet:{actor.domain_id}:corporate-api",
+        method="POST",
+        scheme="http",
+        authority="127.0.0.1",
+        path=path,
+        query="",
+        body=body,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        response = await client.post(
+            path,
+            content=body,
+            headers={"Content-Type": "application/json", **proof_headers(proof)},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema": "agentnet.credential-renewal-result.v1",
+        "status": "renewed",
+        "expires_at": 123456,
+    }
+    assert observed == {
+        "actor": actor,
+        "request": CredentialRenewalRequest(request_id=request_id),
+    }
 

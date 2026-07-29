@@ -244,9 +244,9 @@ HBA/ident views plus config-load freshness prove the exact loaded unshadowed
 role/database/HBA edits and reload remain a separate operator-owned approval;
 rerun the same AgentNet digest afterward.
 
-The wrapper then owns only AgentNet's two locked identities, private roots,
-Approval/Core state, mode-dependent scanner trust, two hardened systemd units,
-bounded start, and exact loopback/public health. Retry reloads realized state
+The wrapper then owns only AgentNet's three locked identities, private roots,
+Approval/Core/C0-responder state, mode-dependent scanner trust, five hardened
+systemd units, bounded start, and exact loopback/public health. Retry reloads realized state
 and commits the request-versioned marker only through same-request
 compare-and-swap; manual marker/unit surgery is unsupported. It never mutates
 DNS, TLS, proxy/firewall policy, PostgreSQL
@@ -342,12 +342,13 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.30` at commit `b36f312d7dc19f8da4215eaf58d2407e6c1af43a`.
+`0.1.31` at commit `dc10f86c9ac15ffc29c4dd5dd37e6c6d5bf15382`.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
-published `0.1.30` repaired installed-verifier package custody. Unreleased
-candidate `0.1.31` targets browser-only fresh-laptop/server onboarding and first
-native message. No release proves completed fresh-laptop enrollment, native
+published `0.1.30` repaired installed-verifier package custody; published
+`0.1.31` added browser-only fresh-laptop/server onboarding and the bounded first
+message path. Unreleased candidate `0.1.32` repairs blockers found during that
+first live server ceremony. No release proves completed fresh-laptop enrollment, native
 cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
@@ -406,7 +407,9 @@ real callback was not retried or reused. Fresh-laptop enrollment and native
 cross-host message/ACK remain pending until the exact public package is installed
 and a new OIDC transaction completes.
 
-Published `0.1.30` fixes installed-verifier custody by running verification from a bounded disposable package copy, rejecting caller pytest arguments, and requiring recursive packed-tree digest/no-residue checks. Unreleased `0.1.31` adds the browser-only, exact-approved-owner first-message path: fixed rate-limited `/activate`; purpose-separated automatic Approval delivery; supported `0.1.28/0.1.30` setup migration/recovery; enabled-unit reconciliation; and destructive package-only reset under a permanent coordination lock. No production or gate-promotion claim is added. Required next runtime proof remains fresh-laptop enrollment, one native signed message, recipient `recipient_committed`, exact `COMPLETED_C0_ROUND_TRIP`, then five-power revocation.
+Published `0.1.30` fixes installed-verifier custody by running verification from a bounded disposable package copy, rejecting caller pytest arguments, and requiring recursive packed-tree digest/no-residue checks. Published `0.1.31` adds the browser-only, exact-approved-owner first-message path: fixed rate-limited `/activate`; purpose-separated automatic Approval delivery; setup migration/recovery; enabled-unit reconciliation; and package-only reset under a permanent coordination lock.
+
+Unreleased `0.1.32` keeps that protocol and adds one coherent blocker repair: signed Approval broker readiness through the configured public origin; authoritative setup response-loss reconciliation; recoverable OIDC-begin idempotency; finite 24-hour always-on credentials with selector-free six-hour-window renewal; Core schema v5; one package-owned isolated C0 responder that never resurrects after terminal cleanup; clean current-package setup-attempt custody; and a five-unit systemd lifecycle. First-C0 setup deliberately rejects reuse of `0.1.31` state. No production or gate-promotion claim is added. Required next runtime proof remains fresh-laptop enrollment, one native signed message, recipient `recipient_committed`, exact `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

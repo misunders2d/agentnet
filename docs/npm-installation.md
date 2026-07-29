@@ -69,10 +69,10 @@ AgentNet environment/config/database writes. AgentNet does not edit PostgreSQL a
 a `postgres_auth_not_ready` blocker requires a separately approved operator
 change/reload followed by same-digest retry.
 
-After that gate, wrapper manages Approval identity, two private data roots,
-root-only environment custody, Approval provisioning, Core schema/config
-bootstrap, scanner public trust, two hardened systemd units, bounded
-start/restart, and redacted step evidence. Retry reruns bootstrap and validates
+After that gate, wrapper manages Approval and isolated C0 responder identities,
+three private data roots, root-only environment custody, Approval provisioning,
+Core schema/config bootstrap, scanner public trust, five hardened systemd units,
+bounded start/restart, and redacted step evidence. Retry reruns bootstrap and validates
 realized state; marker v2 commits only through same-request exact-byte
 compare-and-swap. Old marker is provenance, never readiness. Wrapper uses
 loopback Core `8080` and Approval `8090`, then verifies operator-owned exact

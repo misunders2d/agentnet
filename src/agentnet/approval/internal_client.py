@@ -12,6 +12,7 @@ import httpx
 from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PROOF_HEADER,
     INTERNAL_BROKER_PURPOSE_CREATE,
+    INTERNAL_BROKER_PURPOSE_READINESS,
     INTERNAL_BROKER_PURPOSE_RETRIEVE,
     INTERNAL_BROKER_PURPOSE_STATUS,
     build_internal_broker_proof,
@@ -81,7 +82,7 @@ class ApprovalServiceClient:
             raise GateBlocked("approval_service", "approval service credential is unavailable")
         self.config = config
         self._credential = credential
-        self._audience = config.origin.rstrip("/")
+        self._audience = config.public_origin.rstrip("/")
         self._client = httpx.Client(
             base_url=self._audience,
             timeout=config.request_timeout_seconds,
@@ -136,6 +137,73 @@ class ApprovalServiceClient:
         except httpx.HTTPError as exc:
             raise GateBlocked("approval_service", "approval service is unavailable") from exc
         return _strict_object(b"".join(chunks))
+
+    def readiness(self) -> dict[str, str]:
+        """Prove the configured public broker path without business mutation."""
+
+        path = "/v1/approval/internal/readiness"
+        body = {"schema": "agentnet.approval.internal-readiness.v1"}
+        raw_body = canonical_json(body)
+        headers = {
+            "Authorization": f"Bearer {self._credential}",
+            INTERNAL_BROKER_PROOF_HEADER: build_internal_broker_proof(
+                credential=self._credential,
+                audience=self._audience,
+                method="POST",
+                path=path,
+                purpose=INTERNAL_BROKER_PURPOSE_READINESS,
+                raw_body=raw_body,
+            ),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Cache-Control": "no-store",
+        }
+        try:
+            with self._client.stream("POST", path, content=raw_body, headers=headers) as response:
+                status = response.status_code
+                if status == 200:
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if size > self.config.maximum_response_bytes:
+                            raise GateBlocked(
+                                "approval_broker_auth",
+                                "Approval broker readiness response is invalid",
+                            )
+                        chunks.append(chunk)
+                    try:
+                        result = _strict_object(b"".join(chunks))
+                    except AuthenticationError as exc:
+                        raise GateBlocked(
+                            "approval_broker_auth",
+                            "Approval broker readiness response is invalid",
+                        ) from exc
+                    if result != {
+                        "schema": "agentnet.approval.internal-readiness-result.v1",
+                        "status": "ready",
+                    }:
+                        raise GateBlocked(
+                            "approval_broker_auth",
+                            "Approval broker readiness response is invalid",
+                        )
+                    return {"schema": str(result["schema"]), "status": str(result["status"])}
+                if status in {408, 425, 429} or 500 <= status <= 599:
+                    raise GateBlocked(
+                        "approval_broker_unavailable",
+                        "Approval broker readiness is unavailable",
+                    )
+                raise GateBlocked(
+                    "approval_broker_auth",
+                    "Approval broker readiness authentication failed",
+                )
+        except GateBlocked:
+            raise
+        except httpx.HTTPError as exc:
+            raise GateBlocked(
+                "approval_broker_unavailable",
+                "Approval broker readiness is unavailable",
+            ) from exc
 
     def create_request(
         self,

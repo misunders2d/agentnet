@@ -54,9 +54,10 @@ Keep public instructions separate from local/private material. Private keys, joi
 ### Release-gated bounded C0 phase
 
 When the installed release exposes `bootstrap-plan begin|status|complete`,
-`c0-pilot start|status|complete`, and `supervisor-run --c0-pilot-responder`,
-read the C0 sections of the onboarding reference and canonical example before
-proceeding. The owner responder must already run under the exact owner identity.
+`c0-pilot start|status|complete`, and dedicated `c0-pilot responder`, read the
+C0 sections of the onboarding reference and canonical example before proceeding.
+Ordinary-server setup—not a generic supervisor flag—must already own and run the
+responder under the exact managed owner identity.
 The fresh harness may then request the fixed plan, the owner WebAuthn-approves
 its purpose-specific summary, and the exact waiting process retrieves the result
 automatically through the signed broker using its private begin state.

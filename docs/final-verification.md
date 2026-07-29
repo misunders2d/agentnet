@@ -18,7 +18,7 @@ files retain the exact 85 stable requirement IDs but are no longer sealed bytes.
 After those audits, the owner supplied normative assignment, self-hosting, and
 reuse clarifications. Later implementation passes added explicitly labeled
 status annotations for bilateral relationship consent, immutable governance
-baseline schema v1 plus current contiguous Core migrations 2–4, separate
+baseline schema v1 plus current contiguous Core migrations 2–5, separate
 Approval schema v4, completed local ORG-005 adjudication, recipient-owned
 protected task payload release, the ORG-006 owner blocker, and current S0–S9
 zero-state C0 plan, activation, proof, persistent invalidation, cleanup,

@@ -554,11 +554,12 @@ directed pair is active.
 
 Immutable storage schema v1 contains these governance transactions and
 exception receipts as first-release authority objects. Current unreleased Core
-schema v4 adds the protected payload-release receipt in migration 2, guided OIDC
-enrollment continuation in migration 3, and the bounded C0 bootstrap-plan
-contract in migration 4 without retrofitting relationship consent. Exact
-catalog/checksum verification precedes the current one-transaction SQLite
-v3→v4 N/N-1 upgrade and each contiguous PostgreSQL migration application. No
+schema v5 adds the protected payload-release receipt in migration 2, guided OIDC
+enrollment continuation in migration 3, the bounded C0 bootstrap-plan contract
+in migration 4, and OIDC-begin/finite-credential lifecycle custody in migration
+5 without retrofitting relationship consent. Exact catalog/checksum verification
+precedes the current one-transaction SQLite v4→v5 N/N-1 upgrade and each
+contiguous PostgreSQL migration application. No
 unsupported, tampered, prototype, or unilateral record is converted into
 consent.
 

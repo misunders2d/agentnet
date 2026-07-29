@@ -120,9 +120,9 @@ Mode `identity_only` ends after guided enrollment and reports `first_message_blo
 
 Generic `agentnet admin entitlement issue`, principal-ID grant issuance, three-grant assembly, the legacy founder ceremony, wildcards, and partial repair are forbidden fallbacks for this pilot. If the installed release lacks the complete bounded-plan path, report `first_message_blocked_explicit_authority_required` and stop identity-only.
 
-For a release that passes that gate, the owner first validates and runs only
-`agentnet supervisor-run --config agentnet-supervisor.json
---c0-pilot-responder`. The fresh harness uses only
+For a release that passes that gate, package-owned ordinary-server setup first
+validates and runs only the dedicated isolated responder under the exact managed
+owner identity; generic `supervisor-run` cannot select this mode. The fresh harness uses only
 `agentnet bootstrap-plan begin|status|complete` with its local identity/state,
 then `agentnet c0-pilot start|status|complete` with its local identity. The owner
 reviews the fixed five-communication/five-exact-revoke WebAuthn summary and the

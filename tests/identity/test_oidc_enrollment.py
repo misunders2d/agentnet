@@ -4,9 +4,12 @@ import base64
 import hashlib
 import io
 import json
+import sqlite3
 import ssl
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Barrier, Lock
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -186,6 +189,7 @@ class OIDCStack:
         *,
         name: str = "production workstation",
         remote_activation: bool = False,
+        idempotency_key: str | None = None,
     ):
         request = self.coordinator.begin_authorization(
             domain_id="corp.example",
@@ -193,6 +197,7 @@ class OIDCStack:
             harness_name=name,
             public_key_pem=key.public_pem,
             remote_activation=remote_activation,
+            idempotency_key=idempotency_key,
         )
         self.transport.bind_authorization_request(request.authorization_url)
         return request
@@ -299,6 +304,100 @@ def _exchange_with_client_auth(
         code_verifier=verifier,
         expected_nonce_hash=hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
     )
+
+
+def test_guided_begin_idempotency_returns_exact_cached_response_and_rejects_drift(
+    oidc_stack: OIDCStack,
+) -> None:
+    key = P256KeyPair.generate()
+    idempotency_key = "I" * 43
+
+    first = oidc_stack.begin(key, idempotency_key=idempotency_key)
+    replay = oidc_stack.begin(key, idempotency_key=idempotency_key)
+
+    assert replay == first
+    assert oidc_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM oidc_enrollment_transactions"
+    )["n"] == 1
+    with pytest.raises(ConflictError, match="conflicts"):
+        oidc_stack.begin(
+            key,
+            name="drifted workstation",
+            idempotency_key=idempotency_key,
+        )
+    assert oidc_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM oidc_enrollment_transactions"
+    )["n"] == 1
+
+
+def test_guided_begin_concurrent_same_key_returns_exact_committed_winner(
+    oidc_stack: OIDCStack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = P256KeyPair.generate()
+    idempotency_key = "I" * 43
+    barrier = Barrier(2)
+    lock = Lock()
+    initial_reads = 0
+    original_fetch_one = oidc_stack.store.fetch_one
+
+    def synchronized_fetch_one(sql, parameters=()):
+        nonlocal initial_reads
+        if "WHERE begin_idempotency_key_hash=?" in sql:
+            with lock:
+                should_wait = initial_reads < 2
+                if should_wait:
+                    initial_reads += 1
+            if should_wait:
+                result = original_fetch_one(sql, parameters)
+                assert result is None
+                barrier.wait(timeout=5)
+                return result
+        return original_fetch_one(sql, parameters)
+
+    monkeypatch.setattr(oidc_stack.store, "fetch_one", synchronized_fetch_one)
+
+    def begin():
+        return oidc_stack.coordinator.begin_authorization(
+            domain_id="corp.example",
+            harness_kind="pi",
+            harness_name="production workstation",
+            public_key_pem=key.public_pem,
+            idempotency_key=idempotency_key,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: begin(), range(2)))
+
+    assert results[0] == results[1]
+    assert original_fetch_one(
+        "SELECT COUNT(*) AS n FROM oidc_enrollment_transactions"
+    )["n"] == 1
+
+
+def test_guided_begin_unrelated_integrity_failure_is_not_duplicate_success(
+    oidc_stack: OIDCStack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenConnection:
+        def execute(self, _sql, _parameters=()):
+            raise sqlite3.IntegrityError("unrelated constraint failure")
+
+    @contextmanager
+    def broken_transaction(*, immediate=False):
+        del immediate
+        yield BrokenConnection()
+
+    monkeypatch.setattr(oidc_stack.store, "transaction", broken_transaction)
+
+    with pytest.raises(sqlite3.IntegrityError, match="unrelated constraint"):
+        oidc_stack.coordinator.begin_authorization(
+            domain_id="corp.example",
+            harness_kind="pi",
+            harness_name="production workstation",
+            public_key_pem=P256KeyPair.generate().public_pem,
+            idempotency_key="I" * 43,
+        )
 
 
 @pytest.mark.parametrize(

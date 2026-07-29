@@ -56,6 +56,9 @@ from agentnet.federation.service import FederationService
 from agentnet.identity.actors import ActorKind, TrustedTransportContext, VerifiedActor
 from agentnet.identity.context import VerifiedContextResolver
 from agentnet.identity.credentials import (
+    CredentialRenewalRequest,
+    CredentialRenewalResult,
+    CredentialRenewalService,
     CredentialRotationRequest,
     CredentialRotationResult,
     CredentialRotationService,
@@ -330,6 +333,12 @@ class CommunicationCore:
             credential_ttl_seconds=config.policies.identity.credential_ttl_seconds,
             outage_gate=self.outage,
         )
+        self.credential_renewal = CredentialRenewalService(
+            store,
+            credential_ttl_seconds=config.policies.identity.always_on_credential_ttl_seconds,
+            renewal_window_seconds=config.policies.identity.credential_renewal_window_seconds,
+            outage_gate=self.outage,
+        )
         scanner_policy = None
         scanner_keys: dict[str, str] | None = None
         if config.scanner_trust is not None:
@@ -565,7 +574,11 @@ class CommunicationCore:
             profile=self.config.profile,
             binding_assurance=binding_assurance,
             credential_ttl=(
-                self.config.policies.identity.credential_ttl_seconds
+                (
+                    self.config.policies.identity.always_on_credential_ttl_seconds
+                    if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+                    else self.config.policies.identity.credential_ttl_seconds
+                )
                 if credential_ttl is None
                 else credential_ttl
             ),
@@ -654,15 +667,23 @@ class CommunicationCore:
             return {"ready": True, "required": False}
         try:
             self._require_enrolled_server_agent_binding()
+            binding = load_credential_binding(self.store, str(self.config.enrolled_credential_id))
         except Exception as exc:
             return {
                 "ready": False,
                 "required": True,
                 "reason": type(exc).__name__,
+                "credential_state": "expired",
             }
+        remaining = binding.expires_at - int(time.time())
         return {
             "ready": True,
             "required": True,
+            "credential_state": (
+                "renewal_needed"
+                if remaining <= self.config.policies.identity.credential_renewal_window_seconds
+                else "current"
+            ),
         }
 
     def _require_server_agent_capability(self, capability: ServerAgentCapability) -> None:
@@ -885,6 +906,17 @@ class CommunicationCore:
             raise GateBlocked("c0_pilot", "bounded C0 pilot service is not configured")
         return self.c0_pilot_service
 
+    def c0_pilot_readiness(self, *, actor: VerifiedActor) -> dict[str, str]:
+        if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+            self._require_enrolled_server_agent_binding()
+            if (
+                actor.domain_id != self.config.domain_id
+                or actor.harness_id != self.config.enrolled_harness_id
+                or actor.credential_id != self.config.enrolled_credential_id
+            ):
+                raise AuthenticationError("C0 responder actor does not match managed binding")
+        return self._require_c0_runtime().readiness(actor=actor)
+
     def c0_pilot_start(self, *, actor: VerifiedActor) -> dict[str, str]:
         return self._require_c0_runtime().start(actor=actor)
 
@@ -1022,6 +1054,25 @@ class CommunicationCore:
             DigestIdempotentReplayHandler(replay),
             limit=limit,
         )
+
+    def renew_current_credential(
+        self,
+        *,
+        actor: VerifiedActor,
+        request: CredentialRenewalRequest,
+    ) -> CredentialRenewalResult:
+        """Renew only exact configured always-on binding from signed actor."""
+
+        if self.config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+            raise GateBlocked("credential_renewal", "credential renewal requires server-agent profile")
+        self._require_enrolled_server_agent_binding()
+        if (
+            actor.domain_id != self.config.domain_id
+            or actor.harness_id != self.config.enrolled_harness_id
+            or actor.credential_id != self.config.enrolled_credential_id
+        ):
+            raise AuthenticationError("credential renewal actor does not match managed binding")
+        return self.credential_renewal.renew(actor=actor, request=request)
 
     def rotate_credential(
         self,
@@ -1727,6 +1778,25 @@ class CommunicationCore:
             audit = {"valid": False, "reason": type(exc).__name__}
             artifacts = {"ready": False, "reason": type(exc).__name__}
             deployment_binding = {"ready": False, "reason": type(exc).__name__}
+        approval_broker: dict[str, Any] = {
+            "ready": True,
+            "required": self.approval_service_client is not None,
+        }
+        if self.approval_service_client is not None:
+            try:
+                self.approval_service_client.readiness()
+            except GateBlocked as exc:
+                approval_broker = {
+                    "ready": False,
+                    "required": True,
+                    "reason": exc.gate,
+                }
+            except Exception:
+                approval_broker = {
+                    "ready": False,
+                    "required": True,
+                    "reason": "approval_broker_unavailable",
+                }
         a2a_schema = {"ready": True, "required": self.config.features.public_a2a}
         if self.config.features.public_a2a:
             try:
@@ -1750,6 +1820,7 @@ class CommunicationCore:
             storage.get("ready")
             and audit.get("valid")
             and deployment_binding.get("ready")
+            and approval_broker.get("ready")
             and a2a_schema.get("ready")
             and (not artifacts_enabled or artifacts.get("ready"))
             and (not scanner_trust.get("required") or scanner_trust.get("ready"))
@@ -1786,6 +1857,7 @@ class CommunicationCore:
             "storage": storage,
             "artifacts": artifacts,
             "deployment_binding": deployment_binding,
+            "approval_broker": approval_broker,
             "a2a_schema": a2a_schema,
             "scanner_trust": scanner_trust,
             "release_certified": False,

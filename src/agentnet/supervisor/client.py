@@ -102,6 +102,14 @@ class AgentNetSupervisorCoreClient:
             raise ValidationError("C0 pilot response schema is invalid")
         return {"schema": str(value["schema"]), "status": str(value["status"])}
 
+    def c0_pilot_readiness(self) -> dict[str, str]:
+        value = self._value(self.client.c0_pilot_readiness())
+        if value.get("schema") != "agentnet.c0-pilot.readiness-result.v1" or value.get(
+            "status"
+        ) not in {"waiting_plan", "ready"}:
+            raise ValidationError("C0 pilot readiness response schema is invalid")
+        return {"schema": str(value["schema"]), "status": str(value["status"])}
+
     def c0_pilot_respond(self) -> dict[str, str]:
         return self._c0_result(self._value(self.client.c0_pilot_respond()))
 

@@ -35,13 +35,16 @@ if os.name == "posix":
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from agentnet import __version__
+from agentnet.approval.internal_client import ApprovalServiceClient
 from agentnet.approval.config import (
     ApprovalOwnerOIDCConfig,
     ApprovalServiceConfig,
     MANDATORY_APPROVAL_PURPOSES,
 )
 from agentnet.core.capabilities import ServerAgentCapability
+from agentnet.errors import GateBlocked
 from agentnet.operations.config import (
+    ExtensionConfig,
     ApprovalServiceClientConfig,
     IndependentApproverConfig,
     OIDCEnrollmentConfig,
@@ -64,16 +67,34 @@ from agentnet.storage.postgres import (
 
 CORE_USER = "agentnet"
 APPROVAL_USER = "agentnet-approval"
+C0_RESPONDER_USER = "agentnet-c0"
 CORE_UNIT = "agentnet-core.service"
 APPROVAL_UNIT = "agentnet-approval.service"
+C0_RESPONDER_UNIT = "agentnet-c0-responder.service"
+CREDENTIAL_RENEW_UNIT = "agentnet-credential-renew.service"
+CREDENTIAL_RENEW_TIMER = "agentnet-credential-renew.timer"
+MANAGED_UNITS = (
+    APPROVAL_UNIT,
+    CORE_UNIT,
+    C0_RESPONDER_UNIT,
+    CREDENTIAL_RENEW_UNIT,
+    CREDENTIAL_RENEW_TIMER,
+)
 CORE_DATA = Path("/var/lib/agentnet")
 APPROVAL_DATA = Path("/var/lib/agentnet-approval")
+C0_RESPONDER_DATA = Path("/var/lib/agentnet-c0")
+C0_RESPONDER_CONFIG = C0_RESPONDER_DATA / "config.json"
+C0_RESPONDER_TERMINAL = C0_RESPONDER_DATA / "terminal.json"
+SERVER_AGENT_IDENTITY = CORE_DATA / "server-agent-identity.json"
+SERVER_AGENT_KEY = CORE_DATA / "guided-join.key.pem"
+CREDENTIAL_RENEW_STATE = CORE_DATA / "credential-renewal-state.json"
 CORE_CONFIG = CORE_DATA / "agentnet.json"
 CORE_OIDC_CONFIG = CORE_DATA / "oidc-enrollment.json"
 APPROVAL_CONFIG = APPROVAL_DATA / "config.json"
 APPROVAL_STATE = APPROVAL_DATA / "state"
 SETUP_ROOT = Path("/var/lib/agentnet-setup")
 SETUP_MARKER = SETUP_ROOT / "setup.json"
+SETUP_ATTEMPT = SETUP_ROOT / "attempt.json"
 SETUP_RUNTIME_ROOT = SETUP_ROOT / "npm-runtime"
 SETUP_UPGRADE_JOURNAL = SETUP_ROOT / "upgrade.json"
 SECRET_ROOT = Path("/etc/agentnet-secrets")
@@ -117,9 +138,16 @@ _JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
 class ServerSetupError(RuntimeError):
     """Fail-closed setup blocker safe to show in redacted operator evidence."""
 
-    def __init__(self, blocker: str, message: str) -> None:
+    def __init__(
+        self,
+        blocker: str,
+        message: str,
+        *,
+        identity_enrolled: bool = False,
+    ) -> None:
         super().__init__(message)
         self.blocker = blocker
+        self.identity_enrolled = identity_enrolled
 
 
 class SetupOIDCProvider(BaseModel):
@@ -1185,6 +1213,7 @@ Environment=XDG_CACHE_HOME={CORE_DATA}/.cache
 Environment=AGENTNET_NPM_RUNTIME_DIR={CORE_DATA}/npm-runtime
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} serve --config {_unit_arg(str(CORE_CONFIG))} --host 127.0.0.1 --port {CORE_PORT}
+SuccessExitStatus=143 SIGTERM
 Restart=on-failure
 RestartSec=2
 {common}
@@ -1193,7 +1222,124 @@ ReadWritePaths={CORE_DATA}
 [Install]
 WantedBy=multi-user.target
 """.encode()
-    return {APPROVAL_UNIT: approval, CORE_UNIT: core}
+    responder = f"""[Unit]
+Description=AgentNet package-owned C0 responder
+After=network-online.target {CORE_UNIT}
+Wants=network-online.target
+Requires={CORE_UNIT}
+ConditionPathExists={C0_RESPONDER_CONFIG}
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User={C0_RESPONDER_USER}
+Group={C0_RESPONDER_USER}
+Environment=HOME={C0_RESPONDER_DATA}
+Environment=XDG_STATE_HOME={C0_RESPONDER_DATA}/.local/state
+Environment=XDG_CACHE_HOME={C0_RESPONDER_DATA}/.cache
+Environment=AGENTNET_NPM_RUNTIME_DIR={C0_RESPONDER_DATA}/npm-runtime
+Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
+LoadCredential=signing-key.pem:{SERVER_AGENT_KEY}
+ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} c0-pilot responder --run --config {_unit_arg(str(C0_RESPONDER_CONFIG))} --credential %d/signing-key.pem
+Restart=on-failure
+RestartSec=2
+{common}
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={C0_RESPONDER_DATA}
+
+[Install]
+WantedBy=multi-user.target
+""".encode()
+    renewal = f"""[Unit]
+Description=AgentNet current credential renewal
+After=network-online.target {CORE_UNIT}
+Requires={CORE_UNIT}
+
+[Service]
+Type=oneshot
+User={CORE_USER}
+Group={CORE_USER}
+Environment=HOME={CORE_DATA}
+Environment=XDG_STATE_HOME={CORE_DATA}/.local/state
+Environment=XDG_CACHE_HOME={CORE_DATA}/.cache
+Environment=AGENTNET_NPM_RUNTIME_DIR={CORE_DATA}/npm-runtime
+Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
+ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} credential renew --identity {_unit_arg(str(SERVER_AGENT_IDENTITY))} --state {_unit_arg(str(CREDENTIAL_RENEW_STATE))}
+{common}
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={CORE_DATA}
+""".encode()
+    renewal_timer = f"""[Unit]
+Description=Hourly AgentNet credential renewal
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit={CREDENTIAL_RENEW_UNIT}
+
+[Install]
+WantedBy=timers.target
+""".encode()
+    return {
+        APPROVAL_UNIT: approval,
+        CORE_UNIT: core,
+        C0_RESPONDER_UNIT: responder,
+        CREDENTIAL_RENEW_UNIT: renewal,
+        CREDENTIAL_RENEW_TIMER: renewal_timer,
+    }
+
+
+def _validated_managed_identity_profile(
+    path: Path,
+    key_path: Path,
+    account: pwd.struct_passwd,
+    *,
+    config: ExtensionConfig,
+    request: ServerSetupRequest,
+) -> dict[str, object]:
+    try:
+        value = json.loads(
+            _read_private_managed_file(
+                path,
+                account,
+                blocker="server_agent_identity",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ServerSetupError("server_agent_identity", "managed server-agent identity is invalid") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema", "server_base_url", "audience", "actor", "private_key_path"}
+        or value.get("schema") != "agentnet.identity-profile.v1"
+        or value.get("server_base_url") != request.core_public_origin
+        or value.get("audience") != request.service_audience
+        or value.get("private_key_path") != str(key_path)
+        or not isinstance(value.get("actor"), dict)
+    ):
+        raise ServerSetupError("server_agent_identity", "managed server-agent identity mismatches fixed profile")
+    actor = value["actor"]
+    if (
+        actor.get("domain_id") != request.domain_id
+        or actor.get("harness_id") != config.enrolled_harness_id
+        or actor.get("credential_id") != config.enrolled_credential_id
+    ):
+        raise ServerSetupError("server_agent_identity", "managed server-agent identity mismatches current binding")
+    key_payload = _read_private_managed_file(
+        key_path,
+        account,
+        blocker="server_agent_identity",
+        max_bytes=65_536,
+    )
+    try:
+        key = P256KeyPair.from_private_pem(key_payload)
+    except Exception as exc:
+        raise ServerSetupError("server_agent_identity", "managed server-agent key is invalid") from exc
+    if actor.get("key_id") != key.thumbprint:
+        raise ServerSetupError("server_agent_identity", "managed server-agent key mismatches current binding")
+    return value
 
 
 def _validate_broker_credential(value: str) -> None:
@@ -1286,6 +1432,7 @@ def _planned_setup_evidence(
         {"id": "preflight", "status": "completed"},
         {"id": "core_identity", "status": _account_fact(CORE_USER, CORE_DATA)},
         {"id": "approval_identity", "status": _account_fact(APPROVAL_USER, APPROVAL_DATA)},
+        {"id": "c0_responder_identity", "status": _account_fact(C0_RESPONDER_USER, C0_RESPONDER_DATA)},
         {"id": "private_roots", "status": "inspect_or_create"},
         {"id": "approval_provision", "status": "inspect_or_create"},
         {"id": "core_bootstrap", "status": "inspect_or_create"},
@@ -1535,7 +1682,7 @@ def _validated_setup_marker(
     }
     digests = (marker.get("approval_config_digest"), marker.get("core_config_digest"))
     if (
-        marker.get("units") != [APPROVAL_UNIT, CORE_UNIT]
+        marker.get("units") != list(MANAGED_UNITS)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in digests)
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker does not match the fixed profile")
@@ -1567,7 +1714,7 @@ def _validated_setup_marker(
             or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
             or not isinstance(marker.get("package_version"), str)
             or not isinstance(unit_digests, dict)
-            or set(unit_digests) != {APPROVAL_UNIT, CORE_UNIT}
+            or set(unit_digests) != set(MANAGED_UNITS)
             or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
         ):
             raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
@@ -1584,11 +1731,67 @@ def _validated_setup_marker(
         or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
         or not isinstance(marker.get("package_version"), str)
         or not isinstance(unit_digests, dict)
-        or set(unit_digests) != {APPROVAL_UNIT, CORE_UNIT}
+        or set(unit_digests) != set(MANAGED_UNITS)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
     return marker
+
+
+def _prepare_setup_attempt(
+    path: Path,
+    *,
+    existing_marker: Mapping[str, Any] | None,
+    preexisting_state: bool,
+    request_digest: str,
+    uid: int,
+    gid: int,
+) -> tuple[str, bool]:
+    payload = _read_managed_exact(
+        path,
+        uid=uid,
+        gid=gid,
+        mode=0o600,
+        blocker="clean_state_required",
+        label="setup attempt",
+    )
+    if payload is not None:
+        attempt = _strict_json_bytes(payload, label="setup attempt")
+        if attempt != {
+            "schema": "agentnet.server-setup.attempt.v1",
+            "package_version": __version__,
+            "request_digest": request_digest,
+        }:
+            raise ServerSetupError(
+                "clean_state_required",
+                "existing AgentNet setup attempt is not this exact package request",
+            )
+        return "resumed_exact_attempt", True
+    if existing_marker is not None:
+        return "not_required_existing_marker", False
+    if preexisting_state:
+        raise ServerSetupError(
+            "clean_state_required",
+            "pre-existing AgentNet state has no current-package setup custody",
+        )
+    result = _atomic_write(
+        path,
+        (
+            json.dumps(
+                {
+                    "schema": "agentnet.server-setup.attempt.v1",
+                    "package_version": __version__,
+                    "request_digest": request_digest,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+            + b"\n"
+        ),
+        mode=0o600,
+        uid=uid,
+        gid=gid,
+    )
+    return result, True
 
 
 def _atomic_replace_exact(
@@ -1800,7 +2003,7 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         or not isinstance(journal.get("from_package_version"), str)
         or not isinstance(journal.get("to_package_version"), str)
         or not isinstance(units, dict)
-        or set(units) != {APPROVAL_UNIT, CORE_UNIT}
+        or set(units) != set(MANAGED_UNITS)
         or not isinstance(configs, dict)
         or set(configs) != _JOURNALED_CONFIG_KEYS
     ):
@@ -1894,7 +2097,7 @@ def _commit_setup_marker(
 ) -> str:
     unit_digests = {
         unit: hashlib.sha256(unit_payloads[unit]).hexdigest()
-        for unit in (APPROVAL_UNIT, CORE_UNIT)
+        for unit in MANAGED_UNITS
     }
     marker_schema = (
         "agentnet.server-setup.marker.v3"
@@ -1907,7 +2110,7 @@ def _commit_setup_marker(
         "package_version": __version__,
         "request_digest": request_digest,
         "unit_digests": unit_digests,
-        "units": [APPROVAL_UNIT, CORE_UNIT],
+        "units": list(MANAGED_UNITS),
     }
     if artifact_mode is not None:
         realized["artifact_mode"] = artifact_mode
@@ -2120,6 +2323,7 @@ def _run_systemctl_sequence_or_reconcile(
     transport outcome, is allowed to report success.
     """
 
+    first_failure: ServerSetupError | None = None
     for arguments in sequence:
         try:
             _run_systemctl(
@@ -2128,12 +2332,19 @@ def _run_systemctl_sequence_or_reconcile(
                 failure_message="failed to start AgentNet managed units",
             )
         except ServerSetupError as failure:
-            try:
-                reconcile()
-            except ServerSetupError:
-                raise failure from None
-            return "reconciled_after_response_loss"
-    return "completed"
+            # A transport failure proves neither success nor failure. Continue
+            # the bounded idempotent sequence, then accept only its exact final
+            # live postcondition. This prevents an early lost response from
+            # silently skipping a later Core restart.
+            if first_failure is None:
+                first_failure = failure
+    if first_failure is None:
+        return "completed"
+    try:
+        reconcile()
+    except ServerSetupError:
+        raise first_failure from None
+    return "reconciled_after_response_loss"
 
 
 def _require_core_bootstrap_evidence(
@@ -2693,6 +2904,49 @@ def _read_private_managed_file(
         os.close(descriptor)
 
 
+def _validated_c0_terminal_marker(
+    path: Path,
+    account: pwd.struct_passwd,
+    *,
+    config: ExtensionConfig,
+) -> dict[str, str] | None:
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        value = json.loads(
+            _read_private_managed_file(
+                path,
+                account,
+                blocker="c0_responder_terminal",
+                max_bytes=4096,
+            )
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ServerSetupError(
+            "c0_responder_terminal",
+            "C0 responder terminal marker is invalid",
+        ) from exc
+    expected = {
+        "schema": "agentnet.c0-pilot-responder.terminal.v1",
+        "status": value.get("status") if isinstance(value, dict) else None,
+        "domain_id": config.domain_id,
+        "harness_id": config.enrolled_harness_id,
+        "credential_id": config.enrolled_credential_id,
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(expected)
+        or value != expected
+        or value.get("status")
+        not in {"COMPLETED_C0_ROUND_TRIP", "expired", "invalidated", "failed"}
+    ):
+        raise ServerSetupError(
+            "c0_responder_terminal",
+            "C0 responder terminal marker conflicts with managed identity",
+        )
+    return value
+
+
 def _managed_config_digest(
     path: Path,
     account: pwd.struct_passwd,
@@ -2873,6 +3127,17 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 _START_HEALTH_ATTEMPTS = 90
 
 
+def _health_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, tuple):
+        return actual in expected
+    if isinstance(expected, Mapping):
+        return isinstance(actual, Mapping) and all(
+            key in actual and _health_value_matches(actual[key], item)
+            for key, item in expected.items()
+        )
+    return actual == expected
+
+
 def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> None:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
@@ -2885,7 +3150,7 @@ def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> 
                 if response.status != 200 or len(payload) > 65_536:
                     raise ValueError("invalid health response")
                 value = json.loads(payload)
-                if isinstance(value, dict) and all(value.get(key) == item for key, item in expected.items()):
+                if isinstance(value, dict) and _health_value_matches(value, expected):
                     return
         except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
             pass
@@ -3470,6 +3735,7 @@ def apply_server_setup(
     _allow_test_layout: bool = False,
 ) -> dict[str, Any]:
     pending: dict[str, Any] = {}
+    verified: dict[str, bool] = {}
     try:
         return _apply_server_setup(
             request,
@@ -3478,9 +3744,12 @@ def apply_server_setup(
             layout=layout,
             _allow_test_layout=_allow_test_layout,
             _pending_upgrade=pending,
+            _verified=verified,
         )
-    except BaseException:
+    except BaseException as exc:
         _rollback_pending_upgrade(pending)
+        if isinstance(exc, ServerSetupError) and verified.get("identity_enrolled"):
+            exc.identity_enrolled = True
         raise
 
 
@@ -3492,6 +3761,7 @@ def _apply_server_setup(
     layout: SetupLayout,
     _allow_test_layout: bool,
     _pending_upgrade: dict[str, Any],
+    _verified: dict[str, bool],
 ) -> dict[str, Any]:
     preflight = _server_setup_preflight(request, layout=layout)
     actual_digest = preflight.request_digest
@@ -3546,10 +3816,14 @@ def _apply_server_setup(
             raise ServerSetupError("setup_locked", "another AgentNet server setup is active") from exc
         core_data = layout.host(CORE_DATA)
         approval_data = layout.host(APPROVAL_DATA)
+        c0_responder_data = layout.host(C0_RESPONDER_DATA)
+        c0_responder_config_path = layout.host(C0_RESPONDER_CONFIG)
+        c0_responder_terminal_path = layout.host(C0_RESPONDER_TERMINAL)
         core_config_path = layout.host(CORE_CONFIG)
         approval_config_path = layout.host(APPROVAL_CONFIG)
         approval_state = layout.host(APPROVAL_STATE)
         setup_marker = layout.host(SETUP_MARKER)
+        setup_attempt = layout.host(SETUP_ATTEMPT)
         core_env_path = layout.host(CORE_ENV)
         approval_env_path = layout.host(APPROVAL_ENV)
 
@@ -3579,7 +3853,7 @@ def _apply_server_setup(
                 else None
             ),
         )
-        for unit in (APPROVAL_UNIT, CORE_UNIT):
+        for unit in MANAGED_UNITS:
             _require_no_unit_overrides(layout, unit)
         core_input = input_bundle["core_environment_file"]
         approval_input = input_bundle["approval_environment_file"]
@@ -3596,14 +3870,21 @@ def _apply_server_setup(
             APPROVAL_DATA,
             useradd_executable=useradd_executable,
         )
+        c0_responder_account = _ensure_account(
+            C0_RESPONDER_USER,
+            C0_RESPONDER_DATA,
+            useradd_executable=useradd_executable,
+        )
         steps: list[dict[str, Any]] = [
             {"id": "preflight", "status": "completed"},
             {"id": "core_identity", "status": "completed"},
             {"id": "postgres_service_identity", "status": postgres_evidence["status"]},
             {"id": "approval_identity", "status": "completed"},
+            {"id": "c0_responder_identity", "status": "completed"},
         ]
         steps.append({"id": "core_private_root", "status": _ensure_private_root(core_data, core_account)})
         steps.append({"id": "approval_private_root", "status": _ensure_private_root(approval_data, approval_account)})
+        steps.append({"id": "c0_responder_private_root", "status": _ensure_private_root(c0_responder_data, c0_responder_account)})
         approval_preexisting = _private_entry_exists(
             approval_config_path,
             approval_account,
@@ -3622,6 +3903,18 @@ def _apply_server_setup(
             expected="file",
             blocker="core_custody",
         )
+        c0_responder_config_preexisting = _private_entry_exists(
+            c0_responder_config_path,
+            c0_responder_account,
+            expected="file",
+            blocker="c0_responder_custody",
+        )
+        c0_responder_terminal_preexisting = _private_entry_exists(
+            c0_responder_terminal_path,
+            c0_responder_account,
+            expected="file",
+            blocker="c0_responder_custody",
+        )
         core_runtime = core_data / "core"
         core_oidc_path = layout.host(CORE_OIDC_CONFIG)
         if request.effective_artifact_mode == "disabled":
@@ -3632,6 +3925,47 @@ def _apply_server_setup(
             expected="directory",
             blocker="core_custody",
         )
+        unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
+        preexisting_managed_state = any(
+            (
+                approval_preexisting,
+                approval_state_preexisting,
+                core_preexisting,
+                core_runtime_preexisting,
+                c0_responder_config_preexisting,
+                c0_responder_terminal_preexisting,
+                *(path.exists() or path.is_symlink() for path in unit_paths.values()),
+            )
+        )
+        if (
+            existing_marker is None
+            and preexisting_managed_state
+            and not (setup_attempt.exists() or setup_attempt.is_symlink())
+        ):
+            raise ServerSetupError(
+                "clean_state_required",
+                "pre-existing AgentNet state has no current-package setup custody",
+            )
+        steps.append(
+            {
+                "id": "setup_marker_root",
+                "status": _ensure_root_private_directory(
+                    setup_marker.parent,
+                    uid=root_uid,
+                    gid=root_gid,
+                    label="setup_marker",
+                ),
+            }
+        )
+        attempt_status, attempt_active = _prepare_setup_attempt(
+            setup_attempt,
+            existing_marker=existing_marker,
+            preexisting_state=preexisting_managed_state,
+            request_digest=approved_digest,
+            uid=root_uid,
+            gid=root_gid,
+        )
+        steps.append({"id": "setup_attempt", "status": attempt_status})
         if approval_state_preexisting:
             _require_private_tree(approval_state, approval_account, blocker="approval_custody")
         if core_runtime_preexisting:
@@ -3666,7 +4000,6 @@ def _apply_server_setup(
                 oidc=prevalidated_oidc,
                 scanner_trust=scanner_trust,
             )
-        unit_paths = {unit: layout.unit(unit) for unit in (APPROVAL_UNIT, CORE_UNIT)}
         journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
         upgrade_status = _prepare_supported_upgrade(
             existing_marker=existing_marker,
@@ -3718,17 +4051,6 @@ def _apply_server_setup(
                     uid=root_uid,
                     gid=root_gid,
                     label="secret",
-                ),
-            }
-        )
-        steps.append(
-            {
-                "id": "setup_marker_root",
-                "status": _ensure_root_private_directory(
-                    setup_marker.parent,
-                    uid=root_uid,
-                    gid=root_gid,
-                    label="setup_marker",
                 ),
             }
         )
@@ -3902,7 +4224,86 @@ def _apply_server_setup(
                 scanner_trust=scanner_trust,
             )
         identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
+        c0_responder_required = False
         steps.append({"id": "core_bootstrap", "status": bootstrap_status})
+        if identity_enrolled and start:
+            identity_path = layout.host(SERVER_AGENT_IDENTITY)
+            signing_key_path = layout.host(SERVER_AGENT_KEY)
+            _validated_managed_identity_profile(
+                identity_path,
+                signing_key_path,
+                core_account,
+                config=config,
+                request=request,
+            )
+            _verified["identity_enrolled"] = True
+            terminal = _validated_c0_terminal_marker(
+                c0_responder_terminal_path,
+                c0_responder_account,
+                config=config,
+            )
+            if terminal is not None:
+                if c0_responder_config_path.exists() or c0_responder_config_path.is_symlink():
+                    _require_private_file(
+                        c0_responder_config_path,
+                        c0_responder_account,
+                        blocker="c0_responder_terminal",
+                    )
+                    try:
+                        c0_responder_config_path.unlink()
+                        directory = os.open(
+                            c0_responder_config_path.parent,
+                            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                        )
+                        try:
+                            os.fsync(directory)
+                        finally:
+                            os.close(directory)
+                    except OSError as exc:
+                        raise ServerSetupError(
+                            "c0_responder_terminal",
+                            "C0 responder terminal cleanup could not be reconciled",
+                        ) from exc
+                    responder_config_status = "terminal_cleanup_reconciled"
+                else:
+                    responder_config_status = "terminal_not_recreated"
+                steps.append({"id": "c0_responder_config", "status": responder_config_status})
+            else:
+                c0_responder_required = True
+                responder_payload = json.dumps(
+                    {
+                        "schema": "agentnet.c0-pilot-responder.config.v1",
+                        "core_base_url": request.core_public_origin,
+                        "audience": request.service_audience,
+                        "domain_id": request.domain_id,
+                        "harness_id": config.enrolled_harness_id,
+                        "credential_id": config.enrolled_credential_id,
+                        "poll_seconds": 2,
+                        "max_consecutive_errors": 5,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ).encode() + b"\n"
+                steps.append(
+                    {
+                        "id": "c0_responder_config",
+                        "status": _atomic_write(
+                            c0_responder_config_path,
+                            responder_payload,
+                            mode=0o600,
+                            uid=c0_responder_account.pw_uid,
+                            gid=c0_responder_account.pw_gid,
+                        ),
+                    }
+                )
+        elif not identity_enrolled and any(
+            path.exists() or path.is_symlink()
+            for path in (c0_responder_config_path, c0_responder_terminal_path)
+        ):
+            raise ServerSetupError(
+                "c0_responder_conflict",
+                "C0 responder state exists before exact activated identity",
+            )
 
         approval_config, trusted_after = _approval_trust(
             approval_config_path,
@@ -3970,6 +4371,8 @@ def _apply_server_setup(
         # the next run can verify the committed marker and clear the stale journal.
         _pending_upgrade.clear()
         _clear_upgrade_journal(journal_path)
+        if attempt_active:
+            _clear_upgrade_journal(setup_attempt)
         if start:
             approval_health = {
                 "schema": "agentnet.approval.health.v1",
@@ -4001,7 +4404,12 @@ def _apply_server_setup(
             }
 
             def verify_live_service_state() -> None:
-                for unit in (APPROVAL_UNIT, CORE_UNIT):
+                active_units = [APPROVAL_UNIT, CORE_UNIT]
+                if identity_enrolled:
+                    active_units.append(CREDENTIAL_RENEW_TIMER)
+                if c0_responder_required:
+                    active_units.append(C0_RESPONDER_UNIT)
+                for unit in active_units:
                     _run_systemctl(
                         systemctl_executable,
                         ["is-active", "--quiet", unit],
@@ -4037,6 +4445,38 @@ def _apply_server_setup(
                     ),
                     layout=layout,
                 )
+                if c0_responder_required:
+                    _validate_systemd_service_runtime(
+                        systemctl_executable,
+                        unit=C0_RESPONDER_UNIT,
+                        user=C0_RESPONDER_USER,
+                        data_root=c0_responder_data,
+                        node_executable=node_executable,
+                        agentnet_executable=executable,
+                        uv_executable=uv_executable,
+                        expected_argv=(
+                            str(node_executable), str(executable), "c0-pilot", "responder",
+                            "--run", "--config", str(c0_responder_config_path),
+                            "--credential", "/run/credentials/agentnet-c0-responder.service/signing-key.pem",
+                        ),
+                        layout=layout,
+                    )
+                expected_states = {CREDENTIAL_RENEW_UNIT: "static"}
+                if not c0_responder_required:
+                    expected_states[C0_RESPONDER_UNIT] = "disabled"
+                if not identity_enrolled:
+                    expected_states[CREDENTIAL_RENEW_TIMER] = "disabled"
+                for unit, expected_state in expected_states.items():
+                    properties = _systemd_show(systemctl_executable, unit)
+                    if (
+                        properties.get("LoadState") != "loaded"
+                        or properties.get("UnitFileState") != expected_state
+                        or properties.get("MainPID") not in {"", "0"}
+                    ):
+                        raise ServerSetupError(
+                            "service_runtime_binding",
+                            "inactive AgentNet auxiliary unit does not match fixed state",
+                        )
                 _health(
                     f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
                     expected=approval_health,
@@ -4048,20 +4488,49 @@ def _apply_server_setup(
                     attempts=_START_HEALTH_ATTEMPTS,
                 )
 
+            systemctl_commands: list[list[str]] = [
+                ["daemon-reload"],
+                ["enable", "--now", APPROVAL_UNIT],
+                ["enable", CORE_UNIT],
+                ["restart", CORE_UNIT],
+            ]
+            if identity_enrolled:
+                systemctl_commands.append(["enable", "--now", CREDENTIAL_RENEW_TIMER])
+            else:
+                systemctl_commands.append(["disable", "--now", CREDENTIAL_RENEW_TIMER])
+            systemctl_commands.append(
+                ["enable", "--now", C0_RESPONDER_UNIT]
+                if c0_responder_required
+                else ["disable", "--now", C0_RESPONDER_UNIT]
+            )
+            systemctl_commands.append(["stop", CREDENTIAL_RENEW_UNIT])
             start_status = _run_systemctl_sequence_or_reconcile(
                 systemctl_executable,
-                (
-                    ["daemon-reload"],
-                    ["enable", "--now", APPROVAL_UNIT],
-                    ["enable", CORE_UNIT],
-                    ["restart", CORE_UNIT],
-                ),
+                systemctl_commands,
                 reconcile=verify_live_service_state,
             )
             if start_status == "completed":
                 verify_live_service_state()
             _health(f"{request.approval_public_origin}/healthz", expected=approval_health)
             _health(f"{request.core_public_origin}/healthz", expected=core_health)
+            if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
+                raise ServerSetupError("approval_broker_auth", "Approval broker configuration is unavailable")
+            broker_client = ApprovalServiceClient(
+                oidc.approval_service,
+                core_values[_BROKER_CREDENTIAL_NAME],
+            )
+            try:
+                broker_client.readiness()
+            except GateBlocked as exc:
+                blocker = (
+                    exc.gate
+                    if exc.gate in {"approval_broker_auth", "approval_broker_unavailable"}
+                    else "approval_broker_auth"
+                )
+                raise ServerSetupError(blocker, "Approval broker readiness failed") from exc
+            finally:
+                broker_client.close()
+            steps.append({"id": "approval_broker_readiness", "status": "completed"})
             steps.append({"id": "service_start", "status": start_status})
             steps.append({"id": "managed_unit_runtime", "status": "validated_hermetic_live_binding"})
             steps.append({"id": "public_https_routes", "status": "completed"})
@@ -4085,10 +4554,22 @@ def _apply_server_setup(
                     "public_origin": request.core_public_origin,
                     "service_audience": request.service_audience,
                     "runtime_instance_id": request.runtime_instance_id,
-                    "deployment_binding": {"ready": True, "required": True},
+                    "deployment_binding": {
+                        "ready": True,
+                        "required": True,
+                        "credential_state": ("current", "renewal_needed"),
+                    },
+                    "approval_broker": {"ready": True, "required": True},
                 }
                 _health(f"http://127.0.0.1:{CORE_PORT}/readyz", expected=readiness)
-                _health(f"{request.core_public_origin}/readyz", expected=readiness)
+                try:
+                    _health(f"{request.core_public_origin}/readyz", expected=readiness)
+                except ServerSetupError as exc:
+                    raise ServerSetupError(
+                        exc.blocker,
+                        str(exc),
+                        identity_enrolled=True,
+                    ) from exc
                 steps.append({"id": "operational_readiness", "status": "completed"})
                 status = "operational"
                 next_action = "enroll additional ordinary laptops with agentnet join guided"

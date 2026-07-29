@@ -812,6 +812,112 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
         assert private not in output.out + output.err
 
 
+def test_guided_join_begin_response_loss_reuses_precommitted_idempotency_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+        ]
+    )
+    begin_keys: list[str] = []
+
+    def lost_response(*, server, method, path, body, timeout=10.0):
+        del server, method, timeout
+        assert path.endswith("/begin")
+        begin_keys.append(str(body["idempotency_key"]))
+        raise RuntimeError("simulated begin response loss")
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", lost_response)
+    with pytest.raises(RuntimeError, match="response loss"):
+        args.func(args)
+
+    pending = json.loads(state.read_text(encoding="utf-8"))
+    assert pending["schema"] == "agentnet.guided-join.v3"
+    assert pending["authorization"] is None
+    assert pending["begin_idempotency_key"] == begin_keys[0]
+
+    def retry(*, server, method, path, body, timeout=10.0):
+        del server, method, timeout
+        if path.endswith("/begin"):
+            begin_keys.append(str(body["idempotency_key"]))
+            return {
+                "transaction_id": "oidc-response-loss-winner",
+                "authorization_url": "https://accounts.example/authorize?state=private",
+                "state": "s" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "c" * 43,
+            }
+        assert path.endswith("/poll")
+        return {
+            "status": "failed",
+            "interval_seconds": 2,
+            "expires_at": int(time.time()) + 300,
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", retry)
+    with pytest.raises(SystemExit, match="terminal state: failed"):
+        args.func(args)
+    assert begin_keys == [begin_keys[0], begin_keys[0]]
+
+
+def test_guided_join_state_write_failure_prevents_begin_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+        ]
+    )
+    monkeypatch.setattr(
+        "agentnet.cli._write_owner_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("local state write failed")),
+    )
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("begin request must not run before durable local state"),
+    )
+
+    with pytest.raises(OSError, match="local state write failed"):
+        args.func(args)
+
+
 def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

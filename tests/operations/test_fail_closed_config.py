@@ -367,6 +367,7 @@ def test_communication_only_server_readiness_does_not_probe_artifacts(
     status = core.readiness()
 
     assert status["ready"] is True
+    assert status["approval_broker"] == {"ready": True, "required": False}
     assert status["artifact_mode"] == "disabled"
     assert status["artifacts"] == {
         "enabled": False,
@@ -382,6 +383,34 @@ def test_communication_only_server_readiness_does_not_probe_artifacts(
     }
     assert not artifact_dir.exists()
     assert not (config.data_dir / "secrets" / "artifact.key").exists()
+
+    class _Broker:
+        def __init__(self, failure: GateBlocked | None = None) -> None:
+            self.failure = failure
+
+        def readiness(self) -> dict[str, str]:
+            if self.failure is not None:
+                raise self.failure
+            return {
+                "schema": "agentnet.approval.internal-readiness-result.v1",
+                "status": "ready",
+            }
+
+    core.approval_service_client = _Broker()  # type: ignore[assignment]
+    status = core.readiness()
+    assert status["ready"] is True
+    assert status["approval_broker"] == {"ready": True, "required": True}
+
+    core.approval_service_client = _Broker(  # type: ignore[assignment]
+        GateBlocked("approval_broker_auth", "sanitized")
+    )
+    status = core.readiness()
+    assert status["ready"] is False
+    assert status["approval_broker"] == {
+        "ready": False,
+        "required": True,
+        "reason": "approval_broker_auth",
+    }
 
 
 def _confidential_oidc_config(
