@@ -34,6 +34,7 @@ from agentnet.identity.oidc import (
     OIDCHTTPResponse,
     OIDCProvider,
     OIDCProviderConfig,
+    RemoteActivationIdentityMismatch,
     UrllibOIDCHTTPTransport,
 )
 from agentnet.operations.config import OIDCTokenEndpointAuthMethod, RuntimeProfile
@@ -179,12 +180,19 @@ class OIDCStack:
     approver_key: P256KeyPair
     approval_verifier: IndependentApprovalVerifier
 
-    def begin(self, key: P256KeyPair, *, name: str = "production workstation"):
+    def begin(
+        self,
+        key: P256KeyPair,
+        *,
+        name: str = "production workstation",
+        remote_activation: bool = False,
+    ):
         request = self.coordinator.begin_authorization(
             domain_id="corp.example",
             harness_kind="codex",
             harness_name=name,
             public_key_pem=key.public_pem,
+            remote_activation=remote_activation,
         )
         self.transport.bind_authorization_request(request.authorization_url)
         return request
@@ -240,6 +248,7 @@ def oidc_stack(store) -> OIDCStack:
             client_id="client-1",
             redirect_uri="https://agent.example/oidc/callback",
             allowed_signing_algorithms=("ES256",),
+            remote_activation_oidc_subject="workforce-subject-1",
             http_timeout_seconds=2,
         ),
         transport=transport,
@@ -379,6 +388,227 @@ def test_provider_config_rejects_auth_method_secret_mismatch_and_hides_secret() 
     assert "runtime-secret-sentinel" not in repr(config)
 
 
+def test_remote_activation_exposes_only_one_fixed_browser_handoff(
+    oidc_stack: OIDCStack,
+) -> None:
+    authorization = oidc_stack.begin(
+        P256KeyPair.generate(),
+        name="Headless server",
+        remote_activation=True,
+    )
+    assert (
+        oidc_stack.coordinator.remote_activation_authorization_url()
+        == authorization.authorization_url
+    )
+    challenge = oidc_stack.coordinator.complete_authorization(
+        state=authorization.state,
+        code="code-remote-server-activation",
+    )
+    assert oidc_stack.coordinator.remote_activation_for_challenge(
+        challenge.challenge_id
+    ) is True
+    with pytest.raises(GateBlocked, match="exactly one remote server activation"):
+        oidc_stack.coordinator.remote_activation_authorization_url()
+
+
+def test_remote_activation_wrong_account_restores_pending_and_allows_approved_retry(
+    oidc_stack: OIDCStack,
+) -> None:
+    class NeverCalledApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
+
+        def create_request(self, **_kwargs):
+            raise AssertionError("wrong-account callback must not stage an Approval request")
+
+    oidc_stack.coordinator.approval_client = NeverCalledApprovalClient()
+    authorization = oidc_stack.begin(
+        P256KeyPair.generate(),
+        name="Headless server",
+        remote_activation=True,
+    )
+    oidc_stack.transport.claim_overrides["sub"] = "unapproved-workforce-subject"
+
+    for code in (
+        "code-remote-server-wrong-account-one",
+        "code-remote-server-wrong-account-two",
+    ):
+        with pytest.raises(RemoteActivationIdentityMismatch) as rejected:
+            oidc_stack.coordinator.complete_authorization(
+                state=authorization.state,
+                code=code,
+            )
+        assert rejected.value.code == "activation_wrong_account"
+
+    transaction = oidc_stack.store.fetch_one(
+        """SELECT status,claimed_at,enrollment_challenge_id
+             FROM oidc_enrollment_transactions WHERE transaction_id=?""",
+        (authorization.transaction_id,),
+    )
+    continuation = oidc_stack.store.fetch_one(
+        """SELECT status,challenge_encrypted
+             FROM oidc_enrollment_continuations WHERE transaction_id=?""",
+        (authorization.transaction_id,),
+    )
+    assert transaction is not None
+    assert dict(transaction) == {
+        "status": "pending",
+        "claimed_at": None,
+        "enrollment_challenge_id": None,
+    }
+    assert continuation is not None
+    assert continuation["status"] == "awaiting_oidc"
+    assert continuation["challenge_encrypted"] is not None
+    assert (
+        oidc_stack.coordinator.remote_activation_authorization_url()
+        == authorization.authorization_url
+    )
+
+    oidc_stack.transport.claim_overrides.clear()
+    challenge = oidc_stack.coordinator.complete_authorization(
+        state=authorization.state,
+        code="code-remote-server-approved-account",
+    )
+    assert oidc_stack.coordinator.remote_activation_for_challenge(
+        challenge.challenge_id
+    ) is True
+
+
+def test_remote_activation_challenge_marker_rejects_unknown_fields(
+    oidc_stack: OIDCStack,
+) -> None:
+    authorization = oidc_stack.begin(
+        P256KeyPair.generate(),
+        name="Headless server",
+        remote_activation=True,
+    )
+    challenge = oidc_stack.coordinator.complete_authorization(
+        state=authorization.state,
+        code="code-remote-marker-strictness",
+    )
+    row = oidc_stack.store.fetch_one(
+        """SELECT challenge_encrypted FROM oidc_enrollment_continuations
+             WHERE transaction_id=?""",
+        (authorization.transaction_id,),
+    )
+    assert row is not None
+    payload = oidc_stack.store.cipher.decrypt_json(
+        row["challenge_encrypted"],
+        purpose=f"oidc-guided-challenge:{authorization.transaction_id}",
+    )
+    payload["unrecognized"] = True
+    encrypted = oidc_stack.store.cipher.encrypt_json(
+        payload,
+        purpose=f"oidc-guided-challenge:{authorization.transaction_id}",
+    )
+    with oidc_stack.store.transaction() as connection:
+        connection.execute(
+            """UPDATE oidc_enrollment_continuations SET challenge_encrypted=?
+                 WHERE transaction_id=?""",
+            (encrypted, authorization.transaction_id),
+        )
+    with pytest.raises(AuthenticationError, match="remote activation is unavailable"):
+        oidc_stack.coordinator.remote_activation_for_challenge(challenge.challenge_id)
+
+
+def test_remote_activation_rejects_local_ambiguous_and_expired_requests(
+    oidc_stack: OIDCStack,
+) -> None:
+    oidc_stack.begin(P256KeyPair.generate(), name="Local laptop")
+    with pytest.raises(GateBlocked, match="exactly one remote server activation"):
+        oidc_stack.coordinator.remote_activation_authorization_url()
+
+    oidc_stack.begin(
+        P256KeyPair.generate(),
+        name="Headless server one",
+        remote_activation=True,
+    )
+    oidc_stack.begin(
+        P256KeyPair.generate(),
+        name="Headless server two",
+        remote_activation=True,
+    )
+    with pytest.raises(GateBlocked, match="exactly one remote server activation"):
+        oidc_stack.coordinator.remote_activation_authorization_url()
+
+    oidc_stack.clock.value += 301
+    with pytest.raises(GateBlocked, match="exactly one remote server activation"):
+        oidc_stack.coordinator.remote_activation_authorization_url()
+
+
+def test_remote_activation_callback_poll_stages_exact_approval_request(
+    oidc_stack: OIDCStack,
+) -> None:
+    key = P256KeyPair.generate()
+    authorization = oidc_stack.begin(
+        key,
+        name="Headless server",
+        remote_activation=True,
+    )
+    assert (
+        oidc_stack.coordinator.remote_activation_authorization_url()
+        == authorization.authorization_url
+    )
+    challenge = oidc_stack.coordinator.complete_authorization(
+        state=authorization.state,
+        code="code-remote-server-poll-stage",
+    )
+    assert oidc_stack.coordinator.remote_activation_for_challenge(
+        challenge.challenge_id
+    ) is True
+
+    class ApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
+
+        def __init__(self) -> None:
+            self.created: list[dict[str, object]] = []
+
+        def create_request(self, **kwargs):
+            self.created.append(dict(kwargs))
+            return {
+                "request_id": "approval-request-remote-server-0001",
+                "state": "pending",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": kwargs["request_expires_at"],
+                "duplicate": False,
+            }
+
+        def request_status(self, **kwargs):
+            assert kwargs["request_id"] == "approval-request-remote-server-0001"
+            return {
+                "request_id": kwargs["request_id"],
+                "state": "pending",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": challenge.expires_at,
+            }
+
+    approval_client = ApprovalClient()
+    oidc_stack.coordinator.approval_client = approval_client
+    oidc_stack.clock.value += 4
+    result = oidc_stack.coordinator.poll_continuation(
+        transaction_id=authorization.transaction_id,
+        continuation_token=authorization.continuation_token,
+    )
+
+    assert result.status == "approval_pending"
+    assert result.challenge_id == challenge.challenge_id
+    assert result.nonce == challenge.nonce
+    assert result.approval_url == "https://approval.corp.example/approval"
+    assert len(approval_client.created) == 1
+    created = approval_client.created[0]
+    approval_possession = oidc_module._approval_possession_secret(
+        authorization.continuation_token,
+        transaction_id=authorization.transaction_id,
+    )
+    assert approval_possession != authorization.continuation_token
+    assert created["possession_hash"] == hashlib.sha256(
+        approval_possession.encode("ascii")
+    ).hexdigest()
+    assert created["request_expires_at"] == challenge.expires_at
+    assert oidc_stack.coordinator.remote_activation_for_challenge(
+        challenge.challenge_id
+    ) is False
+
+
 def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
     oidc_stack: OIDCStack,
 ) -> None:
@@ -391,6 +621,16 @@ def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
         authorization.continuation_token.encode("ascii")
     ).hexdigest()
     assert authorization.continuation_token not in repr(authorization)
+    approval_possession = oidc_module._approval_possession_secret(
+        authorization.continuation_token,
+        transaction_id=authorization.transaction_id,
+    )
+    assert approval_possession != authorization.continuation_token
+    with pytest.raises(AuthenticationError, match="continuation"):
+        oidc_stack.coordinator.poll_continuation(
+            transaction_id=authorization.transaction_id,
+            continuation_token=approval_possession,
+        )
     with pytest.raises(AuthenticationError, match="continuation"):
         oidc_stack.coordinator.poll_continuation(
             transaction_id=authorization.transaction_id,
@@ -422,12 +662,23 @@ def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
 
         def create_request(self, **kwargs):
             self.requested_expires_at = kwargs["request_expires_at"]
+            assert kwargs["possession_hash"] == hashlib.sha256(
+                approval_possession.encode("ascii")
+            ).hexdigest()
             return {
                 "request_id": "approval-request-guided-0001",
                 "state": "pending",
                 "transaction_digest": kwargs["transaction_digest"],
                 "expires_at": kwargs["request_expires_at"],
                 "duplicate": False,
+            }
+
+        def request_status(self, **kwargs):
+            return {
+                "request_id": kwargs["request_id"],
+                "state": "pending",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": self.requested_expires_at,
             }
 
     approval_client = ApprovalClient()
@@ -444,6 +695,85 @@ def test_guided_continuation_is_hash_only_rate_bounded_and_callback_recoverable(
     assert ready.approval_url == "https://approval.corp.example/approval"
     assert approval_client.requested_expires_at == challenge.expires_at
     assert ready.expires_at == challenge.expires_at
+
+
+def test_guided_poll_budget_applies_only_before_oidc_callback(
+    oidc_stack: OIDCStack,
+) -> None:
+    authorization = oidc_stack.begin(P256KeyPair.generate())
+    with oidc_stack.store.transaction() as connection:
+        connection.execute(
+            """UPDATE oidc_enrollment_continuations
+                  SET poll_count=60,poll_after_at=? WHERE transaction_id=?""",
+            (oidc_stack.clock(), authorization.transaction_id),
+        )
+    exhausted = oidc_stack.coordinator.poll_continuation(
+        transaction_id=authorization.transaction_id,
+        continuation_token=authorization.continuation_token,
+    )
+    assert exhausted.status == "failed"
+
+
+def test_guided_approval_polling_uses_challenge_expiry_not_pre_callback_budget(
+    oidc_stack: OIDCStack,
+) -> None:
+    authorization = oidc_stack.begin(P256KeyPair.generate())
+    challenge = oidc_stack.coordinator.complete_authorization(
+        state=authorization.state,
+        code="code-guided-full-owner-ceremony",
+    )
+
+    class ApprovalClient:
+        config = SimpleNamespace(origin="https://approval.corp.example")
+
+        def create_request(self, **kwargs):
+            return {
+                "request_id": "approval-request-guided-full-ceremony",
+                "state": "pending",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": kwargs["request_expires_at"],
+                "duplicate": False,
+            }
+
+        def request_status(self, **kwargs):
+            return {
+                "request_id": kwargs["request_id"],
+                "state": "pending",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": challenge.expires_at,
+            }
+
+    oidc_stack.coordinator.approval_client = ApprovalClient()
+    with oidc_stack.store.transaction() as connection:
+        connection.execute(
+            """UPDATE oidc_enrollment_continuations
+                  SET poll_count=60,poll_after_at=? WHERE transaction_id=?""",
+            (oidc_stack.clock(), authorization.transaction_id),
+        )
+
+    pending = oidc_stack.coordinator.poll_continuation(
+        transaction_id=authorization.transaction_id,
+        continuation_token=authorization.continuation_token,
+    )
+    assert pending.status == "approval_pending"
+    row = oidc_stack.store.fetch_one(
+        "SELECT status,poll_count FROM oidc_enrollment_continuations WHERE transaction_id=?",
+        (authorization.transaction_id,),
+    )
+    assert (row["status"], row["poll_count"]) == ("approval_pending", 60)
+
+    oidc_stack.clock.value = challenge.expires_at - 1
+    still_pending = oidc_stack.coordinator.poll_continuation(
+        transaction_id=authorization.transaction_id,
+        continuation_token=authorization.continuation_token,
+    )
+    assert still_pending.status == "approval_pending"
+    oidc_stack.clock.value = challenge.expires_at
+    expired = oidc_stack.coordinator.poll_continuation(
+        transaction_id=authorization.transaction_id,
+        continuation_token=authorization.continuation_token,
+    )
+    assert expired.status == "expired"
 
 
 def test_same_oidc_principal_enrolls_two_exact_sibling_harnesses_identity_only(
@@ -487,7 +817,11 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         state=authorization.state,
         code="code-guided-completion",
     )
-    claim_code = "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
+    approval_possession = oidc_module._approval_possession_secret(
+        authorization.continuation_token,
+        transaction_id=authorization.transaction_id,
+    )
+    assert approval_possession != authorization.continuation_token
 
     class ApprovalClient:
         config = SimpleNamespace(origin="https://approval.corp.example")
@@ -495,6 +829,9 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         available = True
 
         def create_request(self, **kwargs):
+            assert kwargs["possession_hash"] == hashlib.sha256(
+                approval_possession.encode("ascii")
+            ).hexdigest()
             return {
                 "request_id": "approval-request-guided-0002",
                 "state": "pending",
@@ -503,11 +840,19 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
                 "duplicate": False,
             }
 
+        def request_status(self, **kwargs):
+            return {
+                "request_id": kwargs["request_id"],
+                "state": "issued",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": challenge.expires_at,
+            }
+
         def retrieve_receipt(self, **kwargs):
             self.retrievals += 1
             if not self.available:
                 raise AssertionError("recovery must not depend on approval service")
-            assert kwargs["claim_code"] == claim_code
+            assert kwargs["possession_secret"] == approval_possession
             assert kwargs["transaction_digest"] == hashlib.sha256(
                 challenge.canonical_transaction
             ).hexdigest()
@@ -520,7 +865,7 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         transaction_id=authorization.transaction_id,
         continuation_token=authorization.continuation_token,
     )
-    assert polled.status == "approval_pending"
+    assert polled.status == "approval_ready"
     possession_signature = key.sign(
         "agentnet.enrollment.pop.v1",
         challenge.signed_fields(),
@@ -541,7 +886,6 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         oidc_stack.coordinator.complete_guided_enrollment(
             transaction_id=authorization.transaction_id,
             continuation_token=authorization.continuation_token,
-            claim_code=claim_code,
             possession_signature=possession_signature,
         )
     continuation = oidc_stack.store.fetch_one(
@@ -559,13 +903,11 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
     recovered = oidc_stack.coordinator.complete_guided_enrollment(
         transaction_id=authorization.transaction_id,
         continuation_token=authorization.continuation_token,
-        claim_code=claim_code,
         possession_signature=possession_signature,
     )
     repeated = oidc_stack.coordinator.complete_guided_enrollment(
         transaction_id=authorization.transaction_id,
         continuation_token=authorization.continuation_token,
-        claim_code=claim_code,
         possession_signature=possession_signature,
     )
     assert repeated == recovered
@@ -584,7 +926,6 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         oidc_stack.coordinator.complete_guided_enrollment(
             transaction_id=authorization.transaction_id,
             continuation_token=authorization.continuation_token,
-            claim_code=claim_code,
             possession_signature=P256KeyPair.generate().sign(
                 "agentnet.enrollment.pop.v1",
                 challenge.signed_fields(),
@@ -595,7 +936,6 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         oidc_stack.coordinator.complete_guided_enrollment(
             transaction_id=authorization.transaction_id,
             continuation_token=authorization.continuation_token,
-            claim_code=claim_code,
             possession_signature=possession_signature,
         )
     assert oidc_stack.coordinator.poll_continuation(
@@ -603,8 +943,7 @@ def test_guided_completion_brokers_receipt_and_recovers_response_loss(
         continuation_token=authorization.continuation_token,
     ).status == "expired"
 
-
-def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
+def test_guided_completion_rejects_wrong_pop_and_continuation_before_reservation(
     oidc_stack: OIDCStack,
 ) -> None:
     key = P256KeyPair.generate()
@@ -613,13 +952,20 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
         state=authorization.state,
         code="code-guided-negative",
     )
-    correct_code = "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
+    approval_possession = oidc_module._approval_possession_secret(
+        authorization.continuation_token,
+        transaction_id=authorization.transaction_id,
+    )
+    assert approval_possession != authorization.continuation_token
 
     class ApprovalClient:
         config = SimpleNamespace(origin="https://approval.corp.example")
         retrievals = 0
 
         def create_request(self, **kwargs):
+            assert kwargs["possession_hash"] == hashlib.sha256(
+                approval_possession.encode("ascii")
+            ).hexdigest()
             return {
                 "request_id": "approval-request-guided-0003",
                 "state": "pending",
@@ -628,19 +974,26 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
                 "duplicate": False,
             }
 
+        def request_status(self, **kwargs):
+            return {
+                "request_id": kwargs["request_id"],
+                "state": "issued",
+                "transaction_digest": kwargs["transaction_digest"],
+                "expires_at": challenge.expires_at,
+            }
+
         def retrieve_receipt(self, **kwargs):
             self.retrievals += 1
-            if kwargs["claim_code"] != correct_code:
-                raise AuthenticationError("approval request denied")
+            assert kwargs["possession_secret"] == approval_possession
             return oidc_stack.approval(challenge)
 
     approval_client = ApprovalClient()
     oidc_stack.coordinator.approval_client = approval_client
     oidc_stack.clock.value += 4
-    oidc_stack.coordinator.poll_continuation(
+    assert oidc_stack.coordinator.poll_continuation(
         transaction_id=authorization.transaction_id,
         continuation_token=authorization.continuation_token,
-    )
+    ).status == "approval_ready"
     wrong_signature = P256KeyPair.generate().sign(
         "agentnet.enrollment.pop.v1",
         challenge.signed_fields(),
@@ -649,7 +1002,6 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
         oidc_stack.coordinator.complete_guided_enrollment(
             transaction_id=authorization.transaction_id,
             continuation_token=authorization.continuation_token,
-            claim_code=correct_code,
             possession_signature=wrong_signature,
         )
     assert approval_client.retrievals == 0
@@ -662,19 +1014,17 @@ def test_guided_completion_rejects_wrong_pop_and_code_before_reservation(
         "agentnet.enrollment.pop.v1",
         challenge.signed_fields(),
     )
-    with pytest.raises(AuthenticationError, match="approval request denied"):
+    with pytest.raises(AuthenticationError, match="continuation"):
         oidc_stack.coordinator.complete_guided_enrollment(
             transaction_id=authorization.transaction_id,
-            continuation_token=authorization.continuation_token,
-            claim_code="1111-2222-3333-4444-5555-6666-7777-8888",
+            continuation_token="x" * 43,
             possession_signature=correct_signature,
         )
-    assert approval_client.retrievals == 1
+    assert approval_client.retrievals == 0
     assert oidc_stack.store.fetch_one(
         "SELECT completion_request_digest FROM oidc_enrollment_continuations WHERE transaction_id=?",
         (authorization.transaction_id,),
     )["completion_request_digest"] is None
-
 
 def test_authorization_code_pkce_to_independently_approved_binding(oidc_stack: OIDCStack) -> None:
     key = P256KeyPair.generate()

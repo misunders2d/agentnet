@@ -35,8 +35,9 @@ Every evidence record must include the source commit, dependency and harness ver
 Ordinary self-hosted onboarding may colocate Core, PostgreSQL, and approval on
 the existing server under distinct OS identities, credentials, storage roots,
 and loopback services. Human confirmation remains independent of the enrolling
-harness through an owner-controlled WebAuthn authenticator and exact one-time
-code. This profile reports `independent_boundary_proven=false` and makes no
+harness through an owner-controlled WebAuthn authenticator and automatic
+possession-bound broker delivery to exact waiting process. This profile reports
+`independent_boundary_proven=false` and makes no
 independent-administration or production-certification claim.
 
 The threat-model delta is explicit: a root-level compromise of the shared
@@ -44,8 +45,9 @@ server can affect Core configuration, trust anchors, PostgreSQL state, and the
 approval service together. Distinct OS identities reduce ordinary process and
 operator mistakes but do not contain shared-host root compromise. Compensating
 controls are exact OIDC/PKCE and candidate-key proof, WebAuthn UV, transaction-
-bound challenges, five-minute 128-bit claim codes with a five-attempt bound,
-immutable audit facts, enrolled-harness inventory review, rapid revocation, and
+bound challenges, hash-only possession binding, cumulative retrieval-attempt
+limits, expiry, replay custody, exact response-loss recovery, immutable audit
+facts, enrolled-harness inventory review, rapid revocation, and
 honest assurance labels. A separately administered approval host remains the
 optional high-assurance profile for organizations that require containment from
 shared-server compromise.
@@ -57,7 +59,10 @@ The default-profile adversarial verification pass must cover:
 - forged approval receipts and approval-key/trust-anchor substitution;
 - wrong transaction, domain, beneficiary, purpose, RP ID, origin, policy/key
   epoch, and candidate key;
-- claim-code guess, replay, expiry, sixth failed attempt, and response loss;
+- possession-secret mismatch, replay, expiry, cumulative-attempt exhaustion,
+  conflicting retrieval digest, and response loss;
+- legacy claim-code guess/replay/expiry/sixth-attempt behavior in explicit
+  compatibility tests only;
 - revoked authenticator or harness credential;
 - duplicate-paste and restart recovery without a second identity;
 - Core compromise simulations proving the assurance label never upgrades to
@@ -169,7 +174,7 @@ The following are cross-cutting property assertions, not merely examples:
 | `B04` Clean worker ↔ host and inherited workspace | Project instructions, hooks, plugins, filesystem, process, secret, IPC, DNS/network escape | Exact clean launch manifest and deny-by-default sandbox. | Gate 3; `tests/host/test_worker_escape.py` |
 | `B05` Clean worker ↔ model-egress broker | Credential theft, generic proxy use, origin/budget smuggling, request replay | Worker-bound short capability, allowlisted model/origin, fixed framed inference, persistent per-capability one-use request nonce, no vendor credential in worker. | Gates 3, 14, and 19 |
 | `B06` Supervisor ↔ corporate edge/core | Payload identity, token replay, wrong audience/domain, stale epoch | Exact human/guest plus harness or scoped workload actor from DPoP/mTLS context. | Gates 6–8 and 19 |
-| `B07` OIDC/WebAuthn/OOB ↔ enrollment authority | Mix-up, substitution, agent automation, same-device false independence, private-URL leakage, terminal-control injection | Exact transaction binding, phishing-resistant fresh authentication, one-time independent approval, system-browser default, and explicit verified private-TTY handoff that rejects control bytes and partial writes. | Gates 6, 17, 19 |
+| `B07` OIDC/WebAuthn/OOB ↔ enrollment authority | Mix-up, substitution, agent automation, same-device false independence, private-URL leakage, anonymous activation initiation/traffic amplification, activation ambiguity, wrong-account binding, possession replay, premature poll-budget exhaustion, unsafe terminal-state reset | Exact transaction binding, phishing-resistant fresh authentication, one-time independent approval, local system-browser default, fixed unauthenticated/rate-limited public remote `/activate` accepting no selector/private value, exactly one encrypted remote pending transaction, exact server-staged approved owner identity, retryable wrong-account denial with no challenge/Approval staging, purpose-separated automatic possession-bound signed-broker delivery, pre-callback-only finite poll budget, challenge-expiry-bounded Approval polling, and Core-confirmed key-preserving terminal replacement that refuses nonterminal/drifted state. | Gates 6, 17, 19 |
 | `B08` Core PEP ↔ PDP/entity snapshot | Missing/stale/incoherent revisions, diagnostics, positive harness authority | One coherent revision; missing or inconsistent state denies; human is sole positive source. | Gate 8 |
 | `B09` Core transaction ↔ PostgreSQL/outbox | Response loss, partial commit, stale read, split-brain writer | Accepted state, idempotency, recipient rows, audit intent, and outbox share one authoritative commit. | Gates 9, 10, 16 |
 | `B10` PostgreSQL manifest ↔ artifact bytes | Orphan, object swap, wrong version, cross-class dedup leak | No artifact acceptance/access without verified immutable object version plus authoritative manifest. | Gates 9 and 13 |

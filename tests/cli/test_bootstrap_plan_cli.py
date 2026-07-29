@@ -128,7 +128,7 @@ def test_status_uses_saved_begin_key_and_prints_only_strict_public_result(
         "status": "approval_ready",
         "approval_url": "https://approval.example/approval",
         "expires_at": 1_800_000_300,
-        "next_action": "enter_claim_code_in_masked_local_tty",
+        "next_action": "complete_automatically",
     }
     client = _Client([_Response(200, body)])
     monkeypatch.setattr(cli, "_load_identity_client", _load(client))
@@ -173,7 +173,7 @@ def test_status_accepts_exact_committed_public_result(
     assert json.loads(capsys.readouterr().out) == body
 
 
-def test_complete_reads_claim_code_only_from_masked_tty_and_never_persists_or_prints_it(
+def test_complete_uses_exact_private_state_without_tty_or_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -194,18 +194,15 @@ def test_complete_reads_claim_code_only_from_masked_tty_and_never_persists_or_pr
         "authority_granted": False,
         "communication_usable": False,
     }
-    claim_code = "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
-    prompts: list[str] = []
-    terminal_checks: list[bool] = []
     monkeypatch.setattr(
         cli,
         "_require_private_terminal_or_exit",
-        lambda: terminal_checks.append(True),
+        lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
     monkeypatch.setattr(
         cli.getpass,
         "getpass",
-        lambda prompt: prompts.append(prompt) or claim_code.lower(),
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )
     client = _Client([_Response(201, body)])
     monkeypatch.setattr(cli, "_load_identity_client", _load(client))
@@ -215,19 +212,16 @@ def test_complete_reads_claim_code_only_from_masked_tty_and_never_persists_or_pr
     ) == 0
     output = capsys.readouterr().out
     assert json.loads(output) == body
-    assert claim_code not in output
-    assert claim_code not in state_path.read_text(encoding="utf-8")
-    assert terminal_checks == [True]
-    assert prompts == ["One-time approval code: "]
+    assert "claim_code" not in output
+    assert "claim_code" not in state_path.read_text(encoding="utf-8")
     assert client.requests[0][2] == {
-        "schema": "agentnet.bootstrap-plan.complete.v1",
+        "schema": "agentnet.bootstrap-plan.complete.v2",
         "begin_idempotency_key": "bootstrap-begin-key-0001",
         "completion_idempotency_key": "bootstrap-complete-key-0001",
-        "claim_code": claim_code,
     }
 
 
-def test_complete_fails_before_claim_prompt_without_private_terminal(
+def test_complete_runs_without_private_terminal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,19 +235,34 @@ def test_complete_fails_before_claim_prompt_without_private_terminal(
         },
         force=False,
     )
-    prompted: list[bool] = []
     monkeypatch.setattr(
         cli,
         "_require_private_terminal_or_exit",
-        lambda: (_ for _ in ()).throw(SystemExit("private terminal required")),
+        lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
-    monkeypatch.setattr(cli.getpass, "getpass", lambda _prompt: prompted.append(True) or "denied")
+    monkeypatch.setattr(
+        cli.getpass,
+        "getpass",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
+    )
+    client = _Client(
+        [
+            _Response(
+                201,
+                {
+                    "schema": "agentnet.bootstrap-plan.complete-result.v1",
+                    "status": "prepared_unusable",
+                    "authority_granted": False,
+                    "communication_usable": False,
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
 
-    with pytest.raises(SystemExit, match="private terminal required"):
-        cli.command_bootstrap_plan_complete(
-            argparse.Namespace(identity="identity.json", state=str(state_path))
-        )
-    assert prompted == []
+    assert cli.command_bootstrap_plan_complete(
+        argparse.Namespace(identity="identity.json", state=str(state_path))
+    ) == 0
 
 
 def test_cli_rejects_non_strict_server_result_without_printing_it(
@@ -280,7 +289,7 @@ def test_cli_rejects_non_strict_server_result_without_printing_it(
                     "status": "approval_ready",
                     "approval_url": "https://approval.example/approval",
                     "expires_at": 1_800_000_300,
-                    "next_action": "enter_claim_code_in_masked_local_tty",
+                    "next_action": "complete_automatically",
                     "private_detail": "must-not-print",
                 },
             )

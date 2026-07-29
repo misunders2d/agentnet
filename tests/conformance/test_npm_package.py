@@ -38,10 +38,16 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-28-v0.1.30/artifacts/RETENTION.md",
+        "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
+        "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
+        "evidence/local/2026-07-28-v0.1.31/artifacts/RETENTION.md",
+        "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31-py3-none-any.whl",
+        "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31.tar.gz",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
+    assert "evidence/**/*.whl" not in package["files"]
+    assert "evidence/**/*.gz" not in package["files"]
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
     assert package["scripts"]["check"].endswith("&& npm run check:packed")
     assert package["os"] == ["linux", "darwin", "win32"]
@@ -192,7 +198,7 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "hub-generates-public-onboarding-packet",
         "fresh-laptop-canonical-single-prompt-is-mandatory",
         "fresh-laptop-messaging-authority-blocked",
-        "fresh-laptop-claim-code-channel-is-approved",
+        "fresh-laptop-approval-result-is-automatic",
         "fresh-laptop-default-needs-no-extra-approval-host",
         "fresh-laptop-never-requires-infisical",
         "fresh-laptop-one-consolidated-setup-approval",
@@ -214,7 +220,9 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "ordinary-server-disabled-mode-rejects-null-scanner-field",
         "ordinary-server-enabled-mode-requires-scanner-before-mutation",
         "ordinary-server-human-ceremony-remains-explicit",
-        "headless-server-uses-private-terminal-browser-handoff",
+        "headless-server-uses-fixed-browser-only-activation",
+        "guided-join-terminal-recovery-is-explicit-and-key-preserving",
+        "server-reset-is-destructive-manager-only-recovery",
         "fresh-laptop-rejects-three-grant-c0-fallback",
         "c0-success-requires-approved-seven-fact-sequence",
         "repository-candidate-does-not-unblock-installed-release",
@@ -237,6 +245,9 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "agentnet harness-probe",
         "agentnet supervisor-run",
         "agentnet server-agent setup",
+        "server-agent reset",
+        "--retain-external-prerequisites",
+        "--confirm-package-state-removal",
         "ordinary-server-setup.md",
         "agentnet network create",
         "--scanner-trust-config",
@@ -271,6 +282,8 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "FED-001..009",
         "There is no separate privileged Hub product",
         "operator must not be required to write missing adapters",
+        "fixed unauthenticated Core `/activate`",
+        "server-manager-only package recovery",
     ):
         assert required in scope
 
@@ -288,6 +301,9 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "result upload requires the committed release receipt",
         "include_payload",
         "tool and effect authority false",
+        "Public remote activation",
+        "activation_wrong_account",
+        "Destructive server reset",
     ):
         assert required in boundaries
     assert "ordinary-server-setup.md" in boundaries
@@ -509,7 +525,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-        "evidence/local/2026-07-28-v0.1.30/artifacts/RETENTION.md",
+        "evidence/local/2026-07-28-v0.1.31/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

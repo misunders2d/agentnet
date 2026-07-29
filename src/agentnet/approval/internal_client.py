@@ -145,18 +145,20 @@ class ApprovalServiceClient:
         approval_purpose: str,
         canonical_transaction: bytes,
         transaction_digest: str,
+        possession_hash: str,
         request_expires_at: int,
     ) -> dict[str, Any]:
         result = self._post(
             "/v1/approval/internal/requests",
             {
-                "schema": "agentnet.approval.internal-request-create.v1",
+                "schema": "agentnet.approval.internal-request-create.v2",
                 "idempotency_key": idempotency_key,
                 "approver_principal_id": self.config.approver_principal_id,
                 "domain_id": domain_id,
                 "approval_purpose": approval_purpose,
                 "canonical_transaction_b64": b64url_encode(canonical_transaction),
                 "transaction_digest": transaction_digest,
+                "possession_hash": possession_hash,
                 "request_expires_at": request_expires_at,
             },
             purpose=INTERNAL_BROKER_PURPOSE_CREATE,
@@ -219,7 +221,7 @@ class ApprovalServiceClient:
         self,
         *,
         request_id: str,
-        claim_code: str,
+        possession_secret: str,
         domain_id: str,
         approval_purpose: str,
         transaction_digest: str,
@@ -228,9 +230,9 @@ class ApprovalServiceClient:
         result = self._post(
             "/v1/approval/internal/receipts/retrieve",
             {
-                "schema": "agentnet.approval.internal-receipt-retrieve.v1",
+                "schema": "agentnet.approval.internal-receipt-retrieve.v2",
                 "request_id": request_id,
-                "claim_code": claim_code,
+                "possession_secret": possession_secret,
                 "domain_id": domain_id,
                 "approval_purpose": approval_purpose,
                 "transaction_digest": transaction_digest,

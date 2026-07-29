@@ -1,0 +1,58 @@
+{
+  "run_id": "2026-07-28-v0.1.31",
+  "evaluated_at": "2026-07-29T08:30:42+00:00",
+  "scope": "v0_1_31_first_message_onboarding_and_recovery_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "a87fedd610b183b1c5564abc8966583f1baa69cc50ce70ad0a3a3a328eff313b",
+  "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.30/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.30/manifest.json",
+  "change_boundary": "First-message blockers known before the live server ceremony only: fixed browser-only remote activation bound to one exact approved OIDC owner; purpose-separated automatic Approval possession; exact supported 0.1.28/0.1.30 migration with journaled rollback and response-loss recovery; status-scoped guided-join polling through fresh Approval-challenge expiry; explicit Core-authenticated terminal-state replacement with argument-bound v2 state and same-key reuse; enabled-unit reconciliation; package-only destructive reset under a permanent root-only coordination lock; matching operator skill and fail-closed documentation. The later live server ceremony completed after operator recovery but exposed MEL-216 owner-passkey registration ordering and MEL-217 false final setup health/identity status; both remain unresolved in 0.1.31 and are assigned to the next release. Package publication only enables the remaining fresh-laptop proof. Fresh-laptop enrollment, native message, recipient commitment, completion marker, and temporary-authority revocation remain absent and mandatory before tag, ship eligibility, production certification, or gate promotion.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository",
+    "packed_generations": "source plus two clean recursive npm installation generations each reported 1549 passed and 16 expected platform/dedicated-PostgreSQL skips; complete package-tree content digests matched and no named verification residue remained; separate focused packaged recovery/conformance lane reported 72 passed and Pi loaded exactly one packaged skill with zero diagnostics",
+    "root_installed_external_host": "Hub installed the exact prior untagged 0.1.31 artifact into an inert root-owned prefix and verified byte identity, then failed closed before setup because its embedded release bindings were stale; replacement internally bound artifact verification remains pending and is not claimed by this local record",
+    "callback_incident": "public 0.1.30 required private controlling TTY/manual transfer and lacked fixed owner-bound remote activation; no failed OAuth callback URL, state, cookie, or transaction is reused",
+    "known_live_findings": "MEL-216 owner-passkey registration ordering and MEL-217 false final setup health/identity status remain unresolved in 0.1.31; the already-enrolled server recovered without folding either fix into this candidate"
+  },
+  "commands": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/identity/test_oidc_enrollment.py tests/integration/test_enrollment_http.py tests/approval/test_internal_client.py tests/approval/test_approval_http.py tests/approval/test_webauthn_service.py tests/authorization/test_bootstrap_plan_service.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/integration/test_cli_product_journey.py tests/conformance/test_npm_package.py tests/cli/test_terminal_handoff.py",
+      "result": "PASS: 344 passed"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q",
+      "result": "BOUNDED NON-GREEN: 1625 passed and 16 expected platform/dedicated-PostgreSQL skips; two installed-harness pin failures and one pre-refresh release-manifest drift failure remained non-green and were not waived"
+    },
+    {
+      "command": "packed npm tarball install plus tests/identity/test_oidc_enrollment.py tests/integration/test_cli_product_journey.py tests/conformance/test_npm_package.py",
+      "result": "PASS: 72 passed from unrelated temporary prefix; agentnet 0.1.31 and guided recovery flags present; Pi skill loader found exactly one agentnet-operator skill with zero diagnostics; no named verification residue"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1549 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds produced byte-identical 0.1.31 sdist and wheel archives"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Independent guided-ceremony closure skill/security/Constitution review",
+      "model": "claude-opus-5",
+      "result": "PASS: BLOCKERS none; LIVE_TEST_DECISION PROCEED; SKILL_ARCH_VERDICT PASS; CODE_SECURITY_VERDICT PASS; CONSTITUTION_VERDICT PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31.tar.gz",
+      "sha256": "a673bc7f91094762955258e553053277307f1543438b06b04eceb98f41797353"
+    },
+    {
+      "path": "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31-py3-none-any.whl",
+      "sha256": "783a9d7c7648edf0826216f0f30fb8f2b089c8aba8614d329bb712d0bc55e2b8"
+    }
+  ]
+}

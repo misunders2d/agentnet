@@ -334,6 +334,8 @@ def test_browser_page_uses_stable_owner_session_without_fragment_capability() ->
             assert "/v1/approval/owner/registration/begin" in script.text
             assert "/v1/approval/owner/requests/options" in script.text
             assert "navigator.credentials.get" in script.text
+            assert "Waiting for the AgentNet request" in script.text
+            assert "window.setTimeout(() => loadRequests().catch(deny), 500)" in script.text
             assert "One-time approval code" in page.text
             assert script.headers["cache-control"] == "no-store"
 
@@ -600,14 +602,17 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
         app = create_approval_app(service)
         canonical = b'{"schema":"agentnet.test.v1"}'
         digest = hashlib.sha256(canonical).hexdigest()
+        possession_secret = "P" * 43
+        possession_hash = hashlib.sha256(possession_secret.encode("ascii")).hexdigest()
         create_body = {
-            "schema": "agentnet.approval.internal-request-create.v1",
+            "schema": "agentnet.approval.internal-request-create.v2",
             "idempotency_key": "core:enrollment:test-1",
             "approver_principal_id": "security-owner",
             "domain_id": "corp.example",
             "approval_purpose": "identity.enrollment.approve",
             "canonical_transaction_b64": b64url_encode(canonical),
             "transaction_digest": digest,
+            "possession_hash": possession_hash,
             "request_expires_at": 1_800_000_300,
         }
         async with httpx.AsyncClient(
@@ -699,9 +704,9 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             assert status.json()["state"] == "issued"
 
             retrieve_body = {
-                "schema": "agentnet.approval.internal-receipt-retrieve.v1",
+                "schema": "agentnet.approval.internal-receipt-retrieve.v2",
                 "request_id": "request-1",
-                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+                "possession_secret": possession_secret,
                 "domain_id": "corp.example",
                 "approval_purpose": "identity.enrollment.approve",
                 "transaction_digest": digest,
@@ -723,6 +728,26 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
             assert secret not in retrieved.text
             assert len(service.store.calls) == 3
 
+            non_ascii_retrieve = {
+                **retrieve_body,
+                "possession_secret": "é" * 16,
+                "idempotency_key": "core:enrollment-complete:non-ascii",
+            }
+            calls_before_invalid = list(service.calls)
+            invalid_retrieve = await client.post(
+                retrieve_path,
+                content=canonical_json(non_ascii_retrieve),
+                headers=signed_headers(
+                    retrieve_path,
+                    INTERNAL_BROKER_PURPOSE_RETRIEVE,
+                    non_ascii_retrieve,
+                    nonce=b"v" * 32,
+                ),
+            )
+            assert invalid_retrieve.status_code == 400
+            assert invalid_retrieve.json() == {"error": "request_denied"}
+            assert service.calls == calls_before_invalid
+
             noncanonical_raw = json.dumps(status_body, indent=1).encode("utf-8")
             noncanonical = await client.post(
                 status_path,
@@ -743,7 +768,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 },
             )
             assert noncanonical.status_code == 400
-            assert len(service.store.calls) == 4
+            assert len(service.store.calls) == 5
             assert [name for name, _value in service.calls] == [
                 "create_request",
                 "request_status",
@@ -761,7 +786,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 ),
             )
             assert query_denied.status_code == 400
-            assert len(service.store.calls) == 4
+            assert len(service.store.calls) == 5
 
             duplicate_proof = signed_headers(
                 status_path,
@@ -780,7 +805,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 ],
             )
             assert duplicate_header_denied.status_code == 400
-            assert len(service.store.calls) == 4
+            assert len(service.store.calls) == 5
 
             malformed = await client.post(
                 status_path,
@@ -792,7 +817,7 @@ def test_internal_routes_require_runtime_secret_and_never_return_approval_url(
                 },
             )
             assert malformed.status_code == 400
-            assert len(service.store.calls) == 4
+            assert len(service.store.calls) == 5
 
             for nonce, failure in (
                 (b"u" * 32, GateBlocked("approval_store", "private outage detail")),

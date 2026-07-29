@@ -254,6 +254,8 @@ administration, identity, or authority. Human OIDC/WebAuthn and offline
 activation remain explicit. Final setup status is `operational` with identity
 enrolled and authority still false.
 
+Destructive recovery is an explicit server-manager action: `agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal`. It acquires and validates the setup lock before inventory, proves exact owner/mode/type custody, stops and proves managed units inactive, requires symlink-attack-resistant removal, removes only package-owned deployment units/state, preserves the permanent root-only setup coordination lock/root, and reloads systemd even on an exact retry. PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall, operator inputs, and locked service identities remain untouched. Typed evidence proves deployment-state absence. Reset is never an owner browser step, fresh-laptop prompt action, or secret-rotation mechanism.
+
 Communication-only request-v2 is a restricted first-message/testing profile,
 not a substitute for full AgentNet. Artifact HTTP/CLI/service operations and
 non-empty message/task artifact bindings fail with `artifacts_disabled` before
@@ -282,22 +284,35 @@ the browser nor the enrolling harness receives them. Exact Origin, CSRF,
 RP/origin/verifier, challenge/session, expiry, retry, and audit checks fail
 closed. Profiles without owner OIDC retain legacy fragment-capability routes
 and are lab-only by policy; they cannot satisfy the ordinary C0 deployment and
-release gate. Signed broker routes let authenticated Core create/status
-exact requests and retrieve only already-issued receipts after a WebAuthn-
-approved one-time human code. Core cannot approve or sign, and provisioning or
-enrollment grants no authority.
+release gate. Signed broker routes let authenticated Core create/status exact
+requests with a SHA-256 binding to a purpose-separated Approval possession
+secret and retrieve only already-issued receipts after WebAuthn UV. For OIDC,
+Core derives that secret per transaction from continuation custody; bootstrap
+plans generate and encrypt a distinct high-entropy value. Browser/human
+receives no code, receipt, continuation, capability, or broker secret. Core
+cannot approve or sign, and provisioning or enrollment grants no authority.
 
-AgentNet also includes `agentnet join guided`: one resumable command opens the
-candidate OIDC page and stable owner Approval page without printing either URL,
-polls Core with an owner-only opaque continuation, prompts for the short-lived
-human code only through a private masked local terminal, proves the locally
-retained candidate key, and writes an owner-only identity profile. Explicit
-`--browser terminal` uses verified `/dev/tty`; control bytes, missing TTYs,
-partial writes, and unsupported platforms fail closed while resumable state is
-retained. Core retrieves the signed receipt directly; the candidate never
-receives it. Completion retries converge after response loss. Human/model
-success output omits identity IDs and reports only identity-only completion,
-local save status, zero authority, and the bounded-authority next step.
+AgentNet also includes `agentnet join guided`: one resumable command opens local
+candidate OIDC and stable Approval pages without printing either URL, polls Core
+with owner-only opaque continuation, proves locally retained candidate key, and
+writes owner-only identity profile. Exact waiting process retrieves Approval
+result automatically through signed broker. For headless server, server-local
+manager uses `--browser remote`; owner opens only fixed public Core `/activate`
+in normal browser. Core redirects exactly one waiting remote transaction through
+OIDC and Approval, while zero/multiple/expired/local state fails closed. Both
+fixed activation routes are unauthenticated and rate-limited; they accept no
+selector/private input, and callback must match the exact server-staged approved
+OIDC owner identity. Owner uses no SSH, server terminal, private URL, claim code,
+receipt, or browser value transfer. Completion retries converge after response
+loss. Core's 60-poll anti-abuse budget applies only before OIDC callback;
+callback/Approval polling remains rate-controlled and ends at fresh challenge
+expiry. Nonterminal local state resumes with exact command. Only after Core
+proves `expired` or `failed`, `--replace-terminal-state` starts fresh OIDC using
+same candidate key; absent, completed, malformed, drifted, or nonterminal state
+is never replaced. Human/model success output omits identity IDs and reports only
+identity-only completion, local save status,
+`approval_delivery=automatic_possession_bound_signed_broker`, zero authority,
+and the bounded-authority next step.
 
 This software component is not proof of independence. Production enrollment,
 recovery, elevation, revocation, or relationship consent still requires a real
@@ -327,11 +342,13 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.29` at commit `2044224b26b2d7ddcab735be5ebe782989f313ab`.
-Published `0.1.29` repairs the owner and enrollment OIDC callback parsers after a
-real Google owner login exposed rejection of valid unique response extensions.
-Neither release proves completed fresh-laptop enrollment, a native cross-host
-message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
+`0.1.30` at commit `b36f312d7dc19f8da4215eaf58d2407e6c1af43a`.
+Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
+Google owner login exposed rejection of valid unique response extensions;
+published `0.1.30` repaired installed-verifier package custody. Unreleased
+candidate `0.1.31` targets browser-only fresh-laptop/server onboarding and first
+native message. No release proves completed fresh-laptop enrollment, native
+cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
 public HTTPS health identity, interruption recovery, redacted evidence, and
@@ -376,7 +393,7 @@ exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence
 files. The two installed-harness pin failures remain non-green and are not
 waived.
 
-Candidate `0.1.29` retains decoded callback pairs until every known or unknown
+Published `0.1.29` retains decoded callback pairs until every known or unknown
 name is proven unique, strictly separates success and provider-error shapes,
 ignores only unique unrecognized OAuth extensions, and terminally fails only the
 exact state-bound pending owner/enrollment/recovery transaction on provider
@@ -389,7 +406,7 @@ real callback was not retried or reused. Fresh-laptop enrollment and native
 cross-host message/ACK remain pending until the exact public package is installed
 and a new OIDC transaction completes.
 
-Candidate `0.1.30` fixes the only current first-message setup blocker: installed verification runs from a bounded disposable package copy and rejects caller pytest arguments, while packed verification requires the immutable npm package tree to retain the same complete content digest and contain no Hypothesis, pytest, or Python bytecode residue. No broader feature or production claim is added; the next runtime proof is fresh-laptop enrollment followed by one native signed message and recipient ACK.
+Published `0.1.30` fixes installed-verifier custody by running verification from a bounded disposable package copy, rejecting caller pytest arguments, and requiring recursive packed-tree digest/no-residue checks. Unreleased `0.1.31` adds the browser-only, exact-approved-owner first-message path: fixed rate-limited `/activate`; purpose-separated automatic Approval delivery; supported `0.1.28/0.1.30` setup migration/recovery; enabled-unit reconciliation; and destructive package-only reset under a permanent coordination lock. No production or gate-promotion claim is added. Required next runtime proof remains fresh-laptop enrollment, one native signed message, recipient `recipient_committed`, exact `COMPLETED_C0_ROUND_TRIP`, then five-power revocation.
 
 Production adoption still requires deployment-specific evidence such as a real
 workforce identity provider and independent approval channel, protected key

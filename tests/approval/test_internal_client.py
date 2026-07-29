@@ -24,6 +24,7 @@ def _config() -> ApprovalServiceClientConfig:
         public_origin="https://approval-public.corp.example",
         service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
         approver_principal_id="security-owner",
+        remote_activation_oidc_subject="approved-owner-subject",
     )
 
 
@@ -104,12 +105,15 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
     )
     try:
         transaction_digest = hashlib.sha256(b"{}").hexdigest()
+        possession_secret = "P" * 43
+        possession_hash = hashlib.sha256(possession_secret.encode("ascii")).hexdigest()
         created = client.create_request(
             idempotency_key="core:enrollment:test-1",
             domain_id="corp.example",
             approval_purpose="identity.enrollment.approve",
             canonical_transaction=b"{}",
             transaction_digest=transaction_digest,
+            possession_hash=possession_hash,
             request_expires_at=1_800_000_300,
         )
         assert created["request_id"] == "request-1"
@@ -119,7 +123,7 @@ def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None
         )["state"] == "issued"
         receipt = client.retrieve_receipt(
             request_id="request-1",
-            claim_code="AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+            possession_secret=possession_secret,
             domain_id="corp.example",
             approval_purpose="identity.enrollment.approve",
             transaction_digest=transaction_digest,
@@ -174,6 +178,7 @@ def test_internal_client_uses_fresh_proof_for_same_business_retry() -> None:
                 approval_purpose="identity.enrollment.approve",
                 canonical_transaction=b"{}",
                 transaction_digest=hashlib.sha256(b"{}").hexdigest(),
+                possession_hash=hashlib.sha256(b"waiting-process-secret").hexdigest(),
                 request_expires_at=1_800_000_300,
             )
     finally:

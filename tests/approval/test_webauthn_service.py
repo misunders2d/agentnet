@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -646,6 +647,196 @@ def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
             "WHERE request_id=? AND action='approval.receipt_retrieved'",
             (created.identifier,),
         )["n"] == 2
+    finally:
+        stack.store.close()
+
+
+def test_corrupt_delivery_binding_isolated_from_other_owner_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        _register(stack, monkeypatch)
+        owner_session_hash = _owner_session(stack)
+        corrupt = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=_approval_transaction("Corrupt binding laptop"),
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:corrupt-binding",
+            possession_hash=hashlib.sha256(b"corrupt-possession").hexdigest(),
+            request_expires_at=NOW + 200,
+        )
+        valid = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=_approval_transaction("Valid binding laptop"),
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:valid-binding",
+            possession_hash=hashlib.sha256(b"valid-possession").hexdigest(),
+            request_expires_at=NOW + 200,
+        )
+        with stack.store.transaction() as connection:
+            connection.execute(
+                "UPDATE approval_requests SET capability_encrypted=? WHERE request_id=?",
+                (
+                    stack.store.cipher.encrypt_json(
+                        {"possession_hash": "invalid"},
+                        purpose=f"approval-request-capability:{corrupt.identifier}",
+                    ),
+                    corrupt.identifier,
+                ),
+            )
+
+        actionable = stack.service.actionable_requests_for_owner(
+            principal_id="security-owner",
+            domain_id="corp.example",
+        )
+        assert {item["request_id"] for item in actionable} == {
+            corrupt.identifier,
+            valid.identifier,
+        }
+        by_id = {item["request_id"]: item for item in actionable}
+        assert by_id[corrupt.identifier] == {
+            "request_id": corrupt.identifier,
+            "approval_purpose": PURPOSE,
+            "state": "unavailable",
+            "automatic_delivery": False,
+            "actionable": False,
+            "failure_code": "delivery_binding_unavailable",
+            "created_at": NOW,
+            "expires_at": NOW + 200,
+        }
+        assert by_id[valid.identifier]["state"] == "pending"
+        assert by_id[valid.identifier]["automatic_delivery"] is True
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.request_options_for_owner(
+                request_id=corrupt.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+                owner_session_hash=owner_session_hash,
+            )
+    finally:
+        stack.store.close()
+
+
+def test_possession_bound_delivery_is_automatic_exact_and_retry_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        credential_id = _register(stack, monkeypatch)
+        possession_secret = "P" * 43
+        possession_hash = hashlib.sha256(possession_secret.encode("ascii")).hexdigest()
+        transaction = _approval_transaction("Automatic delivery laptop")
+        created = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:automatic-delivery-1",
+            possession_hash=possession_hash,
+            request_expires_at=NOW + 200,
+        )
+        duplicate = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=transaction,
+            delivery_mode="core_claim_code",
+            idempotency_key="core:enrollment:automatic-delivery-1",
+            possession_hash=possession_hash,
+            request_expires_at=NOW + 200,
+        )
+        assert duplicate.identifier == created.identifier
+        assert duplicate.duplicate is True
+        with pytest.raises(ConflictError, match="idempotency conflict"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=transaction,
+                delivery_mode="core_claim_code",
+                idempotency_key="core:enrollment:automatic-delivery-1",
+                possession_hash="f" * 64,
+                request_expires_at=NOW + 200,
+            )
+
+        token = _token(created.url)
+        stack.service.request_options(token)
+        monkeypatch.setattr(
+            "agentnet.approval.webauthn_uv.verify_authentication_response",
+            lambda **_kwargs: SimpleNamespace(
+                credential_id=b"credential-1",
+                new_sign_count=1,
+                credential_device_type=CredentialDeviceType.SINGLE_DEVICE,
+                credential_backed_up=False,
+                user_verified=True,
+            ),
+        )
+        issued = stack.service.approve_request(token, {"id": credential_id}, approved=True)
+        assert issued == {
+            "schema": "agentnet.approval.possession-status.v1",
+            "request_id": created.identifier,
+            "delivery_status": "waiting_agent",
+            "expires_at": NOW + stack.config.receipt_ttl_seconds,
+        }
+        assert "claim_code" not in issued
+        assert stack.service.approve_request(token, {}, approved=True) == issued
+        assert stack.service.actionable_requests_for_owner(
+            principal_id="security-owner", domain_id="corp.example"
+        ) == []
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.regenerate_claim_code(
+                request_id=created.identifier,
+                principal_id="security-owner",
+                domain_id="corp.example",
+            )
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.retrieve_core_receipt(
+                request_id=created.identifier,
+                possession_secret="W" * 43,
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                transaction_digest=created.transaction_digest or "",
+                retrieval_digest="d" * 64,
+            )
+        first = stack.service.retrieve_core_receipt(
+            request_id=created.identifier,
+            possession_secret=possession_secret,
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            transaction_digest=created.transaction_digest or "",
+            retrieval_digest="d" * 64,
+        )
+        assert stack.service.retrieve_core_receipt(
+            request_id=created.identifier,
+            possession_secret=possession_secret,
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            transaction_digest=created.transaction_digest or "",
+            retrieval_digest="d" * 64,
+        ) == first
+        with pytest.raises(AuthenticationError, match="denied"):
+            stack.service.retrieve_core_receipt(
+                request_id=created.identifier,
+                possession_secret=possession_secret,
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                transaction_digest=created.transaction_digest or "",
+                retrieval_digest="e" * 64,
+            )
+        stored = stack.store.fetch_one(
+            "SELECT claim_code_hash FROM approval_claim_codes WHERE request_id=?",
+            (created.identifier,),
+        )
+        assert stored is not None and stored["claim_code_hash"] == possession_hash
+        assert possession_secret not in str(stored)
     finally:
         stack.store.close()
 

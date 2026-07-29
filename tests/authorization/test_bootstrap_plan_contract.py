@@ -108,7 +108,7 @@ def test_bounded_c0_plan_contract_is_explicit_and_non_wildcard() -> None:
     assert "*" not in contract.BOOTSTRAP_PLAN_RESOURCES
 
 
-def test_plan_begin_status_and_complete_requests_expose_only_retry_keys_and_claim_code() -> None:
+def test_plan_begin_status_and_complete_requests_expose_only_retry_keys() -> None:
     contract = import_module("agentnet.authorization.bootstrap_plan")
     begin = {
         "schema": "agentnet.bootstrap-plan.begin.v1",
@@ -124,10 +124,9 @@ def test_plan_begin_status_and_complete_requests_expose_only_retry_keys_and_clai
 
     complete = contract.BootstrapPlanCompletionRequest.model_validate(
         {
-            "schema": "agentnet.bootstrap-plan.complete.v1",
+            "schema": "agentnet.bootstrap-plan.complete.v2",
             "begin_idempotency_key": begin["begin_idempotency_key"],
             "completion_idempotency_key": "fixed-bootstrap-complete-key-0001",
-            "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
         }
     )
     assert complete.completion_idempotency_key.endswith("0001")
@@ -149,10 +148,9 @@ def test_plan_begin_status_and_complete_requests_expose_only_retry_keys_and_clai
         with pytest.raises(ValidationError):
             contract.BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin["begin_idempotency_key"],
                     "completion_idempotency_key": "fixed-bootstrap-complete-key-0001",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                     field: "caller-value",
                 }
             )

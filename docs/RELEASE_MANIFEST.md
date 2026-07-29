@@ -1,9 +1,9 @@
 # Release Manifest
 
 Snapshot: 2026-07-28
-Candidate: `agentnet 0.1.30`
-Latest published package: `agentnet 0.1.29`
-Evidence profile: installed-verifier custody repair candidate
+Candidate: `agentnet 0.1.31`
+Latest published package: `agentnet 0.1.30`
+Evidence profile: first-message onboarding and recovery candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `11636d7ea858b7abe9f650d9b73c754446c518db8d6ad731f4d4870ac910eb2e` |
-| `pyproject.toml` | SHA-256 `a2e2544d27b23edd7b70747881d2b706e11db635a8f9e76e2a07280f1f950b35` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `ffc44ebf4b6f30309f3a1c8864ab4127f16410c09a22b2b850777794e1b1dc0b` |
+| `pyproject.toml` | SHA-256 `649031f992ea27965c3285bc31ae82596b107b3bcfecc115934568166e6ad13b` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -229,7 +229,7 @@ byte-identical wheel/sdist builds pass. External installation and live enrollmen
 evidence remain absent until exact public-package deployment and a fresh OIDC
 transaction complete.
 
-Candidate `0.1.30` repairs the installed-verifier custody blocker exposed on the
+Published `0.1.30` repairs the installed-verifier custody blocker exposed on the
 Hub after exact public `0.1.29` verification. The verifier copies the complete
 package into a bounded temporary runtime, excludes cache/build/dependency roots,
 runs the suite only against that disposable copy, clears inherited pytest
@@ -237,8 +237,25 @@ controls, rejects all caller pytest arguments, and redirects Hypothesis and
 Python bytecode state. Two recursive packed npm generations require both exact
 installed-tree content-digest equality before/after verification and absence of
 `.hypothesis`, `.pytest_cache`, `__pycache__`, and `.pyc` residue. This is a
-package-custody repair only; no live Hub replacement, enrollment, message, ACK,
-or gate-promotion claim is added.
+package-custody repair only; no enrollment, message, ACK, or gate-promotion
+claim is added.
+
+Candidate `0.1.31` addresses the first-message blockers known before its live
+server ceremony: fixed browser-only remote activation bound to one server-staged
+approved OIDC owner; purpose-separated automatic Approval delivery; exact
+supported `0.1.28/0.1.30` migration and response-loss recovery; enabled-unit
+reconciliation; and package-only destructive reset under a permanent root-only
+coordination lock. Current local evidence reports `1625 passed, 16 expected
+platform/dedicated-PostgreSQL skips`; two installed-harness pin failures remain
+non-green and were not waived. Source and two clean recursively packed npm
+generations each report `1549 passed, 16 expected skips`, with package-tree
+digest/no-residue checks green. Independent guided-ceremony closure review
+reports no blockers and PASS for skill architecture, code security, and
+Constitution. The later live server ceremony exposed MEL-216 (owner-passkey
+registration ordering) and MEL-217 (false final setup health/identity status);
+both remain unresolved in `0.1.31` and are assigned to the next release. Final
+replacement-package verification and fresh-laptop message/ACK/revocation proof
+remain pending.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

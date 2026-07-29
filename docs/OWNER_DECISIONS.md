@@ -10,7 +10,7 @@ evidence tier are not approved.
 | Decision | Reversible implementation default | Launch blocker requiring accountable owner |
 |---|---|---|
 | PD-001 | opaque domain principal = OIDC issuer+subject; verified email alias/history; principal/harness IDs remain inside authenticated Core/Manager authority operations and are omitted from public human reports | migration/appeal semantics outside this bounded default |
-| PD-002 | owner-controlled WebAuthn UV plus exact transaction and 128-bit one-time code; confirmation independent of the enrolling harness; colocated server profile allowed with `independent_boundary_proven=false` | separately administered approval host and stronger recovery/production evidence for the optional high-assurance tier |
+| PD-002 | owner-controlled WebAuthn UV plus exact-transaction, purpose-separated possession-bound automatic Approval delivery retained by the waiting process; browser/human receives no code or capability; legacy 128-bit claim-code delivery remains compatibility-only; confirmation independent of the enrolling harness; colocated server profile allowed with `independent_boundary_proven=false` | separately administered approval host and stronger recovery/production evidence for the optional high-assurance tier |
 | PD-003 | harness/device/session only attenuate; posture disabled | exact posture/appeal policy |
 | PD-004 | one independent approver ordinary; two high-impact/break-glass | risk classes, approver sets, TTL/use, break-glass |
 | PD-005 | retain inert accepted history only under lawful retention; conservative compromise quarantine | event matrix, erasure/hold, adjudicator |
@@ -36,11 +36,15 @@ usability and threat-model tradeoff:
   server under distinct OS identities. This profile reports
   `independent_boundary_proven=false`; separately administered approval is an
   optional high-assurance tier.
-- The one-time claim code is 128 bits, expires after five minutes, permits at
-  most five failed attempts, and is typed only into the fresh laptop's masked
-  prompt. When the enrollee and approver are the same owner, direct human
-  transfer between the approval UI and fresh laptop is allowed; no extra
-  person, host, Slack/A2A relay, or second reporting channel is required.
+- **Updated 2026-07-28:** ordinary enrollment uses purpose-separated,
+  possession-bound automatic Approval delivery. Exact waiting process retains
+  Core continuation/begin state. Core derives a per-transaction OIDC Approval
+  possession secret or generates a distinct high-entropy bootstrap secret,
+  sends only that secret's SHA-256 hash, and retrieves the receipt through
+  signed broker after WebAuthn UV. Browser and human receive no claim code,
+  receipt, continuation, broker secret, or private URL. No extra person, host,
+  Slack/A2A relay, copy/paste, or reporting channel is required. Legacy 128-bit
+  claim-code delivery remains compatibility-only and is not ordinary onboarding.
 - Recovery requires fresh OIDC plus WebAuthn and creates a new binding. It does
   not resurrect or copy a lost harness key.
 - One owner may act as enrollee, WebAuthn approver, and messaging administrator

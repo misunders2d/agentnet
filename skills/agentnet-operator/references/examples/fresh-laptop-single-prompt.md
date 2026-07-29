@@ -20,7 +20,7 @@ Validation before issuance:
 - for mode `c0_pilot` only, the dedicated owner-harness responder passed `--check` and is already running under the exact owner identity before this packet is issued;
 - existing A2A remains active and unchanged.
 
-The ordinary default requires no extra approval host, extra person, Infisical or other named secret manager, Slack/A2A claim-code relay, second report channel, or per-command setup approvals. Separately administered approval hosting is optional high assurance only.
+The ordinary default requires no extra approval host, extra person, Infisical or other named secret manager, manual approval-code relay, second report channel, or per-command setup approvals. No relay channel or second person is required. Separately administered approval hosting is optional high assurance only.
 
 ```text
 AgentNet blank-laptop onboarding — exact public packet
@@ -46,19 +46,17 @@ Human actions — complete list for selected mode
 2. Approve an official Node.js or uv installer only if a required prerequisite is missing.
 3. Complete Google sign-in in the system browser after verifying the account, issuer, Core, domain, and callback shown below.
 4. On the current owner laptop, review the exact AgentNet enrollment transaction and approve it with the registered passkey.
-5. Read the enrollment one-time code shown by the approval UI and type it into this fresh laptop's masked AgentNet prompt.
-6. Mode `c0_pilot` only: on the current owner laptop, review the separate fixed C0 plan summary—exact two harnesses, five communication powers, five matching revoke powers, one-hour ceiling—and approve it with the registered passkey.
-7. Mode `c0_pilot` only: read the C0-plan one-time code shown by the approval UI and type it into this fresh laptop's masked AgentNet prompt.
+5. Mode `c0_pilot` only: on the current owner laptop, review the separate fixed C0 plan summary—exact two harnesses, five communication powers, five matching revoke powers, one-hour ceiling—and approve it with the registered passkey.
 
-For mode `identity_only`, actions 6–7 do not apply and must not be requested. No other human setup, command entry, device, person, secret manager, identifier relay, or approval is part of this flow.
+For mode `identity_only`, action 5 does not apply and must not be requested. No other human setup, command entry, device, person, secret manager, identifier relay, approval code, or approval is part of this flow.
 
 Safety rules
 - This is an isolated nonproduction C0 pilot. Use no company, personal, credential, production, file, task, tool, budget, or business-effect data.
 - Installation creates code only. Enrollment creates identity only. Mode `identity_only` stops after Phase 3. Mode `c0_pilot` uses one separate exact WebAuthn-approved plan; never assemble authority with generic entitlement issuance, three independent grants, or the legacy founder ceremony.
 - Preserve existing A2A and every existing communication system unchanged.
 - Use system browsers only; never an embedded webview.
-- Never expose a private key, token, capability/private URL, OAuth callback data, signed receipt, cookie, identity profile, private path, private payload, claim code, or raw command output in chat, Slack, A2A, prompts, logs, screenshots, repositories, USB, QR, or support reports.
-- The owner moves only each 128-bit one-time code directly from the approval UI on the current laptop into this laptop's masked prompt. Each expires after five minutes and allows at most five failed attempts. No relay channel or second person is required.
+- Never expose a private key, token, possession secret, capability/private URL, OAuth callback data, signed receipt, cookie, identity profile, private path, private payload, or raw command output in chat, Slack, A2A, prompts, logs, screenshots, repositories, USB, QR, or support reports.
+- After passkey approval, AgentNet automatically returns the receipt to only the exact waiting process through its signed broker. Browser and human receive no receipt, approval code, possession secret, or broker capability.
 - Stop on an unresolved placeholder, unsupported OS/CPU, version/integrity mismatch, unexpected account/domain/origin/callback, non-HTTPS endpoint, request for private material, missing command surface, unexpected authority, or server health failure. Report only the bounded public blocker.
 
 Phase 1 — prerequisites
@@ -100,11 +98,11 @@ Phase 3 — guided identity enrollment
 2. AgentNet must create owner-only local state, open the system browser without printing its private authorization URL, and contact only <CORE_HTTPS_ORIGIN>.
 3. Request human action 3. The human verifies the expected Google account, issuer <OIDC_ISSUER>, callback <OIDC_CALLBACK>, Core <CORE_HTTPS_ORIGIN>, and domain <AGENTNET_DOMAIN>, then consents. Stop on mismatch.
 4. Tell the human that the exact pending transaction is now available at <APPROVAL_HTTPS_ORIGIN> on the current owner laptop. Request human action 4: review human, domain, harness, candidate-key thumbprint, purpose, digest, and expiry; then approve with the registered passkey.
-5. When AgentNet displays its masked one-time-code prompt, request human action 5. The human types only the code shown by the approval UI. Never request or accept a receipt, URL, key, identity file, screenshot, or other value.
-6. On timeout, cancellation, network loss, or expired code, retain owner-only state and rerun the exact same command. Never create a second identity or move private state.
+5. Keep the guided command running. After approval, AgentNet must detect `approval_ready`, retrieve the receipt automatically through the signed broker, and complete without a TTY prompt or any value copied from the browser.
+6. On local timeout, cancellation, or network loss while Core still reports nonterminal state, retain owner-only state and rerun the exact same command. If Core reports terminal `expired` or `failed`, never delete/edit state: rerun that exact command with `--replace-terminal-state`. The flag must refuse absent, completed, malformed, argument-drifted, or nonterminal state, reuse the same candidate key, and start a fresh OIDC transaction without creating an identity. Never move private state.
 7. Verify safe output shows:
    - status enrolled_identity_only
-   - domain_id <AGENTNET_DOMAIN>
+   - approval_delivery automatic_possession_bound_signed_broker
    - authority_granted false
    - first_message_status first_message_blocked_explicit_authority_required
 
@@ -125,17 +123,17 @@ Phase 4 — selected-mode boundary and optional bounded C0 round trip
 
    agentnet bootstrap-plan begin --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-5. Request human action 6. The owner opens only the stable public approval page already shown by AgentNet, verifies the exact fixed C0 summary and expiry, then WebAuthn-approves it. Never expose or relay the approval URL, request ID, digest, receipt, or harness IDs.
+5. Request human action 5. The owner opens only the stable public approval page already shown by AgentNet, verifies the exact fixed C0 summary and expiry, then WebAuthn-approves it. Never expose or relay the approval URL, request ID, digest, receipt, possession secret, or harness IDs.
 6. Poll the same state safely:
 
    agentnet bootstrap-plan status --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-   Continue only for `approval_ready` plus `enter_claim_code_in_masked_local_tty`. `rejected`, `canceled`, `expired`, or `invalidated` is terminal.
+   Continue only for `approval_ready` plus `complete_automatically`. `rejected`, `canceled`, `expired`, or `invalidated` is terminal.
 7. Run:
 
    agentnet bootstrap-plan complete --identity ".agentnet/identity.json" --state ".agentnet/bootstrap-plan-state.json"
 
-   Request human action 7 only at its masked prompt. Verify output is `prepared_unusable`, `authority_granted: false`, and `communication_usable: false`.
+   AgentNet must retrieve the approval automatically with the exact private begin state and must not require a TTY or browser value. Verify output is `prepared_unusable`, `authority_granted: false`, and `communication_usable: false`.
 8. Start the fixed proof:
 
    agentnet c0-pilot start --identity ".agentnet/identity.json"
@@ -151,7 +149,7 @@ Phase 4 — selected-mode boundary and optional bounded C0 round trip
 
 Phase 5 — recovery and final report
 - Apply this local-state policy: <RETENTION_ABORT_POLICY>
-- Duplicate paste, restart, timeout, browser cancellation, code expiry, and response loss must resume the same guided-join state and, for mode `c0_pilot`, the same bootstrap-plan/C0 attempt state without a second identity or duplicate event.
+- Duplicate paste, restart, timeout, browser cancellation, approval expiry, and response loss must resume the same guided-join state and, for mode `c0_pilot`, the same bootstrap-plan/C0 attempt state without a second identity or duplicate event.
 - Return only:
 
   AgentNet blank-laptop onboarding
@@ -164,5 +162,5 @@ Phase 5 — recovery and final report
   messaging: first_message_blocked_explicit_authority_required | COMPLETED_C0_ROUND_TRIP | waiting_owner | waiting_fresh | expired | invalidated | blocked
   public_blocker: none | <short public reason>
 
-Do not include any claim code, principal/harness IDs, secrets, private state, paths, screenshots, raw output, event IDs, envelope digests, receipts, or payloads.
+Do not include any principal/harness IDs, secrets, possession state, private state, paths, screenshots, raw output, event IDs, envelope digests, receipts, or payloads.
 ```

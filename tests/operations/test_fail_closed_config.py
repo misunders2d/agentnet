@@ -446,6 +446,7 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
         public_origin="https://approval.example",
         service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
         approver_principal_id="security-owner",
+        remote_activation_oidc_subject="approved-owner-subject",
     )
     enrollment = _confidential_oidc_config().model_copy(
         update={"approval_service": approval}
@@ -465,6 +466,8 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
         "public_origin": "https://approval.example",
         "service_credential_env": "AGENTNET_TEST_APPROVAL_CORE_TOKEN",
         "approver_principal_id": "security-owner",
+        "remote_activation_oidc_subject": "approved-owner-subject",
+        "remote_activation_verified_email_alias": None,
         "request_timeout_seconds": 5.0,
         "maximum_response_bytes": 262144,
     }
@@ -504,6 +507,7 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
                 public_origin="https://approval.example",
                 service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
                 approver_principal_id="security-owner",
+                remote_activation_oidc_subject="approved-owner-subject",
             )
 
     for public_origin in (
@@ -518,6 +522,7 @@ def test_guided_approval_client_config_is_reference_only_and_fail_closed(
                 public_origin=public_origin,
                 service_credential_env="AGENTNET_TEST_APPROVAL_CORE_TOKEN",
                 approver_principal_id="security-owner",
+                remote_activation_oidc_subject="approved-owner-subject",
             )
 
 

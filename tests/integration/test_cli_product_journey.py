@@ -430,7 +430,7 @@ def test_guided_join_is_resumable_private_and_identity_only(
             }
         if path.endswith("/poll"):
             return {
-                "status": "approval_pending",
+                "status": "approval_ready",
                 "interval_seconds": 2,
                 "expires_at": int(time.time()) + 300,
                 "challenge_id": "challenge-guided-cli-0001",
@@ -439,7 +439,8 @@ def test_guided_join_is_resumable_private_and_identity_only(
                 "approval_url": "https://approval.corp.example/approval",
             }
         assert path.endswith("/complete")
-        assert body["claim_code"] == "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
+        assert body["continuation_token"] == "c" * 43
+        assert "claim_code" not in body
         assert "independent_approval" not in body
         return {
             "principal_id": actor.principal_id,
@@ -457,14 +458,13 @@ def test_guided_join_is_resumable_private_and_identity_only(
         "agentnet.cli.webbrowser.open",
         lambda url, **_kwargs: opened.append(url) or True,
     )
-    terminal_checks: list[bool] = []
     monkeypatch.setattr(
         "agentnet.cli.require_private_terminal",
-        lambda: terminal_checks.append(True),
+        lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
     monkeypatch.setattr(
         "agentnet.cli.getpass.getpass",
-        lambda _prompt: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )
     args = build_parser().parse_args(
         [
@@ -496,6 +496,7 @@ def test_guided_join_is_resumable_private_and_identity_only(
         "continue only with an explicitly approved bounded authority plan"
     )
     assert result["identity_saved_locally"] is True
+    assert result["approval_delivery"] == "automatic_possession_bound_signed_broker"
     for forbidden in (
         actor.domain_id,
         actor.principal_id,
@@ -507,7 +508,7 @@ def test_guided_join_is_resumable_private_and_identity_only(
         "https://accounts.example/authorize?state=private",
         "https://approval.corp.example/approval",
     ]
-    assert terminal_checks == [True]
+    assert "claim_code" not in json.dumps([body for _path, body in calls])
     private_values = (
         "https://accounts.example/authorize",
         "c" * 43,
@@ -608,7 +609,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
     monkeypatch.setattr("agentnet.cli.time.sleep", lambda _seconds: None)
     monkeypatch.setattr(
         "agentnet.cli.getpass.getpass",
-        lambda _prompt: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("claim prompt must not run")),
     )
     args = build_parser().parse_args(
         [
@@ -657,7 +658,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
                     "expires_at": int(time.time()) + 300,
                 }
             return {
-                "status": "approval_pending",
+                "status": "approval_ready",
                 "interval_seconds": 2,
                 "expires_at": int(time.time()) + 300,
                 "challenge_id": "challenge-guided-terminal-0001",
@@ -666,6 +667,8 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
                 "approval_url": "https://approval.corp.example/approval",
             }
         assert path.endswith("/complete")
+        assert body["continuation_token"] == "c" * 43
+        assert "claim_code" not in body
         return {
             "principal_id": actor.principal_id,
             "harness_id": actor.harness_id,
@@ -687,12 +690,373 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
         "/v1/enrollment/oidc/poll",
         "/v1/enrollment/oidc/complete",
     ]
-    assert terminal_checks == [True, True, True]
+    assert terminal_checks == [True, True]
     assert handoffs == [
         (authorization_url, "owner OIDC enrollment", True),
         (authorization_url, "owner OIDC enrollment", True),
         ("https://approval.corp.example/approval", "stable owner approval", True),
     ]
+
+
+def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclosure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id="corp.example",
+        principal_id="person-remote",
+        harness_id="harness-remote",
+        credential_id="credential-remote",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    authorization_url = "https://accounts.example/authorize?state=private-remote"
+    approval_url = "https://approval.corp.example/approval"
+    transaction = json.dumps(
+        {
+            "challenge_id": "challenge-guided-remote-0001",
+            "nonce": "n" * 43,
+            "schema": "agentnet.enrollment.challenge.v1",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    paths: list[str] = []
+    key_id: str | None = None
+
+    def request(*, server, method, path, body, timeout=10.0):
+        nonlocal key_id
+        paths.append(path)
+        if path.endswith("/begin"):
+            assert body["activation_mode"] == "remote_browser"
+            key_id = public_key_thumbprint(str(body["public_key_pem"]))
+            return {
+                "transaction_id": "oidc-transaction-guided-remote-0001",
+                "authorization_url": authorization_url,
+                "state": "s" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "c" * 43,
+            }
+        if path.endswith("/poll"):
+            return {
+                "status": "approval_ready",
+                "interval_seconds": 2,
+                "expires_at": int(time.time()) + 300,
+                "challenge_id": "challenge-guided-remote-0001",
+                "nonce": "n" * 43,
+                "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+                "approval_url": approval_url,
+            }
+        assert path.endswith("/complete")
+        assert body["continuation_token"] == "c" * 43
+        assert "claim_code" not in body
+        return {
+            "principal_id": actor.principal_id,
+            "harness_id": actor.harness_id,
+            "credential_id": actor.credential_id,
+            "key_id": key_id,
+            "credential_epoch": 1,
+            "harness_status": "active",
+            "actor": actor.model_dump(mode="json"),
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", request)
+    for target in (
+        "agentnet.cli.require_private_terminal",
+        "agentnet.cli.handoff_private_url",
+        "agentnet.cli.webbrowser.open",
+        "agentnet.cli.getpass.getpass",
+    ):
+        monkeypatch.setattr(
+            target,
+            lambda *_args, **_kwargs: pytest.fail(
+                "remote mode must not use browser, private TTY, handoff, or claim prompt"
+            ),
+        )
+    monkeypatch.setattr("agentnet.cli.time.sleep", lambda _seconds: None)
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+        ]
+    )
+
+    assert args.func(args) == 0
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert result["status"] == "enrolled_identity_only"
+    assert paths == [
+        "/v1/enrollment/oidc/begin",
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/complete",
+    ]
+    for private in (authorization_url, approval_url, "s" * 43, "c" * 43):
+        assert private not in output.out + output.err
+
+
+def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id="corp.example",
+        principal_id="person-replaced-terminal",
+        harness_id="harness-replaced-terminal",
+        credential_id="credential-replaced-terminal",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    original_key_id: str | None = None
+
+    def first_request(*, server, method, path, body, timeout=10.0):
+        nonlocal original_key_id
+        if path.endswith("/begin"):
+            original_key_id = public_key_thumbprint(str(body["public_key_pem"]))
+            return {
+                "transaction_id": "oidc-transaction-terminal-old",
+                "authorization_url": "https://accounts.example/authorize?state=private-old",
+                "state": "o" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "c" * 43,
+            }
+        assert path.endswith("/poll")
+        return {
+            "status": "failed",
+            "interval_seconds": 2,
+            "expires_at": int(time.time()) + 300,
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", first_request)
+    for target in (
+        "agentnet.cli.require_private_terminal",
+        "agentnet.cli.handoff_private_url",
+        "agentnet.cli.webbrowser.open",
+        "agentnet.cli.getpass.getpass",
+    ):
+        monkeypatch.setattr(
+            target,
+            lambda *_args, **_kwargs: pytest.fail("remote mode must not disclose private state"),
+        )
+    original_args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+        ]
+    )
+    with pytest.raises(SystemExit, match="terminal state: failed"):
+        original_args.func(original_args)
+    capsys.readouterr()
+    original_state = state.read_bytes()
+
+    drifted_args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(tmp_path / "private" / "different-identity.json"),
+            "--browser",
+            "remote",
+            "--replace-terminal-state",
+        ]
+    )
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("argument drift must fail before Core polling"),
+    )
+    with pytest.raises(SystemExit, match="resume arguments do not match"):
+        drifted_args.func(drifted_args)
+    assert state.read_bytes() == original_state
+
+    replacement_args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+            "--replace-terminal-state",
+        ]
+    )
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: {
+            "status": "authorization_pending",
+            "interval_seconds": 2,
+            "expires_at": int(time.time()) + 300,
+        },
+    )
+    with pytest.raises(SystemExit, match="is not terminal"):
+        replacement_args.func(replacement_args)
+    assert state.read_bytes() == original_state
+
+    transaction = json.dumps(
+        {
+            "challenge_id": "challenge-guided-replaced-terminal",
+            "nonce": "n" * 43,
+            "schema": "agentnet.enrollment.challenge.v1",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    calls: list[str] = []
+
+    def replacement_request(*, server, method, path, body, timeout=10.0):
+        calls.append(path)
+        if len(calls) == 1:
+            assert path.endswith("/poll")
+            assert body["transaction_id"] == "oidc-transaction-terminal-old"
+            return {
+                "status": "failed",
+                "interval_seconds": 2,
+                "expires_at": int(time.time()) + 300,
+            }
+        if path.endswith("/begin"):
+            assert public_key_thumbprint(str(body["public_key_pem"])) == original_key_id
+            return {
+                "transaction_id": "oidc-transaction-terminal-new",
+                "authorization_url": "https://accounts.example/authorize?state=private-new",
+                "state": "r" * 43,
+                "expires_at": int(time.time()) + 300,
+                "continuation_token": "d" * 43,
+            }
+        if path.endswith("/poll"):
+            assert body["transaction_id"] == "oidc-transaction-terminal-new"
+            return {
+                "status": "approval_ready",
+                "interval_seconds": 2,
+                "expires_at": int(time.time()) + 300,
+                "challenge_id": "challenge-guided-replaced-terminal",
+                "nonce": "n" * 43,
+                "canonical_transaction_b64": base64.b64encode(transaction).decode(),
+                "approval_url": "https://approval.corp.example/approval",
+            }
+        assert path.endswith("/complete")
+        return {
+            "principal_id": actor.principal_id,
+            "harness_id": actor.harness_id,
+            "credential_id": actor.credential_id,
+            "key_id": original_key_id,
+            "credential_epoch": 1,
+            "harness_status": "active",
+            "actor": actor.model_dump(mode="json"),
+        }
+
+    monkeypatch.setattr("agentnet.cli._public_json_request", replacement_request)
+    assert replacement_args.func(replacement_args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "enrolled_identity_only"
+    assert calls == [
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/begin",
+        "/v1/enrollment/oidc/poll",
+        "/v1/enrollment/oidc/complete",
+    ]
+    assert identity.exists()
+
+    completed_state = state.read_bytes()
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("completed state must fail before Core polling"),
+    )
+    with pytest.raises(SystemExit, match="completed guided join state cannot be replaced"):
+        replacement_args.func(replacement_args)
+    assert state.read_bytes() == completed_state
+
+
+def test_guided_join_terminal_replacement_requires_existing_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "private" / "guided.json"
+    identity = tmp_path / "private" / "identity.json"
+    monkeypatch.setattr(
+        "agentnet.cli._public_json_request",
+        lambda **_kwargs: pytest.fail("absent state must fail before Core polling"),
+    )
+    args = build_parser().parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+            "--domain",
+            "corp.example",
+            "--harness",
+            "native",
+            "--name",
+            "Headless server",
+            "--state",
+            str(state),
+            "--identity",
+            str(identity),
+            "--browser",
+            "remote",
+            "--replace-terminal-state",
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="requires existing pending state"):
+        args.func(args)
+    assert not state.exists()
+    assert not state.with_suffix(".key.pem").exists()
+    assert not identity.exists()
 
 
 def test_guided_join_terminal_mode_requires_tty_before_begin(

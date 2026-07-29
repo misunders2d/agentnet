@@ -28,6 +28,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from agentnet.errors import (
     AuthenticationError,
@@ -53,6 +54,13 @@ from agentnet.security.signatures import canonical_json, verify_signature
 
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 _OIDC_ALGORITHMS = frozenset({"RS256", "ES256"})
+
+
+class RemoteActivationIdentityMismatch(AuthenticationError):
+    """Verified OIDC identity does not match the server-staged owner policy."""
+
+    code = "activation_wrong_account"
+    http_status = 403
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +224,8 @@ class OIDCProviderConfig:
     allowed_endpoint_origins: tuple[str, ...] = ()
     allowed_private_endpoint_cidrs: tuple[str, ...] = ()
     pinned_endpoint_addresses: tuple[str, ...] = ()
+    remote_activation_oidc_subject: str | None = None
+    remote_activation_verified_email_alias: str | None = None
     authorization_ttl_seconds: int = 300
     maximum_id_token_age_seconds: int = 300
     allowed_clock_skew_seconds: int = 30
@@ -259,6 +269,28 @@ class OIDCProviderConfig:
             raise ValueError("OIDC clock skew is outside the supported range")
         if self.http_timeout_seconds <= 0 or self.http_timeout_seconds > 30:
             raise ValueError("OIDC HTTP timeout is outside the supported range")
+        if self.remote_activation_oidc_subject is not None and any(
+            ord(character) < 0x20 for character in self.remote_activation_oidc_subject
+        ):
+            raise ValueError("remote activation owner OIDC subject is invalid")
+        if self.remote_activation_verified_email_alias is not None:
+            normalized = self.remote_activation_verified_email_alias.strip().casefold()
+            local, separator, domain = normalized.partition("@")
+            try:
+                normalized.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ValueError("remote activation verified-email alias must be normalized") from exc
+            if (
+                separator != "@"
+                or not local
+                or not domain
+                or "@" in domain
+                or normalized != self.remote_activation_verified_email_alias
+                or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in normalized)
+            ):
+                raise ValueError("remote activation verified-email alias must be normalized")
+        if self.remote_activation_oidc_subject is not None and self.remote_activation_verified_email_alias is not None:
+            raise ValueError("remote activation owner identity must use subject or verified-email alias")
         pins = dict(self.pinned_jwk_thumbprints)
         if len(pins) != len(self.pinned_jwk_thumbprints) or any(
             not key_id or not _is_sha256(value) for key_id, value in pins.items()
@@ -654,6 +686,7 @@ class OIDCEnrollmentCoordinator:
         harness_kind: str,
         harness_name: str,
         public_key_pem: str,
+        remote_activation: bool = False,
     ) -> OIDCGuidedAuthorizationRequest:
         if self.enrollment.outage_gate is not None:
             self.enrollment.outage_gate.require_issuance()
@@ -680,6 +713,28 @@ class OIDCEnrollmentCoordinator:
         verifier_encrypted = self.store.cipher.encrypt_json(
             {"code_verifier": code_verifier},
             purpose=f"oidc-pkce:{transaction_id}",
+        )
+        expected_subject = self.provider.config.remote_activation_oidc_subject
+        expected_email = self.provider.config.remote_activation_verified_email_alias
+        if remote_activation and (expected_subject is None) == (expected_email is None):
+            raise GateBlocked(
+                "remote_activation_identity_policy",
+                "remote server activation requires one exact approved owner identity",
+            )
+        activation_encrypted = (
+            self.store.cipher.encrypt_json(
+                {
+                    "schema": "agentnet.oidc.remote-activation.v1",
+                    "transaction_id": transaction_id,
+                    "authorization_url": authorization_url,
+                    "expected_oidc_issuer": self.provider.config.issuer,
+                    "expected_oidc_subject": expected_subject,
+                    "expected_verified_email_alias": expected_email,
+                },
+                purpose=f"oidc-guided-activation:{transaction_id}",
+            )
+            if remote_activation
+            else None
         )
         with self.store.transaction() as connection:
             connection.execute(
@@ -710,12 +765,13 @@ class OIDCEnrollmentCoordinator:
             )
             connection.execute(
                 """INSERT INTO oidc_enrollment_continuations(
-                       transaction_id,continuation_hash,status,poll_after_at,
+                       transaction_id,continuation_hash,status,challenge_encrypted,poll_after_at,
                        poll_interval_seconds,poll_count,created_at,updated_at,expires_at
-                   ) VALUES(?,?,'awaiting_oidc',?,2,0,?,?,?)""",
+                   ) VALUES(?,?,'awaiting_oidc',?,?,2,0,?,?,?)""",
                 (
                     transaction_id,
                     continuation_hash,
+                    activation_encrypted,
                     now + 2,
                     now,
                     now,
@@ -740,6 +796,89 @@ class OIDCEnrollmentCoordinator:
             continuation_token,
         )
 
+    def remote_activation_authorization_url(self) -> str:
+        """Return one server-staged browser authorization without exposing its state elsewhere."""
+
+        now = self.provider.clock()
+        rows = self.store.fetch_all(
+            """SELECT c.transaction_id,c.challenge_encrypted,c.expires_at,o.status AS oidc_status
+                 FROM oidc_enrollment_continuations c
+                 JOIN oidc_enrollment_transactions o ON o.transaction_id=c.transaction_id
+                WHERE c.status='awaiting_oidc' AND c.challenge_encrypted IS NOT NULL
+                  AND c.expires_at>? AND o.status='pending'
+                ORDER BY c.created_at,c.transaction_id""",
+            (now,),
+        )
+        if len(rows) != 1:
+            raise GateBlocked(
+                "remote_activation_unavailable",
+                "exactly one remote server activation must be waiting",
+            )
+        row = rows[0]
+        transaction_id = str(row["transaction_id"])
+        value = self.store.cipher.decrypt_json(
+            row["challenge_encrypted"],
+            purpose=f"oidc-guided-activation:{transaction_id}",
+        )
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {
+                "schema",
+                "transaction_id",
+                "authorization_url",
+                "expected_oidc_issuer",
+                "expected_oidc_subject",
+                "expected_verified_email_alias",
+            }
+            or value.get("schema") != "agentnet.oidc.remote-activation.v1"
+            or value.get("transaction_id") != transaction_id
+            or not isinstance(value.get("authorization_url"), str)
+            or value.get("expected_oidc_issuer") != self.provider.config.issuer
+            or value.get("expected_oidc_subject")
+            != self.provider.config.remote_activation_oidc_subject
+            or value.get("expected_verified_email_alias")
+            != self.provider.config.remote_activation_verified_email_alias
+            or (value.get("expected_oidc_subject") is None)
+            == (value.get("expected_verified_email_alias") is None)
+        ):
+            raise AuthenticationError("OIDC remote activation is unavailable")
+        authorization_url = str(value["authorization_url"])
+        _require_https_url(authorization_url, label="authorization URL", allow_query=True)
+        return authorization_url
+
+    def remote_activation_for_challenge(self, challenge_id: str) -> bool:
+        """Report whether a verified callback belongs to browser-only server activation."""
+
+        row = self.store.fetch_one(
+            """SELECT c.transaction_id,c.challenge_encrypted
+                 FROM oidc_enrollment_continuations c
+                 JOIN oidc_enrollment_transactions o ON o.transaction_id=c.transaction_id
+                WHERE o.enrollment_challenge_id=? AND c.status='callback_ready'""",
+            (challenge_id,),
+        )
+        if row is None or not row["challenge_encrypted"]:
+            return False
+        transaction_id = str(row["transaction_id"])
+        value = self.store.cipher.decrypt_json(
+            row["challenge_encrypted"],
+            purpose=f"oidc-guided-challenge:{transaction_id}",
+        )
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {
+                "challenge_id",
+                "nonce",
+                "canonical_transaction_b64",
+                "activation_mode",
+            }
+            or value.get("challenge_id") != challenge_id
+            or value.get("activation_mode") != "remote_browser"
+        ):
+            raise AuthenticationError("OIDC remote activation is unavailable")
+        return True
+
     def poll_continuation(
         self,
         *,
@@ -754,9 +893,18 @@ class OIDCEnrollmentCoordinator:
         ):
             raise AuthenticationError("OIDC enrollment continuation is unavailable")
         supplied_hash = hashlib.sha256(continuation_token.encode("utf-8")).hexdigest()
+        approval_possession_secret = _approval_possession_secret(
+            continuation_token,
+            transaction_id=transaction_id,
+        )
+        approval_possession_hash = hashlib.sha256(
+            approval_possession_secret.encode("ascii")
+        ).hexdigest()
         now = self.provider.clock()
         challenge_value: dict[str, Any] | None = None
         should_stage = False
+        approval_request_id: str | None = None
+        approval_transaction_digest: str | None = None
         with self.store.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM oidc_enrollment_continuations WHERE transaction_id=?",
@@ -778,7 +926,12 @@ class OIDCEnrollmentCoordinator:
                     )
                 return OIDCPollResult("expired", interval, expires_at)
             if status not in {"enrolled", "expired", "failed"}:
-                if int(row["poll_count"]) >= 60:
+                # The finite poll budget protects the browser-authorization wait only.
+                # Callback creates a fresh enrollment challenge and resets ``expires_at``;
+                # the human Approval ceremony is bounded by that expiry, not by polling
+                # already spent before the callback.
+                awaiting_oidc = status == "awaiting_oidc"
+                if awaiting_oidc and int(row["poll_count"]) >= 60:
                     connection.execute(
                         """UPDATE oidc_enrollment_continuations
                               SET status='failed',updated_at=? WHERE transaction_id=?""",
@@ -787,18 +940,33 @@ class OIDCEnrollmentCoordinator:
                     status = "failed"
                 elif now < int(row["poll_after_at"]):
                     interval = min(10, interval + 2)
-                    connection.execute(
-                        """UPDATE oidc_enrollment_continuations
-                              SET poll_interval_seconds=?,poll_after_at=?,poll_count=poll_count+1,
-                                  updated_at=? WHERE transaction_id=?""",
-                        (interval, now + interval, now, transaction_id),
-                    )
+                    if awaiting_oidc:
+                        connection.execute(
+                            """UPDATE oidc_enrollment_continuations
+                                  SET poll_interval_seconds=?,poll_after_at=?,
+                                      poll_count=poll_count+1,updated_at=?
+                                WHERE transaction_id=?""",
+                            (interval, now + interval, now, transaction_id),
+                        )
+                    else:
+                        connection.execute(
+                            """UPDATE oidc_enrollment_continuations
+                                  SET poll_interval_seconds=?,poll_after_at=?,updated_at=?
+                                WHERE transaction_id=?""",
+                            (interval, now + interval, now, transaction_id),
+                        )
                     return OIDCPollResult("slow_down", interval, expires_at)
-                else:
+                elif awaiting_oidc:
                     connection.execute(
                         """UPDATE oidc_enrollment_continuations
                               SET poll_after_at=?,poll_count=poll_count+1,updated_at=?
                             WHERE transaction_id=?""",
+                        (now + interval, now, transaction_id),
+                    )
+                else:
+                    connection.execute(
+                        """UPDATE oidc_enrollment_continuations
+                              SET poll_after_at=?,updated_at=? WHERE transaction_id=?""",
                         (now + interval, now, transaction_id),
                     )
             if status in {"callback_ready", "approval_pending"}:
@@ -813,6 +981,11 @@ class OIDCEnrollmentCoordinator:
                     raise AuthenticationError("OIDC enrollment continuation is unavailable")
                 challenge_value = value
                 should_stage = status == "callback_ready"
+                if status == "approval_pending":
+                    approval_request_id = str(row["approval_request_id"] or "")
+                    approval_transaction_digest = str(
+                        row["approval_transaction_digest"] or ""
+                    )
             else:
                 rendered = "authorization_pending" if status == "awaiting_oidc" else status
                 return OIDCPollResult(rendered, interval, expires_at)
@@ -854,6 +1027,7 @@ class OIDCEnrollmentCoordinator:
                 approval_purpose="identity.enrollment.approve",
                 canonical_transaction=canonical,
                 transaction_digest=transaction_digest,
+                possession_hash=approval_possession_hash,
                 request_expires_at=challenge_expires_at,
             )
             request_id = created.get("request_id")
@@ -905,6 +1079,31 @@ class OIDCEnrollmentCoordinator:
                     or current["approval_transaction_digest"] != transaction_digest
                 ):
                     raise ReplayError("OIDC approval staging conflicted")
+            approval_request_id = request_id
+            approval_transaction_digest = transaction_digest
+        if (
+            self.approval_client is None
+            or not approval_request_id
+            or not approval_transaction_digest
+        ):
+            raise AuthenticationError("OIDC enrollment continuation is unavailable")
+        approval_status = self.approval_client.request_status(
+            request_id=approval_request_id,
+            transaction_digest=approval_transaction_digest,
+        )
+        remote_state = approval_status.get("state")
+        if remote_state in {"rejected", "expired"}:
+            terminal_status = "expired" if remote_state == "expired" else "failed"
+            with self.store.transaction() as connection:
+                connection.execute(
+                    """UPDATE oidc_enrollment_continuations
+                          SET status=?,updated_at=?
+                        WHERE transaction_id=? AND status='approval_pending'""",
+                    (terminal_status, now, transaction_id),
+                )
+            return OIDCPollResult(terminal_status, interval, expires_at)
+        if remote_state not in {"pending", "issued"}:
+            raise AuthenticationError("approval service response denied")
         approval_config = getattr(self.approval_client, "config", None)
         approval_origin = getattr(approval_config, "origin", None)
         if not isinstance(approval_origin, str) or not approval_origin.startswith("https://"):
@@ -913,7 +1112,7 @@ class OIDCEnrollmentCoordinator:
                 "guided enrollment approval entrypoint is unavailable",
             )
         return OIDCPollResult(
-            "approval_pending",
+            "approval_ready" if remote_state == "issued" else "approval_pending",
             interval,
             expires_at,
             challenge_id=str(challenge_value["challenge_id"]),
@@ -927,7 +1126,6 @@ class OIDCEnrollmentCoordinator:
         *,
         transaction_id: str,
         continuation_token: str,
-        claim_code: str,
         possession_signature: str,
     ) -> EnrollmentResult:
         """Complete one brokered enrollment without exposing approval receipt."""
@@ -947,10 +1145,6 @@ class OIDCEnrollmentCoordinator:
             or _B64URL.fullmatch(possession_signature) is None
         ):
             raise AuthenticationError("OIDC enrollment continuation is unavailable")
-        normalized_code = claim_code.strip().upper() if isinstance(claim_code, str) else ""
-        if re.fullmatch(r"[0-9A-F]{4}(?:-[0-9A-F]{4}){7}", normalized_code) is None:
-            raise AuthenticationError("approval request denied")
-
         supplied_hash = hashlib.sha256(continuation_token.encode("utf-8")).hexdigest()
         request_digest = hashlib.sha256(
             json.dumps(
@@ -958,9 +1152,7 @@ class OIDCEnrollmentCoordinator:
                     "challenge_signature_hash": hashlib.sha256(
                         possession_signature.encode("ascii")
                     ).hexdigest(),
-                    "claim_code_hash": hashlib.sha256(
-                        normalized_code.encode("ascii")
-                    ).hexdigest(),
+                    "continuation_hash": supplied_hash,
                     "transaction_id": transaction_id,
                 },
                 sort_keys=True,
@@ -1062,7 +1254,10 @@ class OIDCEnrollmentCoordinator:
         # shape or the host correctly rejects them as a conflicting retrieval.
         receipt = self.approval_client.retrieve_receipt(
             request_id=request_id,
-            claim_code=normalized_code,
+            possession_secret=_approval_possession_secret(
+                continuation_token,
+                transaction_id=transaction_id,
+            ),
             domain_id=str(identity["domain_id"]),
             approval_purpose="identity.enrollment.approve",
             transaction_digest=approval_transaction_digest,
@@ -1341,6 +1536,9 @@ class OIDCEnrollmentCoordinator:
                 result=result,
                 now=now,
             )
+        except RemoteActivationIdentityMismatch:
+            self._restore_remote_activation_pending(transaction_id, claimed_at=now)
+            raise
         except Exception as exc:
             self._mark_failed(transaction_id, now=now)
             if isinstance(exc, ExtensionError):
@@ -1419,6 +1617,51 @@ class OIDCEnrollmentCoordinator:
                     "INSERT INTO replay_nonces(actor_id,nonce_hash,expires_at) VALUES(?,?,?)",
                     (self._token_replay_actor, result.id_token_hash, replay_expires_at),
                 )
+                continuation_current = connection.execute(
+                    """SELECT challenge_encrypted FROM oidc_enrollment_continuations
+                        WHERE transaction_id=? AND status='awaiting_oidc'""",
+                    (current["transaction_id"],),
+                ).fetchone()
+                if continuation_current is None:
+                    raise ReplayError("OIDC enrollment continuation is no longer current")
+                remote_activation = False
+                if continuation_current["challenge_encrypted"]:
+                    activation = self.store.cipher.decrypt_json(
+                        continuation_current["challenge_encrypted"],
+                        purpose=f"oidc-guided-activation:{current['transaction_id']}",
+                    )
+                    if (
+                        not isinstance(activation, dict)
+                        or set(activation)
+                        != {
+                            "schema",
+                            "transaction_id",
+                            "authorization_url",
+                            "expected_oidc_issuer",
+                            "expected_oidc_subject",
+                            "expected_verified_email_alias",
+                        }
+                        or activation.get("schema") != "agentnet.oidc.remote-activation.v1"
+                        or activation.get("transaction_id") != current["transaction_id"]
+                        or activation.get("expected_oidc_issuer") != current["issuer"]
+                        or activation.get("expected_oidc_subject")
+                        != self.provider.config.remote_activation_oidc_subject
+                        or activation.get("expected_verified_email_alias")
+                        != self.provider.config.remote_activation_verified_email_alias
+                        or (activation.get("expected_oidc_subject") is None)
+                        == (activation.get("expected_verified_email_alias") is None)
+                    ):
+                        raise AuthenticationError("OIDC remote activation is unavailable")
+                    subject_matches = activation.get("expected_oidc_subject") == result.identity.subject
+                    email_matches = (
+                        activation.get("expected_verified_email_alias")
+                        == result.identity.verified_email
+                    )
+                    if not (subject_matches or email_matches):
+                        raise RemoteActivationIdentityMismatch(
+                            "verified OIDC account is not approved for this server activation"
+                        )
+                    remote_activation = True
                 challenge = self.enrollment._begin_in_transaction(
                     connection,
                     domain_id=current["domain_id"],
@@ -1428,14 +1671,17 @@ class OIDCEnrollmentCoordinator:
                     public_key_pem=current["public_key_pem"],
                     now=now,
                 )
+                challenge_payload = {
+                    "challenge_id": challenge.challenge_id,
+                    "nonce": challenge.nonce,
+                    "canonical_transaction_b64": base64.b64encode(
+                        challenge.canonical_transaction
+                    ).decode("ascii"),
+                }
+                if remote_activation:
+                    challenge_payload["activation_mode"] = "remote_browser"
                 challenge_encrypted = self.store.cipher.encrypt_json(
-                    {
-                        "challenge_id": challenge.challenge_id,
-                        "nonce": challenge.nonce,
-                        "canonical_transaction_b64": base64.b64encode(
-                            challenge.canonical_transaction
-                        ).decode("ascii"),
-                    },
+                    challenge_payload,
                     purpose=f"oidc-guided-challenge:{current['transaction_id']}",
                 )
                 continuation = connection.execute(
@@ -1493,6 +1739,31 @@ class OIDCEnrollmentCoordinator:
         }
         if any(row[field] != value for field, value in expected.items()):
             raise AuthenticationError("OIDC authorization provider binding mismatch")
+
+    def _restore_remote_activation_pending(self, transaction_id: str, *, claimed_at: int) -> None:
+        """Restore one wrong-account remote callback without consuming its state."""
+
+        try:
+            with self.store.transaction() as connection:
+                updated = connection.execute(
+                    """UPDATE oidc_enrollment_transactions
+                          SET status='pending',claimed_at=NULL
+                        WHERE transaction_id=? AND status='exchanging' AND claimed_at=?""",
+                    (transaction_id, claimed_at),
+                )
+                if updated.rowcount != 1:
+                    return
+                self.store.append_audit(
+                    connection,
+                    {
+                        "action": "oidc.authorization.wrong_account_rejected",
+                        "transaction_id": transaction_id,
+                    },
+                )
+        except Exception:
+            # Failure to restore leaves ``exchanging`` unusable and therefore
+            # fails closed without staging or enrolling the wrong identity.
+            return
 
     def _mark_failed(self, transaction_id: str, *, now: int) -> None:
         try:
@@ -1620,6 +1891,24 @@ def _b64url_encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def _approval_possession_secret(
+    continuation_token: str,
+    *,
+    transaction_id: str,
+) -> str:
+    """Purpose-separate Approval possession from Core continuation bearer use."""
+
+    derived = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=(
+            "agentnet.approval.possession.v1:" + transaction_id
+        ).encode("ascii"),
+    ).derive(continuation_token.encode("ascii"))
+    return _b64url_encode(derived)
+
+
 def _b64url_uint(value: Any, *, field: str) -> int:
     if not isinstance(value, str):
         raise AuthenticationError(f"OIDC JWK {field} is invalid")
@@ -1690,6 +1979,7 @@ __all__ = [
     "OIDCProvider",
     "OIDCProviderConfig",
     "OIDCVerificationResult",
+    "RemoteActivationIdentityMismatch",
     "PinnedOIDCHTTPTransport",
     "UrllibOIDCHTTPTransport",
 ]

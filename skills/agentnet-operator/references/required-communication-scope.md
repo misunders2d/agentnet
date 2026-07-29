@@ -7,6 +7,8 @@ Use this reference to decide whether an installation or readiness claim delivers
 - **ARC-001..006:** one separately installable, agent-agnostic extension supports Claude, Codex, Pi, Antigravity, and isolated standards-compliant A2A interoperability.
 - An always-on node is an ordinary enrolled server agent with explicit capabilities. There is no separate privileged Hub product or Hub identity class.
 - Public A2A identity, task state, message content, Agent Cards, or receipts do not create corporate identity, authority, or business-effect proof.
+- Browser-only server enrollment may expose fixed unauthenticated Core `/activate`, but route selects exactly one server-staged remote transaction, accepts no selector/private value, requires exact approved OIDC owner identity plus WebAuthn UV and candidate PoP, and grants no authority. `remote_activation_unavailable` and `activation_wrong_account` are fail-closed/retryable identity states, never communication proof.
+- Destructive `server-agent reset` is server-manager-only package recovery under persistent root-only lock; it never belongs in owner-browser or fresh-laptop instructions and never grants identity/authority.
 
 ## Communication and collaboration
 

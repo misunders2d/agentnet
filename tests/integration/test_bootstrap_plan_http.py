@@ -58,7 +58,7 @@ class StubService:
                 "status": "approval_ready",
                 "approval_url": "https://approval.example/approval",
                 "expires_at": 1_800_000_300,
-                "next_action": "enter_claim_code_in_masked_local_tty",
+                "next_action": "complete_automatically",
             },
         )
 
@@ -102,7 +102,7 @@ def test_bootstrap_plan_http_success_bodies_are_exact_and_non_disclosing(http_st
     )
     complete = client.post(
         "/v1/bootstrap-plan/complete",
-        content=b'{"begin_idempotency_key":"bootstrap-begin-key-0001","claim_code":"AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111","completion_idempotency_key":"bootstrap-complete-key-0001","schema":"agentnet.bootstrap-plan.complete.v1"}',
+        content=b'{"begin_idempotency_key":"bootstrap-begin-key-0001","completion_idempotency_key":"bootstrap-complete-key-0001","schema":"agentnet.bootstrap-plan.complete.v2"}',
         headers={"content-type": "application/json"},
     )
 

@@ -10,16 +10,19 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthenticationError, ValidationError
-from agentnet.identity.oidc import OIDCEnrollmentCoordinator
+from agentnet.identity.oidc import (
+    OIDCEnrollmentCoordinator,
+    RemoteActivationIdentityMismatch,
+)
 from agentnet.identity.oidc_callback import OIDCCallbackError, parse_oidc_callback_pairs
 from agentnet.identity.recovery import OIDCCredentialRecoveryCoordinator
 
@@ -30,6 +33,7 @@ class OIDCBeginBody(BaseModel):
     harness_kind: str = Field(min_length=1, max_length=64)
     harness_name: str = Field(min_length=1, max_length=128)
     public_key_pem: str = Field(min_length=128, max_length=16_384)
+    activation_mode: Literal["local_browser", "remote_browser"] = "local_browser"
 
 
 class OIDCPollBody(BaseModel):
@@ -44,7 +48,6 @@ class OIDCGuidedCompleteBody(BaseModel):
 
     transaction_id: str = Field(min_length=16, max_length=128)
     continuation_token: str = Field(min_length=32, max_length=128)
-    claim_code: str = Field(pattern=r"^[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){7}$")
     possession_signature: str = Field(min_length=16, max_length=2_048)
 
 
@@ -109,8 +112,37 @@ def create_enrollment_routes(
             harness_kind=parsed.harness_kind,
             harness_name=parsed.harness_name,
             public_key_pem=parsed.public_key_pem,
+            remote_activation=parsed.activation_mode == "remote_browser",
         )
         return JSONResponse(asdict(authorization), status_code=201, headers=_public_headers())
+
+    async def activation_page(request: Request) -> Response:
+        _rate_limit(core, request, metric="enrollment_activation_pages", limit=60)
+        headers = {
+            **_public_headers(),
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        }
+        return HTMLResponse(
+            "<!doctype html><html><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>Activate AgentNet server</title>"
+            "<style>body{font:18px system-ui;max-width:42rem;margin:4rem auto;padding:0 1rem}"
+            "a{display:inline-block;padding:.8rem 1rem;background:#155eef;color:white;text-decoration:none;border-radius:.4rem}</style>"
+            "</head><body><h1>Activate AgentNet server</h1>"
+            "<p>Continue only if you started this AgentNet server activation. "
+            "You will sign in with the approved company account, review an identity-only request, and approve with your passkey.</p>"
+            "<a href='/v1/enrollment/oidc/activate'>Continue with Google</a></body></html>",
+            headers=headers,
+        )
+
+    async def activate(request: Request) -> Response:
+        _rate_limit(core, request, metric="enrollment_activation_starts", limit=20)
+        authorization_url = coordinator.remote_activation_authorization_url()
+        return RedirectResponse(
+            authorization_url,
+            status_code=303,
+            headers=_public_headers(),
+        )
 
     async def callback(request: Request) -> Response:
         _rate_limit(core, request)
@@ -133,7 +165,34 @@ def create_enrollment_routes(
                 },
                 headers=_public_headers(),
             )
-        challenge = coordinator.complete_authorization(state=query.state, code=query.code)
+        try:
+            challenge = coordinator.complete_authorization(state=query.state, code=query.code)
+        except RemoteActivationIdentityMismatch:
+            headers = {
+                **_public_headers(),
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+            }
+            return HTMLResponse(
+                "<!doctype html><html><head><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Approved account required</title></head><body>"
+                "<h1>Approved company account required</h1>"
+                "<p>This account cannot activate this AgentNet server. Sign out, then retry "
+                "from the fixed activation page with the approved company account.</p>"
+                "<p><a href='/activate'>Return to server activation</a></p></body></html>",
+                status_code=403,
+                headers=headers,
+            )
+        if coordinator.remote_activation_for_challenge(challenge.challenge_id):
+            approval_config = getattr(coordinator.approval_client, "config", None)
+            approval_origin = getattr(approval_config, "public_origin", None)
+            if not isinstance(approval_origin, str) or not approval_origin.startswith("https://"):
+                raise AuthenticationError("remote activation approval entrypoint is unavailable")
+            return RedirectResponse(
+                f"{approval_origin.rstrip('/')}/approval",
+                status_code=303,
+                headers=_public_headers(),
+            )
         if "application/json" in request.headers.get("accept", "").lower():
             return JSONResponse(
                 {
@@ -169,7 +228,6 @@ def create_enrollment_routes(
         result = coordinator.complete_guided_enrollment(
             transaction_id=parsed.transaction_id,
             continuation_token=parsed.continuation_token,
-            claim_code=parsed.claim_code,
             possession_signature=parsed.possession_signature,
         )
         value = asdict(result)
@@ -200,6 +258,8 @@ def create_enrollment_routes(
         return JSONResponse(value, status_code=201, headers=_public_headers())
 
     return [
+        Route("/activate", activation_page, methods=["GET"]),
+        Route("/v1/enrollment/oidc/activate", activate, methods=["GET"]),
         Route("/v1/enrollment/oidc/begin", begin, methods=["POST"]),
         Route("/v1/enrollment/oidc/callback", callback, methods=["GET"]),
         Route("/v1/enrollment/oidc/poll", poll, methods=["POST"]),

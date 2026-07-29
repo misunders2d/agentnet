@@ -23,6 +23,37 @@ export function platformStateRoot(platform, environment, homeDirectory) {
   return localAppData;
 }
 
+// ProtectHome=true hides /home, /root, and /run/user from the managed units and
+// PrivateTmp=true replaces /tmp and /var/tmp, so a runtime executable under any
+// of them is unusable by the services even when privileged setup can read it.
+// Kept here so the launcher digest and the Python preflight refuse the same set.
+export const SERVICE_HIDDEN_ROOTS = Object.freeze([
+  "/home",
+  "/root",
+  "/run/user",
+  "/tmp",
+  "/var/tmp",
+]);
+
+export function serviceVisiblePath(resolved, hiddenRoots = SERVICE_HIDDEN_ROOTS) {
+  return !hiddenRoots.some(
+    (root) => resolved === root || resolved.startsWith(`${root}/`),
+  );
+}
+
+export function requireServiceVisiblePath(
+  resolved,
+  label,
+  hiddenRoots = SERVICE_HIDDEN_ROOTS,
+) {
+  if (!serviceVisiblePath(resolved, hiddenRoots)) {
+    throw new Error(
+      `installed ${label} executable is hidden by the managed service sandbox`,
+    );
+  }
+  return resolved;
+}
+
 export function forwardedSignals(platform) {
   if (!supportedPlatform(platform)) {
     throw new Error(`AgentNet does not support host platform: ${platform}`);

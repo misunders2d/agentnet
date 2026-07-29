@@ -370,6 +370,16 @@ class CommunicationCore:
         self.internal_invitations: InternalInvitationService | None = None
         if config.oidc_enrollment is not None:
             oidc = config.oidc_enrollment
+            if (
+                config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+                and oidc.approval_service is not None
+                and oidc.approval_service.remote_activation_oidc_subject is None
+                and oidc.approval_service.remote_activation_verified_email_alias is None
+            ):
+                raise GateBlocked(
+                    "remote_activation_identity_policy",
+                    "remote server activation requires one exact approved owner identity",
+                )
             if self.approval_verifier is None:  # pragma: no cover - validated composition invariant
                 raise GateBlocked("approval_trust", "configured independent approval verifier is absent")
             enrollment = self.create_enrollment_service(
@@ -404,6 +414,16 @@ class CommunicationCore:
                     allowed_endpoint_origins=oidc.allowed_endpoint_origins,
                     allowed_private_endpoint_cidrs=oidc.allowed_private_endpoint_cidrs,
                     pinned_endpoint_addresses=oidc.pinned_endpoint_addresses,
+                    remote_activation_oidc_subject=(
+                        oidc.approval_service.remote_activation_oidc_subject
+                        if oidc.approval_service is not None
+                        else None
+                    ),
+                    remote_activation_verified_email_alias=(
+                        oidc.approval_service.remote_activation_verified_email_alias
+                        if oidc.approval_service is not None
+                        else None
+                    ),
                 )
             )
             if oidc.approval_service is not None:

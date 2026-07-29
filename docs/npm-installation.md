@@ -80,11 +80,29 @@ public HTTPS routes. It never mutates DNS, TLS, proxy, PostgreSQL administration
 firewall, human identity, or authority.
 
 Expected initial status after successful start is
-`waiting_owner_oidc_or_passkey`. Bundled skill then uses only dedicated-user
-Approval registration, `join guided --browser terminal`, offline
-`server-agent activate`, and exact setup rerun. Final status is `operational`,
+`waiting_owner_oidc_or_passkey`. Server-local AgentNet manager then uses only
+browser owner registration when needed, `join guided --browser remote`, fixed
+public Core `/activate`, offline `server-agent activate`, and exact setup rerun.
+Fixed activation routes are unauthenticated/rate-limited, accept no selector or
+private input, and require callback identity to match exact server-staged
+approved OIDC owner. Owner uses a normal browser only: approved-account OIDC,
+identity-only review, and WebAuthn UV. No SSH, `sudo`, server terminal/path,
+private authorization URL, claim code, receipt, continuation, or broker secret
+reaches the owner. Exact waiting process retrieves Approval result automatically
+through signed broker using purpose-separated possession. Guided output must
+report `approval_delivery=automatic_possession_bound_signed_broker`. Pre-callback
+polling has a 60-poll anti-abuse budget; callback/Approval polling remains
+rate-controlled until fresh challenge expiry. Rerun exact command for nonterminal
+state. Use `--replace-terminal-state` only after Core proves `expired` or `failed`;
+it reuses candidate key and refuses absent, completed, malformed, drifted, or
+nonterminal state. Never delete/edit guided state. Final status is `operational`,
 `identity_enrolled=true`, public Core `/readyz` verified, and
 `authority_granted=false`. Human OIDC and passkey steps are never automated.
+
+Destructive `server-agent reset` is server-manager-only package recovery. It
+requires both confirmation flags documented in bundled operator skill, preserves
+permanent setup lock/root plus all external prerequisites and service identities,
+and is neither browser onboarding nor secret rotation.
 
 The supported real-network experience must deliver exactly the capability set in `docs/requirements.md`. AgentNet is responsible for shipping or explicitly provisioning the required maintained mechanisms, adapters, manifests, and preflight checks. The operator supplies approved infrastructure, secrets, owner decisions, trust roots, and human ceremonies—not custom integration code. Missing product components block the real-network path; local synthetic C0 is test evidence, not a smaller product substitute.
 

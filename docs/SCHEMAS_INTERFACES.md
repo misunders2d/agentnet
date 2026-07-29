@@ -79,8 +79,9 @@ conflicting migration rolls back. It contains:
 - `approval_requests`: approver/domain/purpose, encrypted canonical transaction,
   exact digest, encrypted challenge, state, active fingerprint, attempts,
   delivery mode, approval-host-only encrypted browser capability, exact pending
-  expiry, cumulative claim-code failure/rotation budgets, and the exact owner
-  browser session bound to an assertion challenge;
+  expiry, cumulative retrieval-failure/legacy-code-rotation budgets, optional
+  encrypted possession-hash binding, and exact owner browser session bound to an
+  assertion challenge;
 - `approval_request_idempotency`: exact Core request key/digest binding;
 - `approval_claim_codes`: request-bound claim-code hash, five-attempt bound,
   expiry, and exact retrieval-digest retry binding;
@@ -119,13 +120,13 @@ fragment-based legacy profile gets no broker surface.
 | `POST /v1/approval/owner/registration/begin` / `.../complete` | session-bound, isolated WebAuthn UV registration with cumulative owner budgets |
 | `GET /v1/approval/owner/requests` | exact owner/domain pending and approved-unretrieved requests; no capability, receipt, transaction, or claim code |
 | `POST /v1/approval/owner/requests/options` | exact owner session/request selection; server resolves encrypted capability and returns a purpose-specific bounded summary plus session-bound assertion options |
-| `POST /v1/approval/owner/requests/complete` / `.../reject` | exact session+CSRF request action; completion requires assertion challenge bound to that active session |
-| `POST /v1/approval/owner/requests/regenerate-code` | rotates only a current, unretrieved, nonterminal code within cumulative limits and receipt expiry |
+| `POST /v1/approval/owner/requests/complete` / `.../reject` | exact session+CSRF request action; completion requires assertion challenge bound to that active session; possession-bound completion returns only `waiting_agent`/`retrieved` and no claim code |
+| `POST /v1/approval/owner/requests/regenerate-code` | legacy-only; possession-bound requests deny regeneration; otherwise rotates only a current, unretrieved, nonterminal code within cumulative limits and receipt expiry |
 | `POST /v1/approval/registration/options` / `.../verify` | lab-only fragment registration flow |
 | `POST /v1/approval/requests/options` / `.../verify` / `.../reject` | lab-only exact fragment request flow |
-| `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; exact idempotent Core request with challenge-bound expiry; never returns approval URL |
+| `POST /v1/approval/internal/requests` | runtime Bearer plus signed one-use broker proof; strict v2 binds exact SHA-256 possession hash, idempotent Core request, and challenge expiry; never returns approval URL or claim code |
 | `POST /v1/approval/internal/requests/status` | runtime Bearer plus signed one-use broker proof; request/digest status |
-| `POST /v1/approval/internal/receipts/retrieve` | runtime Bearer plus signed one-use broker proof and exact claim code/domain/purpose/digest binding; retryable receipt retrieval, not claim-code consumption |
+| `POST /v1/approval/internal/receipts/retrieve` | runtime Bearer plus signed one-use broker proof and exactly one possession secret or legacy claim code, with exact domain/purpose/digest binding; signed canonical body hashes possession secret; exact retry returns same receipt and conflicting digest fails |
 
 Each internal proof uses a fixed schema and domain-separated HMAC-SHA256 key
 derived from the existing high-entropy runtime credential. It binds exact
@@ -219,10 +220,12 @@ The guided-enrollment public routes are:
 
 | Route | Input/effect |
 |---|---|
-| `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata; creates OIDC transaction plus hash-only continuation |
-| `GET /v1/enrollment/oidc/callback` | one strict `code`+`state` success or `error`+`state` failure; duplicate/mixed/orphan recognized shapes deny, unique unrecognized OAuth extensions are ignored, bound errors terminally consume the matching enrollment/recovery transaction without token exchange, and success stores the challenge atomically before safe HTML unless explicit JSON compatibility is requested |
-| `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling and Core-side approval staging |
-| `POST /v1/enrollment/oidc/complete` | continuation, human claim code, and candidate PoP; Core retrieves receipt and atomically consumes enrollment challenge |
+| `GET /activate` | unauthenticated, world-reachable fixed no-store Core entry page for human-reviewed headless server activation; page body contains no transaction, state, authorization URL, code, receipt, identity, or secret and its only action targets fixed internal activation route |
+| `GET /v1/enrollment/oidc/activate` | unauthenticated, rate-limited route that selects exactly one waiting nonexpired `remote_browser` transaction from encrypted Core custody and 303-redirects to OIDC authorization URL; redirect necessarily publishes OIDC `state`, `nonce`, and PKCE `code_challenge` to browser/provider but never verifier, continuation, receipt, possession secret, or authority; zero/multiple/local requests deny and callback requires exact server-staged approved owner identity |
+| `POST /v1/enrollment/oidc/begin` | candidate key/harness metadata plus optional exact `local_browser|remote_browser`; creates OIDC transaction plus hash-only continuation; remote mode stores authorization URL only in purpose-encrypted continuation custody |
+| `GET /v1/enrollment/oidc/callback` | one strict `code`+`state` success or `error`+`state` failure; duplicate/mixed/orphan recognized shapes deny, unique unrecognized OAuth extensions are ignored, bound errors terminally consume matching enrollment/recovery transaction without token exchange, and success atomically replaces remote activation custody with challenge custody before safe local HTML or fixed Approval redirect |
+| `POST /v1/enrollment/oidc/poll` | transaction ID plus opaque continuation; bounded 2–10 second polling, Core-side approval staging, and `approval_ready` only after remote Approval is ready; 60-poll anti-abuse budget applies only to pre-callback `awaiting_oidc`, while callback/Approval stages remain rate-controlled until fresh challenge expiry |
+| `POST /v1/enrollment/oidc/complete` | opaque Core continuation plus candidate PoP; Core retrieves receipt automatically with distinct transaction-derived Approval possession secret and atomically consumes enrollment challenge; no human claim code |
 
 The signed selector-free C0 routes are:
 
@@ -241,17 +244,29 @@ through `agentnet supervisor-run --c0-pilot-responder` and the internal respond
 route. Neither surface prints protected identifiers or evidence.
 
 Receipt bytes never appear in candidate responses. Core reserves an exact
-completion digest only after PoP and claim-code retrieval succeed. Exact retry
+completion digest around PoP and possession-bound retrieval. Exact retry
 returns the encrypted result; a crash after enrollment commit reconstructs the
 same deterministic harness/credential binding from authoritative rows.
 Enrollment creates no entitlement.
 
-`join guided`, `approval open`, and `approval watch --open` expose an additive
-`--browser system|terminal` presentation option. `system` remains the default.
-`terminal` is POSIX-only, opens and verifies `/dev/tty`, accepts printable-ASCII
-HTTPS URLs without userinfo, writes one flushed framed block, and returns only
-sanitized failures. Browser mode is not stored in continuation, identity,
-approval, or audit schemas and changes no route or authority contract.
+`join guided` exposes `--browser system|terminal|remote`; `system` remains fresh-
+laptop default. `remote` is server-only, opens/discloses nothing, marks only the
+purpose-encrypted pre-callback continuation, and requires fixed public `/activate`.
+Marker is replaced by challenge custody after callback and never enters identity,
+approval, or public audit schemas. New pending local state uses
+`agentnet.guided-join.v2` to bind exact identity path and browser mode in addition
+to server/domain/harness/name and candidate key; legacy v1 remains resumable but
+is not eligible for terminal replacement because those arguments were unbound.
+Exact nonterminal owner-only state resumes with the same command.
+`--replace-terminal-state` first polls Core with the stored
+continuation and proceeds only for `expired|failed`; it refuses absent, completed,
+malformed, argument-drifted, or nonterminal state, reuses the candidate key, and
+atomically stores one fresh OIDC authorization before continuing. A lost begin
+response can leave an orphan Core transaction, so activation ambiguity still
+fails closed rather than claiming exactly-once recovery. `terminal` remains
+explicit POSIX compatibility, not ordinary onboarding. `approval open` and
+`approval watch --open` retain their separate presentation options. Browser mode
+and terminal recovery create no identity or authority.
 
 ## Relationship wire and storage contract
 
@@ -494,5 +509,7 @@ Every invocation emits `agentnet.server-setup.evidence.v1` with one typed status
 Plan performs no privileged or managed-host mutation: no service identities, AgentNet roots, secret copies, database schema/config, units, or services. The npm launcher may materialize its caller-owned Python runtime before Python preflight. Apply requires root, exact frozen-plan digest, and nonblocking host lock. AgentNet, Node.js, and `uv` come only from current system-wide installed context, never request JSON. Canonical runtime under `/root`, `/home`, or `/run/user` is rejected because hardened units use `ProtectHome=true`. Target coding agent must establish root-owned non-writable service-readable lineage before invoking package code as root because untrusted code cannot self-validate safely; launcher and Python package-tree checks are defense in depth.
 
 After fixed Core account exists, apply requires two bounded read-only PostgreSQL probes before AgentNet environment/config/database write: exact service-identity socket connection proving current role/database and writable-primary state, then parsed current-file HBA/ident inspection proving exact unshadowed `local agentnet agentnet peer` with no map or parse error, plus `pg_conf_load_time()` freshness against both auth-file modification times. Failure emits `status=blocked` with `blocker=postgres_auth_not_ready`; PostgreSQL administration/reload remains external and separately approved. After that gate and before any Approval/Core product subprocess, setup uses `lstat` to reject symlink, dangling-symlink, nonregular, ownership, or mode conflicts at fixed config/state/data child paths. Existing and newly realized service-owned state trees are recursively custody-checked before later product writes, unit commit, or marker commit.
+
+`agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal` is the explicit destructive recovery surface. Both flags are required. It creates/acquires and validates the permanent root-only setup lock before inventory; any managed deployment state without a pre-existing package lock fails custody; exact clean-host retry may create the lock/root. It requires exact owner/group/mode/type/link custody for managed roots and files, stops/disables and proves both managed units inactive, rejects unexpected secret-root entries, and requires symlink-attack-resistant recursive removal. It removes only allowlisted package deployment units/state while preserving coordination lock/root, then reloads systemd even on exact retry after prior response loss. It emits `agentnet.server-setup.reset-evidence.v1`; exact retry reports `already_absent` and proves deployment-path absence, not lock/root absence. PostgreSQL, runtimes, installed package, proxy/TLS/DNS/firewall, operator inputs, and locked service identities are retained. Reset grants no authority, enrolls no identity, proves no durability, cannot remove external prerequisites, and is not a secret-rotation path.
 
 Apply reruns bootstrap and validates realized Core/Approval state; marker never skips it. Request-v1 writes root-only marker-v2, retaining original meaning and same-request v1→v2 migration. Request-v2 writes marker-v3, which additionally binds exact `artifact_mode`; marker-v1/v2 cannot satisfy request-v2. Both bind request, package, units, non-secret Approval/Core config digests, revision, and previous-marker digest while excluding only offline-activation enrollment labels. Marker replacement uses exact prior-byte compare-and-swap under setup lock. Marker is provenance, not health/readiness/identity/authority/durability evidence. Existing Approval policy must match exact owner OIDC and complete approver set—extra trust anchors block. Start is valid only with apply and affects only daemon reload, Approval enable/start, Core enable/restart, and exact active-state/local/public probes. Core health/readiness bind exact artifact mode and capability set; Approval health returns `agentnet.approval.health.v1`. Setup validates exact service role, version, origin/domain/profile/runtime identity and rejects generic HTTP 200. `operational` requires exact enrolled binding and public Core readiness; pre-enrollment start reports `waiting_owner_oidc_or_passkey`.

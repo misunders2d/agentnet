@@ -10,6 +10,7 @@ import {
   realpathSync,
 } from "node:fs";
 import path from "node:path";
+import { SERVICE_HIDDEN_ROOTS, requireServiceVisiblePath } from "./platform.mjs";
 
 const sha256 = (payload) => createHash("sha256").update(payload).digest("hex");
 const canonicalize = (value) => {
@@ -283,7 +284,7 @@ export const stablePackageTreeSha256 = (root) => {
   });
 };
 
-const runtimeIdentity = (environment) => {
+const runtimeIdentity = (environment, hiddenRoots) => {
   const fields = {
     agentnet_executable: environment.AGENTNET_EXECUTABLE,
     node_executable: environment.AGENTNET_NODE_EXECUTABLE,
@@ -298,19 +299,25 @@ const runtimeIdentity = (environment) => {
     }
     const resolved = realpathSync(filename);
     if (resolved !== filename) throw new Error("setup runtime identity is not canonical");
+    requireServiceVisiblePath(resolved, name.replace("_executable", ""), hiddenRoots);
     result[name] = filename;
     result[name.replace("_executable", "_sha256")] = stableExecutableSha256(filename);
   }
   const packageRoot = environment.AGENTNET_PACKAGE_ROOT;
   if (typeof packageRoot !== "string") throw new Error("setup package root is invalid");
+  requireServiceVisiblePath(packageRoot, "package root", hiddenRoots);
   result.package_root = packageRoot;
   result.package_tree_sha256 = stablePackageTreeSha256(packageRoot);
   return result;
 };
 
+// `serviceHiddenRoots` exists so hermetic fixture trees can exercise the digest
+// contract itself.  The privileged launcher never passes it, so the managed
+// sandbox roots are always enforced on a real host.
 export const privilegedApprovalDigest = (
   userArguments,
   environment = process.env,
+  { serviceHiddenRoots = SERVICE_HIDDEN_ROOTS } = {},
 ) => {
   const requestPath = argumentValue(userArguments, "--request");
   const requestPayload = readPrivateSetupInput(requestPath, 1_048_576, environment);
@@ -337,6 +344,6 @@ export const privilegedApprovalDigest = (
     schema: evidenceProfile.digestSchema,
     request_file_sha256: sha256(requestPayload),
     referenced_inputs: references,
-    runtime_identity: runtimeIdentity(environment),
+    runtime_identity: runtimeIdentity(environment, serviceHiddenRoots),
   });
 };

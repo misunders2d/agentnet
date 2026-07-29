@@ -70,6 +70,25 @@ def test_setup_layout_keeps_runtime_lock_and_marker_in_persistent_setup_custody(
     assert layout.host(setup.SETUP_MARKER) == tmp_path / "var/lib/agentnet-setup/setup.json"
 
 
+def _bootstrap_evidence(domain_id: str) -> dict[str, object]:
+    """Exactly the structured evidence `agentnet bootstrap-server-agent` prints."""
+
+    return {
+        "domain": {
+            "domain_id": domain_id,
+            "status": "active",
+            "policy_revision": 1,
+            "revocation_epoch": 0,
+            "created_at": 1,
+        },
+        "recovery": {"ready": True},
+        "storage": {"ready": True},
+        "audit": {"valid": True},
+        "deployment_binding": {"ready": False, "required": True},
+        "warning": "software-key/single-PostgreSQL bootstrap; no HA, mTLS, KMS, or restore claim",
+    }
+
+
 def _private_json(path: Path, value: object) -> Path:
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)
@@ -255,12 +274,15 @@ def test_launcher_preflight_digest_matches_python_plan(
         lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
     )
     module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
+    # The hermetic fixture tree lives under the test temporary root, so this
+    # exercises the digest contract with the sandbox-root rule relaxed; the
+    # default rule itself is proven by the focused rejection tests below.
     script = f"""
       import {{ privilegedApprovalDigest }} from {json.dumps(module)};
       const request = process.argv.at(-1);
       console.log(privilegedApprovalDigest([
         'server-agent', 'setup', '--request', request, '--apply',
-      ], process.env));
+      ], process.env, {{ serviceHiddenRoots: ['/home', '/root', '/run/user'] }}));
     """
     digest_environment = {
         "PATH": "/usr/bin:/bin",
@@ -675,26 +697,82 @@ def test_node_private_input_detects_same_size_change(tmp_path: Path) -> None:
 
 
 def test_non_root_owned_launcher_is_rejected_deterministically(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import agentnet.operations.server_setup as setup
 
-    launcher = tmp_path / "agentnet"
-    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    launcher.chmod(0o755)
-    original_stat = Path.stat
-
-    def user_owned_stat(target: Path, *args: object, **kwargs: object) -> object:
-        metadata = original_stat(target, *args, **kwargs)
-        if target == launcher:
-            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=1234)
-        return metadata
-
-    monkeypatch.setattr(Path, "stat", user_owned_stat)
+    launcher = Path("/opt/agentnet-runtime/bin/agentnet")
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=True: self)
+    monkeypatch.setattr(Path, "is_file", lambda self: self == launcher)
+    monkeypatch.setattr(Path, "is_dir", lambda self: self != launcher)
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self: SimpleNamespace(
+            st_uid=1234 if self == launcher else 0,
+            st_mode=(stat.S_IFREG | 0o755) if self == launcher else (stat.S_IFDIR | 0o755),
+        ),
+    )
+    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
     with pytest.raises(ServerSetupError, match="ownership is unsafe") as exc_info:
         setup._require_root_owned_executable(launcher, label="agentnet")
     assert exc_info.value.blocker == "unsafe_executable"
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    ["/home/owner/.nvm/bin/node", "/root/.local/bin/uv", "/run/user/1000/node", "/tmp/node", "/var/tmp/uv"],
+)
+def test_runtime_hidden_by_the_managed_sandbox_is_rejected(hidden: str) -> None:
+    import agentnet.operations.server_setup as setup
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._require_service_visible_path(Path(hidden), label="Node.js")
+    assert exc_info.value.blocker == "service_executable_inaccessible"
+
+
+@pytest.mark.parametrize(
+    ("variable", "resolver", "label"),
+    [
+        ("AGENTNET_NODE_EXECUTABLE", "_resolve_node_executable", "Node.js"),
+        ("AGENTNET_UV", "_resolve_uv_executable", "uv"),
+    ],
+)
+def test_runtime_selection_is_package_owned_and_never_uses_ambient_path(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    resolver: str,
+    label: str,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    def unexpected_which(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("hermetic runtime selection must not search PATH")
+
+    monkeypatch.setattr(setup.shutil, "which", unexpected_which)
+    monkeypatch.setattr(setup, "_require_root_owned_executable", lambda value, **_kwargs: value)
+    monkeypatch.delenv(variable, raising=False)
+    with pytest.raises(ServerSetupError) as missing:
+        getattr(setup, resolver)()
+    assert missing.value.blocker == "missing_package_provenance"
+
+    for unsafe in (f"relative/{label}", f"/opt/agentnet-runtime/../{label}", f"/opt/agentnet-runtime//{label}"):
+        monkeypatch.setenv(variable, unsafe)
+        with pytest.raises(ServerSetupError) as rejected:
+            getattr(setup, resolver)()
+        assert rejected.value.blocker == "unsafe_executable"
+
+    monkeypatch.setenv(variable, "/opt/agentnet-runtime/bin/runtime")
+    assert getattr(setup, resolver)() == Path("/opt/agentnet-runtime/bin/runtime")
+
+    monkeypatch.setattr(
+        setup,
+        "_require_root_owned_executable",
+        lambda value, **_kwargs: Path("/opt/other/runtime"),
+    )
+    with pytest.raises(ServerSetupError) as linked:
+        getattr(setup, resolver)()
+    assert linked.value.blocker == "unsafe_executable"
 
 
 def test_root_owned_nontraversable_launcher_is_rejected_deterministically(
@@ -2599,7 +2677,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
                     encoding="utf-8",
                 )
                 mutate_bootstrap_once = False
-            return {"ready": True}
+            return _bootstrap_evidence(request.domain_id)
         raise AssertionError(argv)
 
     monkeypatch.setattr(setup, "_run_as", fake_run_as)
@@ -2753,8 +2831,8 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     drift_trust_during_apply = False
-    assert sum(argv[2] == "bootstrap-server-agent" for argv in product_calls) == bootstrap_calls + 1
-    bootstrap_calls += 1
+    # Pre-write Approval trust revalidation rejects drift before Core bootstrap.
+    assert sum(argv[2] == "bootstrap-server-agent" for argv in product_calls) == bootstrap_calls
 
     config_drift = True
     with pytest.raises(ServerSetupError, match="Core state conflicts"):
@@ -2842,6 +2920,51 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         setup.subprocess,
         "run",
         lambda argv, **_kwargs: systemctl_calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    live_pids = {setup.APPROVAL_UNIT: 4321, setup.CORE_UNIT: 4322}
+    live_argv = {
+        setup.APPROVAL_UNIT: (
+            "/usr/bin/node", "/usr/local/bin/agentnet", "approval", "serve",
+            "--config", str(layout.host(setup.APPROVAL_CONFIG)),
+            "--host", "127.0.0.1", "--port", str(setup.APPROVAL_PORT),
+        ),
+        setup.CORE_UNIT: (
+            "/usr/bin/node", "/usr/local/bin/agentnet", "serve",
+            "--config", str(layout.host(setup.CORE_CONFIG)),
+            "--host", "127.0.0.1", "--port", str(setup.CORE_PORT),
+        ),
+    }
+    monkeypatch.setattr(
+        setup,
+        "_systemd_show",
+        lambda _executable, unit: {
+            "LoadState": "loaded",
+            "UnitFileState": "enabled",
+            "FragmentPath": str(layout.unit(unit)),
+            "DropInPaths": "",
+            "User": setup.APPROVAL_USER if unit == setup.APPROVAL_UNIT else setup.CORE_USER,
+            "Group": setup.APPROVAL_USER if unit == setup.APPROVAL_UNIT else setup.CORE_USER,
+            "NoNewPrivileges": "yes",
+            "PrivateDevices": "yes",
+            "PrivateTmp": "yes",
+            "ProtectHome": "yes",
+            "ProtectSystem": "strict",
+            "MainPID": str(live_pids[unit]),
+            "Environment": "AGENTNET_UV=/usr/local/bin/uv",
+            "ReadWritePaths": str(
+                layout.host(setup.APPROVAL_DATA if unit == setup.APPROVAL_UNIT else setup.CORE_DATA)
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        setup,
+        "_read_live_process_identity",
+        lambda pid: (
+            Path("/usr/bin/node"),
+            live_argv[
+                setup.APPROVAL_UNIT if pid == live_pids[setup.APPROVAL_UNIT] else setup.CORE_UNIT
+            ],
+        ),
     )
     fail_health_once = True
 

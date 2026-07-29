@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -15,7 +16,11 @@ from agentnet.enrollment_http import create_enrollment_routes
 from agentnet.errors import AuthenticationError
 from agentnet.http_api import create_app
 from agentnet.identity.enrollment import EnrollmentChallenge, EnrollmentResult
-from agentnet.identity.oidc import OIDCGuidedAuthorizationRequest, OIDCPollResult
+from agentnet.identity.oidc import (
+    OIDCGuidedAuthorizationRequest,
+    OIDCPollResult,
+    RemoteActivationIdentityMismatch,
+)
 from agentnet.operations.config import ExtensionConfig
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
@@ -51,6 +56,14 @@ class FakeCoordinator:
         self.guided_completed: dict | None = None
         self.authorization_completions: list[tuple[str, str]] = []
         self.authorization_failures: list[str] = []
+        self.remote_activation = False
+        self.wrong_account = False
+        self.approval_client = SimpleNamespace(
+            config=SimpleNamespace(
+                origin="https://approval-internal.corp.example",
+                public_origin="https://approval.corp.example",
+            )
+        )
 
     def begin_authorization(self, **kwargs):
         self.begun = kwargs
@@ -62,11 +75,18 @@ class FakeCoordinator:
             continuation_token="c" * 43,
         )
 
+    def remote_activation_authorization_url(self) -> str:
+        return "https://idp.example/authorize?opaque=1"
+
+    def remote_activation_for_challenge(self, challenge_id: str) -> bool:
+        assert challenge_id == "enrollment-challenge-http-0001"
+        return self.remote_activation
+
     def poll_continuation(self, *, transaction_id: str, continuation_token: str):
         assert transaction_id == "oidc-transaction-http-0001"
         assert continuation_token == "c" * 43
         return OIDCPollResult(
-            status="approval_pending",
+            status="approval_ready",
             interval_seconds=2,
             expires_at=2_000_000_000,
             challenge_id="enrollment-challenge-http-0001",
@@ -89,6 +109,10 @@ class FakeCoordinator:
         assert state == "s" * 43
         assert code == "authorization-code-http"
         self.authorization_completions.append((state, code))
+        if self.wrong_account:
+            raise RemoteActivationIdentityMismatch(
+                "verified OIDC account is not approved for this server activation"
+            )
         return EnrollmentChallenge(
             challenge_id="enrollment-challenge-http-0001",
             nonce="n" * 43,
@@ -133,6 +157,33 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         transport=httpx.ASGITransport(app=create_app(core), raise_app_exceptions=False),
         base_url="http://127.0.0.1",
     ) as client:
+        activation_page = await client.get("/activate")
+        assert activation_page.status_code == 200
+        assert "Activate AgentNet server" in activation_page.text
+        assert "opaque=1" not in activation_page.text
+        activation_start = await client.get(
+            "/v1/enrollment/oidc/activate", follow_redirects=False
+        )
+        assert activation_start.status_code == 303
+        assert activation_start.headers["location"] == "https://idp.example/authorize?opaque=1"
+
+        for _ in range(53):
+            assert (await client.get("/activate")).status_code == 200
+        page_limited = await client.get("/activate")
+        assert page_limited.status_code == 503
+        assert "opaque=1" not in page_limited.text
+
+        for _ in range(17):
+            response = await client.get(
+                "/v1/enrollment/oidc/activate", follow_redirects=False
+            )
+            assert response.status_code == 303
+        start_limited = await client.get(
+            "/v1/enrollment/oidc/activate", follow_redirects=False
+        )
+        assert start_limited.status_code == 503
+        assert "opaque=1" not in start_limited.text
+
         begin = await client.post(
             "/v1/enrollment/oidc/begin",
             content=canonical_json(
@@ -151,6 +202,7 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
             "harness_kind": "codex",
             "harness_name": "ordinary laptop agent",
             "public_key_pem": candidate.public_pem,
+            "remote_activation": False,
         }
         assert "identity" not in begin.text and "email" not in begin.text
 
@@ -225,6 +277,34 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         assert "Return to the AgentNet onboarding command" in browser_callback.text
         assert "challenge_id" not in browser_callback.text
 
+        coordinator.remote_activation = True
+        coordinator.wrong_account = True
+        wrong_account = await client.get(
+            "/v1/enrollment/oidc/callback",
+            params={"state": "s" * 43, "code": "authorization-code-http"},
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert wrong_account.status_code == 403
+        assert wrong_account.headers["cache-control"] == "no-store"
+        assert "Approved company account required" in wrong_account.text
+        assert "security-owner" not in wrong_account.text
+        assert "person@corp.example" not in wrong_account.text
+        assert "authorization-code-http" not in wrong_account.text
+        assert "s" * 43 not in wrong_account.text
+        coordinator.wrong_account = False
+
+        remote_callback = await client.get(
+            "/v1/enrollment/oidc/callback",
+            params={"state": "s" * 43, "code": "authorization-code-http"},
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert remote_callback.status_code == 303
+        assert remote_callback.headers["location"] == "https://approval.corp.example/approval"
+        assert "authorization-code-http" not in remote_callback.text
+        coordinator.remote_activation = False
+
         poll = await client.post(
             "/v1/enrollment/oidc/poll",
             content=canonical_json(
@@ -236,7 +316,7 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
             headers={"Content-Type": "application/json"},
         )
         assert poll.status_code == 200
-        assert poll.json()["status"] == "approval_pending"
+        assert poll.json()["status"] == "approval_ready"
         assert "independent_approval" not in poll.text
 
         guided_completed = await client.post(
@@ -245,7 +325,6 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
                 {
                     "transaction_id": "oidc-transaction-http-0001",
                     "continuation_token": "c" * 43,
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                     "possession_signature": candidate.sign(
                         "agentnet.enrollment.pop.v1",
                         {"schema": "agentnet.enrollment.challenge.v1", "exact": True},
@@ -258,9 +337,8 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         assert guided_completed.json()["actor"]["harness_id"] == actor.harness_id
         assert "approval" not in guided_completed.text
         assert coordinator.guided_completed is not None
-        assert coordinator.guided_completed["claim_code"] == (
-            "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111"
-        )
+        assert "claim_code" not in coordinator.guided_completed
+        assert coordinator.guided_completed["continuation_token"] == "c" * 43
 
         transaction = base64.b64decode(challenge["canonical_transaction_b64"])
 

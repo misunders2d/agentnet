@@ -441,7 +441,7 @@ broker-proof replay custody keyed by derived key identity and a SHA-256 nonce
 hash; raw broker nonces and runtime credentials are not stored. Version 4 adds
 pinned owner OIDC identity, callback transactions, RP/origin/verifier-bound
 browser sessions, isolated registration ceremonies, cumulative registration and
-claim-code budgets, and exact assertion-challenge-to-session binding.
+retrieval/legacy-code budgets, and exact assertion-challenge-to-session binding.
 
 Core services remain receipt-only consumers through
 `IndependentApprovalVerifier`. An optional, disabled-by-default broker surface
@@ -462,18 +462,42 @@ Core-created browser capabilities remain encrypted in the Approval store.
 Stable `agentnet approval pending|watch` emits only content-free counts and may
 open only public `/approval`; stable `open` never resolves or prints a request
 capability or request ID. Profiles without owner OIDC retain request IDs and
-local fragment opening for lab compatibility only. Terminal browser mode writes only the
-applicable HTTPS page to verified POSIX `/dev/tty` and fails closed without
-fallback. After WebAuthn, the stable browser shows a 128-bit human-transferred
-claim code instead of receipt JSON. Core binds request expiry exactly to the
-candidate enrollment challenge. Pending requests use that deadline; an issued
-unretrieved request uses the current claim-code/receipt lifecycle. Code
-regeneration requires the current code to remain unexpired, unretrieved, and
-below per-code and cumulative limits; it cannot revive terminal state. Exact
-code/domain/purpose/transaction/retrieval binding returns the same current
-receipt for response-loss retry; Core remains responsible for atomic receipt
-consumption. This presentation path creates no authority and guided completion
-remains identity-only. Six purposes are mandatory in configuration:
+local fragment opening for lab compatibility only. Ordinary Core requests are
+possession-bound with purpose separation. Initiating process retains its Core
+continuation or begin state; before creating an Approval request, Core derives a
+per-transaction OIDC possession secret with HKDF or generates a distinct
+high-entropy bootstrap possession secret. Core sends only SHA-256 hash to
+Approval, stores bootstrap secret only inside encrypted begin custody, and uses
+exact purpose-separated secret for signed retrieval. Approval stores binding in
+existing encrypted capability custody. Broker proof canonicalization hashes
+supplied secret so it never enters signed wire digest or audit detail. After WebAuthn, stable browser reports only `waiting_agent` or
+`retrieved`; it shows no receipt or claim code and denies code regeneration.
+Core binds request expiry exactly to candidate enrollment challenge. Exact
+secret/domain/purpose/transaction/retrieval binding returns same current receipt
+for response-loss retry; wrong secret consumes cumulative attempt budget and
+conflicting retrieval digest fails closed. Legacy claim-code lifecycle remains
+explicit compatibility only.
+
+For headless Core identity, server-local `join guided --browser remote` stores
+OIDC authorization URL only in purpose-encrypted continuation custody. Fixed
+public `/activate` and its internal redirect route are unauthenticated and
+independently rate-limited; they accept no transaction selector or private
+value and redirect only when exactly one unexpired remote transaction is
+waiting. Callback must match exact server-staged approved OIDC subject or
+normalized verified-email alias. Wrong-account denial stages no challenge or
+Approval request and remains retryable. OIDC callback atomically replaces
+remote custody with challenge custody, marks challenge remote internally, and
+redirects to fixed Approval page. Approval UI polls at most 10 seconds to close
+callback/Core-staging race. Local-browser, zero, multiple, expired,
+wrong-account, replayed, malformed, or conflicted state cannot activate
+identity. Owner uses no server terminal or transfer value. The 60-poll
+anti-abuse budget applies only while waiting for OIDC callback; callback and
+Approval stages retain 2–10 second rate control and terminate at the fresh
+challenge expiry. Exact nonterminal local state is resumable. CLI replacement
+requires Core proof that the stored continuation is `expired` or `failed`,
+reuses the same candidate key, and refuses absent, completed, malformed,
+argument-drifted, or nonterminal state. This presentation path creates no
+authority and guided completion remains identity-only. Six purposes are mandatory in configuration:
 `identity.enrollment.approve`,
 `authorization.bootstrap_plan.approve`,
 `authorization.elevation.approve`,
@@ -568,3 +592,5 @@ Ordinary database contract is fixed local peer authentication: OS user, PostgreS
 After database gate, wrapper owns only locked Approval identity, private AgentNet roots, Approval provisioning, Core schema/config bootstrap, mode-applicable scanner public trust, fixed loopback ports, two hardened systemd units, bounded service start/restart, and redacted evidence. Scanner trust is created and passed only for enabled mode; disabled mode rejects preexisting scanner trust and never provisions an artifact key. Before any Approval/Core product subprocess, direct child config/state/data paths are inspected with `lstat`; symlink, dangling-symlink, nonregular, ownership, or mode conflicts block. Existing private state trees and realized post-create/post-bootstrap Core custody are recursively revalidated as owner-only directories and single-link regular files before convergence continues. Existing operator-owned PostgreSQL administration, DNS, TLS/reverse-proxy routes, certificates, firewall, and secret injection are explicit prerequisites and never mutated. Start verifies loopback and exact public HTTPS health, including exact artifact mode and capability set; post-activation start also requires matching public Core readiness.
 
 Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. Marker never proves identity, authority, service health, readiness, PostgreSQL durability, HA, or production certification. OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain explicit ceremonies. Remote Managers may provide immutable package guidance and inspect sanitized evidence only; target coding agents own host execution.
+
+`agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and service identities. Reset is not a browser action, onboarding step, or secret-rotation path.

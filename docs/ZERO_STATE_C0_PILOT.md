@@ -28,7 +28,7 @@ These labels describe the approved implementation plan; they do not change produ
 - Existing A2A, Pi Hub, PostgreSQL service, cloudflared, and non-AgentNet data remain untouched.
 - The C0 peers are the ordinary Hub-hosted human harness `H_owner` and the genuinely fresh-laptop harness `H_fresh`. `H_owner` is an ordinary AgentNet counterparty colocated on the existing server; it does not reuse Pi Hub/A2A identity and receives no Hub/root privilege.
 - Both harnesses authenticate as the same exact human principal `P = (domain, OIDC issuer, OIDC subject)`. Distinct-principal messaging is outside this pilot.
-- One public, non-secret prompt goes to the fresh laptop. Human browser/passkey and masked-local-input actions remain explicit.
+- One public, non-secret prompt goes to the fresh laptop. Human browser/passkey actions remain explicit; no completion value is copied.
 - Installation creates code only. Each enrollment creates identity only. Positive authority requires a later exact WebAuthn-approved plan.
 - Colocated Core/PostgreSQL/Approval remains an ordinary profile and reports `independent_boundary_proven=false`.
 - No production, HA, federation, files/scanner, A2A-conformance, or cutover claim.
@@ -68,9 +68,9 @@ Approval and Core do not share a distributed transaction.
 
 Approval signs a receipt bound to exact purpose, domain, canonical transaction digest, approver, ceremony, RP/origin facts, issue/expiry, and receipt ID. That receipt is evidence, not business authority.
 
-Core uses existing broker protections: authenticated Core→Approval channel, canonical body, signed broker proof, fresh one-use broker nonce, exact request/retrieval digest, replay custody, and strict status/retrieve semantics. Target plan completion must persist a completion-request digest before retrieval. This deliberately strengthens current guided OIDC ordering, which retrieves the receipt before reserving its completion digest. Exact retrieval may repeat with the same claim code and retrieval digest while valid; conflicting retrieval fails closed.
+Core uses existing broker protections: authenticated Core→Approval channel, canonical body, signed broker proof, fresh one-use broker nonce, exact request/retrieval digest, replay custody, and strict status/retrieve semantics. Initiating process retains private Core continuation/begin state. Core derives a transaction-specific OIDC Approval possession secret or generates and encrypts a distinct high-entropy bootstrap-plan secret, sends only that secret's SHA-256 hash to Approval, and later retrieves with exact purpose-separated secret. Signed canonical retrieval hashes supplied secret; browser, model, logs, and audit details never receive it. Target plan completion persists a completion-request digest before retrieval. Exact retrieval may repeat with same possession secret and retrieval digest while valid; wrong secret consumes cumulative attempt budget and conflicting retrieval fails closed.
 
-Core consumes the verified receipt and writes identity/entitlements/result/audit in one Core transaction. Crash before Core commit produces no business state. Crash after commit returns the stored result on exact retry. If the client loses the claim code before commit, it does not recover from logs or plaintext storage: the owner must explicitly regenerate a new code for the same approved transaction under cumulative rotation/attempt limits, or begin a fresh approval after expiry.
+Core consumes verified receipt and writes identity/entitlements/result/audit in one Core transaction. Crash before Core commit produces no business state. Crash after commit returns stored result on exact retry. If Core loses encrypted purpose-separated possession custody before commit, initiating process begins a fresh approval after expiry; no human-visible regeneration or recovery from logs/plaintext exists. Legacy claim-code regeneration remains compatibility-only.
 
 ## 5. Phase A — first owner passkey without a capability URL
 
@@ -91,7 +91,7 @@ Terminal states:
 
 `canceled | rejected | expired | failed`
 
-Multiple tabs use separate challenge rows or return `ceremony_already_active`; they never overwrite a live challenge. Reopening an approved ceremony reports status without rotating a code. Explicit regeneration requires owner authentication, preserves cumulative failure/rotation limits, and never redisplays stored plaintext because none exists.
+Multiple tabs use separate challenge rows or return `ceremony_already_active`; they never overwrite a live challenge. Reopening an approved possession-bound ceremony reports `waiting_agent`/`retrieved` without rotating or displaying any value. Legacy explicit regeneration requires owner authentication, preserves cumulative failure/rotation limits, and never redisplays stored plaintext because none exists.
 
 Result: one Approval-side passkey; still zero AgentNet principal, harness, or authority.
 
@@ -103,8 +103,8 @@ Result: one Approval-side passkey; still zero AgentNet principal, harness, or au
 4. Core brokers request to Approval. Neither CLI nor model receives capability/receipt.
 5. Approval renders plain-language summary from canonical bytes, with advanced digest hidden but available to the human locally.
 6. Owner WebAuthn-approves exact transaction.
-7. Approval displays a 128-bit one-time code once. Human enters it only into a local masked controlling TTY. Five-minute TTL and cumulative attempt limit remain per recorded owner decision.
-8. Core retrieves receipt internally and atomically binds principal, `H_owner`, credential, epochs, approval consumption, stored result, and audit.
+7. Approval returns only `waiting_agent`; browser displays automatic-completion status and no code/receipt.
+8. Exact waiting process proves its private continuation secret through signed broker. Core retrieves receipt internally and atomically binds principal, `H_owner`, credential, epochs, approval consumption, stored result, and audit.
 
 Exact retry after response loss returns the same result.
 
@@ -114,7 +114,7 @@ Result: `H_owner` is `enrolled_identity_only`; `authority_granted=false`.
 
 The public prompt performs only public/reversible actions: exact package install/verification, local candidate-key creation, public metadata/preflight validation, and guided enrollment start. Prompt has no private URL, secret, receipt, claim code, identity, digest, or unresolved technical value.
 
-Owner signs in and WebAuthn-approves the exact fresh-laptop transaction. Human enters the one-time code only into `H_fresh` local masked prompt. Core binds `H_fresh` to existing principal `P` and stores exact result as in Phase B.
+Owner signs in and WebAuthn-approves exact fresh-laptop transaction. Exact waiting `H_fresh` process retrieves approval automatically using private continuation state; browser/human transfers no value. Core binds `H_fresh` to existing principal `P` and stores exact result as in Phase B.
 
 Wrong issuer/subject/account/domain, missing verified alias, wrong candidate key, stale policy, revoked context, replay, expiry, RP/origin mismatch, route/config mismatch, or unknown critical field fails before authority.
 
@@ -176,7 +176,7 @@ Terminal:
 
 S4 makes Core broker `authorization.bootstrap_plan.approve` and removes the pre-S4 `authorization.entitlement.bootstrap.approve` purpose, wildcard founder root, and single-root path from the supported ordinary C0 profile. Core mounts only the bounded bootstrap-plan path. The stable authenticated Approval browser lists the pending plan without a secret URL and derives its summary from canonical bytes: two harness labels backed by local exact identity details, five communication powers, five exact revoke powers, TTL, assurance label, and explicit no-other-authority statement. The resulting guard remains `pending`; S5 alone may activate communication enforcement.
 
-Owner WebAuthn-approves exact digest and enters one-time code into `H_fresh` masked prompt.
+Owner WebAuthn-approves exact digest. Exact waiting `H_fresh` process completes automatically through possession-bound signed broker; browser/human transfers no value.
 
 ### Atomic commit and retry
 
@@ -220,12 +220,12 @@ Only all seven machine facts produce `COMPLETED_C0_ROUND_TRIP`. Missing facts yi
 - **Wrong account/issuer/domain:** reject before ceremony; do not reveal whether another owner exists.
 - **OIDC mix-up/login CSRF/session fixation:** exact issuer/state/nonce/PKCE/redirect checks; rotate server session at callback; CSRF token on state-changing browser calls.
 - **Wrong RP/origin:** WebAuthn verification rejects.
-- **Multiple tabs:** no challenge overwrite, no claim-code rotation on status refresh, cumulative attempt/rotation budget.
+- **Multiple tabs:** no challenge overwrite or possession-binding rotation on status refresh; cumulative attempt budget.
 - **Cancel/reject:** terminal, audited, no business effect.
 - **Expiry:** terminal; new ceremony gets new IDs/proof. No resurrection.
-- **Claim code lost before commit:** explicit regeneration or fresh approval; never recover from logs/plaintext.
+- **Possession secret lost before commit:** fresh approval after expiry; never recover from browser, human, logs, or plaintext storage.
 - **Broker replay/response loss:** exact signed request/retrieval digest and replay custody; same retrieval repeats, conflicting retrieval fails.
-- **Core restart before commit:** zero authority; resume exact reserved completion if same code remains valid, otherwise regenerate/fresh approval.
+- **Core restart before commit:** zero authority; resume exact reserved completion only if same locally retained possession state remains valid, otherwise fresh approval.
 - **Core restart after commit:** return stored result.
 - **Policy/credential/harness/domain epoch drift:** invalidate pending plan; post-commit policy evaluates current state on every action.
 - **Audit outage:** block protected finalization/commit and never claim success.
@@ -242,9 +242,9 @@ Only all seven machine facts produce `COMPLETED_C0_ROUND_TRIP`. Missing facts yi
 ## 12. Human journey
 
 1. Owner opens stable Approval page, signs in, and registers passkey.
-2. Owner-laptop guided identity-only enrollment: browser approval + one masked code entry.
-3. Fresh laptop receives one public prompt and performs guided identity-only enrollment: browser approval + one masked code entry.
-4. Fresh wizard requests fixed C0 plan: browser approval + one masked code entry.
+2. Headless owner/server harness stages remote guided enrollment; owner opens fixed public Core `/activate`, signs in, and passkey-approves; exact waiting process completes automatically.
+3. Fresh laptop receives one public prompt and performs guided identity-only enrollment in its system browser; exact waiting process completes automatically.
+4. Fresh wizard requests fixed C0 plan; owner passkey-approves and exact waiting process completes automatically.
 5. Deterministic responder and verifier complete C0 automatically.
 6. User sees sanitized status only; no technical values require copying.
 
@@ -273,12 +273,12 @@ This is one public prompt to the fresh laptop, not one total human approval. Ind
 - Wrong issuer/subject/email verification/state/nonce/PKCE/redirect/RP/origin/CSRF fails.
 - Session rotates; fixed session cannot survive login.
 - Two tabs do not overwrite challenge or reset attempt budget.
-- Cancel/expiry/regeneration obey terminal/cumulative limits.
-- No response, logs, URL, process args, or public artifact contains capability/session/code.
+- Cancel/expiry and legacy regeneration obey terminal/cumulative limits.
+- No response, logs, URL, process args, or public artifact contains capability/session/possession secret/code.
 
 ### Each guided enrollment
 - Candidate proof of possession; exact OIDC principal; canonical approval purpose/digest.
-- Code expiry/attempt/replay; broker replay; restart and response-loss convergence.
+- Possession mismatch/attempt/expiry/replay; broker replay; restart and response-loss convergence.
 - Wrong account/domain/key/policy/epoch fails.
 - Completion creates identity only; sibling harness attribution remains exact.
 
@@ -322,6 +322,7 @@ Owner approval and the separately approved implementation plan authorize reposit
 3. Replace the current one-row `authorization.entitlement.issue/*` founder path for this profile with `BootstrapGrantPlan`, new purpose/config allowlist, deterministic ten-row atomic commit, and stored-result replay. Existing founder tests must be replaced or retained only as explicitly disabled legacy-path tests; production profile must not fall back to wildcard bootstrap.
 4. Redact current guided-enrollment and C0 human/model-visible CLI output. Protected local identity files and authenticated internal API records may retain exact IDs, but public/model-visible reports must not print principal IDs, harness IDs, credential IDs, event IDs, envelope digests, payloads, receipts, codes, or capabilities.
 5. Add the deterministic ordinary Hub-hosted responder and C0 verifier without changing A2A or granting server/Hub privilege.
+6. Replace ordinary human claim-code delivery with strict possession-bound internal request/retrieval v2. Add headless server `--browser remote`, fixed public Core `/activate`, exact-one remote selection, and automatic Approval-page waiting without exposing authorization URLs, possession state, codes, or receipts.
 
 These deltas are requirements of the candidate architecture, not claims that 0.1.18 already satisfies it.
 

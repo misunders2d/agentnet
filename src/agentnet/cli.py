@@ -82,6 +82,7 @@ from agentnet.operations.config import (
     ScannerTrustConfig,
 )
 from agentnet.operations.config_migration import load_config_json
+from agentnet.operations.server_reset import ServerSetupResetError, reset_server_setup
 from agentnet.operations.server_setup import (
     ServerSetupError,
     apply_server_setup,
@@ -1172,6 +1173,53 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
     return 1
 
 
+def command_server_agent_reset(args: argparse.Namespace) -> int:
+    """Remove only package-owned ordinary server state after explicit confirmation."""
+
+    try:
+        if not bool(args.confirm_package_state_removal):
+            raise ServerSetupResetError(
+                "reset_confirmation_required",
+                "server setup reset requires explicit package-state removal confirmation",
+            )
+        result = reset_server_setup(
+            retain_external_prerequisites=bool(args.retain_external_prerequisites),
+        )
+    except ServerSetupResetError as exc:
+        result = {
+            "schema": "agentnet.server-setup.reset-evidence.v1",
+            "state": "blocked",
+            "blocker": exc.blocker,
+            "message": str(exc),
+            "external_prerequisites": "retained",
+            "authority_granted": False,
+            "identity_enrolled": False,
+            "production_durability_proven": False,
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 1
+    except Exception:
+        print(
+            json.dumps(
+                {
+                    "schema": "agentnet.server-setup.reset-evidence.v1",
+                    "state": "blocked",
+                    "blocker": "internal_reset_failure",
+                    "message": "server setup reset failed before producing verified evidence",
+                    "external_prerequisites": "retained",
+                    "authority_granted": False,
+                    "identity_enrolled": False,
+                    "production_durability_proven": False,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 1
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def command_server_agent_activate(args: argparse.Namespace) -> int:
     """Bind an offline server config to one exact enrolled harness credential.
 
@@ -1386,6 +1434,7 @@ def _guided_success_output(
         "status": "enrolled_identity_only",
         "idempotent_repeat": idempotent_repeat,
         "identity_saved_locally": True,
+        "approval_delivery": "automatic_possession_bound_signed_broker",
         "authority_granted": False,
         "first_message_status": "first_message_blocked_explicit_authority_required",
         "next": "continue only with an explicitly approved bounded authority plan",
@@ -1411,6 +1460,8 @@ def _handoff_guided_authorization(
                 "system browser could not be opened; guided join state is retained"
             )
         return
+    if browser == "remote":
+        return
     if browser != "terminal":
         raise SystemExit("guided join browser mode is invalid")
     try:
@@ -1423,6 +1474,27 @@ def _handoff_guided_authorization(
         raise SystemExit(str(exc)) from None
 
 
+def _poll_guided_authorization(
+    *,
+    server: str,
+    authorization: dict[str, object],
+) -> tuple[dict[str, object], object, int]:
+    polled = _public_json_request(
+        server=server,
+        method="POST",
+        path="/v1/enrollment/oidc/poll",
+        body={
+            "transaction_id": authorization["transaction_id"],
+            "continuation_token": authorization["continuation_token"],
+        },
+    )
+    status = polled.get("status")
+    interval = polled.get("interval_seconds")
+    if type(interval) is not int or not 2 <= interval <= 10:
+        raise SystemExit("guided enrollment poll response is invalid")
+    return polled, status, interval
+
+
 def command_join_guided(args: argparse.Namespace) -> int:
     """Run resumable browser OIDC and Core-brokered independent approval."""
 
@@ -1430,9 +1502,14 @@ def command_join_guided(args: argparse.Namespace) -> int:
     identity_path = Path(os.path.abspath(args.identity))
     server = _canonical_server_origin(args.server)
     authorization_url_disclosed = False
-    if os.path.lexists(state_path):
+    approval_url_disclosed = False
+    state_exists = os.path.lexists(state_path)
+    replace_terminal_state = False
+    if state_exists:
         pending = _guided_join_state(state_path)
         if pending.get("schema") == "agentnet.guided-join-complete.v1":
+            if args.replace_terminal_state:
+                raise SystemExit("completed guided join state cannot be replaced")
             expected = {
                 "schema",
                 "server_base_url",
@@ -1497,13 +1574,25 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "challenge",
             "approval_url",
         }
-        if set(pending) != expected or pending.get("schema") != "agentnet.guided-join.v1":
+        pending_schema = pending.get("schema")
+        if pending_schema == "agentnet.guided-join.v2":
+            expected |= {"identity_path", "browser_mode"}
+        elif pending_schema != "agentnet.guided-join.v1":
+            raise SystemExit("guided join state does not match the exact schema")
+        if set(pending) != expected:
             raise SystemExit("guided join state does not match the exact schema")
         if (
             pending["server_base_url"] != server
             or pending["domain_id"] != args.domain
             or pending["harness_kind"] != args.harness
             or pending["harness_name"] != args.name
+            or (
+                pending_schema == "agentnet.guided-join.v2"
+                and (
+                    pending["identity_path"] != str(identity_path)
+                    or pending["browser_mode"] != args.browser
+                )
+            )
         ):
             raise SystemExit("guided join resume arguments do not match pending state")
         authorization = _validate_guided_authorization(pending["authorization"])
@@ -1513,21 +1602,39 @@ def command_join_guided(args: argparse.Namespace) -> int:
         )
         if key.public_pem != pending["public_key_pem"]:
             raise SystemExit("guided join private key no longer matches pending state")
-    else:
+        if args.replace_terminal_state:
+            if pending_schema != "agentnet.guided-join.v2":
+                raise SystemExit(
+                    "guided join terminal replacement requires argument-bound state"
+                )
+            _polled, terminal_status, _interval = _poll_guided_authorization(
+                server=server,
+                authorization=authorization,
+            )
+            if terminal_status not in {"expired", "failed"}:
+                raise SystemExit(
+                    "guided join state is not terminal; rerun without --replace-terminal-state"
+                )
+            replace_terminal_state = True
+    elif args.replace_terminal_state:
+        raise SystemExit("guided join terminal replacement requires existing pending state")
+
+    if not state_exists or replace_terminal_state:
         if args.browser == "terminal":
             _require_private_terminal_or_exit()
-        key_path = (
-            Path(os.path.abspath(args.private_key))
-            if args.private_key
-            else state_path.with_suffix(".key.pem")
-        )
-        if os.path.lexists(key_path):
-            key = P256KeyPair.from_private_pem(
-                _owner_only_file(key_path, label="guided join private key")
+        if not replace_terminal_state:
+            key_path = (
+                Path(os.path.abspath(args.private_key))
+                if args.private_key
+                else state_path.with_suffix(".key.pem")
             )
-        else:
-            key = P256KeyPair.generate()
-            _write_owner_only(key_path, key.private_pem)
+            if os.path.lexists(key_path):
+                key = P256KeyPair.from_private_pem(
+                    _owner_only_file(key_path, label="guided join private key")
+                )
+            else:
+                key = P256KeyPair.generate()
+                _write_owner_only(key_path, key.private_pem)
         authorization = _validate_guided_authorization(
             _public_json_request(
                 server=server,
@@ -1537,22 +1644,32 @@ def command_join_guided(args: argparse.Namespace) -> int:
                     "harness_kind": args.harness,
                     "harness_name": args.name,
                     "public_key_pem": key.public_pem,
+                    **(
+                        {"activation_mode": "remote_browser"}
+                        if args.browser == "remote"
+                        else {}
+                    ),
                 },
             )
         )
         pending = {
-            "schema": "agentnet.guided-join.v1",
+            "schema": "agentnet.guided-join.v2",
             "server_base_url": server,
             "domain_id": args.domain,
             "harness_kind": args.harness,
             "harness_name": args.name,
             "private_key_path": str(key_path),
             "public_key_pem": key.public_pem,
+            "identity_path": str(identity_path),
+            "browser_mode": args.browser,
             "authorization": authorization,
             "challenge": None,
             "approval_url": None,
         }
-        _write_owner_json(state_path, pending)
+        if replace_terminal_state:
+            _write_private_config(state_path, pending, force=True)
+        else:
+            _write_owner_json(state_path, pending)
         _handoff_guided_authorization(
             str(authorization["authorization_url"]),
             browser=args.browser,
@@ -1560,65 +1677,48 @@ def command_join_guided(args: argparse.Namespace) -> int:
         authorization_url_disclosed = True
 
     challenge_value = pending.get("challenge")
-    if challenge_value is None:
-        deadline = time.monotonic() + float(args.timeout)
-        while True:
-            if time.monotonic() >= deadline:
-                raise SystemExit("guided enrollment timed out; pending state is retained")
-            polled = _public_json_request(
-                server=server,
-                method="POST",
-                path="/v1/enrollment/oidc/poll",
-                body={
-                    "transaction_id": authorization["transaction_id"],
-                    "continuation_token": authorization["continuation_token"],
-                },
+    deadline = time.monotonic() + float(args.timeout)
+    while True:
+        if time.monotonic() >= deadline:
+            raise SystemExit("guided enrollment timed out; pending state is retained")
+        polled, status, interval = _poll_guided_authorization(
+            server=server,
+            authorization=authorization,
+        )
+        if status in {"approval_pending", "approval_ready"}:
+            challenge_value = {
+                "challenge_id": polled.get("challenge_id"),
+                "nonce": polled.get("nonce"),
+                "canonical_transaction_b64": polled.get("canonical_transaction_b64"),
+            }
+            _validate_guided_challenge(challenge_value)
+            pending["challenge"] = challenge_value
+            pending["approval_url"] = _validate_stable_approval_url(
+                polled.get("approval_url")
             )
-            status = polled.get("status")
-            interval = polled.get("interval_seconds")
-            if type(interval) is not int or not 2 <= interval <= 10:
-                raise SystemExit("guided enrollment poll response is invalid")
-            if status == "approval_pending":
-                challenge_value = {
-                    "challenge_id": polled.get("challenge_id"),
-                    "nonce": polled.get("nonce"),
-                    "canonical_transaction_b64": polled.get(
-                        "canonical_transaction_b64"
-                    ),
-                }
-                _validate_guided_challenge(challenge_value)
-                pending["challenge"] = challenge_value
-                pending["approval_url"] = _validate_stable_approval_url(
-                    polled.get("approval_url")
-                )
-                _write_private_config(state_path, pending, force=True)
-                break
-            if status not in {"authorization_pending", "slow_down"}:
-                raise SystemExit(f"guided enrollment stopped in terminal state: {status}")
-            if status == "authorization_pending" and not authorization_url_disclosed:
-                if args.browser == "terminal":
-                    _require_private_terminal_or_exit()
+            _write_private_config(state_path, pending, force=True)
+            if not approval_url_disclosed:
                 _handoff_guided_authorization(
-                    str(authorization["authorization_url"]),
+                    str(pending["approval_url"]),
                     browser=args.browser,
+                    purpose="stable owner approval",
                 )
-                authorization_url_disclosed = True
-            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+                approval_url_disclosed = True
+            if status == "approval_ready":
+                break
+        elif status not in {"authorization_pending", "slow_down"}:
+            raise SystemExit(f"guided enrollment stopped in terminal state: {status}")
+        if status == "authorization_pending" and not authorization_url_disclosed:
+            if args.browser == "terminal":
+                _require_private_terminal_or_exit()
+            _handoff_guided_authorization(
+                str(authorization["authorization_url"]),
+                browser=args.browser,
+            )
+            authorization_url_disclosed = True
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
-    challenge, decoded = _validate_guided_challenge(challenge_value)
-    approval_url = _validate_stable_approval_url(pending.get("approval_url"))
-    _handoff_guided_authorization(
-        approval_url,
-        browser=args.browser,
-        purpose="stable owner approval",
-    )
-    _require_private_terminal_or_exit()
-    print(
-        "Google sign-in received. Complete independent WebAuthn approval, then enter "
-        "the displayed one-time code.",
-        file=sys.stderr,
-    )
-    claim_code = getpass.getpass("One-time approval code: ").strip().upper()
+    _challenge, decoded = _validate_guided_challenge(challenge_value)
     result = _public_json_request(
         server=server,
         method="POST",
@@ -1626,7 +1726,6 @@ def command_join_guided(args: argparse.Namespace) -> int:
         body={
             "transaction_id": authorization["transaction_id"],
             "continuation_token": authorization["continuation_token"],
-            "claim_code": claim_code,
             "possession_signature": key.sign("agentnet.enrollment.pop.v1", decoded),
         },
     )
@@ -2291,18 +2390,15 @@ def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
 
 def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
     state = _load_bootstrap_plan_cli_state(Path(args.state))
-    _require_private_terminal_or_exit()
-    claim_code = getpass.getpass("One-time approval code: ").strip().upper()
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
             "/v1/bootstrap-plan/complete",
             json_body={
-                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "schema": "agentnet.bootstrap-plan.complete.v2",
                 "begin_idempotency_key": state["begin_idempotency_key"],
                 "completion_idempotency_key": state["completion_idempotency_key"],
-                "claim_code": claim_code,
             },
         )
     finally:
@@ -3706,6 +3802,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="exact digest from the human-approved no-managed-host-write plan; required with --apply",
     )
     server_agent_setup.set_defaults(func=command_server_agent_setup)
+    server_agent_reset = server_agent_commands.add_parser(
+        "reset",
+        help="remove only package-owned server state while retaining every external prerequisite",
+    )
+    server_agent_reset.add_argument(
+        "--retain-external-prerequisites",
+        action="store_true",
+        required=True,
+        help="required acknowledgment that PostgreSQL, Node.js, uv, proxy, TLS, and operator config are retained",
+    )
+    server_agent_reset.add_argument(
+        "--confirm-package-state-removal",
+        action="store_true",
+        required=True,
+        help="required explicit confirmation to stop managed units and remove package-owned AgentNet state",
+    )
+    server_agent_reset.set_defaults(func=command_server_agent_reset)
     server_agent_activate = server_agent_commands.add_parser(
         "activate",
         help="bind an offline server config to one exact enrolled identity without granting authority",
@@ -3729,11 +3842,19 @@ def build_parser() -> argparse.ArgumentParser:
     join_guided.add_argument("--identity", default=".agentnet/identity.json")
     join_guided.add_argument(
         "--browser",
-        choices=("system", "terminal"),
+        choices=("system", "terminal", "remote"),
         default="system",
-        help="open locally or disclose only through the private controlling terminal",
+        help="open locally, use fixed Core /activate remotely, or disclose through a private terminal",
     )
     join_guided.add_argument("--timeout", type=int, choices=range(30, 601), default=300)
+    join_guided.add_argument(
+        "--replace-terminal-state",
+        action="store_true",
+        help=(
+            "replace one exact pending local state only after Core proves its "
+            "continuation expired or failed; the candidate key is reused"
+        ),
+    )
     join_guided.set_defaults(func=command_join_guided)
     join_begin = join_commands.add_parser("begin", help="start exact OIDC/device enrollment")
     join_begin.add_argument("--server", required=True)

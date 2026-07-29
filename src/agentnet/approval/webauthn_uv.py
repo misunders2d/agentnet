@@ -102,19 +102,23 @@ def _core_request_digest(
     domain_id: str,
     approval_purpose: str,
     transaction_digest: str,
+    possession_hash: str | None,
 ) -> str:
-    return hashlib.sha256(
-        canonical_json(
-            {
-                "schema": "agentnet.approval.core-request.v1",
-                "idempotency_key": idempotency_key,
-                "approver_principal_id": principal_id,
-                "domain_id": domain_id,
-                "approval_purpose": approval_purpose,
-                "transaction_digest": transaction_digest,
-            }
-        )
-    ).hexdigest()
+    value: dict[str, object] = {
+        "schema": (
+            "agentnet.approval.core-request.v2"
+            if possession_hash is not None
+            else "agentnet.approval.core-request.v1"
+        ),
+        "idempotency_key": idempotency_key,
+        "approver_principal_id": principal_id,
+        "domain_id": domain_id,
+        "approval_purpose": approval_purpose,
+        "transaction_digest": transaction_digest,
+    }
+    if possession_hash is not None:
+        value["possession_hash"] = possession_hash
+    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 def _user_handle(config: ApprovalServiceConfig, principal_id: str, domain_id: str) -> bytes:
@@ -433,6 +437,7 @@ class WebAuthnApprovalService:
         delivery_mode: Literal["direct_receipt", "core_claim_code"] = "direct_receipt",
         domain_id: str | None = None,
         idempotency_key: str | None = None,
+        possession_hash: str | None = None,
         request_expires_at: int | None = None,
         now: int | None = None,
     ) -> ApprovalURL:
@@ -450,6 +455,13 @@ class WebAuthnApprovalService:
             or any(ord(character) < 0x21 or ord(character) > 0x7E for character in idempotency_key)
         ):
             raise ValidationError("approval idempotency key is invalid")
+        if possession_hash is not None and (
+            delivery_mode != "core_claim_code"
+            or idempotency_key is None
+            or len(possession_hash) != 64
+            or any(character not in "0123456789abcdef" for character in possession_hash)
+        ):
+            raise ValidationError("approval possession binding is invalid")
         if not canonical_transaction or len(canonical_transaction) > self.config.max_transaction_bytes:
             raise ValidationError("approval transaction size is invalid")
         if request_expires_at is not None and (
@@ -465,6 +477,7 @@ class WebAuthnApprovalService:
                 domain_id=item.domain_id,
                 approval_purpose=approval_purpose,
                 transaction_digest=transaction_digest,
+                possession_hash=possession_hash,
             )
             if idempotency_key is not None
             else None
@@ -509,8 +522,15 @@ class WebAuthnApprovalService:
                         purpose=f"approval-request-capability:{existing['request_id']}",
                     )
                     existing_token = value.get("token") if isinstance(value, dict) else None
-                    if not isinstance(existing_token, str) or not secrets.compare_digest(
-                        _capability_hash(existing_token), str(existing["capability_hash"])
+                    existing_possession_hash = (
+                        value.get("possession_hash") if isinstance(value, dict) else None
+                    )
+                    if (
+                        not isinstance(existing_token, str)
+                        or not secrets.compare_digest(
+                            _capability_hash(existing_token), str(existing["capability_hash"])
+                        )
+                        or existing_possession_hash != possession_hash
                     ):
                         raise AuthenticationError("approval request denied")
                     return ApprovalURL(
@@ -543,7 +563,14 @@ class WebAuthnApprovalService:
             )
             capability_encrypted = (
                 self.cipher.encrypt_json(
-                    {"token": token},
+                    {
+                        "token": token,
+                        **(
+                            {"possession_hash": possession_hash}
+                            if possession_hash is not None
+                            else {}
+                        ),
+                    },
                     purpose=f"approval-request-capability:{request_id}",
                 )
                 if delivery_mode == "core_claim_code"
@@ -643,7 +670,8 @@ class WebAuthnApprovalService:
         self._commit_request_expirations(at=at)
         rows = self.store.fetch_all(
             """SELECT r.request_id,r.approval_purpose,r.state,r.created_at,r.expires_at,
-                      c.first_retrieved_at,c.expires_at AS claim_code_expires_at
+                      r.capability_encrypted,c.first_retrieved_at,
+                      c.expires_at AS claim_code_expires_at
                  FROM approval_requests AS r
                  LEFT JOIN approval_claim_codes AS c ON c.request_id=r.request_id
                 WHERE r.approver_principal_id=? AND r.domain_id=?
@@ -659,16 +687,42 @@ class WebAuthnApprovalService:
                 ORDER BY r.created_at,r.request_id""",
             (principal_id, domain_id, at, at),
         )
-        return [
-            {
-                "request_id": str(row["request_id"]),
-                "approval_purpose": str(row["approval_purpose"]),
-                "state": str(row["state"]),
-                "created_at": int(row["created_at"]),
-                "expires_at": int(row["expires_at"]),
-            }
-            for row in rows
-        ]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                automatic_delivery = self._core_possession_hash(row) is not None
+            except AuthenticationError:
+                # Isolate one corrupt capability instead of denying every other
+                # owner request.  Keep a content-free signal, never an approval
+                # action, so operators can recover the affected transaction.
+                result.append(
+                    {
+                        "request_id": str(row["request_id"]),
+                        "approval_purpose": str(row["approval_purpose"]),
+                        "state": "unavailable",
+                        "automatic_delivery": False,
+                        "actionable": False,
+                        "failure_code": "delivery_binding_unavailable",
+                        "created_at": int(row["created_at"]),
+                        "expires_at": int(row["expires_at"]),
+                    }
+                )
+                continue
+            # Browser approval already succeeded; automatic delivery continues in
+            # the exact waiting process and needs no owner recovery action.
+            if row["state"] == "issued" and automatic_delivery:
+                continue
+            result.append(
+                {
+                    "request_id": str(row["request_id"]),
+                    "approval_purpose": str(row["approval_purpose"]),
+                    "state": str(row["state"]),
+                    "automatic_delivery": automatic_delivery,
+                    "created_at": int(row["created_at"]),
+                    "expires_at": int(row["expires_at"]),
+                }
+            )
+        return result
 
     def _owner_request_token(
         self,
@@ -739,6 +793,27 @@ class WebAuthnApprovalService:
             ):
                 raise AuthenticationError("approval request denied")
         return token
+
+    def _core_possession_hash(self, row: Any) -> str | None:
+        encrypted = row["capability_encrypted"]
+        if not encrypted:
+            return None
+        value = self.cipher.decrypt_json(
+            encrypted,
+            purpose=f"approval-request-capability:{row['request_id']}",
+        )
+        if not isinstance(value, dict):
+            raise AuthenticationError("approval request denied")
+        possession_hash = value.get("possession_hash")
+        if possession_hash is None:
+            return None
+        if (
+            not isinstance(possession_hash, str)
+            or len(possession_hash) != 64
+            or any(character not in "0123456789abcdef" for character in possession_hash)
+        ):
+            raise AuthenticationError("approval request denied")
+        return possession_hash
 
     def request_options_for_owner(
         self,
@@ -981,11 +1056,14 @@ class WebAuthnApprovalService:
                     allow_rebind=False,
                 )
             if row is not None and row["state"] == "issued":
-                result = (
-                    self._claim_code_status(connection, row, at=at)
-                    if row["delivery_mode"] == "core_claim_code"
-                    else self._stored_receipt(connection, row, at=at)
-                )
+                if row["delivery_mode"] == "core_claim_code":
+                    result = (
+                        self._possession_status(connection, row, at=at)
+                        if self._core_possession_hash(row) is not None
+                        else self._claim_code_status(connection, row, at=at)
+                    )
+                else:
+                    result = self._stored_receipt(connection, row, at=at)
             else:
                 self._require_request_row(row, at=at, state="pending", challenge=True)
                 trusted, signer = self._approver(
@@ -1107,11 +1185,20 @@ class WebAuthnApprovalService:
                             WHERE request_id=?""",
                         (row["request_id"],),
                     )
-                    result = (
-                        self._issue_claim_code(connection, row, at=at)
-                        if row["delivery_mode"] == "core_claim_code"
-                        else receipt
-                    )
+                    if row["delivery_mode"] == "core_claim_code":
+                        possession_hash = self._core_possession_hash(row)
+                        result = (
+                            self._issue_possession_binding(
+                                connection,
+                                row,
+                                possession_hash=possession_hash,
+                                at=at,
+                            )
+                            if possession_hash is not None
+                            else self._issue_claim_code(connection, row, at=at)
+                        )
+                    else:
+                        result = receipt
         if failure is not None:
             raise AuthenticationError("approval request denied") from failure
         if result is None:
@@ -1179,6 +1266,7 @@ class WebAuthnApprovalService:
                 or row["delivery_mode"] != "core_claim_code"
                 or row["approver_principal_id"] != principal_id
                 or row["domain_id"] != domain_id
+                or self._core_possession_hash(row) is not None
             ):
                 raise AuthenticationError("approval request denied")
             code = connection.execute(
@@ -1198,20 +1286,22 @@ class WebAuthnApprovalService:
         self,
         *,
         request_id: str,
-        claim_code: str,
         domain_id: str,
         approval_purpose: str,
         transaction_digest: str,
         retrieval_digest: str,
+        claim_code: str | None = None,
+        possession_secret: str | None = None,
         now: int | None = None,
     ) -> dict[str, Any]:
         at = self.clock() if now is None else now
         self._commit_request_expirations(at=at)
-        if len(retrieval_digest) != 64 or any(
-            character not in "0123456789abcdef" for character in retrieval_digest
+        if (
+            len(retrieval_digest) != 64
+            or any(character not in "0123456789abcdef" for character in retrieval_digest)
+            or (claim_code is None) == (possession_secret is None)
         ):
             raise AuthenticationError("approval request denied")
-        supplied_hash = _claim_code_hash(request_id, claim_code)
         failure = False
         receipt: dict[str, Any] | None = None
         with self.store.transaction() as connection:
@@ -1230,6 +1320,26 @@ class WebAuthnApprovalService:
             )
             if not exact:
                 raise AuthenticationError("approval request denied")
+            bound_possession_hash = self._core_possession_hash(row)
+            if bound_possession_hash is None:
+                if claim_code is None or possession_secret is not None:
+                    raise AuthenticationError("approval request denied")
+                supplied_hash = _claim_code_hash(request_id, claim_code)
+                invalid_detail = "claim_code_invalid"
+            else:
+                if (
+                    possession_secret is None
+                    or claim_code is not None
+                    or not 16 <= len(possession_secret) <= 256
+                    or possession_secret != possession_secret.strip()
+                    or any(
+                        ord(character) < 0x21 or ord(character) > 0x7E
+                        for character in possession_secret
+                    )
+                ):
+                    raise AuthenticationError("approval request denied")
+                supplied_hash = hashlib.sha256(possession_secret.encode("ascii")).hexdigest()
+                invalid_detail = "possession_binding_invalid"
             code = connection.execute(
                 "SELECT * FROM approval_claim_codes WHERE request_id=?",
                 (request_id,),
@@ -1242,14 +1352,8 @@ class WebAuthnApprovalService:
             ):
                 raise AuthenticationError("approval request denied")
             if not secrets.compare_digest(str(code["claim_code_hash"]), supplied_hash):
-                attempts = min(
-                    _MAX_CLAIM_CODE_ATTEMPTS,
-                    int(code["failed_attempts"]) + 1,
-                )
-                cumulative = min(
-                    20,
-                    int(row["claim_code_failed_attempts_total"]) + 1,
-                )
+                attempts = min(_MAX_CLAIM_CODE_ATTEMPTS, int(code["failed_attempts"]) + 1)
+                cumulative = min(20, int(row["claim_code_failed_attempts_total"]) + 1)
                 terminal = attempts >= _MAX_CLAIM_CODE_ATTEMPTS or cumulative >= 20
                 connection.execute(
                     """UPDATE approval_claim_codes
@@ -1272,7 +1376,7 @@ class WebAuthnApprovalService:
                     digest=row["transaction_digest"],
                     occurred_at=at,
                     outcome="denied",
-                    detail="claim_code_invalid",
+                    detail=invalid_detail,
                 )
                 failure = True
             elif code["last_retrieval_digest"] is not None and not secrets.compare_digest(
@@ -1487,6 +1591,59 @@ class WebAuthnApprovalService:
         if not isinstance(canonical, str):
             raise AuthenticationError("approval request denied")
         return canonical.encode("utf-8")
+
+    def _possession_status(self, connection: Any, row: Any, *, at: int) -> dict[str, Any]:
+        binding = connection.execute(
+            """SELECT expires_at,first_retrieved_at
+                 FROM approval_claim_codes WHERE request_id=?""",
+            (row["request_id"],),
+        ).fetchone()
+        if binding is None or int(binding["expires_at"]) <= at:
+            raise AuthenticationError("approval request denied")
+        return {
+            "schema": "agentnet.approval.possession-status.v1",
+            "request_id": str(row["request_id"]),
+            "delivery_status": (
+                "retrieved" if binding["first_retrieved_at"] is not None else "waiting_agent"
+            ),
+            "expires_at": int(binding["expires_at"]),
+        }
+
+    def _issue_possession_binding(
+        self,
+        connection: Any,
+        row: Any,
+        *,
+        possession_hash: str,
+        at: int,
+    ) -> dict[str, Any]:
+        issued = connection.execute(
+            "SELECT receipt_expires_at FROM approval_issued_receipts WHERE request_id=?",
+            (row["request_id"],),
+        ).fetchone()
+        if issued is None or int(issued["receipt_expires_at"]) <= at:
+            raise AuthenticationError("approval request denied")
+        expires_at = int(issued["receipt_expires_at"])
+        connection.execute(
+            """INSERT INTO approval_claim_codes(
+                   request_id,claim_code_hash,issued_at,expires_at,failed_attempts,
+                   first_retrieved_at,last_retrieved_at,last_retrieval_digest
+               ) VALUES(?,?,?,?,0,NULL,NULL,NULL)""",
+            (row["request_id"], possession_hash, at, expires_at),
+        )
+        self._audit(
+            connection,
+            action="approval.possession_delivery_ready",
+            request_id=row["request_id"],
+            principal_id=row["approver_principal_id"],
+            domain_id=row["domain_id"],
+            purpose=row["approval_purpose"],
+            digest=row["transaction_digest"],
+            occurred_at=at,
+            outcome="issued",
+            detail="webauthn_receipt_brokered",
+        )
+        return self._possession_status(connection, row, at=at)
 
     def _claim_code_status(self, connection: Any, row: Any, *, at: int) -> dict[str, Any]:
         code = connection.execute(

@@ -207,14 +207,31 @@ provide immutable package instructions and inspect sanitized evidence only.
 Start verifies local and public Core/Approval health. Before owner enrollment,
 honest status is `waiting_owner_oidc_or_passkey`.
 
-Owner registration, workforce OIDC, WebAuthn UV, claim-code entry, and exact
-server-harness enrollment remain explicit human ceremonies. After `join guided`
-finishes identity-only, Core is stopped, `server-agent activate` binds the exact
-identity offline, and the same setup request with its approved
+Owner registration, workforce OIDC, WebAuthn UV, and exact server-harness
+enrollment remain explicit human ceremonies. Server-local manager stages remote
+guided enrollment; owner opens only fixed public Core `/activate` in a normal
+browser. Both fixed activation routes are unauthenticated and rate-limited,
+accept no selector/private input, and callback requires exact server-staged
+approved OIDC owner identity. Approval result returns automatically to exact
+waiting process through signed broker using purpose-separated possession;
+owner transfers no URL, code, receipt, or secret. After `join guided` finishes identity-only, Core is stopped,
+`server-agent activate` binds the exact identity offline, and the same setup
+request with its approved
 `--expected-request-digest` plus `--apply --start` restarts and
 checks it. Final status is `operational`, `identity_enrolled=true`, and
-`authority_granted=false`. This proves neither production durability nor any
-business permission.
+`authority_granted=false`. Guided success also reports
+`approval_delivery=automatic_possession_bound_signed_broker`; absence/mismatch
+blocks current no-transfer onboarding claim. This proves neither production
+durability nor any business permission.
+
+Destructive package recovery is server-manager-only:
+`agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal`.
+It requires explicit approval for both flags, takes permanent root-only setup
+lock before inventory, rejects unknown custody, removes only allowlisted package
+deployment units/state, preserves coordination lock/root, proves units inactive,
+and reloads systemd on exact retry. It retains PostgreSQL, runtimes, package,
+proxy/TLS/DNS/firewall inputs, operator config, and service identities. It is
+never an owner-browser/fresh-laptop step or secret-rotation path.
 
 ## WebAuthn-UV approval service and deployment profiles
 
@@ -328,11 +345,13 @@ In the ordinary owner-OIDC profile, only the signed internal Core broker may
 create approval requests. Stable browser APIs resolve encrypted request
 capabilities inside Approval after exact owner principal/domain/session checks;
 they never return a capability or receipt. The page shows a bounded human
-summary, invokes WebAuthn UV, and displays the short-lived one-time code. Code
-regeneration requires the current code to remain unexpired, unretrieved, and
-below per-code and cumulative limits; it cannot revive an expired code merely
-because the receipt remains current. The legacy `request-create` and
-fragment-capability browser flow remain available
+summary and invokes WebAuthn UV. Possession-bound Core requests finish with
+`waiting_agent` or `retrieved` and never display or regenerate a human value.
+Legacy claim-code requests may display a short-lived one-time code; regeneration
+requires the current code to remain unexpired, unretrieved, and below per-code
+and cumulative limits and cannot revive an expired code merely because the
+receipt remains current. The legacy `request-create` and fragment-capability
+browser flow remain available
 only in explicit lab profiles without owner OIDC; do not use that compatibility
 path for the ordinary onboarding journey.
 
@@ -350,8 +369,6 @@ request IDs, purpose, digest, capability, canonical transaction, or receipt:
 ```bash
 agentnet approval pending --config /etc/agentnet-approval/config.json
 agentnet approval watch --config /etc/agentnet-approval/config.json --open
-# owner-operated headless POSIX host with a private, unrecorded controlling TTY
-agentnet approval watch --config /etc/agentnet-approval/config.json --open --browser terminal
 ```
 
 Explicit lab profiles without owner OIDC retain `request-create`, request IDs,
@@ -360,18 +377,23 @@ Those commands are not part of ordinary onboarding. Stable profiles reject
 manual request creation and make `approval open --request-id` open only the
 public `/approval` page without resolving or printing the supplied request ID.
 
-After WebAuthn, Core mode shows only a 128-bit one-time claim code. It expires
-after five minutes and allows at most five failed attempts. When the owner is
-both enrollee and approver, the owner reads it in the approval UI and types it
-directly into the fresh laptop's masked prompt; no extra person, host, Slack/A2A
-relay, or second report channel is required. Exact retries return the same
-current receipt to Core. Candidate never receives receipt or approval
-URL. Guided enrollment composes this broker with hash-only Core continuation
-state and `agentnet join guided`. Core stages the exact
-request outside its database transaction, retrieves the receipt without
-consuming it, and leaves `EnrollmentService.complete()` as the sole atomic
-receipt/challenge consumer. A crash after that commit reconstructs the exact
-created binding and encrypts the same completion response on retry.
+After WebAuthn, possession-bound Core mode displays no claim code or receipt.
+Waiting process retains Core continuation/begin state. For OIDC, Core derives a
+transaction-specific Approval possession secret with HKDF; for bootstrap plans,
+Core generates and encrypts a distinct high-entropy secret. Core sends only that
+secret's SHA-256 hash when creating the Approval request and later proves exact
+purpose-separated possession through signed broker retrieval. Browser receives only
+`waiting_agent`/`retrieved` status. No extra person, host, Slack/A2A relay,
+copy/paste, or second report channel is required. Wrong secret, sixth cumulative
+failure, expiry, replay, regenerated-code request, or conflicting retrieval
+digest fails closed. Exact retries return same current receipt to Core.
+Candidate never receives receipt or approval capability URL. Guided enrollment
+composes this broker with hash-only Core continuation state and `agentnet join
+guided`. Core stages exact request outside its database transaction, retrieves
+receipt without consuming it, and leaves `EnrollmentService.complete()` as sole
+atomic receipt/challenge consumer. A crash after that commit reconstructs exact
+created binding and encrypts same completion response on retry. Legacy
+claim-code retrieval remains explicit compatibility only.
 
 Revoke a lost authenticator from the approval-service administrative context:
 
@@ -446,9 +468,11 @@ lower-level `network create` primitive. It provisions the namespace, PostgreSQL
 schema, Approval and owner-only software-key files plus scanner/artifact state
 only when artifact mode is enabled. Communication-only mode provisions neither
 scanner trust nor artifact state. Setup does not invent an enrolled identity or
-authority. For a release that ships the guided flow, complete exact OIDC, candidate-key
-possession, and WebAuthn human-approval enrollment with one resumable command,
-then bind the offline configuration explicitly:
+authority. For a release that ships fixed remote guided flow, server-local AgentNet manager
+completes exact OIDC, candidate-key possession, and WebAuthn human-approval
+enrollment with one resumable command, then binds offline configuration
+explicitly. Commands below are manager-owned server actions, never owner
+instructions:
 
 ```bash
 sudo -u agentnet -H <resolved-root-owned-agentnet-path> join guided \
@@ -458,7 +482,7 @@ sudo -u agentnet -H <resolved-root-owned-agentnet-path> join guided \
   --name server-agent-1 \
   --state /var/lib/agentnet/guided-join.json \
   --identity /var/lib/agentnet/server-agent-identity.json \
-  --browser terminal
+  --browser remote
 sudo systemctl stop agentnet-core.service
 sudo -u agentnet -H <resolved-root-owned-agentnet-path> server-agent activate \
   --config /var/lib/agentnet/agentnet.json \
@@ -469,16 +493,34 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
-The guided command defaults to the system browser without printing the
-authorization URL. The explicit server-only `--browser terminal` mode requires
-a private controlling POSIX TTY and writes the HTTPS URL only to verified
-`/dev/tty` for manual opening on the owner-controlled laptop browser. It rejects
-control bytes and userinfo, never falls back to stdout/stderr/chat/A2A, and
-retains pending state after missing-TTY or write failure. Both modes store
-candidate key/state as owner-only files, poll only Core, and ask the human only
-for the short-lived claim code shown after WebAuthn UV on the owner-controlled
-approval device. It never accepts or writes a receipt file. On success it replaces pending
-state with a minimal completion marker and reports zero granted authority.
+Guided command defaults to local system browser without printing authorization
+URL. Explicit server-only `--browser remote` stores authorization URL encrypted
+inside Core continuation custody, opens/discloses nothing, and waits. Owner opens
+only fixed public Core `/activate`; unauthenticated/rate-limited activation
+routes accept no selector/private input, select exactly one waiting unexpired
+remote transaction, then redirect browser through OIDC to fixed Approval page.
+Callback requires exact server-staged approved OIDC owner identity. Wrong account
+returns retryable `activation_wrong_account` without staging challenge or
+Approval request. Approval page polls at most 10 seconds for exact request to
+close callback/poll race. Zero, multiple, expired, rejected, local-browser,
+malformed, or conflicted state returns `remote_activation_unavailable`. Both modes store candidate key/state as owner-only files and poll
+only Core. Exact process retrieves receipt automatically with private possession
+state. Browser/human receives no claim code, receipt, continuation, broker
+secret, or private URL. On success command replaces pending state with minimal
+completion marker and reports zero granted authority. It never accepts or writes
+a receipt file.
+
+Pre-callback `awaiting_oidc` alone consumes the 60-poll anti-abuse budget.
+Callback and Approval phases remain subject to 2–10 second polling control but
+run until the fresh enrollment-challenge expiry. A local timeout with
+nonterminal Core state resumes by rerunning the exact command. If Core proves
+the stored continuation `expired` or `failed`, rerun that exact command with
+`--replace-terminal-state`; it refuses absent, completed, malformed,
+argument-drifted, or nonterminal state, reuses the same candidate key, and starts
+a fresh OIDC transaction. Never delete/edit the state file or move it between
+systems. Begin response loss may leave an orphan server transaction; fixed
+`/activate` still fails closed on resulting ambiguity.
+
 `join begin`/`join complete` remain available only as the compatible expert
 manual ceremony.
 
@@ -527,10 +569,10 @@ The beneficiary-principal path never opens beneficiary private state. Core still
 rejects a missing, inactive, non-human, or cross-domain principal and stale
 policy revision. Replace the example `--policy-revision 1` with the exact current
 domain policy revision when it is not 1. Principal and harness identifiers remain inside the authenticated Core/Manager
-PD-001 path and are omitted from public human reports. Under the recorded PD-002
-default, the owner may move the claim code directly from the approval UI to the
-fresh laptop's masked prompt. Enrollment itself grants none of these
-entitlements.
+PD-001 path and are omitted from public human reports. Under current recorded
+PD-002 default, exact waiting process retrieves Approval result automatically
+through possession-bound signed broker; owner moves no code, receipt, URL, or
+secret. Enrollment itself grants none of these entitlements.
 
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation

@@ -44,6 +44,7 @@ class FakeApprovalClient:
         self.verifier = verifier
         self.canonical: bytes | None = None
         self.digest: str | None = None
+        self.possession_hash: str | None = None
         self.fail = False
         self.create_failures = 0
         self.retrieve_failures = 0
@@ -59,6 +60,7 @@ class FakeApprovalClient:
             raise RuntimeError("approval create unavailable")
         self.canonical = kwargs["canonical_transaction"]
         self.digest = kwargs["transaction_digest"]
+        self.possession_hash = kwargs["possession_hash"]
         return {
             "request_id": f"approval-request-bootstrap-{self.create_calls:04d}",
             "transaction_digest": self.digest,
@@ -74,8 +76,10 @@ class FakeApprovalClient:
             "expires_at": self.status_expires_at,
         }
 
-    def retrieve_receipt(self, **_kwargs):
+    def retrieve_receipt(self, **kwargs):
         self.retrieve_calls += 1
+        assert self.possession_hash is not None
+        assert hashlib.sha256(kwargs["possession_secret"].encode("ascii")).hexdigest() == self.possession_hash
         if self.fail:
             raise RuntimeError("approval unavailable")
         if self.retrieve_failures:
@@ -229,10 +233,9 @@ def test_begin_status_complete_commits_exact_pending_plan_atomically(bootstrap_s
         actor=bootstrap_stack.actor,
         request=BootstrapPlanCompletionRequest.model_validate(
             {
-                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "schema": "agentnet.bootstrap-plan.complete.v2",
                 "begin_idempotency_key": "bootstrap-begin-key-0001",
                 "completion_idempotency_key": "bootstrap-complete-key-0001",
-                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
             }
         ),
     )
@@ -257,10 +260,9 @@ def test_begin_status_complete_commits_exact_pending_plan_atomically(bootstrap_s
         actor=bootstrap_stack.actor,
         request=BootstrapPlanCompletionRequest.model_validate(
             {
-                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "schema": "agentnet.bootstrap-plan.complete.v2",
                 "begin_idempotency_key": "bootstrap-begin-key-0001",
                 "completion_idempotency_key": "bootstrap-complete-key-0001",
-                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
             }
         ),
     )
@@ -302,10 +304,9 @@ def test_final_commit_rejects_changed_resolver_evidence_and_rolls_back_receipt(b
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": "bootstrap-begin-key-0002",
                     "completion_idempotency_key": "bootstrap-complete-key-0002",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -314,19 +315,78 @@ def test_final_commit_rejects_changed_resolver_evidence_and_rolls_back_receipt(b
 
 
 def test_begin_retries_exact_reserved_approval_create_after_response_loss(bootstrap_stack) -> None:
+    begin_key = "a" * 32
     request = BootstrapPlanBeginRequest.model_validate(
-        {"schema": "agentnet.bootstrap-plan.begin.v1", "begin_idempotency_key": "bootstrap-begin-key-0003"}
+        {"schema": "agentnet.bootstrap-plan.begin.v1", "begin_idempotency_key": begin_key}
     )
     bootstrap_stack.client.create_failures = 1
     with pytest.raises(RuntimeError, match="create unavailable"):
         bootstrap_stack.service.begin(actor=bootstrap_stack.actor, request=request)
-    row = bootstrap_stack.store.fetch_one("SELECT state FROM bootstrap_grant_plans")
+    row = bootstrap_stack.store.fetch_one("SELECT * FROM bootstrap_grant_plans")
     assert row["state"] == "reserved"
+    possession_secret, stored_result = bootstrap_stack.service._begin_storage(row)
+    assert possession_secret is not None
+    assert len(possession_secret) >= 43
+    assert possession_secret != begin_key
+    assert stored_result is None
     assert bootstrap_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 0
 
     result = bootstrap_stack.service.begin(actor=bootstrap_stack.actor, request=request)
     assert result["status"] == "approval_pending"
     assert bootstrap_stack.client.create_calls == 2
+    assert bootstrap_stack.client.possession_hash == hashlib.sha256(
+        possession_secret.encode("ascii")
+    ).hexdigest()
+    assert bootstrap_stack.client.possession_hash != hashlib.sha256(
+        begin_key.encode("ascii")
+    ).hexdigest()
+
+    assert bootstrap_stack.service.begin(actor=bootstrap_stack.actor, request=request) == result
+    assert bootstrap_stack.client.create_calls == 2
+    row = bootstrap_stack.store.fetch_one("SELECT * FROM bootstrap_grant_plans")
+    retried_secret, stored_result = bootstrap_stack.service._begin_storage(row)
+    assert retried_secret == possession_secret
+    assert stored_result == result
+
+
+def test_legacy_begin_response_uses_idempotency_key_only_for_compatibility(bootstrap_stack) -> None:
+    begin_key = "legacy-bootstrap-begin-key-0001"
+    request = BootstrapPlanBeginRequest.model_validate(
+        {"schema": "agentnet.bootstrap-plan.begin.v1", "begin_idempotency_key": begin_key}
+    )
+    result = bootstrap_stack.service.begin(actor=bootstrap_stack.actor, request=request)
+    row = bootstrap_stack.store.fetch_one("SELECT * FROM bootstrap_grant_plans")
+    with bootstrap_stack.store.transaction() as connection:
+        connection.execute(
+            "UPDATE bootstrap_grant_plans SET begin_response_encrypted=? WHERE plan_id=?",
+            (
+                bootstrap_stack.store.cipher.encrypt_json(
+                    result,
+                    purpose=f"bootstrap-plan-begin:{row['plan_id']}",
+                ),
+                row["plan_id"],
+            ),
+        )
+    bootstrap_stack.client.possession_hash = hashlib.sha256(begin_key.encode("ascii")).hexdigest()
+
+    assert bootstrap_stack.service.begin(actor=bootstrap_stack.actor, request=request) == result
+    assert bootstrap_stack.service.status(
+        actor=bootstrap_stack.actor,
+        request=BootstrapPlanStatusRequest.model_validate(
+            {"schema": "agentnet.bootstrap-plan.status.v1", "begin_idempotency_key": begin_key}
+        ),
+    )["status"] == "approval_ready"
+    completed = bootstrap_stack.service.complete(
+        actor=bootstrap_stack.actor,
+        request=BootstrapPlanCompletionRequest.model_validate(
+            {
+                "schema": "agentnet.bootstrap-plan.complete.v2",
+                "begin_idempotency_key": begin_key,
+                "completion_idempotency_key": "legacy-bootstrap-complete-key-0001",
+            }
+        ),
+    )
+    assert completed["status"] == "prepared_unusable"
 
 
 def test_concurrent_exact_completion_converges_to_one_atomic_commit(bootstrap_stack) -> None:
@@ -346,10 +406,9 @@ def test_concurrent_exact_completion_converges_to_one_atomic_commit(bootstrap_st
     )
     request = BootstrapPlanCompletionRequest.model_validate(
         {
-            "schema": "agentnet.bootstrap-plan.complete.v1",
+            "schema": "agentnet.bootstrap-plan.complete.v2",
             "begin_idempotency_key": begin_key,
             "completion_idempotency_key": completion_key,
-            "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
         }
     )
     audit_before = bootstrap_stack.store.fetch_one("SELECT COUNT(*) AS n FROM audit_log")["n"]
@@ -490,10 +549,9 @@ def test_final_commit_rejects_competing_plan_inserted_after_receipt_retrieval(bo
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin_key,
                     "completion_idempotency_key": "bootstrap-final-race-completion-key",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -571,10 +629,9 @@ def test_final_commit_statement_faults_leave_zero_authority_and_no_replay(
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin_key,
                     "completion_idempotency_key": f"completion-{begin_key}",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -614,10 +671,9 @@ def _commit_first_plan(bootstrap_stack, *, begin_key: str) -> None:
         actor=bootstrap_stack.actor,
         request=BootstrapPlanCompletionRequest.model_validate(
             {
-                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "schema": "agentnet.bootstrap-plan.complete.v2",
                 "begin_idempotency_key": begin_key,
                 "completion_idempotency_key": f"completion-{begin_key}",
-                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
             }
         ),
     )
@@ -726,10 +782,9 @@ def test_complete_rejects_terminal_plan_without_approval_retrieval(
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin_key,
                     "completion_idempotency_key": f"completion-terminal-{terminal_state}-key",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -781,10 +836,9 @@ def test_complete_expires_due_local_plan_without_receipt_retrieval(bootstrap_sta
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin_key,
                     "completion_idempotency_key": "bootstrap-complete-local-expiry-completion-key",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -822,10 +876,9 @@ def test_complete_rechecks_expiry_inside_final_commit_after_receipt_retrieval(
             actor=bootstrap_stack.actor,
             request=BootstrapPlanCompletionRequest.model_validate(
                 {
-                    "schema": "agentnet.bootstrap-plan.complete.v1",
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
                     "begin_idempotency_key": begin_key,
                     "completion_idempotency_key": "bootstrap-final-commit-expiry-completion-key",
-                    "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
                 }
             ),
         )
@@ -859,7 +912,7 @@ def test_status_rejects_approval_deadline_mismatch(bootstrap_stack) -> None:
         )
 
 
-def test_completion_reservation_survives_wrong_code_and_conflicting_key_never_retrieves(bootstrap_stack) -> None:
+def test_completion_reservation_survives_retrieval_failure_and_conflicting_key(bootstrap_stack) -> None:
     begin_key = "bootstrap-begin-key-0004"
     bootstrap_stack.service.begin(
         actor=bootstrap_stack.actor,
@@ -876,10 +929,9 @@ def test_completion_reservation_survives_wrong_code_and_conflicting_key_never_re
     bootstrap_stack.client.retrieve_failures = 1
     first = BootstrapPlanCompletionRequest.model_validate(
         {
-            "schema": "agentnet.bootstrap-plan.complete.v1",
+            "schema": "agentnet.bootstrap-plan.complete.v2",
             "begin_idempotency_key": begin_key,
             "completion_idempotency_key": "bootstrap-complete-key-0004",
-            "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
         }
     )
     with pytest.raises(AuthenticationError, match="approval request denied"):
@@ -890,18 +942,15 @@ def test_completion_reservation_survives_wrong_code_and_conflicting_key_never_re
     conflicting = first.model_copy(
         update={
             "completion_idempotency_key": "bootstrap-complete-key-other",
-            "claim_code": "1111-2222-3333-4444-5555-6666-7777-8888",
         }
     )
     with pytest.raises(ConflictError, match="completion conflict"):
         bootstrap_stack.service.complete(actor=bootstrap_stack.actor, request=conflicting)
     assert bootstrap_stack.client.retrieve_calls == 1
 
-    regenerated_code = first.model_copy(
-        update={"claim_code": "1111-2222-3333-4444-5555-6666-7777-8888"}
-    )
+    exact_retry = first.model_copy()
     result = bootstrap_stack.service.complete(
-        actor=bootstrap_stack.actor, request=regenerated_code
+        actor=bootstrap_stack.actor, request=exact_retry
     )
     assert result["status"] == "prepared_unusable"
     assert bootstrap_stack.client.retrieve_calls == 2
@@ -925,10 +974,9 @@ def _commit_c0_plan(bootstrap_stack) -> tuple[C0PilotService, VerifiedActor]:
         actor=bootstrap_stack.actor,
         request=BootstrapPlanCompletionRequest.model_validate(
             {
-                "schema": "agentnet.bootstrap-plan.complete.v1",
+                "schema": "agentnet.bootstrap-plan.complete.v2",
                 "begin_idempotency_key": begin_key,
                 "completion_idempotency_key": "bootstrap-c0-service-complete-key",
-                "claim_code": "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111",
             }
         ),
     )

@@ -90,13 +90,14 @@ class _RejectBody(_TokenBody):
 class _InternalCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_id: Literal["agentnet.approval.internal-request-create.v1"] = Field(alias="schema")
+    schema_id: Literal["agentnet.approval.internal-request-create.v2"] = Field(alias="schema")
     idempotency_key: str = Field(min_length=16, max_length=256)
     approver_principal_id: str = Field(min_length=1, max_length=256)
     domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
     approval_purpose: str = Field(min_length=1, max_length=256)
     canonical_transaction_b64: str = Field(min_length=2, max_length=1_400_000)
     transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    possession_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     request_expires_at: int = Field(gt=0)
 
 
@@ -111,9 +112,9 @@ class _InternalStatusBody(BaseModel):
 class _InternalRetrieveBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_id: Literal["agentnet.approval.internal-receipt-retrieve.v1"] = Field(alias="schema")
+    schema_id: Literal["agentnet.approval.internal-receipt-retrieve.v2"] = Field(alias="schema")
     request_id: str = Field(min_length=1, max_length=128)
-    claim_code: str = Field(pattern=r"^[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){7}$")
+    possession_secret: str = Field(pattern=r"^[\x21-\x7e]{16,256}$")
     domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
     approval_purpose: str = Field(min_length=1, max_length=256)
     transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -360,6 +361,8 @@ const claimCodeNode = document.getElementById('claim-code');
 const resultNode = document.getElementById('result');
 let csrfToken = null;
 let selectedRequestId = null;
+let pendingRequestChecks = 0;
+const maxPendingRequestChecks = 20;
 
 function fromB64url(value) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
@@ -430,8 +433,17 @@ async function post(path, body) {
   if (!response.ok) throw new Error(value.error || 'request_denied');
   return value;
 }
-function showClaimCode(result) {
-  if (result.claim_code) {
+function showApprovalResult(result) {
+  if (result.delivery_status === 'waiting_agent' || result.delivery_status === 'retrieved') {
+    claimCodeSection.hidden = true;
+    reviewNode.hidden = true;
+    regenerateButton.hidden = true;
+    approveButton.hidden = true;
+    rejectButton.hidden = true;
+    statusNode.textContent = result.delivery_status === 'retrieved'
+      ? 'Approval complete. AgentNet continued successfully.'
+      : 'Approval complete. AgentNet will continue automatically.';
+  } else if (result.claim_code) {
     claimCodeNode.textContent = result.claim_code;
     claimCodeSection.hidden = false;
     reviewNode.hidden = true;
@@ -449,7 +461,7 @@ async function regenerateCode() {
     csrf_token: csrfToken,
     request_id: selectedRequestId,
   });
-  showClaimCode(result);
+  showApprovalResult(result);
 }
 async function reviewRequest(item) {
   selectedRequestId = item.request_id;
@@ -494,7 +506,7 @@ async function reviewRequest(item) {
       request_id: selectedRequestId,
       credential: authenticationJSON(credential),
     });
-    showClaimCode(result);
+    showApprovalResult(result);
   };
   rejectButton.onclick = async () => {
     rejectButton.disabled = true;
@@ -511,10 +523,17 @@ async function loadRequests() {
   const value = await get('/v1/approval/owner/requests');
   requestsNode.replaceChildren();
   if (value.requests.length === 0) {
-    statusNode.textContent = 'Owner passkey is registered. No pending approvals.';
     requestsSection.hidden = true;
+    if (pendingRequestChecks < maxPendingRequestChecks) {
+      pendingRequestChecks += 1;
+      statusNode.textContent = 'Waiting for the AgentNet request…';
+      window.setTimeout(() => loadRequests().catch(deny), 500);
+      return;
+    }
+    statusNode.textContent = 'Owner passkey is registered. No pending approvals.';
     return;
   }
+  pendingRequestChecks = maxPendingRequestChecks;
   statusNode.textContent = 'Review the pending AgentNet request.';
   requestsSection.hidden = false;
   for (const item of value.requests) {
@@ -1076,6 +1095,7 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
                 canonical_transaction=canonical,
                 delivery_mode="core_claim_code",
                 idempotency_key=body.idempotency_key,
+                possession_hash=body.possession_hash,
                 request_expires_at=body.request_expires_at,
             )
             return _json(
@@ -1135,8 +1155,8 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
                     {
                         "schema": body.schema_id,
                         "request_id": body.request_id,
-                        "claim_code_sha256": hashlib.sha256(
-                            body.claim_code.upper().encode("ascii")
+                        "possession_secret_sha256": hashlib.sha256(
+                            body.possession_secret.encode("ascii")
                         ).hexdigest(),
                         "domain_id": body.domain_id,
                         "approval_purpose": body.approval_purpose,
@@ -1147,7 +1167,7 @@ def create_approval_app(service: WebAuthnApprovalService) -> Starlette:
             ).hexdigest()
             receipt = service.retrieve_core_receipt(
                 request_id=body.request_id,
-                claim_code=body.claim_code,
+                possession_secret=body.possession_secret,
                 domain_id=body.domain_id,
                 approval_purpose=body.approval_purpose,
                 transaction_digest=body.transaction_digest,

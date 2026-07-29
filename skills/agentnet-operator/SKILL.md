@@ -1,6 +1,6 @@
 ---
 name: agentnet-operator
-description: Safely install, initialize, enroll, verify, configure, operate, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, enrollment or authority, Pi bindings, or server-agent deployment.
+description: Safely install, initialize, enroll, verify, configure, operate, reset, recover, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, enrollment or authority, Pi bindings, server-agent deployment, or destructive package-owned server reset/reinstall.
 license: Apache-2.0
 compatibility: Bundled AgentNet npm/Pi package on Linux, macOS, and Windows local profiles; production deployment remains Linux-first. Follow the installed release's exact Node.js, uv, and Python requirements.
 ---
@@ -18,7 +18,8 @@ Use the smallest safe workflow matching the request. AgentNet installation is co
 5. **Always-on server agent** — PostgreSQL, HTTPS, secret injection, identity and recovery prerequisites.
 6. **Enrollment or authority** — workforce OIDC, proof of possession, WebAuthn/OOB human approval independent of the enrolling harness, explicit grants.
 7. **Fresh-laptop bootstrap** — one complete public instruction packet for a human to paste into a newly installed generic agent with no prior AgentNet/A2A knowledge.
-8. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
+8. **Server reset or recovery** — destructive package-owned cleanup, retained external prerequisites, interrupted setup/upgrade, and clean reinstall.
+9. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
 
 ## Enforce the exact product contract
 
@@ -57,8 +58,8 @@ When the installed release exposes `bootstrap-plan begin|status|complete`,
 read the C0 sections of the onboarding reference and canonical example before
 proceeding. The owner responder must already run under the exact owner identity.
 The fresh harness may then request the fixed plan, the owner WebAuthn-approves
-its purpose-specific summary, and the fresh harness enters only the second
-short-lived code through its masked TTY.
+its purpose-specific summary, and the exact waiting process retrieves the result
+automatically through the signed broker using its private begin state.
 
 Call only the fixed commands; never use generic message, inbox, ACK, authority
 inventory, or entitlement mutation commands for this pilot. The C0 commands
@@ -74,12 +75,16 @@ If the installed release lacks a product-owned secure handoff for any private en
 For a later installed release whose actual `agentnet join --help` exposes
 `join guided`, use only that product flow for a nontechnical fresh laptop. It
 opens the system browser without printing the authorization URL, keeps
-continuation/challenge/key state owner-only, and prompts only for the short-lived
-human claim code. For one owner-operated headless POSIX server only, when the
-installed help exposes it and a private unrecorded controlling TTY is active,
-use explicit `--browser terminal`; open the TTY-disclosed URL manually on the
-owner laptop. Never move that URL through chat/A2A/logs or use terminal mode for
-the ordinary fresh-laptop packet. Success means `enrolled_identity_only`, not messaging readiness. Stop at
+continuation/challenge/key/possession state owner-only, and automatically receives
+the passkey-approved result without a TTY prompt or browser value transfer. For a
+headless server, its local AgentNet manager uses `join guided --browser remote`,
+then tells the owner only to open the fixed public Core `/activate` page. Owner
+signs in and passkey-approves entirely in normal browser. Never reveal or transfer
+a private authorization URL, claim code, receipt, continuation, or broker secret.
+Resume nonterminal state with exact command. Only after Core proves `expired` or
+`failed`, use `--replace-terminal-state`; never delete state or replace
+absent/completed/nonterminal/drifted state, and preserve candidate key. Success
+means `enrolled_identity_only`, not messaging readiness. Stop at
 `first_message_blocked_explicit_authority_required` unless the installed
 release's complete bounded C0 gate is verified and the canonical packet selects
 that phase. Generic `authorization.entitlement.issue`, the legacy founder
@@ -118,45 +123,15 @@ A normal foreground Pi process does not receive AgentNet tools merely because th
 
 ### Real server-agent network
 
-Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) before any host change. The target server's coding agent owns local execution. Remote Managers may provide immutable public package instructions and inspect sanitized evidence only; they must not shell into the host or send bespoke user/directory/unit/systemctl choreography.
+Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) and [safe commands](references/safe-commands.md) before any host change. Those references own exact request schemas, commands, runtime pins, PostgreSQL peer contract, digest/marker versions, secret syntax, systemd profile, activation sequence, recovery, and reset command surface. Do not duplicate or improvise them here.
 
-For the default Linux profile, the fixed CLI surface is `agentnet server-agent setup`; invoke it only through the resolved absolute root-owned launcher:
+Target server's coding agent owns local execution. Remote Managers may provide immutable public package instructions and inspect sanitized evidence only; they must not shell into host or send bespoke user/directory/unit/systemctl choreography. Use only resolved absolute root-owned AgentNet launcher and fixed `server-agent setup` flow: read-only plan first, then one frozen exact-digest apply. Never replace it with manual identities, directories, units, markers, network creation, Approval provisioning, or service assembly.
 
-```bash
-<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
-sudo -- <resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json --expected-request-digest <approved-request-digest> --apply --start
-```
+Select artifact mode before request creation. Communication-only requires request-v2 `artifact_mode=disabled`, no scanner input, and only `offline_custody`; artifact state/bindings stay unavailable. Setup registers no identity and grants no authority. Missing prerequisite reports one named **blocked** state; never substitute root access, payload identity, chat/A2A/Slack claims, synthetic actors, or model output.
 
-First command performs no privileged or managed-host write; npm may materialize its caller-owned Python runtime. It requires system-wide root-owned Node/uv/AgentNet runtime visible to hardened services. Select artifact mode before creating the request: request-v1 is immutable scanner-backed legacy; request-v2 requires explicit `enabled` or `disabled`. Request-v2 disabled is communication-only: scanner input must be absent, only `offline_custody` is configured, and artifact state/bindings remain unavailable. Request-v1 uses approval-digest-v2/marker-v2; request-v2 uses approval-digest-v3/marker-v3 binding exact mode. Both digest versions bind exact executable paths/content for Node.js, uv, AgentNet, `systemctl`, and `useradd`, plus one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`. Second command follows one frozen AgentNet setup approval, repeats preflight under setup lock, and manages only AgentNet identities, private roots, environment custody, and two systemd units. Exact reruns revalidate realized state; marker is provenance and never causes bootstrap skip. Setup verifies loopback services plus operator-owned public HTTPS routes, registers no identity, and grants no authority. Do not replace it with manual AgentNet `useradd`, directory, unit, marker, `network create`, Approval-provision, or service-start assembly.
+After `waiting_owner_oidc_or_passkey`, follow only reference's browser-only owner registration, server-local `join guided --browser remote`, fixed public Core `/activate`, offline activation, and exact setup rerun. Human uses no SSH, `sudo`, server terminal/path, private authorization URL, claim code, receipt, continuation, or broker secret. Success requires `operational`, `identity_enrolled=true`, verified public Core readiness, and `authority_granted=false`.
 
-Before apply, require these host and policy inputs. PostgreSQL role/database/HBA may be prepared first; on a clean host, the first approved apply may instead create only the fixed Core OS identity plus `/var/lib/agentnet-setup` runtime/lock and stop at `postgres_auth_not_ready`:
-
-- supported PostgreSQL with verified durability settings and recovery plan;
-- operator-owned role/database and HBA for the fixed password-free local peer contract: role/database `agentnet` over `/var/run/postgresql`, exact unshadowed `local agentnet agentnet peer`, no ident map;
-- dedicated HTTPS/TLS endpoints and exact service audience;
-- workforce OIDC provider with exact issuer, callbacks, endpoint origins, signing algorithms, and token-endpoint authentication method;
-- for confidential OIDC, public `client_secret_env` references plus private runtime values; never a secret in config, commands, logs, evidence, or chat;
-- exact owner/approver identity policy, mandatory approval purposes, selected artifact mode, mode-applicable scanner trust, capabilities, retention, recovery, and evidence policy.
-
-Setup intentionally precedes server-harness enrollment. Only after setup reports `waiting_owner_oidc_or_passkey` require owner-controlled WebAuthn user verification, per-harness keys, proof of possession, and exact revocation/recovery procedures for guided enrollment and offline activation.
-
-The WebAuthn-UV ceremony service is an AgentNet product component operated through `agentnet approval`; it uses pinned maintained verification and the existing receipt contract. In the default self-hosted profile it may share the existing server with Core/PostgreSQL under a distinct OS identity, credential, storage root, and loopback service that the enrolling harness cannot read or control. The owner approves with a WebAuthn authenticator on the current laptop. This profile reports `independent_boundary_proven=false`; separate administration is optional high assurance. Operators must not be sent through manual extra-host, secret-manager, or per-command setup choreography.
-
-OIDC token-endpoint authentication must be explicit: `none`,
-`client_secret_post`, or `client_secret_basic`. Existing public clients default
-to `none`. Confidential methods require provider discovery support and a
-non-empty runtime secret resolved through `client_secret_env`; method inference
-and embedded secret values are forbidden. Google Web applications use the exact
-registered HTTPS callback and `client_secret_post` profile documented in the
-implementation guide.
-
-Apply may create fixed Core OS identity plus root-owned setup runtime/lock, then report `postgres_auth_not_ready` before any AgentNet environment, Core/Approval config, database schema, unit, Approval identity, or service write. PostgreSQL role/database/HBA changes and reload are separate operator-owned approval boundary; after exact live rule is installed and reloaded, rerun same AgentNet digest. Never treat root/operator database access, raw HBA text, TCP/SCRAM/trust, or an old setup marker as service-user proof.
-
-If any prerequisite is missing, report **blocked** and name it. Never replace real identity with payload fields, chat claims, A2A receipts, Slack messages, synthetic actors, or model output.
-
-After setup reports `waiting_owner_oidc_or_passkey`, follow only the dedicated-user registration, `join guided --browser terminal`, offline activation, and setup rerun sequence in the ordinary-server reference. Final setup status must be `operational` with `identity_enrolled=true`, public Core readiness verified, and `authority_granted=false`.
-
-Activation acquires the configured runtime lease under the dedicated Core owner, verifies the same PostgreSQL credential and owner-only private key, and changes only enrolled harness/credential labels. It never grants authority. Core must be offline; a live process, stale/retired credential, key mismatch, or different prior binding blocks activation. Rerunning product setup with the same approved `--expected-request-digest` plus `--apply --start` performs the bounded Core restart and readiness check.
+For `server-agent reset`, treat request as destructive server-manager-only recovery. Read exact reset entry in safe commands and ordinary-server reference. Require explicit approval for both confirmation flags. Reset must retain PostgreSQL, runtimes, proxy/TLS, operator config, and service identities; preserve permanent root-only coordination lock; refuse unknown custody; and never be presented as secret rotation. No browser prompt or fresh-laptop packet may contain reset.
 
 ## Preserve evidence boundaries
 

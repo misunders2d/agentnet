@@ -8,6 +8,7 @@ private roots, environment files, and systemd units.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -68,21 +69,49 @@ APPROVAL_UNIT = "agentnet-approval.service"
 CORE_DATA = Path("/var/lib/agentnet")
 APPROVAL_DATA = Path("/var/lib/agentnet-approval")
 CORE_CONFIG = CORE_DATA / "agentnet.json"
+CORE_OIDC_CONFIG = CORE_DATA / "oidc-enrollment.json"
 APPROVAL_CONFIG = APPROVAL_DATA / "config.json"
 APPROVAL_STATE = APPROVAL_DATA / "state"
-SETUP_MARKER = Path("/var/lib/agentnet-setup/setup.json")
-CORE_ENV = Path("/etc/agentnet-secrets/core.env")
-APPROVAL_ENV = Path("/etc/agentnet-secrets/approval.env")
+SETUP_ROOT = Path("/var/lib/agentnet-setup")
+SETUP_MARKER = SETUP_ROOT / "setup.json"
+SETUP_RUNTIME_ROOT = SETUP_ROOT / "npm-runtime"
+SETUP_UPGRADE_JOURNAL = SETUP_ROOT / "upgrade.json"
+SECRET_ROOT = Path("/etc/agentnet-secrets")
+CORE_ENV = SECRET_ROOT / "core.env"
+APPROVAL_ENV = SECRET_ROOT / "approval.env"
+SYSTEMD_UNIT_ROOT = Path("/etc/systemd/system")
 CORE_PORT = 8080
 APPROVAL_PORT = 8090
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _ENV_VALUE = re.compile(r"^[^\s'\"\\\x00-\x1f\x7f]+$")
+_HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _BROKER_CREDENTIAL_NAME = "AGENTNET_APPROVAL_CORE_TOKEN"
 _BROKER_CREDENTIAL_MIN_LENGTH = 43
 _BROKER_CREDENTIAL_MAX_LENGTH = 512
 _SYSTEMCTL_TIMEOUT_SECONDS = 30
 _SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-_PROTECTED_SERVICE_PATHS = (Path("/home"), Path("/root"), Path("/run/user"))
+# ProtectHome=true hides /home, /root, and /run/user; PrivateTmp=true replaces
+# /tmp and /var/tmp.  A runtime executable under any of them is invisible to the
+# managed units even though privileged setup can still read it.
+_PROTECTED_SERVICE_PATHS = (
+    Path("/home"),
+    Path("/root"),
+    Path("/run/user"),
+    Path("/tmp"),
+    Path("/var/tmp"),
+)
+# One exact supported setup-marker upgrade window.  A package upgrade is the only
+# reason an already realized deployment may present a different request digest,
+# and only these source versions were released with a runtime-bound digest.
+_MARKER_UPGRADE_TARGET = "0.1.31"
+_SUPPORTED_MARKER_UPGRADE_SOURCES = frozenset({"0.1.28", "0.1.30"})
+# Blockers that mean "the response was lost", not "the operation was refused".
+# Only these justify one bounded idempotent retry of a product command.
+_RESPONSE_LOSS_BLOCKERS = frozenset({"invalid_product_evidence", "product_command_failed"})
+_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
+_MAX_UNIT_BYTES = 65_536
+_MAX_CONFIG_BYTES = 1_048_576
+_JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
 
 
 class ServerSetupError(RuntimeError):
@@ -302,15 +331,18 @@ class SetupLayout:
 
     @property
     def lock(self) -> Path:
-        return self.host(SETUP_MARKER.parent / "setup.lock")
+        return self.host(SETUP_ROOT / "setup.lock")
+
+    def unit(self, name: str) -> Path:
+        return self.host(SYSTEMD_UNIT_ROOT / name)
 
     @property
     def core_unit(self) -> Path:
-        return self.host(Path("/etc/systemd/system") / CORE_UNIT)
+        return self.unit(CORE_UNIT)
 
     @property
     def approval_unit(self) -> Path:
-        return self.host(Path("/etc/systemd/system") / APPROVAL_UNIT)
+        return self.unit(APPROVAL_UNIT)
 
 
 @dataclass(frozen=True)
@@ -676,24 +708,46 @@ def _resolve_host_tool(name: str) -> Path:
     return _require_root_owned_executable(Path(located), label=name)
 
 
+def _package_owned_executable(variable: str, *, label: str) -> Path:
+    """Select one runtime executable from the installed package binding only.
+
+    Ambient ``PATH`` lookup is deliberately absent: the managed units execute the
+    exact absolute paths recorded here, so a runtime chosen from the invoking
+    shell's environment could differ from the launcher's own runtime and could be
+    invisible inside the unit sandbox.
+    """
+
+    configured = os.environ.get(variable)
+    if not configured:
+        raise ServerSetupError(
+            "missing_package_provenance",
+            f"ordinary server setup requires the installed package {label} binding",
+        )
+    candidate = Path(configured)
+    if (
+        not candidate.is_absolute()
+        or ".." in candidate.parts
+        or configured != os.path.normpath(configured)
+    ):
+        raise ServerSetupError(
+            "unsafe_executable",
+            f"configured {label} executable must be one absolute canonical path",
+        )
+    resolved = _require_root_owned_executable(candidate, label=label)
+    if resolved != candidate:
+        raise ServerSetupError(
+            "unsafe_executable",
+            f"configured {label} executable must not resolve through a symbolic link",
+        )
+    return resolved
+
+
 def _resolve_uv_executable() -> Path:
-    configured = os.environ.get("AGENTNET_UV")
-    if configured is not None and not Path(configured).is_absolute():
-        raise ServerSetupError("unsafe_executable", "configured uv executable must be absolute")
-    located = configured or shutil.which("uv")
-    if located is None:
-        raise ServerSetupError("missing_executable", "installed uv executable is unavailable")
-    return _require_root_owned_executable(Path(located), label="uv")
+    return _package_owned_executable("AGENTNET_UV", label="uv")
 
 
 def _resolve_node_executable() -> Path:
-    configured = os.environ.get("AGENTNET_NODE_EXECUTABLE")
-    if configured is not None and not Path(configured).is_absolute():
-        raise ServerSetupError("unsafe_executable", "configured Node.js executable must be absolute")
-    located = configured or shutil.which("node")
-    if located is None:
-        raise ServerSetupError("missing_executable", "installed Node.js executable is unavailable")
-    return _require_root_owned_executable(Path(located), label="Node.js")
+    return _package_owned_executable("AGENTNET_NODE_EXECUTABLE", label="Node.js")
 
 
 def _sha256_stable_file(path: Path, *, label: str) -> str:
@@ -1000,6 +1054,8 @@ def _validate_inputs(
                 public_origin=request.approval_public_origin,
                 service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
                 approver_principal_id=request.approval_approver_principal_id,
+                remote_activation_oidc_subject=selected[0].oidc_subject,
+                remote_activation_verified_email_alias=selected[0].verified_email_alias,
             ),
         )
     except Exception as exc:
@@ -1357,7 +1413,18 @@ def _atomic_write(path: Path, payload: bytes, *, mode: int, uid: int = 0, gid: i
     return "completed"
 
 
-def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
+def _read_managed_exact(
+    path: Path,
+    *,
+    uid: int,
+    gid: int,
+    mode: int,
+    blocker: str,
+    label: str,
+    max_bytes: int = 65_536,
+) -> bytes | None:
+    """Read one root-owned managed file exactly, or report that it is absent."""
+
     try:
         descriptor = os.open(
             path,
@@ -1369,7 +1436,7 @@ def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise ServerSetupError("setup_marker_conflict", "setup marker custody is unsafe") from exc
+        raise ServerSetupError(blocker, f"{label} custody is unsafe") from exc
     try:
         before = os.fstat(descriptor)
         if (
@@ -1377,10 +1444,10 @@ def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
             or before.st_nlink != 1
             or before.st_uid != uid
             or before.st_gid != gid
-            or stat.S_IMODE(before.st_mode) != 0o600
-            or not 1 <= before.st_size <= 65_536
+            or stat.S_IMODE(before.st_mode) != mode
+            or not 1 <= before.st_size <= max_bytes
         ):
-            raise ServerSetupError("setup_marker_conflict", "setup marker custody is unsafe")
+            raise ServerSetupError(blocker, f"{label} custody is unsafe")
         payload = os.read(descriptor, before.st_size + 1)
         after = os.fstat(descriptor)
         if (
@@ -1391,10 +1458,62 @@ def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
             or after.st_mtime_ns != before.st_mtime_ns
             or after.st_ctime_ns != before.st_ctime_ns
         ):
-            raise ServerSetupError("setup_marker_conflict", "setup marker changed during preflight")
+            raise ServerSetupError(blocker, f"{label} changed during preflight")
         return payload
     finally:
         os.close(descriptor)
+
+
+def _read_setup_marker(path: Path, *, uid: int, gid: int) -> bytes | None:
+    return _read_managed_exact(
+        path,
+        uid=uid,
+        gid=gid,
+        mode=0o600,
+        blocker="setup_marker_conflict",
+        label="setup marker",
+    )
+
+
+def _read_managed_unit(path: Path, *, uid: int, gid: int, blocker: str) -> bytes | None:
+    return _read_managed_exact(
+        path,
+        uid=uid,
+        gid=gid,
+        mode=0o644,
+        blocker=blocker,
+        label="managed AgentNet unit",
+        max_bytes=_MAX_UNIT_BYTES,
+    )
+
+
+def _supported_marker_upgrade(marker_package_version: object) -> bool:
+    """Report whether a realized marker may present one package-caused digest drift.
+
+    ``request_digest`` binds the runtime identity, so every package upgrade
+    changes it even when the operator's request and inputs are byte-identical.
+    Exactly one released source window is supported, and the same version never
+    counts: same-version drift means the request itself changed and must keep
+    failing closed.
+    """
+
+    return (
+        __version__ == _MARKER_UPGRADE_TARGET
+        and isinstance(marker_package_version, str)
+        and marker_package_version in _SUPPORTED_MARKER_UPGRADE_SOURCES
+        and marker_package_version != __version__
+    )
+
+
+def _accepted_marker_request_digest(marker: Mapping[str, Any], request_digest: str) -> bool:
+    recorded = marker.get("request_digest")
+    if recorded == request_digest:
+        return True
+    return (
+        isinstance(recorded, str)
+        and bool(_HEX64.fullmatch(recorded))
+        and _supported_marker_upgrade(marker.get("package_version"))
+    )
 
 
 def _validated_setup_marker(
@@ -1442,7 +1561,7 @@ def _validated_setup_marker(
             artifact_mode is not None
             or not legacy_request_digest
             or set(marker) != v2_keys
-            or marker.get("request_digest") != request_digest
+            or not _accepted_marker_request_digest(marker, request_digest)
             or not isinstance(marker.get("revision"), int)
             or marker["revision"] < 1
             or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
@@ -1459,7 +1578,7 @@ def _validated_setup_marker(
         or artifact_mode is None
         or set(marker) != v3_keys
         or marker.get("artifact_mode") != artifact_mode
-        or marker.get("request_digest") != request_digest
+        or not _accepted_marker_request_digest(marker, request_digest)
         or not isinstance(marker.get("revision"), int)
         or marker["revision"] < 1
         or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
@@ -1480,10 +1599,19 @@ def _atomic_replace_exact(
     mode: int,
     uid: int,
     gid: int,
+    reader: Callable[[Path], bytes | None] | None = None,
+    blocker: str = "setup_marker_conflict",
+    label: str = "setup marker",
+    result: str = "updated_same_request",
 ) -> str:
-    current = _read_setup_marker(path, uid=uid, gid=gid)
+    def read(target: Path) -> bytes | None:
+        if reader is not None:
+            return reader(target)
+        return _read_setup_marker(target, uid=uid, gid=gid)
+
+    current = read(path)
     if current != expected:
-        raise ServerSetupError("setup_marker_conflict", "setup marker changed before compare-and-swap")
+        raise ServerSetupError(blocker, f"{label} changed before compare-and-swap")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -1500,9 +1628,9 @@ def _atomic_replace_exact(
             or before_replace.st_uid != uid
             or before_replace.st_gid != gid
             or stat.S_IMODE(before_replace.st_mode) != mode
-            or _read_setup_marker(path, uid=uid, gid=gid) != expected
+            or read(path) != expected
         ):
-            raise ServerSetupError("setup_marker_conflict", "setup marker changed before compare-and-swap")
+            raise ServerSetupError(blocker, f"{label} changed before compare-and-swap")
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -1516,7 +1644,239 @@ def _atomic_replace_exact(
             pass
         temporary.unlink(missing_ok=True)
         raise
-    return "updated_same_request"
+    return result
+
+
+def _write_managed_unit(
+    path: Path,
+    payload: bytes,
+    *,
+    uid: int,
+    gid: int,
+    previous: bytes | None,
+) -> str:
+    """Install one managed unit, replacing exactly the journaled previous payload.
+
+    Outside a journaled package upgrade this keeps the strict behaviour that a
+    managed path holding unexpected content is a conflict, never an overwrite.
+    """
+
+    if previous is not None and previous != payload:
+        current = _read_managed_unit(path, uid=uid, gid=gid, blocker="managed_path_conflict")
+        if current == previous:
+            return _atomic_replace_exact(
+                path,
+                expected=previous,
+                payload=payload,
+                mode=0o644,
+                uid=uid,
+                gid=gid,
+                reader=lambda target: _read_managed_unit(
+                    target,
+                    uid=uid,
+                    gid=gid,
+                    blocker="managed_path_conflict",
+                ),
+                blocker="managed_path_conflict",
+                label="managed AgentNet unit",
+                result="updated_package_upgrade",
+            )
+    return _atomic_write(path, payload, mode=0o644, uid=uid, gid=gid)
+
+
+def _write_journaled_core_config(
+    path: Path,
+    payload: bytes,
+    *,
+    account: pwd.struct_passwd,
+    previous: bytes,
+) -> str:
+    """Replace one Core config only from its exact journaled payload."""
+
+    current = _read_private_managed_file(
+        path,
+        account,
+        blocker="setup_upgrade_conflict",
+        max_bytes=_MAX_CONFIG_BYTES,
+    )
+    if current == payload:
+        return "already_satisfied"
+    if current != previous:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "managed Core config changed after upgrade journal creation",
+        )
+    return _atomic_replace_exact(
+        path,
+        expected=previous,
+        payload=payload,
+        mode=0o600,
+        uid=account.pw_uid,
+        gid=account.pw_gid,
+        reader=lambda target: _read_private_managed_file(
+            target,
+            account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        blocker="setup_upgrade_conflict",
+        label="managed Core config",
+        result="updated_package_upgrade",
+    )
+
+
+def _require_marker_realized_state(
+    marker: Mapping[str, Any],
+    *,
+    approval_config_digest: str,
+    core_config_digest: str,
+    unit_paths: Mapping[str, Path],
+    uid: int,
+    gid: int,
+) -> None:
+    """Prove the recorded pre-upgrade state is exactly what is realized on disk.
+
+    A supported package upgrade may rewrite managed units, so it may only start
+    from the exact realized state the previous package version committed.  Any
+    drift means the deployment was changed outside setup and fails closed.
+    """
+
+    for key, actual in (
+        ("approval_config_digest", approval_config_digest),
+        ("core_config_digest", core_config_digest),
+    ):
+        if marker.get(key) != actual:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                f"realized {key} does not match the recorded pre-upgrade setup state",
+            )
+    recorded = marker.get("unit_digests")
+    if not isinstance(recorded, dict) or set(recorded) != set(unit_paths):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "recorded pre-upgrade unit provenance does not match the fixed profile",
+        )
+    for unit, path in unit_paths.items():
+        payload = _read_managed_unit(path, uid=uid, gid=gid, blocker="setup_upgrade_conflict")
+        if payload is None or hashlib.sha256(payload).hexdigest() != recorded[unit]:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "realized managed unit does not match the recorded pre-upgrade setup state",
+            )
+
+
+def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] | None:
+    payload = _read_managed_exact(
+        path,
+        uid=uid,
+        gid=gid,
+        mode=0o600,
+        blocker="setup_upgrade_conflict",
+        label="setup upgrade journal",
+        max_bytes=4 * _MAX_CONFIG_BYTES,
+    )
+    if payload is None:
+        return None
+    journal = _strict_json_bytes(payload, label="setup upgrade journal")
+    units = journal.get("previous_units")
+    configs = journal.get("previous_configs")
+    if (
+        journal.get("schema") != _UPGRADE_JOURNAL_SCHEMA
+        or set(journal)
+        != {
+            "schema",
+            "from_marker_sha256",
+            "from_package_version",
+            "from_request_digest",
+            "to_package_version",
+            "to_request_digest",
+            "previous_units",
+            "previous_configs",
+        }
+        or any(
+            not isinstance(journal.get(key), str) or not _HEX64.fullmatch(str(journal.get(key)))
+            for key in ("from_marker_sha256", "from_request_digest", "to_request_digest")
+        )
+        or not isinstance(journal.get("from_package_version"), str)
+        or not isinstance(journal.get("to_package_version"), str)
+        or not isinstance(units, dict)
+        or set(units) != {APPROVAL_UNIT, CORE_UNIT}
+        or not isinstance(configs, dict)
+        or set(configs) != _JOURNALED_CONFIG_KEYS
+    ):
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    for value in units.values():
+        if not isinstance(value, str) or len(value) > 4 * _MAX_UNIT_BYTES:
+            raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    for value in configs.values():
+        if not isinstance(value, str) or len(value) > 2 * _MAX_CONFIG_BYTES:
+            raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    _journaled_unit_payloads(journal)
+    _journaled_config_payloads(journal)
+    return journal
+
+
+def _journaled_unit_payloads(journal: Mapping[str, Any]) -> dict[str, bytes]:
+    try:
+        return {
+            unit: base64.b64decode(str(value), validate=True)
+            for unit, value in dict(journal["previous_units"]).items()
+        }
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid") from exc
+
+
+def _journaled_config_payloads(journal: Mapping[str, Any]) -> dict[str, bytes]:
+    try:
+        payloads = {
+            key: base64.b64decode(str(value), validate=True)
+            for key, value in dict(journal["previous_configs"]).items()
+        }
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid") from exc
+    if set(payloads) != _JOURNALED_CONFIG_KEYS or any(
+        not payload or len(payload) > _MAX_CONFIG_BYTES for payload in payloads.values()
+    ):
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    return payloads
+
+
+def _write_upgrade_journal(path: Path, journal: Mapping[str, Any], *, uid: int, gid: int) -> None:
+    payload = json.dumps(dict(journal), sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.fchown(descriptor, uid, gid)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _clear_upgrade_journal(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    try:
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _commit_setup_marker(
@@ -1551,12 +1911,18 @@ def _commit_setup_marker(
     }
     if artifact_mode is not None:
         realized["artifact_mode"] = artifact_mode
-    if existing_marker is not None and existing_marker.get("schema") == marker_schema:
-        if all(existing_marker.get(key) == value for key, value in realized.items()):
-            return _atomic_write(path, existing_payload or b"", mode=0o600, uid=uid, gid=gid)
-        revision = int(existing_marker["revision"]) + 1
-    else:
-        revision = 1
+    if (
+        existing_marker is not None
+        and existing_marker.get("schema") == marker_schema
+        and all(existing_marker.get(key) == value for key, value in realized.items())
+    ):
+        return _atomic_write(path, existing_payload or b"", mode=0o600, uid=uid, gid=gid)
+    previous_revision = existing_marker.get("revision") if existing_marker is not None else None
+    revision = (
+        previous_revision + 1
+        if isinstance(previous_revision, int) and not isinstance(previous_revision, bool) and previous_revision >= 1
+        else 1
+    )
     marker = {
         "schema": marker_schema,
         "revision": revision,
@@ -1596,6 +1962,237 @@ def _run_systemctl(
         raise ServerSetupError("systemd_start", failure_message) from exc
     if completed.returncode != 0:
         raise ServerSetupError("systemd_start", failure_message)
+
+
+_SYSTEMD_SHOW_PROPERTIES = (
+    "LoadState",
+    "UnitFileState",
+    "FragmentPath",
+    "DropInPaths",
+    "User",
+    "Group",
+    "NoNewPrivileges",
+    "PrivateDevices",
+    "PrivateTmp",
+    "ProtectHome",
+    "ProtectSystem",
+    "MainPID",
+    "Environment",
+    "ReadWritePaths",
+)
+
+
+def _systemd_show(executable: Path, unit: str) -> dict[str, str]:
+    """Read exact live systemd properties for one managed unit."""
+
+    if any(character in unit for character in "\n\r\x00"):
+        raise ServerSetupError("unit_input", "systemd unit input contains a forbidden character")
+    try:
+        completed = subprocess.run(
+            [
+                str(executable),
+                "show",
+                unit,
+                *(f"--property={name}" for name in _SYSTEMD_SHOW_PROPERTIES),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": _SYSTEM_PATH, "HOME": "/root", "LANG": "C.UTF-8"},
+            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServerSetupError("service_runtime", "managed AgentNet unit runtime is not inspectable") from exc
+    stdout = completed.stdout or b""
+    if completed.returncode != 0 or len(stdout) > 262_144:
+        raise ServerSetupError("service_runtime", "managed AgentNet unit runtime is not inspectable")
+    try:
+        text = stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ServerSetupError("service_runtime", "managed AgentNet unit runtime evidence is invalid") from exc
+    properties: dict[str, str] = {}
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        if separator != "=" or name not in _SYSTEMD_SHOW_PROPERTIES:
+            continue
+        properties[name] = value
+    return properties
+
+
+def _read_live_process_identity(pid: int) -> tuple[Path, tuple[str, ...]]:
+    """Read the exact executable and argv of one live managed service process."""
+
+    try:
+        executable = Path(os.readlink(f"/proc/{pid}/exe"))
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            raw = handle.read(262_145)
+    except OSError as exc:
+        raise ServerSetupError("service_runtime", "managed AgentNet service process is not inspectable") from exc
+    if len(raw) > 262_144:
+        raise ServerSetupError("service_runtime", "managed AgentNet service process evidence is oversized")
+    try:
+        arguments = tuple(raw.decode("utf-8").split("\x00"))
+    except UnicodeDecodeError as exc:
+        raise ServerSetupError("service_runtime", "managed AgentNet service process evidence is invalid") from exc
+    while arguments and arguments[-1] == "":
+        arguments = arguments[:-1]
+    return executable, arguments
+
+
+def _validate_systemd_service_runtime(
+    systemctl_executable: Path,
+    *,
+    unit: str,
+    user: str,
+    data_root: Path,
+    node_executable: Path,
+    agentnet_executable: Path,
+    uv_executable: Path,
+    expected_argv: tuple[str, ...],
+    layout: SetupLayout,
+) -> None:
+    """Prove the live unit runs exactly the package-owned hermetic runtime.
+
+    Unit files on disk are not evidence: systemd may still be running a stale
+    fragment, an operator drop-in may have replaced the sandbox or the command,
+    and a PATH-selected runtime would be a different executable from the one the
+    approved digest bound.  This checks the loaded fragment, the sandbox, and the
+    live process itself.
+    """
+
+    properties = _systemd_show(systemctl_executable, unit)
+    expected_fragment = layout.unit(unit)
+    if (
+        properties.get("LoadState") != "loaded"
+        or properties.get("UnitFileState") != "enabled"
+        or properties.get("FragmentPath") != str(expected_fragment)
+        or properties.get("DropInPaths", "").strip()
+        or properties.get("User") != user
+        or properties.get("Group") != user
+        or properties.get("NoNewPrivileges") != "yes"
+        or properties.get("PrivateDevices") != "yes"
+        or properties.get("PrivateTmp") != "yes"
+        or properties.get("ProtectHome") != "yes"
+        or properties.get("ProtectSystem") != "strict"
+    ):
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet unit is not running the exact managed fragment and sandbox",
+        )
+    if f"AGENTNET_UV={uv_executable}" not in properties.get("Environment", "").split():
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet unit does not bind the package-owned uv runtime",
+        )
+    if str(data_root) not in properties.get("ReadWritePaths", "").split():
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet unit does not bind the fixed private state root",
+        )
+    main_pid = properties.get("MainPID", "0")
+    if not main_pid.isdecimal() or int(main_pid) < 1:
+        raise ServerSetupError("service_runtime", "managed AgentNet unit has no live main process")
+    live_executable, live_argv = _read_live_process_identity(int(main_pid))
+    if live_executable != node_executable or live_argv != tuple(expected_argv):
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet service process does not run the approved hermetic runtime",
+        )
+    if str(agentnet_executable) not in live_argv:
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet service process does not run the approved package launcher",
+        )
+
+
+def _run_systemctl_sequence_or_reconcile(
+    executable: Path,
+    sequence: tuple[list[str], ...],
+    *,
+    reconcile: Callable[[], None],
+) -> str:
+    """Apply the managed unit sequence, reconciling one lost systemd response.
+
+    A timed-out or failed ``systemctl`` call proves nothing about the effect: the
+    unit may already be exactly in the intended end state.  On failure the exact
+    live end state is verified instead; only that verified evidence, never the
+    transport outcome, is allowed to report success.
+    """
+
+    for arguments in sequence:
+        try:
+            _run_systemctl(
+                executable,
+                arguments,
+                failure_message="failed to start AgentNet managed units",
+            )
+        except ServerSetupError as failure:
+            try:
+                reconcile()
+            except ServerSetupError:
+                raise failure from None
+            return "reconciled_after_response_loss"
+    return "completed"
+
+
+def _require_core_bootstrap_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    expected_domain_id: str,
+) -> None:
+    domain = evidence.get("domain")
+    recovery = evidence.get("recovery")
+    storage = evidence.get("storage")
+    audit = evidence.get("audit")
+    binding = evidence.get("deployment_binding")
+    if (
+        not isinstance(domain, dict)
+        or domain.get("domain_id") != expected_domain_id
+        or not isinstance(recovery, dict)
+        or recovery.get("ready") is not True
+        or not isinstance(storage, dict)
+        or storage.get("ready") is not True
+        or not isinstance(audit, dict)
+        or audit.get("valid") is not True
+        or not isinstance(binding, dict)
+    ):
+        raise ServerSetupError(
+            "core_bootstrap_evidence",
+            "Core bootstrap evidence did not prove exact healthy durable state",
+        )
+
+
+def _run_bootstrap_idempotently(
+    account: pwd.struct_passwd,
+    argv: list[str],
+    *,
+    environment: Mapping[str, str],
+    expected_domain_id: str,
+) -> tuple[dict[str, Any], str]:
+    """Run the idempotent Core bootstrap, retrying exactly one lost response.
+
+    ``bootstrap-server-agent`` is idempotent, so a lost or truncated response is
+    reconciled by rerunning it and requiring fresh exact evidence.  A refused or
+    unhealthy bootstrap is never retried and never reported as reconciled.
+    """
+
+    attempts = 2
+    for attempt in range(1, attempts + 1):
+        try:
+            evidence = _run_as(
+                account,
+                argv,
+                environment=environment,
+                stage="core_bootstrap",
+            )
+        except ServerSetupError as exc:
+            if attempt >= attempts or exc.blocker not in _RESPONSE_LOSS_BLOCKERS:
+                raise
+            continue
+        _require_core_bootstrap_evidence(evidence, expected_domain_id=expected_domain_id)
+        return evidence, "completed" if attempt == 1 else "reconciled_after_response_loss"
+    raise ServerSetupError("core_bootstrap_evidence", "Core bootstrap did not produce exact evidence")
 
 
 def _ensure_account(
@@ -2268,6 +2865,14 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# A first managed start also materializes the service-private uv runtime, so the
+# bounded window that waits for a service to come up is longer than an ordinary
+# probe.  Only the two loopback startup probes use it; once a service answers
+# exactly, every downstream probe keeps the ordinary bound so a genuinely broken
+# deployment still fails in bounded time.
+_START_HEALTH_ATTEMPTS = 90
+
+
 def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> None:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
@@ -2375,23 +2980,49 @@ def _require_core_create_evidence(
         )
 
 
-def _load_validated_core_config(
-    core_config_path: Path,
-    core_account: pwd.struct_passwd,
+def _build_core_oidc_config(
+    request: ServerSetupRequest,
+    oidc_provider: SetupOIDCProvider,
+    *,
+    trusted: Sequence[IndependentApproverConfig],
+    approvers: Sequence[SetupApprover],
+) -> OIDCEnrollmentConfig:
+    selected = [
+        item for item in trusted
+        if item.principal_id == request.approval_approver_principal_id
+    ]
+    owner_policy = [
+        item for item in approvers
+        if item.principal_id == request.approval_approver_principal_id
+    ]
+    if len(selected) != 1 or len(owner_policy) != 1:
+        raise ServerSetupError(
+            "approval_conflict",
+            "selected Approval trust anchor is unavailable",
+        )
+    return OIDCEnrollmentConfig(
+        **oidc_provider.model_dump(mode="python"),
+        verifier_id=request.approval_verifier_id,
+        trusted_approvers=tuple(trusted),
+        approval_service=ApprovalServiceClientConfig(
+            origin=request.approval_public_origin,
+            public_origin=request.approval_public_origin,
+            service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
+            approver_principal_id=request.approval_approver_principal_id,
+            remote_activation_oidc_subject=owner_policy[0].oidc_subject,
+            remote_activation_verified_email_alias=owner_policy[0].verified_email_alias,
+        ),
+    )
+
+
+def _require_core_config_matches(
+    config: Any,
     *,
     request: ServerSetupRequest,
     core_data: Path,
     oidc: OIDCEnrollmentConfig,
     scanner_trust: ScannerTrustConfig | None,
-):
-    config = load_config_json(
-        _read_private_managed_file(
-            core_config_path,
-            core_account,
-            blocker="core_custody",
-            max_bytes=1_048_576,
-        ).decode("utf-8")
-    )
+) -> None:
     if (
         config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
         or config.domain_id != request.domain_id
@@ -2419,7 +3050,415 @@ def _load_validated_core_config(
         or config.postgres_recovery_topology
     ):
         raise ServerSetupError("core_conflict", "existing Core state conflicts with fixed request")
+
+
+def _load_validated_core_config(
+    core_config_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    core_data: Path,
+    oidc: OIDCEnrollmentConfig,
+    scanner_trust: ScannerTrustConfig | None,
+):
+    config = load_config_json(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="core_custody",
+            max_bytes=1_048_576,
+        ).decode("utf-8")
+    )
+    _require_core_config_matches(
+        config,
+        request=request,
+        core_data=core_data,
+        oidc=oidc,
+        scanner_trust=scanner_trust,
+    )
     return config
+
+
+def _legacy_remote_activation_oidc(
+    oidc: OIDCEnrollmentConfig,
+) -> OIDCEnrollmentConfig:
+    approval = oidc.approval_service
+    if approval is None:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "Core OIDC config has no Approval client to bind during upgrade",
+        )
+    return oidc.model_copy(
+        update={
+            "approval_service": approval.model_copy(
+                update={
+                    "remote_activation_oidc_subject": None,
+                    "remote_activation_verified_email_alias": None,
+                }
+            )
+        }
+    )
+
+
+def _load_upgrade_compatible_core_config(
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    core_data: Path,
+    oidc: OIDCEnrollmentConfig,
+    scanner_trust: ScannerTrustConfig | None,
+) -> tuple[Any, bool]:
+    """Validate exact current semantics, allowing only missing 0.1.30 owner pins."""
+
+    legacy_oidc = _legacy_remote_activation_oidc(oidc)
+    config = load_config_json(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ).decode("utf-8")
+    )
+    core_current = config.oidc_enrollment == oidc
+    core_legacy = not core_current and config.oidc_enrollment == legacy_oidc
+    if not core_current and not core_legacy:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "existing Core OIDC policy differs beyond supported owner binding migration",
+        )
+    normalized = (
+        config.model_copy(update={"oidc_enrollment": oidc})
+        if core_legacy and hasattr(config, "model_copy")
+        else config
+    )
+    _require_core_config_matches(
+        normalized,
+        request=request,
+        core_data=core_data,
+        oidc=oidc,
+        scanner_trust=scanner_trust,
+    )
+
+    standalone = _strict_json_bytes(
+        _read_private_managed_file(
+            core_oidc_path,
+            core_account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="Core OIDC config",
+    )
+    desired_document = oidc.model_dump(mode="json")
+    legacy_document = legacy_oidc.model_dump(mode="json")
+    standalone_legacy = standalone == legacy_document
+    if standalone != desired_document and not standalone_legacy:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "standalone Core OIDC policy differs beyond supported owner binding migration",
+        )
+    return normalized, core_legacy or standalone_legacy
+
+
+def _migrate_legacy_remote_activation_policy(
+    *,
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    oidc: OIDCEnrollmentConfig,
+    pending: dict[str, Any],
+) -> str:
+    journal = pending.get("journal")
+    if not isinstance(journal, Mapping):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "legacy owner binding migration requires an active upgrade journal",
+        )
+    previous = _journaled_config_payloads(journal)
+    legacy_document = _legacy_remote_activation_oidc(oidc).model_dump(mode="json")
+    desired_document = oidc.model_dump(mode="json")
+
+    previous_oidc_document = _strict_json_bytes(
+        previous["core_oidc_config"],
+        label="journaled Core OIDC config",
+    )
+    if previous_oidc_document not in (legacy_document, desired_document):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "journaled Core OIDC policy is not an exact supported upgrade source",
+        )
+    oidc_payload = json.dumps(desired_document, indent=2, sort_keys=True).encode() + b"\n"
+
+    previous_core_document = _strict_json_bytes(
+        previous["core_config"],
+        label="journaled Core config",
+    )
+    if previous_core_document.get("oidc_enrollment") not in (
+        legacy_document,
+        desired_document,
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "journaled Core config is not an exact supported owner binding source",
+        )
+    replacement_core_document = dict(previous_core_document)
+    replacement_core_document["oidc_enrollment"] = desired_document
+    core_payload = (
+        json.dumps(replacement_core_document, indent=2, sort_keys=True).encode() + b"\n"
+    )
+    replacements = {
+        "core_config": core_payload,
+        "core_oidc_config": oidc_payload,
+    }
+    pending["replacement_configs"] = replacements
+    core_status = _write_journaled_core_config(
+        core_config_path,
+        core_payload,
+        account=core_account,
+        previous=previous["core_config"],
+    )
+    oidc_status = _write_journaled_core_config(
+        core_oidc_path,
+        oidc_payload,
+        account=core_account,
+        previous=previous["core_oidc_config"],
+    )
+    return (
+        "updated_package_upgrade"
+        if "updated_package_upgrade" in {core_status, oidc_status}
+        else "already_satisfied"
+    )
+
+
+def _prepare_supported_upgrade(
+    *,
+    existing_marker: dict[str, Any] | None,
+    existing_marker_payload: bytes | None,
+    approved_digest: str,
+    approval_config_path: Path,
+    approval_account: pwd.struct_passwd,
+    approval_preexisting: bool,
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    core_preexisting: bool,
+    unit_paths: Mapping[str, Path],
+    journal_path: Path,
+    uid: int,
+    gid: int,
+    pending: dict[str, Any],
+) -> str:
+    """Gate one supported package upgrade before any managed host write.
+
+    The marker validator already refused every digest drift except a released
+    upgrade source.  This proves the recorded pre-upgrade state is exactly what
+    is realized, then journals the exact previous units so a failed or
+    interrupted upgrade rolls back to that same state instead of leaving a
+    deployment that matches neither marker.
+    """
+
+    journal = _read_upgrade_journal(journal_path, uid=uid, gid=gid)
+    upgrading = existing_marker is not None and existing_marker.get("request_digest") != approved_digest
+    if journal is not None:
+        committed_target = (
+            existing_marker is not None
+            and existing_marker_payload is not None
+            and existing_marker.get("request_digest") == journal["to_request_digest"]
+            and existing_marker.get("package_version") == journal["to_package_version"]
+            and existing_marker.get("previous_marker_digest")
+            == journal["from_marker_sha256"]
+            and journal["to_request_digest"] == approved_digest
+            and journal["to_package_version"] == __version__
+        )
+        if committed_target:
+            if not approval_preexisting or not core_preexisting:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "committed setup marker has no realized Core and Approval state",
+                )
+            _require_marker_realized_state(
+                existing_marker,
+                approval_config_digest=_managed_config_digest(
+                    approval_config_path,
+                    approval_account,
+                    blocker="approval_config",
+                ),
+                core_config_digest=_managed_config_digest(
+                    core_config_path,
+                    core_account,
+                    blocker="core_custody",
+                    exclude_top_level=frozenset(
+                        {"enrolled_harness_id", "enrolled_credential_id"}
+                    ),
+                ),
+                unit_paths=unit_paths,
+                uid=uid,
+                gid=gid,
+            )
+            _clear_upgrade_journal(journal_path)
+            return "cleared_committed_upgrade"
+        if (
+            existing_marker_payload is None
+            or journal["from_marker_sha256"] != hashlib.sha256(existing_marker_payload).hexdigest()
+            or journal["to_request_digest"] != approved_digest
+            or journal["to_package_version"] != __version__
+        ):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "an unrelated interrupted AgentNet setup upgrade is journaled on this host",
+            )
+        pending.update(
+            journal=journal,
+            journal_path=journal_path,
+            unit_paths=dict(unit_paths),
+            config_paths={
+                "core_config": core_config_path,
+                "core_oidc_config": core_oidc_path,
+            },
+            core_account=core_account,
+            uid=uid,
+            gid=gid,
+        )
+        return "resumed_journaled_upgrade"
+    if not upgrading:
+        return "not_required"
+    assert existing_marker is not None and existing_marker_payload is not None
+    if not approval_preexisting or not core_preexisting:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "recorded setup marker has no realized Core and Approval state to upgrade",
+        )
+    _require_marker_realized_state(
+        existing_marker,
+        approval_config_digest=_managed_config_digest(
+            approval_config_path,
+            approval_account,
+            blocker="approval_config",
+        ),
+        core_config_digest=_managed_config_digest(
+            core_config_path,
+            core_account,
+            blocker="core_custody",
+            exclude_top_level=frozenset({"enrolled_harness_id", "enrolled_credential_id"}),
+        ),
+        unit_paths=unit_paths,
+        uid=uid,
+        gid=gid,
+    )
+    previous_units: dict[str, str] = {}
+    for unit, path in unit_paths.items():
+        payload = _read_managed_unit(path, uid=uid, gid=gid, blocker="setup_upgrade_conflict")
+        if payload is None:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "realized managed unit disappeared during upgrade preparation",
+            )
+        previous_units[unit] = base64.b64encode(payload).decode("ascii")
+    previous_configs = {
+        "core_config": base64.b64encode(
+            _read_private_managed_file(
+                core_config_path,
+                core_account,
+                blocker="setup_upgrade_conflict",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+        ).decode("ascii"),
+        "core_oidc_config": base64.b64encode(
+            _read_private_managed_file(
+                core_oidc_path,
+                core_account,
+                blocker="setup_upgrade_conflict",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+        ).decode("ascii"),
+    }
+    journal = {
+        "schema": _UPGRADE_JOURNAL_SCHEMA,
+        "from_marker_sha256": hashlib.sha256(existing_marker_payload).hexdigest(),
+        "from_package_version": str(existing_marker["package_version"]),
+        "from_request_digest": str(existing_marker["request_digest"]),
+        "to_package_version": __version__,
+        "to_request_digest": approved_digest,
+        "previous_units": previous_units,
+        "previous_configs": previous_configs,
+    }
+    _write_upgrade_journal(journal_path, journal, uid=uid, gid=gid)
+    pending.update(
+        journal=journal,
+        journal_path=journal_path,
+        unit_paths=dict(unit_paths),
+        config_paths={
+            "core_config": core_config_path,
+            "core_oidc_config": core_oidc_path,
+        },
+        core_account=core_account,
+        uid=uid,
+        gid=gid,
+    )
+    return "validated_pre_upgrade_realized_state"
+
+
+def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
+    """Restore exact journaled Core configs and units after a failed upgrade.
+
+    Rollback never touches identity, credential, enrollment, or audit records: it
+    restores only managed config/unit payloads the previous package version had
+    committed, so the recorded marker stays the truth about realized state.  If
+    the restore itself cannot complete, the journal is retained so the next run
+    resumes instead of silently losing the pre-upgrade state.
+    """
+
+    journal = pending.get("journal")
+    if not isinstance(journal, Mapping):
+        return
+    try:
+        previous_configs = _journaled_config_payloads(journal)
+        replacements = pending.get("replacement_configs", {})
+        if not isinstance(replacements, Mapping):
+            raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
+        core_account = pending["core_account"]
+        for key, path in dict(pending["config_paths"]).items():
+            current = _read_private_managed_file(
+                path,
+                core_account,
+                blocker="setup_upgrade_conflict",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+            if current == previous_configs[key]:
+                continue
+            replacement = replacements.get(key)
+            if not isinstance(replacement, bytes) or current != replacement:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "managed Core config changed before upgrade rollback",
+                )
+            _write_journaled_core_config(
+                path,
+                previous_configs[key],
+                account=core_account,
+                previous=replacement,
+            )
+        previous = _journaled_unit_payloads(journal)
+        for unit, path in dict(pending["unit_paths"]).items():
+            _write_managed_unit(
+                path,
+                previous[unit],
+                uid=int(pending["uid"]),
+                gid=int(pending["gid"]),
+                previous=_read_managed_unit(
+                    path,
+                    uid=int(pending["uid"]),
+                    gid=int(pending["gid"]),
+                    blocker="setup_upgrade_conflict",
+                ),
+            )
+    except Exception:
+        return
+    try:
+        _clear_upgrade_journal(Path(str(pending["journal_path"])))
+    except OSError:
+        return
 
 
 def apply_server_setup(
@@ -2429,6 +3468,30 @@ def apply_server_setup(
     expected_request_digest: str,
     layout: SetupLayout = SetupLayout(),
     _allow_test_layout: bool = False,
+) -> dict[str, Any]:
+    pending: dict[str, Any] = {}
+    try:
+        return _apply_server_setup(
+            request,
+            start=start,
+            expected_request_digest=expected_request_digest,
+            layout=layout,
+            _allow_test_layout=_allow_test_layout,
+            _pending_upgrade=pending,
+        )
+    except BaseException:
+        _rollback_pending_upgrade(pending)
+        raise
+
+
+def _apply_server_setup(
+    request: ServerSetupRequest,
+    *,
+    start: bool,
+    expected_request_digest: str,
+    layout: SetupLayout,
+    _allow_test_layout: bool,
+    _pending_upgrade: dict[str, Any],
 ) -> dict[str, Any]:
     preflight = _server_setup_preflight(request, layout=layout)
     actual_digest = preflight.request_digest
@@ -2560,6 +3623,7 @@ def apply_server_setup(
             blocker="core_custody",
         )
         core_runtime = core_data / "core"
+        core_oidc_path = layout.host(CORE_OIDC_CONFIG)
         if request.effective_artifact_mode == "disabled":
             _require_communication_only_artifact_absence(core_runtime)
         core_runtime_preexisting = _private_entry_exists(
@@ -2572,7 +3636,80 @@ def apply_server_setup(
             _require_private_tree(approval_state, approval_account, blocker="approval_custody")
         if core_runtime_preexisting:
             _require_private_tree(core_runtime, core_account, blocker="core_custody")
-        secret_root = layout.host(Path("/etc/agentnet-secrets"))
+        prevalidated_oidc: OIDCEnrollmentConfig | None = None
+        legacy_owner_policy = False
+        if approval_preexisting and core_preexisting:
+            approval_config_before, trusted_before = _approval_trust(
+                approval_config_path,
+                approval_account,
+                approval_state,
+            )
+            _require_exact_approval_policy(
+                approval_config_before,
+                request=request,
+                owner_oidc=owner_oidc,
+                approvers=approvers,
+                approval_state=approval_state,
+            )
+            prevalidated_oidc = _build_core_oidc_config(
+                request,
+                oidc_provider,
+                trusted=trusted_before,
+                approvers=approvers,
+            )
+            _, legacy_owner_policy = _load_upgrade_compatible_core_config(
+                core_config_path,
+                core_oidc_path,
+                core_account,
+                request=request,
+                core_data=core_data,
+                oidc=prevalidated_oidc,
+                scanner_trust=scanner_trust,
+            )
+        unit_paths = {unit: layout.unit(unit) for unit in (APPROVAL_UNIT, CORE_UNIT)}
+        journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
+        upgrade_status = _prepare_supported_upgrade(
+            existing_marker=existing_marker,
+            existing_marker_payload=existing_marker_payload,
+            approved_digest=approved_digest,
+            approval_config_path=approval_config_path,
+            approval_account=approval_account,
+            approval_preexisting=approval_preexisting,
+            core_config_path=core_config_path,
+            core_oidc_path=core_oidc_path,
+            core_account=core_account,
+            core_preexisting=core_preexisting,
+            unit_paths=unit_paths,
+            journal_path=journal_path,
+            uid=root_uid,
+            gid=root_gid,
+            pending=_pending_upgrade,
+        )
+        steps.append({"id": "package_upgrade", "status": upgrade_status})
+        journaled_units = (
+            _journaled_unit_payloads(_pending_upgrade["journal"])
+            if _pending_upgrade.get("journal") is not None
+            else {}
+        )
+        if legacy_owner_policy:
+            if prevalidated_oidc is None:  # pragma: no cover - guarded above
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "legacy owner policy was not prevalidated",
+                )
+            steps.append(
+                {
+                    "id": "core_remote_activation_policy_upgrade",
+                    "status": _migrate_legacy_remote_activation_policy(
+                        core_config_path=core_config_path,
+                        core_oidc_path=core_oidc_path,
+                        core_account=core_account,
+                        oidc=prevalidated_oidc,
+                        pending=_pending_upgrade,
+                    ),
+                }
+            )
+        secret_root = layout.host(SECRET_ROOT)
         steps.append(
             {
                 "id": "secret_root",
@@ -2667,21 +3804,18 @@ def apply_server_setup(
                 stage="approval_status",
             )
             steps.append({"id": "approval_provision", "status": "already_satisfied"})
-        selected = [item for item in trusted if item.principal_id == request.approval_approver_principal_id]
-        if len(selected) != 1:
-            raise ServerSetupError("approval_conflict", "selected Approval trust anchor is unavailable")
-        oidc = OIDCEnrollmentConfig(
-            **oidc_provider.model_dump(mode="python"),
-            verifier_id=request.approval_verifier_id,
-            trusted_approvers=tuple(trusted),
-            approval_service=ApprovalServiceClientConfig(
-                origin=request.approval_public_origin,
-                public_origin=request.approval_public_origin,
-                service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
-                approver_principal_id=request.approval_approver_principal_id,
-            ),
+        oidc = _build_core_oidc_config(
+            request,
+            oidc_provider,
+            trusted=trusted,
+            approvers=approvers,
         )
-        oidc_path = core_data / "oidc-enrollment.json"
+        if prevalidated_oidc is not None and oidc != prevalidated_oidc:
+            raise ServerSetupError(
+                "approval_conflict",
+                "Approval trust changed during setup",
+            )
+        oidc_path = core_oidc_path
         oidc_payload = json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
         steps.append({"id": "core_oidc_config", "status": _atomic_write(oidc_path, oidc_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
         scanner_path = core_data / "scanner-trust.json"
@@ -2750,12 +3884,14 @@ def apply_server_setup(
             scanner_trust=scanner_trust,
         )
         if core_preexisting:
-            _run_as(
+            _, bootstrap_status = _run_bootstrap_idempotently(
                 core_account,
                 [str(node_executable), str(executable), "bootstrap-server-agent", "--config", str(core_config_path)],
                 environment=core_environment,
-                stage="core_bootstrap",
+                expected_domain_id=request.domain_id,
             )
+            if bootstrap_status == "completed":
+                bootstrap_status = "revalidated"
             _require_private_tree(core_runtime, core_account, blocker="core_custody")
             config = _load_validated_core_config(
                 core_config_path,
@@ -2785,8 +3921,18 @@ def apply_server_setup(
 
         unit_payloads = render_units(node_executable, executable, uv_executable)
         for unit, payload in unit_payloads.items():
-            target = layout.host(Path("/etc/systemd/system") / unit)
-            steps.append({"id": f"unit:{unit}", "status": _atomic_write(target, payload, mode=0o644, uid=root_uid, gid=root_gid)})
+            steps.append(
+                {
+                    "id": f"unit:{unit}",
+                    "status": _write_managed_unit(
+                        unit_paths[unit],
+                        payload,
+                        uid=root_uid,
+                        gid=root_gid,
+                        previous=journaled_units.get(unit),
+                    ),
+                }
+            )
         steps.append(
             {
                 "id": "setup_marker",
@@ -2819,24 +3965,12 @@ def apply_server_setup(
                 ),
             }
         )
+        # Marker now records realized state.  Disarm rollback before journal
+        # cleanup: a crash during unlink must leave target configs/units intact so
+        # the next run can verify the committed marker and clear the stale journal.
+        _pending_upgrade.clear()
+        _clear_upgrade_journal(journal_path)
         if start:
-            for arguments in (
-                ["daemon-reload"],
-                ["enable", "--now", APPROVAL_UNIT],
-                ["enable", CORE_UNIT],
-                ["restart", CORE_UNIT],
-            ):
-                _run_systemctl(
-                    systemctl_executable,
-                    arguments,
-                    failure_message="failed to start AgentNet managed units",
-                )
-            for unit in (APPROVAL_UNIT, CORE_UNIT):
-                _run_systemctl(
-                    systemctl_executable,
-                    ["is-active", "--quiet", unit],
-                    failure_message="AgentNet managed unit is not active",
-                )
             approval_health = {
                 "schema": "agentnet.approval.health.v1",
                 "service": "agentnet-approval",
@@ -2865,11 +3999,71 @@ def apply_server_setup(
                 "service_audience": request.service_audience,
                 "runtime_instance_id": request.runtime_instance_id,
             }
-            _health(f"http://127.0.0.1:{APPROVAL_PORT}/healthz", expected=approval_health)
-            _health(f"http://127.0.0.1:{CORE_PORT}/healthz", expected=core_health)
+
+            def verify_live_service_state() -> None:
+                for unit in (APPROVAL_UNIT, CORE_UNIT):
+                    _run_systemctl(
+                        systemctl_executable,
+                        ["is-active", "--quiet", unit],
+                        failure_message="AgentNet managed unit is not active",
+                    )
+                _validate_systemd_service_runtime(
+                    systemctl_executable,
+                    unit=APPROVAL_UNIT,
+                    user=APPROVAL_USER,
+                    data_root=approval_data,
+                    node_executable=node_executable,
+                    agentnet_executable=executable,
+                    uv_executable=uv_executable,
+                    expected_argv=(
+                        str(node_executable), str(executable), "approval", "serve",
+                        "--config", str(approval_config_path),
+                        "--host", "127.0.0.1", "--port", str(APPROVAL_PORT),
+                    ),
+                    layout=layout,
+                )
+                _validate_systemd_service_runtime(
+                    systemctl_executable,
+                    unit=CORE_UNIT,
+                    user=CORE_USER,
+                    data_root=core_data,
+                    node_executable=node_executable,
+                    agentnet_executable=executable,
+                    uv_executable=uv_executable,
+                    expected_argv=(
+                        str(node_executable), str(executable), "serve",
+                        "--config", str(core_config_path),
+                        "--host", "127.0.0.1", "--port", str(CORE_PORT),
+                    ),
+                    layout=layout,
+                )
+                _health(
+                    f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
+                    expected=approval_health,
+                    attempts=_START_HEALTH_ATTEMPTS,
+                )
+                _health(
+                    f"http://127.0.0.1:{CORE_PORT}/healthz",
+                    expected=core_health,
+                    attempts=_START_HEALTH_ATTEMPTS,
+                )
+
+            start_status = _run_systemctl_sequence_or_reconcile(
+                systemctl_executable,
+                (
+                    ["daemon-reload"],
+                    ["enable", "--now", APPROVAL_UNIT],
+                    ["enable", CORE_UNIT],
+                    ["restart", CORE_UNIT],
+                ),
+                reconcile=verify_live_service_state,
+            )
+            if start_status == "completed":
+                verify_live_service_state()
             _health(f"{request.approval_public_origin}/healthz", expected=approval_health)
             _health(f"{request.core_public_origin}/healthz", expected=core_health)
-            steps.append({"id": "service_start", "status": "completed"})
+            steps.append({"id": "service_start", "status": start_status})
+            steps.append({"id": "managed_unit_runtime", "status": "validated_hermetic_live_binding"})
             steps.append({"id": "public_https_routes", "status": "completed"})
             if identity_enrolled:
                 readiness = {
@@ -2920,7 +4114,15 @@ def apply_server_setup(
 
 __all__ = [
     "APPROVAL_PORT",
+    "APPROVAL_UNIT",
     "CORE_PORT",
+    "CORE_UNIT",
+    "SECRET_ROOT",
+    "SETUP_MARKER",
+    "SETUP_ROOT",
+    "SETUP_RUNTIME_ROOT",
+    "SETUP_UPGRADE_JOURNAL",
+    "SYSTEMD_UNIT_ROOT",
     "ServerSetupError",
     "ServerSetupRequest",
     "SetupLayout",

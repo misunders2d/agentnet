@@ -381,14 +381,58 @@ class BootstrapPlanService:
         ):
             raise ConflictError("bootstrap plan idempotency conflict")
 
-    def _stored_begin(self, row: Any) -> dict[str, Any]:
+    def _begin_storage(self, row: Any) -> tuple[str | None, dict[str, Any] | None]:
         encrypted = row["begin_response_encrypted"]
         if not encrypted:
-            raise GateBlocked("bootstrap_plan", "bootstrap plan reservation is incomplete")
+            return None, None
         value = self.store.cipher.decrypt_json(
             encrypted, purpose=f"bootstrap-plan-begin:{row['plan_id']}"
         )
-        return BootstrapPlanBeginResult.model_validate(value).model_dump(by_alias=True)
+        if isinstance(value, dict) and value.get("schema") == "agentnet.bootstrap-plan.begin-storage.v1":
+            if set(value) != {"schema", "approval_possession_secret", "result"}:
+                raise GateBlocked("bootstrap_plan", "bootstrap plan reservation is invalid")
+            possession = value.get("approval_possession_secret")
+            if (
+                not isinstance(possession, str)
+                or not 32 <= len(possession) <= 128
+                or any(ord(character) < 0x21 or ord(character) > 0x7E for character in possession)
+            ):
+                raise GateBlocked("bootstrap_plan", "bootstrap plan reservation is invalid")
+            result_value = value.get("result")
+            result = (
+                None
+                if result_value is None
+                else BootstrapPlanBeginResult.model_validate(result_value).model_dump(by_alias=True)
+            )
+            return possession, result
+        # Compatibility for rows created before purpose-separated possession.
+        return None, BootstrapPlanBeginResult.model_validate(value).model_dump(by_alias=True)
+
+    def _encrypt_begin_storage(
+        self,
+        row: Any,
+        *,
+        possession_secret: str,
+        result: dict[str, Any] | None,
+    ) -> str:
+        return self.store.cipher.encrypt_json(
+            {
+                "schema": "agentnet.bootstrap-plan.begin-storage.v1",
+                "approval_possession_secret": possession_secret,
+                "result": result,
+            },
+            purpose=f"bootstrap-plan-begin:{row['plan_id']}",
+        )
+
+    def _stored_begin(self, row: Any) -> dict[str, Any]:
+        _possession, result = self._begin_storage(row)
+        if result is None:
+            raise GateBlocked("bootstrap_plan", "bootstrap plan reservation is incomplete")
+        return result
+
+    def _approval_possession_secret(self, row: Any, *, legacy_fallback: str) -> str:
+        possession, _result = self._begin_storage(row)
+        return possession if possession is not None else legacy_fallback
 
     def _stored_complete(self, row: Any, expected_reservation_digest: str) -> dict[str, Any]:
         if not secrets.compare_digest(
@@ -679,6 +723,26 @@ class BootstrapPlanService:
                 )
                 row = self._row_for_begin(connection, key_hash)
 
+            possession_secret, _stored_result = self._begin_storage(row)
+            if possession_secret is None:
+                possession_secret = secrets.token_urlsafe(32)
+                connection.execute(
+                    "UPDATE bootstrap_grant_plans SET begin_response_encrypted=? WHERE plan_id=? AND state='reserved'",
+                    (
+                        self._encrypt_begin_storage(
+                            row,
+                            possession_secret=possession_secret,
+                            result=None,
+                        ),
+                        row["plan_id"],
+                    ),
+                )
+                row = self._row_for_begin(connection, key_hash)
+
+        possession_secret = self._approval_possession_secret(
+            row,
+            legacy_fallback=request.begin_idempotency_key,
+        )
         transaction_bytes = str(row["final_approval_transaction_json"]).encode("utf-8")
         created = self.approval_client.create_request(
             idempotency_key=str(row["approval_create_idempotency_key"]),
@@ -686,6 +750,7 @@ class BootstrapPlanService:
             approval_purpose=BOOTSTRAP_PLAN_APPROVAL_PURPOSE,
             canonical_transaction=transaction_bytes,
             transaction_digest=str(row["transaction_digest"]),
+            possession_hash=_hash_text(possession_secret),
             request_expires_at=int(row["approval_expires_at"]),
         )
         if (
@@ -710,8 +775,13 @@ class BootstrapPlanService:
                         WHERE plan_id=? AND state='reserved'""",
                     (
                         created["request_id"],
-                        self.store.cipher.encrypt_json(
-                            result, purpose=f"bootstrap-plan-begin:{current['plan_id']}"
+                        self._encrypt_begin_storage(
+                            current,
+                            possession_secret=self._approval_possession_secret(
+                                current,
+                                legacy_fallback=request.begin_idempotency_key,
+                            ),
+                            result=result,
                         ),
                         current["plan_id"],
                     ),
@@ -785,7 +855,7 @@ class BootstrapPlanService:
             "expires_at": int(row["approval_expires_at"]),
         }
         if public_state == "approval_ready":
-            values["next_action"] = "enter_claim_code_in_masked_local_tty"
+            values["next_action"] = "complete_automatically"
         return BootstrapPlanStatusResult.model_validate(values).model_dump(
             by_alias=True, exclude_none=True
         )
@@ -839,13 +909,13 @@ class BootstrapPlanService:
             request_id = str(row["approval_request_id"])
             transaction_digest = str(row["transaction_digest"])
             transaction_bytes = str(row["final_approval_transaction_json"]).encode("utf-8")
-        normalized_code_hash = _hash_text(request.claim_code.strip().upper())
-        retrieval_key = (
-            f"core:bootstrap-plan:retrieve:{plan_id}:{reservation_digest}:{normalized_code_hash}"
-        )
+        retrieval_key = f"core:bootstrap-plan:retrieve:{plan_id}:{reservation_digest}"
         receipt_value = self.approval_client.retrieve_receipt(
             request_id=request_id,
-            claim_code=request.claim_code,
+            possession_secret=self._approval_possession_secret(
+                row,
+                legacy_fallback=request.begin_idempotency_key,
+            ),
             domain_id=actor.domain_id,
             approval_purpose=BOOTSTRAP_PLAN_APPROVAL_PURPOSE,
             transaction_digest=transaction_digest,

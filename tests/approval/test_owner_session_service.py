@@ -340,6 +340,43 @@ def test_bound_owner_session_lists_reviews_and_approves_without_browser_capabili
         stack.store.close()
 
 
+def test_bound_owner_automatic_delivery_returns_no_claim_code(
+    tmp_path: Path,
+) -> None:
+    class AutomaticApprovalRequests(FakeApprovalRequests):
+        def approve_request_for_owner(self, **kwargs):
+            self.calls.append(("approve", kwargs))
+            return {
+                "schema": "agentnet.approval.possession-status.v1",
+                "request_id": kwargs["request_id"],
+                "delivery_status": "waiting_agent",
+                "expires_at": NOW + 300,
+            }
+
+        def regenerate_claim_code(self, **_kwargs):
+            raise AssertionError("automatic delivery must not regenerate a claim code")
+
+    approvals = AutomaticApprovalRequests()
+    stack = _service(tmp_path, approval_service=approvals)
+    try:
+        _preauth, completed = _login(stack)
+        result = stack.service.complete_approval(
+            session_token=completed.session_token,
+            csrf_token=completed.csrf_token,
+            request_id="request-123456789",
+            credential={"id": "credential"},
+        )
+        assert result == {
+            "schema": "agentnet.approval.owner-request-result.v2",
+            "approved": True,
+            "delivery_status": "waiting_agent",
+            "expires_at": NOW + 300,
+        }
+        assert "claim_code" not in result
+    finally:
+        stack.store.close()
+
+
 def test_stable_owner_denies_unsupported_purpose_without_webauthn_options(
     tmp_path: Path,
 ) -> None:

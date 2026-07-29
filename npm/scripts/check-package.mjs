@@ -30,13 +30,20 @@ const requiredPublishedFiles = [
   "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-  "evidence/local/2026-07-28-v0.1.30/artifacts/RETENTION.md",
+  "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
+  "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
+  "evidence/local/2026-07-28-v0.1.31/artifacts/RETENTION.md",
+  "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31-py3-none-any.whl",
+  "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31.tar.gz",
   "skills/**/*.md",
   "skills/**/*.json",
   "tests/fixtures/**/*.json",
 ];
 for (const relative of requiredPublishedFiles) {
   if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
+}
+for (const forbidden of ["evidence/**/*.whl", "evidence/**/*.gz"]) {
+  if (metadata.files?.includes(forbidden)) fail(`published files include historical archives: ${forbidden}`);
 }
 if (metadata.bin?.agentnet !== "npm/bin/agentnet.mjs") fail("agentnet launcher missing");
 const supportedPlatforms = ["linux", "darwin", "win32"];
@@ -127,8 +134,8 @@ for (const required of [
   "references/fresh-laptop-onboarding.md",
   "references/examples/fresh-laptop-single-prompt.md",
   "references/ordinary-server-setup.md",
-  "agentnet server-agent setup",
-  "the first approved apply may instead create only the fixed Core OS identity plus `/var/lib/agentnet-setup` runtime/lock and stop at `postgres_auth_not_ready`",
+  "fixed `server-agent setup` flow",
+  "For `server-agent reset`, treat request as destructive server-manager-only recovery",
 ]) {
   if (!skillText.includes(required)) fail(`AgentNet operator skill is missing: ${required}`);
 }
@@ -150,7 +157,10 @@ for (const required of [
   "one hash computed from deterministic path/type/size/content records for the full root-owned AgentNet package tree executed by `uv run --project`",
   "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
   "then return `postgres_auth_not_ready`. It creates no AgentNet environment, Core/Approval config, database schema, unit, Approval identity, or service.",
-  "Correcting only private environment values while preserving the approved absolute files and variable-name sets keeps the same digest",
+  "**Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest",
+  "first approved apply may create fixed Core OS identity plus root-owned `/var/lib/agentnet-setup` npm runtime and lock custody",
+  "Version 0.1.31 has no package-owned in-place broker-credential or database-password rotation transition",
+  "Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state",
   "Request-v2 writes marker-v3 binding exact `artifact_mode`",
   "communication-only restricted",
 ]) {
@@ -242,8 +252,8 @@ const expectedOnboardingEvalIds = [
   "c0-fixed-commands-and-cleanup-only",
   "c0-success-requires-approved-seven-fact-sequence",
   "fresh-agent-receives-bootstrap-packet",
+  "fresh-laptop-approval-result-is-automatic",
   "fresh-laptop-canonical-single-prompt-is-mandatory",
-  "fresh-laptop-claim-code-channel-is-approved",
   "fresh-laptop-default-needs-no-extra-approval-host",
   "fresh-laptop-human-copy-paste-bootstrap",
   "fresh-laptop-human-never-supplies-technical-metadata",
@@ -252,7 +262,8 @@ const expectedOnboardingEvalIds = [
   "fresh-laptop-one-consolidated-setup-approval",
   "fresh-laptop-rejects-invalid-onboarding-mode",
   "fresh-laptop-rejects-three-grant-c0-fallback",
-  "headless-server-uses-private-terminal-browser-handoff",
+  "guided-join-terminal-recovery-is-explicit-and-key-preserving",
+  "headless-server-uses-fixed-browser-only-activation",
   "hub-generates-public-onboarding-packet",
   "identity-only-mode-skips-c0-phase",
   "ordinary-server-communication-only-explicit-v2",
@@ -273,6 +284,7 @@ const expectedOnboardingEvalIds = [
   "ordinary-server-runtime-drift-invalidates-digest",
   "ordinary-server-uses-product-owned-setup",
   "repository-candidate-does-not-unblock-installed-release",
+  "server-reset-is-destructive-manager-only-recovery",
   "v018-fresh-laptop-receipt-gap",
   "v019-guided-enrollment-is-identity-only",
 ];

@@ -60,14 +60,13 @@ class BootstrapPlanStatusRequest(BaseModel):
 
 
 class BootstrapPlanCompletionRequest(BaseModel):
-    """Complete an existing server-owned plan with a private Approval claim code."""
+    """Complete an approved plan from its exact initiating process state."""
 
     model_config = _STRICT
 
-    schema_id: Literal["agentnet.bootstrap-plan.complete.v1"] = Field(alias="schema")
+    schema_id: Literal["agentnet.bootstrap-plan.complete.v2"] = Field(alias="schema")
     begin_idempotency_key: str = _IDEMPOTENCY
     completion_idempotency_key: str = _IDEMPOTENCY
-    claim_code: str = Field(pattern=r"^[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){7}$")
 
 
 class BootstrapPlanBeginResult(BaseModel):
@@ -93,7 +92,7 @@ class BootstrapPlanStatusResult(BaseModel):
     ]
     approval_url: str | None = None
     expires_at: int | None = Field(default=None, gt=0)
-    next_action: Literal["enter_claim_code_in_masked_local_tty"] | None = None
+    next_action: Literal["complete_automatically"] | None = None
 
     @model_validator(mode="after")
     def require_exact_state_fields(self) -> "BootstrapPlanStatusResult":
@@ -104,7 +103,7 @@ class BootstrapPlanStatusResult(BaseModel):
             if (
                 self.approval_url is None
                 or self.expires_at is None
-                or self.next_action != "enter_claim_code_in_masked_local_tty"
+                or self.next_action != "complete_automatically"
             ):
                 raise ValueError("ready bootstrap status fields are invalid")
         elif self.approval_url is not None or self.expires_at is not None or self.next_action is not None:

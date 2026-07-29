@@ -20,7 +20,7 @@ Local demo helpers use synthetic identities, deterministic-only harness state, a
 
 An always-on server-agent enrollment requires:
 
-- verified workforce OIDC identity using issuer and subject;
+- verified workforce OIDC identity using exact issuer plus server-staged approved subject or normalized verified-email alias;
 - exact harness key and proof of possession;
 - WebAuthn user verification/OOB approval authenticated independently of the enrolling harness;
 - current credential, domain, policy, and revocation state;
@@ -62,6 +62,16 @@ Activation must run while the service is offline. It holds the exact runtime
 lease under a distinct activation owner, runs no migrations, checks the current
 credential and private key against PostgreSQL, and changes only enrollment
 labels. It never creates entitlement, capability, route, or service authority.
+
+### Public remote activation
+
+Fixed Core `GET /activate` is intentionally unauthenticated and world-reachable for normal browser entry. It accepts no transaction selector or private value. It may redirect only when exactly one unexpired `remote_browser` OIDC transaction exists, is independently rate-limited with its internal activation route, and returns no transaction, state, continuation, receipt, possession, or authority material. OIDC callback must match exact server-staged owner identity. Wrong account returns `activation_wrong_account`, stages nothing, and leaves transaction pending/retryable.
+
+Zero, multiple, expired, rejected, local-browser, malformed, or conflicted state returns `remote_activation_unavailable`. Server Manager resumes exact nonterminal `join guided --browser remote` state; owner retries only fixed `/activate`. Core's 60-poll budget applies only before OIDC callback; callback/Approval polling remains rate-controlled and ends at the fresh challenge expiry. After Core proves the exact continuation `expired` or `failed`, Manager may rerun the exact guided command with `--replace-terminal-state`; the flag must refuse absent, completed, malformed, argument-drifted, or nonterminal state and reuse the same candidate key. Never delete state or send private authorization/callback/approval URL or browser value as recovery.
+
+### Destructive server reset
+
+`server-agent reset` is server-manager-only package recovery. It requires exact explicit destructive approval and both confirmation flags listed in [safe commands](safe-commands.md). It must acquire persistent root-only setup lock before inventory, preserve lock across deletion, reject unknown custody, retain every external prerequisite and service identity, and never appear in browser/fresh-laptop instructions or masquerade as secret rotation.
 
 Use the separate supervisor config with:
 

@@ -20,7 +20,7 @@ The unconnected laptop has no agent inbox. No ordinary server agent or A2A peer 
 
 The packet contains public instructions only. It never contains private keys, secret values, join state, OAuth callback data, approval capabilities, signed approval receipts, bearer credentials, cookies, identity profiles, or private host paths.
 
-A short-lived claim code is a distinct enrollment factor, not public packet content. Under the recorded ordinary profile, the owner reads the 128-bit code in the approval UI on the current laptop and types it directly into AgentNet's masked prompt on the fresh laptop. It expires after five minutes and permits at most five failed attempts. No extra person, host, Slack/A2A relay, second report channel, key, receipt, file, URL, continuation, challenge, or identity-state transfer is required. If an organization selects a different human channel, that channel must remain authenticated and unreadable by the enrolling harness.
+The exact waiting AgentNet process retains private Core flow state. Core derives a transaction-specific Approval possession secret, sends only its SHA-256 binding when creating the Approval request, and retrieves with that purpose-separated secret after passkey approval through signed Core↔Approval broker. Browser and human receive no receipt, approval code, possession secret, broker capability, or private URL. No extra person, host, relay, second report channel, key, receipt, file, URL, continuation, challenge, or identity-state transfer is required.
 
 If AgentNet is already installed, the receiving agent loads `agentnet-operator` and follows this contract. If it is absent, the single packet remains self-contained through prerequisites and public npm installation; after installation the receiving agent reloads the bundled skill when supported, then continues the same packet. The packet cannot assume the skill exists before installation.
 
@@ -31,7 +31,7 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 - pastes the single packet once;
 - approves official prerequisite installers only when a prerequisite is missing;
 - completes system-browser Google sign-in and consent;
-- types the short-lived claim code into the masked local prompt;
+- waits while AgentNet automatically receives the passkey-approved result;
 - sends only the bounded completion status allowed by the packet.
 
 ### Human approver
@@ -40,8 +40,8 @@ If AgentNet is already installed, the receiving agent loads `agentnet-operator` 
 - uses an owner-controlled browser/passkey that the enrolling harness cannot read or automate;
 - reviews the exact human, domain, harness, candidate-key thumbprint, purpose, transaction digest, and expiry;
 - completes WebAuthn user verification;
-- reads the short-lived code in the approval UI and types it directly into the fresh laptop's masked prompt;
-- never sends the signed receipt, approval capability, private URL, key, or file.
+- sees a clear confirmation that AgentNet will continue automatically;
+- never receives or sends a signed receipt, approval code, possession secret, approval capability, private URL, key, or file.
 
 ### Administrator
 
@@ -103,20 +103,20 @@ A valid packet selects exactly `identity_only` or `c0_pilot` and covers every ph
 - owner-only candidate key/state;
 - system-browser Authorization Code + PKCE;
 - Core-brokered WebAuthn human approval independent of the enrolling harness;
-- masked claim-code input;
-- resumable/idempotent completion ending at `enrolled_identity_only`.
+- possession-bound automatic receipt delivery to the exact waiting process;
+- resumable/idempotent completion ending at `enrolled_identity_only` without a TTY prompt.
 
 ### 5. WebAuthn human approval
 
 - the owner reviews the exact transaction on an owner-controlled browser/passkey outside the enrolling harness;
 - explicit WebAuthn user verification is required;
 - the default server may host approval under a distinct OS identity and must report `independent_boundary_proven=false`;
-- the owner transfers only the short-lived code directly to the fresh laptop's masked prompt;
-- receipt, capability, URL, key, identity, and continuation state never move between machines or enter a human channel.
+- the browser displays only automatic-delivery status and no receipt or approval code;
+- receipt, possession secret, capability, URL, key, identity, and continuation state never move between machines or enter a human channel.
 
 ### 6. Separate bounded C0 authority
 
-Mode `identity_only` ends after guided enrollment and reports `first_message_blocked_explicit_authority_required`; it requests no C0 approval or second code and runs no C0 command. Enrollment never grants messaging authority. C0 may continue only when the installed release exposes the approved fixed `BootstrapGrantPlan` profile and all of its runtime guards. Core—not the browser, prompt, or caller—resolves the same principal's exact owner/fresh harness pair, credentials, epochs, five communication entitlements, five entitlement-specific revoke powers, C0 payloads, event lineage, mailbox ownership, expiry, and one-use limits. One WebAuthn-approved transaction commits all ten entitlement rows plus matching plan/guard records or none.
+Mode `identity_only` ends after guided enrollment and reports `first_message_blocked_explicit_authority_required`; it requests no C0 approval and runs no C0 command. Enrollment never grants messaging authority. C0 may continue only when the installed release exposes the approved fixed `BootstrapGrantPlan` profile and all of its runtime guards. Core—not the browser, prompt, or caller—resolves the same principal's exact owner/fresh harness pair, credentials, epochs, five communication entitlements, five entitlement-specific revoke powers, C0 payloads, event lineage, mailbox ownership, expiry, and one-use limits. One WebAuthn-approved transaction commits all ten entitlement rows plus matching plan/guard records or none.
 
 Generic `agentnet admin entitlement issue`, principal-ID grant issuance, three-grant assembly, the legacy founder ceremony, wildcards, and partial repair are forbidden fallbacks for this pilot. If the installed release lacks the complete bounded-plan path, report `first_message_blocked_explicit_authority_required` and stop identity-only.
 
@@ -126,8 +126,8 @@ For a release that passes that gate, the owner first validates and runs only
 `agentnet bootstrap-plan begin|status|complete` with its local identity/state,
 then `agentnet c0-pilot start|status|complete` with its local identity. The owner
 reviews the fixed five-communication/five-exact-revoke WebAuthn summary and the
-fresh human enters only its second short-lived claim code through the masked
-local prompt. No caller selects a plan, peer, direction, payload, event,
+waiting process automatically retrieves the result with its private begin state.
+No caller selects a plan, peer, direction, payload, event,
 acknowledgement, digest, receipt, entitlement, or use count.
 
 `waiting_owner` and `waiting_fresh` are resumable sanitized stages. `expired`
@@ -137,7 +137,7 @@ Only `COMPLETED_C0_ROUND_TRIP` proves all seven issuer-owned facts plus exact
 five-communication-power cleanup. Transport ACK, prose, status, or a stored fact
 row alone never proves completion.
 
-The recorded ordinary PD-001/PD-002 defaults permit direct owner transfer of only the short-lived claim code between approval UI and masked prompt. Principal/harness identifiers remain inside authenticated Core operations; the human relays none.
+The recorded ordinary PD-001/PD-002 defaults permit automatic possession-bound delivery only through the signed broker to the exact waiting process. Principal/harness identifiers remain inside authenticated Core operations; the human relays none.
 
 ### 7. Fixed C0 round-trip verification
 
@@ -154,7 +154,8 @@ unchanged.
 
 ### 8. Recovery and reporting
 
-- browser cancellation, network loss, timeout, expired code, duplicate paste, restart, and response loss resume from owner-only state without a second identity;
+- browser cancellation, network loss, local timeout, duplicate paste, restart, and response loss resume the exact owner-only nonterminal state without a second identity;
+- server-confirmed `expired` or `failed` guided state is terminal: never delete it manually; rerun the exact command with `--replace-terminal-state`, which refuses absent/completed/nonterminal state, reuses the same candidate key, and starts a fresh OIDC transaction without creating an identity;
 - no private artifact is moved between systems;
 - public completion report contains only owner-approved fields;
 - principal/harness identifiers remain inside authenticated Core/Manager operations and are omitted from the public completion report.
@@ -174,12 +175,15 @@ Never infer capability from documentation written for another release. Check the
 A release passes the identity-only gate only when `agentnet join guided`:
 
 - opens the system browser without printing its private authorization URL;
-- keeps key, continuation, challenge, callback, and receipt state owner-only;
-- accepts only the short-lived claim code through a masked prompt;
-- resumes safely after timeout or response loss;
+- keeps key, continuation, challenge, callback, possession, and receipt state owner-only;
+- returns the receipt only to the exact waiting process through the signed broker, without a TTY prompt;
+- reports safe output field `approval_delivery: automatic_possession_bound_signed_broker`, which is the operator-checkable proof that this release did not use a claim-code handoff;
+- resumes safely after local timeout or response loss, and offers explicit `--replace-terminal-state` recovery only after Core proves `expired` or `failed`;
 - returns `enrolled_identity_only`, `authority_granted: false`, and `first_message_blocked_explicit_authority_required`.
 
 A release passes the C0 gate only when it additionally ships the fixed atomic `BootstrapGrantPlan`, purpose-specific WebAuthn summary, deny-only runtime guard, deterministic owner-harness responder, exact seven-fact verifier, and immediate communication-entitlement cleanup. Generic principal-ID entitlement issuance does not pass this gate. Real Core/Approval/PostgreSQL/two-harness infrastructure must also be proven.
+
+AgentNet `0.1.9` is a compatibility-only guided flow. It keeps authorization, continuation, candidate key, and signed receipt out of chat, but its browser ceremony gives the human one short-lived claim code to enter only into the exact waiting local guided process. It ends identity-only and grants no communication authority. It does **not** pass the current automatic signed-broker delivery gate and must not be presented as the current no-transfer flow.
 
 AgentNet `0.1.8` fails this gate:
 

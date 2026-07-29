@@ -98,11 +98,13 @@ const requireBlockedSetup = (launcher, request, options) => {
   if (
     evidence.schema !== "agentnet.server-setup.evidence.v1" ||
     evidence.status !== "blocked" ||
-    evidence.blocker !== "unsafe_executable" ||
+    evidence.blocker !== "service_executable_inaccessible" ||
     evidence.authority_granted !== false ||
     evidence.identity_enrolled !== false
   ) {
-    throw new Error("packed setup probe returned unexpected blocker evidence");
+    throw new Error(
+      `packed setup probe returned unexpected blocker evidence: status=${String(evidence.status)} blocker=${String(evidence.blocker)}`,
+    );
   }
 };
 

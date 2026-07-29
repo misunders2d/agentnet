@@ -359,7 +359,7 @@ class IndependentApproverConfig(BaseModel):
 
 
 class ApprovalServiceClientConfig(BaseModel):
-    """Non-secret Core client and stable public Approval origins."""
+    """Non-secret Core client, owner identity, and stable Approval origins."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -367,6 +367,8 @@ class ApprovalServiceClientConfig(BaseModel):
     public_origin: str = Field(min_length=8, max_length=2048)
     service_credential_env: str = Field(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
     approver_principal_id: str = Field(min_length=1, max_length=256)
+    remote_activation_oidc_subject: str | None = Field(default=None, min_length=1, max_length=512)
+    remote_activation_verified_email_alias: str | None = Field(default=None, min_length=3, max_length=320)
     request_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     maximum_response_bytes: int = Field(default=262_144, ge=4096, le=1_048_576)
 
@@ -399,6 +401,33 @@ class ApprovalServiceClientConfig(BaseModel):
     def exact_https_origins(self) -> "ApprovalServiceClientConfig":
         self._require_exact_origin(self.origin, label="approval service origin")
         self._require_exact_origin(self.public_origin, label="public approval origin")
+        if (
+            self.remote_activation_oidc_subject is not None
+            and self.remote_activation_verified_email_alias is not None
+        ):
+            raise ValueError(
+                "remote activation owner identity must use subject or verified-email alias"
+            )
+        if self.remote_activation_oidc_subject is not None and any(
+            ord(character) < 0x20 for character in self.remote_activation_oidc_subject
+        ):
+            raise ValueError("remote activation owner OIDC subject is invalid")
+        if self.remote_activation_verified_email_alias is not None:
+            normalized = self.remote_activation_verified_email_alias.strip().casefold()
+            local, separator, domain = normalized.partition("@")
+            try:
+                normalized.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ValueError("remote activation verified-email alias must be normalized") from exc
+            if (
+                separator != "@"
+                or not local
+                or not domain
+                or "@" in domain
+                or normalized != self.remote_activation_verified_email_alias
+                or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in normalized)
+            ):
+                raise ValueError("remote activation verified-email alias must be normalized")
         return self
 
 

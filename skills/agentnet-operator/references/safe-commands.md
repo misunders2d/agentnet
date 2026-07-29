@@ -129,6 +129,18 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
 
 The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, mode-applicable scanner trust, hardened units, bounded start/restart, and redacted evidence. Communication-only mode carries only `offline_custody`, creates no scanner trust/artifact key, and rejects artifact routes/bindings before custody; it does not prove FILE/G13 or ship readiness. It verifies existing operator-owned HTTPS routes to loopback Core and Approval. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
 
+### Destructive package-owned server reset
+
+Use only when user explicitly requests removal/reinstall of AgentNet-managed server state and approves exact destructive scope. Server's local Manager runs this command; never put it in browser instructions or fresh-laptop prompt:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> server-agent reset \
+  --retain-external-prerequisites \
+  --confirm-package-state-removal
+```
+
+Both flags are mandatory. Reset retains PostgreSQL and cluster data, Node/uv runtimes, proxy/TLS, operator configuration, and service identities. It preserves root-only `/var/lib/agentnet-setup/setup.lock` as permanent reset/setup coordination state, removes only exact allowlisted package deployment state, rejects unknown ownership/custody, proves units inactive before deletion, reloads systemd, and returns sanitized reset evidence. It is server-manager-only recovery—not secret rotation, browser onboarding, or routine cleanup.
+
 OIDC discovery is public-only by default. A private/non-global provider is allowed only when configuration pins its exact HTTPS origin, exact JWK thumbprints, and explicit canonical private CIDRs and/or endpoint addresses; the direct TLS transport may connect only to the validated address tuple. Loopback, link-local, multicast, reserved, documentation, benchmark, transition/softwire, and IPv4-mapped addresses remain forbidden. Do not suggest hosts-file tricks, DNS rebinding, proxy mirrors, or weakened SSRF checks.
 
 Before creating server state, verify that operator has approved values for:

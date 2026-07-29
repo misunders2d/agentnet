@@ -401,3 +401,65 @@ def test_server_agent_activate_store_unavailable_leaves_config_unchanged(
     with pytest.raises(GateBlocked, match="runtime active"):
         cli.command_server_agent_activate(activation_args(state))
     assert writes == []
+
+
+def test_server_agent_reset_requires_two_explicit_confirmations_and_returns_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["server-agent", "reset"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["server-agent", "reset", "--retain-external-prerequisites"]
+        )
+
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        cli,
+        "reset_server_setup",
+        lambda *, retain_external_prerequisites: calls.append(
+            retain_external_prerequisites
+        )
+        or {
+            "schema": "agentnet.server-setup.reset-evidence.v1",
+            "state": "reset",
+            "external_prerequisites": "retained",
+            "authority_granted": False,
+            "identity_enrolled": False,
+            "production_durability_proven": False,
+        },
+    )
+    args = parser.parse_args(
+        [
+            "server-agent",
+            "reset",
+            "--retain-external-prerequisites",
+            "--confirm-package-state-removal",
+        ]
+    )
+    assert args.func(args) == 0
+    assert calls == [True]
+    assert json.loads(capsys.readouterr().out)["state"] == "reset"
+
+
+def test_server_agent_reset_direct_call_without_confirmation_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "reset_server_setup",
+        lambda **_kwargs: pytest.fail("missing confirmation must not reach reset"),
+    )
+    result = cli.command_server_agent_reset(
+        SimpleNamespace(
+            retain_external_prerequisites=True,
+            confirm_package_state_removal=False,
+        )
+    )
+    assert result == 1
+    evidence = json.loads(capsys.readouterr().out)
+    assert evidence["blocker"] == "reset_confirmation_required"
+    assert evidence["external_prerequisites"] == "retained"

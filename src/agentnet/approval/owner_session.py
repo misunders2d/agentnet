@@ -570,6 +570,16 @@ class OwnerSessionService:
             credential=credential,
             owner_session_hash=_secret_hash(session_token),
         )
+        if result.get("schema") == "agentnet.approval.possession-status.v1":
+            delivery_status = result.get("delivery_status")
+            if delivery_status not in {"waiting_agent", "retrieved"}:
+                raise AuthenticationError("approval request denied")
+            return {
+                "schema": "agentnet.approval.owner-request-result.v2",
+                "approved": True,
+                "delivery_status": delivery_status,
+                "expires_at": result["expires_at"],
+            }
         code = result.get("claim_code")
         if result.get("schema") == "agentnet.approval.claim-code.v1" and isinstance(
             code, str

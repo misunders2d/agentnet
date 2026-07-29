@@ -99,7 +99,7 @@ Copy the exact mode-matching example and replace every illustrative value with a
 - confidential Approval OIDC secret only when selected method requires it;
 - same `AGENTNET_APPROVAL_CORE_TOKEN` value.
 
-Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. Correcting only private environment values while preserving the approved absolute files and variable-name sets keeps the same digest; rerun plan to confirm it before retry. A changed file path, variable-name set, public input fingerprint, request, or runtime identity requires a new digest and approval.
+Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.31 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
 
 Environment syntax is strict unquoted `NAME=value`. Whitespace, shell quoting, backslashes, duplicate names, empty values, or setup-owned interpreter variables are rejected.
 
@@ -208,45 +208,27 @@ A changed request, input fingerprint, executable path/hash, unit set, marker req
 
 ## Human ceremonies and activation
 
-Setup never automates OIDC or WebAuthn.
+Setup never automates owner OIDC or WebAuthn. Human work is browser-only. Never ask the owner to use SSH, `sudo`, a server terminal/path, a private authorization URL, a claim code, an approval receipt, or a broker secret.
 
-1. Register owner passkey through shipped Approval surface under dedicated identity:
+1. Server-side AgentNet manager applies the approved setup and starts public Core and Approval surfaces. If no owner passkey exists, the owner opens the normal public Approval page, signs in with the preapproved company account, and registers a phishing-resistant passkey with user verification.
+2. Server-side AgentNet manager starts guided identity-only enrollment under Core service identity with `join guided --browser remote`. It retains continuation and candidate private key locally, derives a purpose-separated Approval possession secret, sends only that secret's hash to Approval, and reveals no authorization or approval URL.
+3. Manager tells the owner only that fixed public activation is ready. Owner opens `<resolved-core-https-origin>/activate`, confirms the activation warning, signs in with the approved company account, reviews the identity-only request, and approves with the registered passkey.
+4. Core routes browser from fixed activation through OIDC to fixed Approval page. Approval waits at most 10 seconds (20 checks × 500 ms) for exact pending request if Core and browser race. Receipt remains inside signed Core↔Approval broker; exact waiting process retrieves it using purpose-separated possession secret. Browser and owner receive no transferable completion value.
+5. Server-side AgentNet manager verifies guided enrollment completion, stops Core, activates the exact saved identity offline, and reruns the same setup digest. These are manager-owned machine actions, not owner instructions.
 
-   ```bash
-   sudo -u agentnet-approval -H <resolved-root-owned-agentnet-path> approval register-begin \
-     --config /var/lib/agentnet-approval/config.json \
-     --approver <resolved-owner-principal-id>
-   ```
+`GET /activate` is intentionally unauthenticated and world-reachable at fixed public Core origin so ordinary browser can start selected transaction's Google redirect. It accepts no transaction identifier, continuation, callback value, receipt, or authority input; selects exactly one unexpired remote-browser transaction; rate-limits both public activation routes; and reveals no private state. OIDC result must match server-staged exact approved owner subject or normalized verified-email policy. Wrong-account attempt returns typed `activation_wrong_account`, stages no challenge or Approval request, and leaves pending transaction retryable.
 
-2. Owner signs in and registers phishing-resistant passkey with user verification.
-3. On private unrecorded POSIX TTY, run guided identity-only enrollment under Core identity:
-
-   ```bash
-   sudo -u agentnet -H <resolved-root-owned-agentnet-path> join guided \
-     --server <resolved-core-https-origin> \
-     --domain <resolved-domain> \
-     --harness <resolved-supported-harness> \
-     --name <resolved-server-display-name> \
-     --state /var/lib/agentnet/guided-join.json \
-     --identity /var/lib/agentnet/server-agent-identity.json \
-     --browser terminal
-   ```
-
-4. Owner opens only TTY-disclosed HTTPS URL, completes OIDC/WebAuthn, and enters short-lived claim code into masked TTY. Never relay URL/code through chat, A2A, logs, or files.
-5. Stop Core, activate exact identity offline, then rerun same setup digest:
-
-   ```bash
-   sudo systemctl stop agentnet-core.service
-   sudo -u agentnet -H <resolved-root-owned-agentnet-path> server-agent activate \
-     --config /var/lib/agentnet/agentnet.json \
-     --identity /var/lib/agentnet/server-agent-identity.json
-   sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
-     --request /home/operator/.config/agentnet-setup/server-setup.json \
-     --expected-request-digest <approved-request-digest> \
-     --apply --start
-   ```
+Remote activation fails closed with `remote_activation_unavailable` when zero, multiple, expired, rejected, locally initiated, or conflicted transactions exist. Recovery is server-manager-only. For pending nonterminal state, rerun the exact `join guided --browser remote` command and have owner retry only fixed `/activate`; never send private URL/state. If Core reports that exact continuation `expired` or `failed`, rerun the exact command with `--replace-terminal-state`. That flag refuses absent, completed, malformed, argument-drifted, or nonterminal state, reuses the same candidate key, and starts a fresh OIDC transaction; never delete or edit guided state manually. The 60-poll anti-abuse budget applies only before OIDC callback; callback/Approval polling is bounded by the fresh challenge expiry. Failed PKCE, candidate possession failure, missing WebAuthn UV, broker denial, and response-loss conflicts never activate identity.
 
 Final setup must report `operational`, `identity_enrolled=true`, exact public Core readiness, and `authority_granted=false`. Enrollment remains identity-only.
+
+## Package-owned reset recovery
+
+Reset is destructive server-manager recovery, never owner browser step and never part of canonical fresh-laptop prompt. Exact invocation and confirmation flags belong to [safe commands](safe-commands.md); use only after explicit approval to remove current AgentNet package-owned deployment state.
+
+Reset acquires/creates and validates root-only package lock before inventory, requires exact owner/group/mode/type/link custody, stops/disables both managed units, proves neither remains active, requires symlink-attack-resistant recursive removal, and removes only exact allowlisted deployment entries. Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state, preventing setup from creating a second lock inode while reset runs. Reset rejects unexpected setup/secret entries, managed state without preexisting package lock, active setup, active/unprovable unit, and any request to remove external prerequisites. It reloads systemd even on exact retry after prior response loss. It is idempotent and emits `agentnet.server-setup.reset-evidence.v1` with exact removed/absent paths and all authority, identity, and durability claims false.
+
+Reset retains PostgreSQL data/role/configuration, system Node.js and `uv`, installed AgentNet package, reverse proxy/TLS/DNS/firewall, operator-owned staging/configuration, permanent coordination lock, and locked `agentnet` and `agentnet-approval` OS identities. Service identities remain because safe ownership of every file carrying reused numeric UID cannot be proven outside package roots. Reset never edits marker or external prerequisite to force retry, and is not secret rotation.
 
 ## Evidence limits and cleanup
 
