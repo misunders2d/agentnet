@@ -5,7 +5,7 @@
   "verification_status": "PASS",
   "release_certified": false,
   "source_revision_kind": "release_source_tree_sha256",
-  "release_source_tree_sha256": "a87fedd610b183b1c5564abc8966583f1baa69cc50ce70ad0a3a3a328eff313b",
+  "release_source_tree_sha256": "c02e508e945a65e2442bd2e84aa98e5404f41fcd1956d160a871885ab4b1f8dc",
   "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.30/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.30/manifest.json",
   "change_boundary": "First-message blockers known before the live server ceremony only: fixed browser-only remote activation bound to one exact approved OIDC owner; purpose-separated automatic Approval possession; exact supported 0.1.28/0.1.30 migration with journaled rollback and response-loss recovery; status-scoped guided-join polling through fresh Approval-challenge expiry; explicit Core-authenticated terminal-state replacement with argument-bound v2 state and same-key reuse; enabled-unit reconciliation; package-only destructive reset under a permanent root-only coordination lock; matching operator skill and fail-closed documentation. The later live server ceremony completed after operator recovery but exposed MEL-216 owner-passkey registration ordering and MEL-217 false final setup health/identity status; both remain unresolved in 0.1.31 and are assigned to the next release. Package publication only enables the remaining fresh-laptop proof. Fresh-laptop enrollment, native message, recipient commitment, completion marker, and temporary-authority revocation remain absent and mandatory before tag, ship eligibility, production certification, or gate promotion.",
@@ -48,11 +48,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31.tar.gz",
-      "sha256": "a673bc7f91094762955258e553053277307f1543438b06b04eceb98f41797353"
+      "sha256": "fa03d0765827c83ad57c0e1c381ccde5e4051b142e3dc8a6906c1f6ef0f87ae7"
     },
     {
       "path": "evidence/local/2026-07-28-v0.1.31/artifacts/agentnet-0.1.31-py3-none-any.whl",
-      "sha256": "783a9d7c7648edf0826216f0f30fb8f2b089c8aba8614d329bb712d0bc55e2b8"
+      "sha256": "b0a553acd2541fbdeb87f71c9190de80d3280f501e4a15a47644e35952cf5dc2"
     }
   ]
 }

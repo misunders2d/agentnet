@@ -14,7 +14,6 @@ being deleted.
 from __future__ import annotations
 
 import os
-import pwd
 import shutil
 import stat
 import subprocess
@@ -326,6 +325,8 @@ def reset_server_setup(
                 "managed state exists without a pre-existing package-owned setup lock",
             )
         if layout.root == Path("/"):
+            import pwd
+
             directory_owners: dict[str, tuple[int, int]] = {}
             for label, account_name in (
                 ("core_state", "agentnet"),
