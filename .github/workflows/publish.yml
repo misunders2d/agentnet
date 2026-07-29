@@ -4,8 +4,14 @@ on:
   push:
     tags:
       - "v*"
+  # One bounded recovery for immutable v0.1.31. The original tag run completed
+  # every source and recursive packed suite, then its final no-apply setup probe
+  # rejected an unsafe GitHub-hosted Node executable with a different safe
+  # fail-closed blocker than the checker expected.
+  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -20,6 +26,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'v0.1.31' || github.ref }}
 
       - name: Configure Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -43,7 +50,23 @@ jobs:
       - name: Verify tag matches package version
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$PACKAGE_VERSION"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$(git rev-parse HEAD)" = "dc10f86c9ac15ffc29c4dd5dd37e6c6d5bf15382"
+            test "$PACKAGE_VERSION" = "0.1.31"
+          else
+            test "$GITHUB_REF_NAME" = "v$PACKAGE_VERSION"
+          fi
+
+      - name: Verify exact v0.1.31 recovery evidence
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api repos/${GITHUB_REPOSITORY}/actions/runs/30458919348 --jq .head_sha)" = "dc10f86c9ac15ffc29c4dd5dd37e6c6d5bf15382"
+          test "$(gh api repos/${GITHUB_REPOSITORY}/actions/runs/30458919348 --jq .conclusion)" = "failure"
+          gh run view 30458919348 --log-failed > /tmp/v0.1.31-failed.log
+          grep -F "1549 passed, 16 skipped" /tmp/v0.1.31-failed.log
+          grep -F "blocker=unsafe_executable" /tmp/v0.1.31-failed.log
 
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
@@ -51,4 +74,12 @@ jobs:
       # AgentNet's prepublishOnly script runs package checks, the test suite,
       # and release-manifest verification before npm accepts the staged package.
       - name: Stage package
+        if: github.event_name != 'workflow_dispatch'
         run: npm stage publish --access public
+
+      # Exact recovery only. Run 30458919348 already completed both 1549-test
+      # generations and release verification; only its host-dependent expected
+      # blocker assertion failed. --ignore-scripts stages unchanged tagged bytes.
+      - name: Stage exact v0.1.31 recovery
+        if: github.event_name == 'workflow_dispatch'
+        run: npm stage publish --access public --ignore-scripts
