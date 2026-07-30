@@ -168,7 +168,8 @@ for (const required of [
   "creates no ambient global command",
   "ordinary laptop global CLI install",
   "<server-prefix>/bin/node",
-  "no blanket package-mode repair",
+  "npm-created install-topology ancestors",
+  "no recursive package-mode repair",
   "No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation",
   "Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution",
 ]) {

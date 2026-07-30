@@ -23,7 +23,6 @@ for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /v
     exit 2
   fi
 done
-
 WORK="$RUNNER_TEMP/agentnet-ordinary-server-e2e"
 INPUTS="$WORK/inputs"
 PACK="$WORK/pack"
@@ -36,7 +35,11 @@ RUNTIME_PREFIX="/opt/agentnet-e2e"
 RUNTIME_PATH="$RUNTIME_PREFIX/bin:/usr/bin:/bin"
 RUNTIME_NODE="$RUNTIME_PREFIX/bin/node"
 RUNTIME_UV="$RUNTIME_PREFIX/bin/uv"
-RUNTIME_LAUNCHER="$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs"
+RUNTIME_PACKAGE_ROOT="$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet"
+RUNTIME_LAUNCHER="$RUNTIME_PACKAGE_ROOT/npm/bin/agentnet.mjs"
+HOST_SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+HOST_SYSTEMCTL="$(PATH="$HOST_SYSTEM_PATH" command -v systemctl)"
+HOST_USERADD="$(PATH="$HOST_SYSTEM_PATH" command -v useradd)"
 OPT_UID="$(stat -c '%u' /opt)"
 OPT_GID="$(stat -c '%g' /opt)"
 OPT_MODE="$(stat -c '%a' /opt)"
@@ -162,7 +165,7 @@ sudo -- sh -c 'umask 022; exec "$@"' sh \
   "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" \
   --bin-links=false --umask=0022 \
   --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
-if ! PACKAGE_SYMLINK="$(sudo find "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet" -type l -print -quit)"; then
+if ! PACKAGE_SYMLINK="$(sudo find "$RUNTIME_PACKAGE_ROOT" -type l -print -quit)"; then
   echo "ordinary server setup E2E: cannot inspect the installed AgentNet package tree for symbolic links" >&2
   exit 1
 fi
@@ -170,6 +173,14 @@ if [[ -n "$PACKAGE_SYMLINK" ]]; then
   echo "ordinary server setup E2E: installed AgentNet package tree contains a symbolic link: $PACKAGE_SYMLINK" >&2
   exit 1
 fi
+# npm creates these install-topology directories outside archive-entry mode
+# semantics. Normalize only that exact lineage; archived descendants remain
+# untouched and are checked below.
+sudo chmod 0755 \
+  "$RUNTIME_PREFIX/lib" \
+  "$RUNTIME_PREFIX/lib/node_modules" \
+  "$RUNTIME_PREFIX/lib/node_modules/@misunders2d" \
+  "$RUNTIME_PACKAGE_ROOT"
 # npm may honor SUDO_UID/SUDO_GID for global installs. The frozen E2E deployment
 # step explicitly transfers the exact prefix into root custody before setup.
 sudo chown -Rh root:root "$RUNTIME_PREFIX"
@@ -184,7 +195,9 @@ sudo chown -Rh root:root "$RUNTIME_PREFIX"
 require_service_safe_executable "Node.js" "$RUNTIME_NODE"
 require_service_safe_executable "uv" "$RUNTIME_UV"
 require_service_safe_executable "AgentNet launcher" "$RUNTIME_LAUNCHER"
-require_service_safe_tree "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet"
+require_service_safe_executable "systemctl" "$HOST_SYSTEMCTL"
+require_service_safe_executable "useradd" "$HOST_USERADD"
+require_service_safe_tree "$RUNTIME_PACKAGE_ROOT"
 
 # Operator-owned local TLS reverse proxy for exact public-route health probes.
 echo '127.0.0.1 core.agentnet.test approval.agentnet.test # agentnet-e2e' | sudo tee -a /etc/hosts >/dev/null

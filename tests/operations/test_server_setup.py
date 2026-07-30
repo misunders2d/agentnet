@@ -55,6 +55,12 @@ def _stable_synthetic_runtime_hashes(
         "_sha256_stable_file",
         lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest(),
     )
+    if request.node.name != "test_host_tool_resolution_uses_fixed_system_path":
+        monkeypatch.setattr(
+            setup,
+            "_resolve_host_tool",
+            lambda name: Path(f"/usr/bin/{name}"),
+        )
     if request.node.name not in {
         "test_launcher_preflight_digest_matches_python_plan",
         "test_package_tree_digest_rejects_symlinks_and_changes_with_content",
@@ -1977,6 +1983,7 @@ def test_host_tool_resolution_uses_fixed_system_path(
     import agentnet.operations.server_setup as setup
 
     observed: dict[str, str | None] = {}
+    validated: list[Path] = []
 
     def which(name: str, *, path: str | None = None) -> str:
         observed[name] = path
@@ -1984,9 +1991,14 @@ def test_host_tool_resolution_uses_fixed_system_path(
 
     monkeypatch.setenv("PATH", "/tmp/untrusted")
     monkeypatch.setattr(setup.shutil, "which", which)
-    monkeypatch.setattr(setup, "_require_root_owned_executable", lambda value, **_kwargs: value)
+    monkeypatch.setattr(
+        setup,
+        "_require_root_owned_executable",
+        lambda value, **_kwargs: validated.append(value) or value,
+    )
     assert setup._resolve_host_tool("systemctl") == Path("/usr/bin/systemctl")
     assert observed == {"systemctl": setup._SYSTEM_PATH}
+    assert validated == [Path("/usr/bin/systemctl")]
 
 
 def test_uv_resolution_uses_exact_configured_path_and_rejects_protected_home(

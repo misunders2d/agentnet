@@ -79,10 +79,13 @@ Required:
   invokes the verified absolute package launcher directly; npm extraction and
   bin-link creation apply distinct mode rules, so a permissive value can create
   a launcher that AgentNet must reject;
+- normalize only the exact npm-created install-topology ancestors to `0755`;
+  never recursively rewrite archived descendants, whose owner/mode checks
+  remain fail-closed;
 - this server install differs from an ordinary laptop global CLI install:
   laptop installation retains npm's `agentnet` bin link and cannot later be
   reused as the root-owned server prerequisite;
-- no blanket package-mode repair; writable, service-inaccessible, or
+- no recursive package-mode repair; writable, service-inaccessible, or
   non-executable packaged entries remain defects and fail closed;
 - Node.js, uv, AgentNet, `systemctl`, and `useradd` executable bytes stable between plan and locked apply;
 - no selected path or resolved ancestor under `/root`, `/home`, or `/run/user` because units use `ProtectHome=true`;

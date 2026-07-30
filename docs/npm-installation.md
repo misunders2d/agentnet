@@ -48,7 +48,8 @@ owner/mode component. The server system install uses process `umask 022` plus
 npm `--bin-links=false --umask=0022`, then invokes the verified absolute
 package launcher directly. npm extraction and bin-link creation apply distinct
 mode rules; leaving either permissive can create a launcher that AgentNet must
-reject. Do not blanket-repair package modes: group/other
+reject. Normalize only the exact npm-created install-topology ancestors to
+`0755`; do not recursively rewrite archived descendants. Group/other
 writability, missing service-read bits, or a non-executable launcher is a
 package/install defect that must remain fail-closed. This server topology
 differs from an ordinary laptop global CLI install, which retains npm's
