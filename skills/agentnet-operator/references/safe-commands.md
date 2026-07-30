@@ -117,13 +117,17 @@ Only after enrollment and explicit approval may an operator run the supervisor w
 This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Select either the unchanged scanner-backed [request-v1 example](examples/ordinary-server-setup-request.json) or restricted communication-only [request-v2 example](examples/ordinary-server-communication-only-setup-request.json). Sensitive values remain owner-only file references. Then run the no-managed-host-write plan (npm may materialize its caller-owned Python runtime):
 
 ```bash
-<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+<server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
 ```
 
 After one frozen human approval, target server agent runs:
 
 ```bash
-sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+sudo -- <server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup \
   --request /home/operator/.config/agentnet-setup/server-setup.json \
   --expected-request-digest <approved-request-digest> \
   --apply --start
@@ -136,7 +140,9 @@ The wrapper owns fixed dedicated identities, private roots, Approval provisionin
 Use only when user explicitly requests removal/reinstall of AgentNet-managed server state and approves exact destructive scope. Server's local Manager runs this command; never put it in browser instructions or fresh-laptop prompt:
 
 ```bash
-sudo -- <resolved-root-owned-agentnet-path> server-agent reset \
+sudo -- <server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent reset \
   --retain-external-prerequisites \
   --confirm-package-state-removal
 ```

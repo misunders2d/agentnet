@@ -164,7 +164,10 @@ for (const required of [
   "Request-v2 writes marker-v3 binding exact `artifact_mode`",
   "communication-only restricted",
   "`sudo npm install -g` established root custody",
-  "system installation runs under `umask 022`",
+  "`--bin-links=false --umask=0022`",
+  "creates no ambient global command",
+  "ordinary laptop global CLI install",
+  "<server-prefix>/bin/node",
   "no blanket package-mode repair",
   "No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation",
   "Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution",
@@ -185,6 +188,7 @@ for (const required of [
   "deployed Hub compatibility is separately reported as Node.js 22.23.2 with npm 11.18.0",
   "Skill-mediated installation must inspect `node --version` before running `npm install`, `npm exec`, or `pi install`",
   "direct npm installation can warn or proceed according to the caller's npm configuration",
+  "<server-prefix>/bin/node",
 ]) {
   if (!safeCommandsText.includes(required)) {
     fail(`safe commands reference is missing canonical ordinary-server boundary: ${required}`);

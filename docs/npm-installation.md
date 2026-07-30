@@ -44,23 +44,30 @@ invoking user. The separately approved system-install step must first reject
 symbolic links inside the exact AgentNet package root, then transfer only the
 resolved non-root installation prefix into root custody without dereferencing
 links, and finally verify every Node.js, uv, launcher, prefix, and package-tree
-owner/mode component. Run that system install under `umask 022`: npm's
-bin-link step derives the launcher mode from the privileged install process
-umask, and a more permissive value can create a launcher that AgentNet must
+owner/mode component. The server system install uses process `umask 022` plus
+npm `--bin-links=false --umask=0022`, then invokes the verified absolute
+package launcher directly. npm extraction and bin-link creation apply distinct
+mode rules; leaving either permissive can create a launcher that AgentNet must
 reject. Do not blanket-repair package modes: group/other
 writability, missing service-read bits, or a non-executable launcher is a
-package/install defect that must remain fail-closed.
+package/install defect that must remain fail-closed. This server topology
+differs from an ordinary laptop global CLI install, which retains npm's
+`agentnet` bin link and cannot later be reused as the server prerequisite.
 
 Prepare the strict non-secret request with owner-only sensitive file references described by the bundled `skills/agentnet-operator/references/ordinary-server-setup.md`, then plan without privileged or managed-host writes. The npm launcher may materialize its caller-owned Python runtime as part of installed-code execution:
 
 ```bash
-<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+<server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
 ```
 
 After one frozen human-approved scope:
 
 ```bash
-sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+sudo -- <server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup \
   --request /home/operator/.config/agentnet-setup/server-setup.json \
   --expected-request-digest <approved-request-digest> \
   --apply --start

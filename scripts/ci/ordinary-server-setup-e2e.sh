@@ -155,10 +155,12 @@ sudo chmod 0755 /opt
 sudo install -o root -g root -m 0755 -d "$RUNTIME_PREFIX/bin"
 sudo install -o root -g root -m 0755 "$(command -v node)" "$RUNTIME_NODE"
 sudo install -o root -g root -m 0755 "$(command -v uv)" "$RUNTIME_UV"
-# npm's bin-link step rewrites executable targets from the privileged process
-# umask. Set it inside sudo rather than trusting host sudoers inheritance.
+# npm extraction applies its own configured umask, while bin-link creation
+# applies the process umask separately. The server profile needs no ambient
+# global command: preserve the archive launcher mode and invoke it directly.
 sudo -- sh -c 'umask 022; exec "$@"' sh \
   "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" \
+  --bin-links=false --umask=0022 \
   --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
 if ! PACKAGE_SYMLINK="$(sudo find "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet" -type l -print -quit)"; then
   echo "ordinary server setup E2E: cannot inspect the installed AgentNet package tree for symbolic links" >&2
@@ -171,8 +173,8 @@ fi
 # npm may honor SUDO_UID/SUDO_GID for global installs. The frozen E2E deployment
 # step explicitly transfers the exact prefix into root custody before setup.
 sudo chown -Rh root:root "$RUNTIME_PREFIX"
-[[ "$(realpath "$RUNTIME_PREFIX/bin/agentnet")" == "$(realpath "$RUNTIME_LAUNCHER")" ]] || {
-  echo "ordinary server setup E2E: global AgentNet command does not resolve to the installed launcher" >&2
+[[ ! -e "$RUNTIME_PREFIX/bin/agentnet" ]] || {
+  echo "ordinary server setup E2E: server install unexpectedly created an ambient AgentNet command" >&2
   exit 1
 }
 [[ "$(env PATH="$RUNTIME_PATH" node -p 'require("node:fs").realpathSync(process.execPath)')" == "$RUNTIME_NODE" ]] || {

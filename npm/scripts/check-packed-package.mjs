@@ -90,6 +90,31 @@ const requireNoVerificationResidue = (packageRoot) => {
   }
 };
 
+const requireSafeInstalledModes = (packageRoot) => {
+  if (process.platform === "win32") return;
+  const violations = [];
+  const visit = (target) => {
+    const metadata = statSync(target);
+    const mode = metadata.mode & 0o777;
+    const required = metadata.isDirectory() ? 0o005 : 0o004;
+    if ((mode & 0o022) !== 0 || (mode & required) !== required) {
+      violations.push(`${path.relative(packageRoot, target) || "."}:${mode.toString(8)}`);
+    }
+    if (!metadata.isDirectory()) return;
+    for (const entry of readdirSync(target, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        violations.push(`${path.relative(packageRoot, path.join(target, entry.name))}:symlink`);
+        continue;
+      }
+      visit(path.join(target, entry.name));
+    }
+  };
+  visit(packageRoot);
+  if (violations.length !== 0) {
+    throw new Error(`installed package tree has unsafe mode: ${violations.slice(0, 10).join(", ")}`);
+  }
+};
+
 const isProtectedServicePath = (candidate) => protectedServiceRoots.some((rootPath) => (
   candidate === rootPath || candidate.startsWith(`${rootPath}${path.sep}`)
 ));
@@ -228,6 +253,7 @@ try {
       "install",
       "--prefix",
       prefix,
+      "--umask=0022",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
@@ -250,6 +276,7 @@ try {
         );
       }
     }
+    requireSafeInstalledModes(packageRoot);
     const environment = {
       ...process.env,
       HOME: home,

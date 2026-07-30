@@ -74,9 +74,14 @@ Required:
   rejects package-root symbolic links, then transfers only the exact resolved
   non-root installation prefix to root without dereferencing links, and
   revalidates every owner and mode component;
-- system installation runs under `umask 022` because npm's bin-link step derives
-  launcher mode from the privileged install process umask; a more permissive
-  value can create a launcher that AgentNet must reject;
+- system installation uses process `umask 022` plus npm
+  `--bin-links=false --umask=0022`, creates no ambient global command, and
+  invokes the verified absolute package launcher directly; npm extraction and
+  bin-link creation apply distinct mode rules, so a permissive value can create
+  a launcher that AgentNet must reject;
+- this server install differs from an ordinary laptop global CLI install:
+  laptop installation retains npm's `agentnet` bin link and cannot later be
+  reused as the root-owned server prerequisite;
 - no blanket package-mode repair; writable, service-inaccessible, or
   non-executable packaged entries remain defects and fail closed;
 - Node.js, uv, AgentNet, `systemctl`, and `useradd` executable bytes stable between plan and locked apply;
@@ -148,7 +153,9 @@ If service user does not exist yet, first approved apply may create fixed Core O
 Run without `sudo` or `--apply`:
 
 ```bash
-<resolved-root-owned-agentnet-path> server-agent setup \
+<server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup \
   --request /home/operator/.config/agentnet-setup/server-setup.json
 ```
 
@@ -176,7 +183,9 @@ Show human concise frozen scope. Ask again when scope or executable bytes change
 After exact setup approval:
 
 ```bash
-sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
+sudo -- <server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent setup \
   --request /home/operator/.config/agentnet-setup/server-setup.json \
   --expected-request-digest <approved-request-digest> \
   --apply --start

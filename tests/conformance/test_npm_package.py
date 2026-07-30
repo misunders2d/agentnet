@@ -72,6 +72,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         'entry.path === "npm/bin/agentnet.mjs"',
         "launcherArchiveEntry?.mode !== 0o755",
         "installedLauncherMode !== 0o755",
+        '"--umask=0022"',
+        "requireSafeInstalledModes(packageRoot)",
+        "installed package tree has unsafe mode",
     ):
         assert required in packed_checker
     for rejected_blocker in (
