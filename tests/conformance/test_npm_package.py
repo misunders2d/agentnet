@@ -274,7 +274,9 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "operator may separately install that CA into platform system trust visible to CPython or replace the route certificate",
         "`SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` injection is not a supported remediation",
         "Node.js 23 and 25 are unsupported despite the broad npm engine floor",
-        "Release/publish stays pinned to Node.js 24.18.0 LTS and npm 12.0.1",
+        "Minimum-floor compatibility uses Node.js 22.19.0 with npm 10.9.3",
+        "Release/publish and the Node.js 24.18.0/26.5.0 lanes stay pinned to npm 12.0.1",
+        "deployed Hub compatibility is separately reported as Node.js 22.23.2 with npm 11.18.0",
         "Skill-mediated installation must inspect `node --version` before running `npm install`, `npm exec`, or `pi install`",
         "direct npm installation can warn or proceed according to the caller's npm configuration",
     ):

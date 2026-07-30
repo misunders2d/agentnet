@@ -193,7 +193,7 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "e171c20b6d52abe409c4305942f4b46e72524e3f175586fda198f0b497e69fd6"
+      "sha256": "59413bcbcf532230109088071e0d569e28294f59079a7e9c0f293191cc5011ab"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "67ca3c1a6ef7569e32731a650130ee572c5c15dbf19b9330bc760862bdc63765"
+      "sha256": "1709dfef96b1c6a9efb42795ee037c8f4a9b07cfeccf7c59daf6893c112aa8f5"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "90bdf612588b7a4c3df55ce9f2be7f4e87f9bfa1fecb4bf088a8056e3b835c7e"
+      "sha256": "dbf715c7ad93fc6c9a06e31fd88e1910a1c3690e190d1b3760647cb66aa073d5"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
