@@ -261,17 +261,19 @@ Approval broker readiness through the configured public path; authoritative
 post-enrollment setup evidence; recoverable OIDC begin; finite current credential
 renewal; Core schema v5; current-package clean-state custody; an isolated
 package-owned C0 responder; and exact five-unit setup/reset lifecycle. Current
-affected source lane reports `585 passed, 7 expected dedicated-PostgreSQL skips`.
+affected source lane reports `586 passed, 7 expected dedicated-PostgreSQL skips`.
 The source regression lane excluding only installed-harness pins and release
-manifest self-check reports `1622 passed, 16 expected platform/dedicated-
-PostgreSQL skips`. The unfiltered run reports `1655 passed, 16 expected skips,
+manifest self-check reports `1623 passed, 16 expected platform/dedicated-
+PostgreSQL skips`. The unfiltered run reports `1656 passed, 16 expected skips,
 2 installed-harness G01 failures`; both failures remain non-green and unwaived.
 Source and both recursive packed generations each report
-`1578 passed, 16 expected skips`; release verifier, package-tree digest/no-residue
+`1579 passed, 16 expected skips`; release verifier, package-tree digest/no-residue
 checks, source/packed Pi skill loaders, retained byte-identical archives, and code
 and skill rereviews pass; final Constitution evidence-only closure also passes.
-Mutation-authorized PostgreSQL, cross-platform CI, and external host/C0 evidence
-remain absent. No gate is promoted.
+Cross-platform CI passed at `e5e6c95`; ordinary-server E2E then exposed the timer
+`MainPID` category error. The timer-aware correction has local proof and requires
+a fresh clean-host run. Mutation-authorized local PostgreSQL and external C0
+evidence remain absent. No gate is promoted.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

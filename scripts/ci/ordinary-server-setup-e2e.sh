@@ -12,11 +12,12 @@ if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" ]]; then
   exit 2
 fi
 if getent passwd agentnet >/dev/null || getent passwd agentnet-approval >/dev/null ||
-   getent group agentnet >/dev/null || getent group agentnet-approval >/dev/null; then
+   getent passwd agentnet-c0 >/dev/null || getent group agentnet >/dev/null ||
+   getent group agentnet-approval >/dev/null || getent group agentnet-c0 >/dev/null; then
   echo "ordinary server setup E2E requires clean AgentNet identities and groups" >&2
   exit 2
 fi
-for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-setup /etc/agentnet-secrets; do
+for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /var/lib/agentnet-setup /etc/agentnet-secrets; do
   if sudo test -e "$path"; then
     echo "ordinary server setup E2E requires clean AgentNet state" >&2
     exit 2
@@ -39,12 +40,24 @@ chmod 700 "$WORK" "$INPUTS"
 
 cleanup() {
   set +e
-  sudo systemctl disable --now agentnet-core.service agentnet-approval.service >/dev/null 2>&1
-  sudo rm -f /etc/systemd/system/agentnet-core.service /etc/systemd/system/agentnet-approval.service
+  sudo systemctl disable --now \
+    agentnet-core.service \
+    agentnet-approval.service \
+    agentnet-c0-responder.service \
+    agentnet-credential-renew.timer >/dev/null 2>&1
+  sudo systemctl stop agentnet-credential-renew.service >/dev/null 2>&1
+  sudo rm -f \
+    /etc/systemd/system/agentnet-core.service \
+    /etc/systemd/system/agentnet-approval.service \
+    /etc/systemd/system/agentnet-c0-responder.service \
+    /etc/systemd/system/agentnet-credential-renew.service \
+    /etc/systemd/system/agentnet-credential-renew.timer
   sudo systemctl daemon-reload >/dev/null 2>&1
-  sudo rm -rf /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-setup /etc/agentnet-secrets
+  sudo rm -rf /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /var/lib/agentnet-setup /etc/agentnet-secrets
+  sudo userdel agentnet-c0 >/dev/null 2>&1
   sudo userdel agentnet-approval >/dev/null 2>&1
   sudo userdel agentnet >/dev/null 2>&1
+  sudo groupdel agentnet-c0 >/dev/null 2>&1
   sudo groupdel agentnet-approval >/dev/null 2>&1
   sudo groupdel agentnet >/dev/null 2>&1
   sudo rm -f /etc/nginx/sites-enabled/agentnet-e2e /etc/nginx/sites-available/agentnet-e2e

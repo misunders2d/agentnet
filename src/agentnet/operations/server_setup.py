@@ -2170,6 +2170,7 @@ def _run_systemctl(
 _SYSTEMD_SHOW_PROPERTIES = (
     "LoadState",
     "UnitFileState",
+    "ActiveState",
     "FragmentPath",
     "DropInPaths",
     "User",
@@ -2221,6 +2222,30 @@ def _systemd_show(executable: Path, unit: str) -> dict[str, str]:
             continue
         properties[name] = value
     return properties
+
+
+def _validate_inactive_auxiliary_unit_state(
+    *,
+    unit: str,
+    expected_unit_file_state: str,
+    properties: dict[str, str],
+) -> None:
+    """Validate one inactive auxiliary unit without requiring service-only fields."""
+
+    service_pid_invalid = (
+        unit.endswith(".service")
+        and properties.get("MainPID") not in {"", "0"}
+    )
+    if (
+        properties.get("LoadState") != "loaded"
+        or properties.get("UnitFileState") != expected_unit_file_state
+        or properties.get("ActiveState") != "inactive"
+        or service_pid_invalid
+    ):
+        raise ServerSetupError(
+            "service_runtime_binding",
+            "inactive AgentNet auxiliary unit does not match fixed state",
+        )
 
 
 def _read_live_process_identity(pid: int) -> tuple[Path, tuple[str, ...]]:
@@ -4467,16 +4492,11 @@ def _apply_server_setup(
                 if not identity_enrolled:
                     expected_states[CREDENTIAL_RENEW_TIMER] = "disabled"
                 for unit, expected_state in expected_states.items():
-                    properties = _systemd_show(systemctl_executable, unit)
-                    if (
-                        properties.get("LoadState") != "loaded"
-                        or properties.get("UnitFileState") != expected_state
-                        or properties.get("MainPID") not in {"", "0"}
-                    ):
-                        raise ServerSetupError(
-                            "service_runtime_binding",
-                            "inactive AgentNet auxiliary unit does not match fixed state",
-                        )
+                    _validate_inactive_auxiliary_unit_state(
+                        unit=unit,
+                        expected_unit_file_state=expected_state,
+                        properties=_systemd_show(systemctl_executable, unit),
+                    )
                 _health(
                     f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
                     expected=approval_health,

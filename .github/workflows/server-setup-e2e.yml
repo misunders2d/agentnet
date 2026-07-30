@@ -86,16 +86,22 @@ jobs:
           set -euo pipefail
           ! getent passwd agentnet >/dev/null
           ! getent passwd agentnet-approval >/dev/null
+          ! getent passwd agentnet-c0 >/dev/null
           ! getent group agentnet >/dev/null
           ! getent group agentnet-approval >/dev/null
+          ! getent group agentnet-c0 >/dev/null
           for path in \
             /usr/local/agentnet-e2e \
             /var/lib/agentnet \
             /var/lib/agentnet-approval \
+            /var/lib/agentnet-c0 \
             /var/lib/agentnet-setup \
             /etc/agentnet-secrets \
             /etc/systemd/system/agentnet-core.service \
             /etc/systemd/system/agentnet-approval.service \
+            /etc/systemd/system/agentnet-c0-responder.service \
+            /etc/systemd/system/agentnet-credential-renew.service \
+            /etc/systemd/system/agentnet-credential-renew.timer \
             /etc/nginx/sites-enabled/agentnet-e2e \
             /etc/nginx/sites-available/agentnet-e2e \
             /usr/local/share/ca-certificates/agentnet-e2e.crt \

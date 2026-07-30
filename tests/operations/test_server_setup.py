@@ -2088,6 +2088,42 @@ def test_systemctl_commands_are_bounded_and_redacted(
     }
 
 
+def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> None:
+    import agentnet.operations.server_setup as setup
+
+    setup._validate_inactive_auxiliary_unit_state(
+        unit=setup.CREDENTIAL_RENEW_TIMER,
+        expected_unit_file_state="disabled",
+        properties={
+            "LoadState": "loaded",
+            "UnitFileState": "disabled",
+            "ActiveState": "inactive",
+        },
+    )
+
+    with pytest.raises(ServerSetupError, match="fixed state"):
+        setup._validate_inactive_auxiliary_unit_state(
+            unit=setup.CREDENTIAL_RENEW_TIMER,
+            expected_unit_file_state="disabled",
+            properties={
+                "LoadState": "loaded",
+                "UnitFileState": "disabled",
+                "ActiveState": "active",
+            },
+        )
+
+    with pytest.raises(ServerSetupError, match="fixed state"):
+        setup._validate_inactive_auxiliary_unit_state(
+            unit=setup.CREDENTIAL_RENEW_UNIT,
+            expected_unit_file_state="static",
+            properties={
+                "LoadState": "loaded",
+                "UnitFileState": "static",
+                "ActiveState": "inactive",
+            },
+        )
+
+
 def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() -> None:
     import agentnet.operations.server_setup as setup
 
@@ -3023,7 +3059,12 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             "PrivateTmp": "yes",
             "ProtectHome": "yes",
             "ProtectSystem": "strict",
-            "MainPID": str(live_pids.get(unit, 0)),
+            "ActiveState": "active" if unit in live_pids else "inactive",
+            **(
+                {}
+                if unit == setup.CREDENTIAL_RENEW_TIMER
+                else {"MainPID": str(live_pids.get(unit, 0))}
+            ),
             "Environment": "AGENTNET_UV=/usr/local/bin/uv",
             "ReadWritePaths": str(
                 layout.host(

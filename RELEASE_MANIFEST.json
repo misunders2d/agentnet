@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "38e96ef1e491906a594ac43c4dbce31b2f8bff680b4c09ef582392d4a21d8495"
+      "sha256": "39ea9a7578ee4b78eb7609d425d99456db3488807c435fedc80757fee3f96911"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "831c0f4ab0ffdaf15d003e9157cc124b27452ee78a1213988da003eed241c7f0"
+      "sha256": "15c2904b0097c139bacbf26a3ca13594ef9dd3141697b8f8c983ba54668c9b76"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -245,13 +245,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "df471bcec8f3fb0ad0041afcdce792bd44ec0405fc387da41aa218c68c8cc812"
+      "sha256": "72871b7a5c7494e17b3be3469352c771f04a3098a4d9fecca0368f7d96b197fc"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "78b776180446264b3edad37f2b8570fa5341eca006156c4bfa8ee5c071dca678"
+    "sha256": "ca311a18240bd56ecf1d97838ca29a9a2981f9a99b11c2bdf80018a988b0ebbb"
   },
   "protocols": {
     "a2a": {
