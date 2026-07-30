@@ -42,6 +42,12 @@ from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 BROKER = "synthetic-shared-test-token-0123456789abcdef0123456789"
 
 
+@pytest.fixture(autouse=True)
+def _clear_tls_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _private_json(path: Path, value: object) -> Path:
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)

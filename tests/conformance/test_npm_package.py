@@ -158,6 +158,8 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
     assert "Infisical or other named secret manager" in example
     assert "per-command setup approvals" in example
     assert "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value" in example
+    assert "Before any AgentNet install, parse `node --version`" in example
+    assert "Node.js 23 or 25 blocks installation despite satisfying the broad npm engine floor" in example
     for removed_placeholder in (
         "<APPROVER_NAME>",
         "<APPROVAL_CODE_CHANNEL>",
@@ -203,9 +205,14 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "fresh-laptop-never-requires-infisical",
         "fresh-laptop-one-consolidated-setup-approval",
         "fresh-laptop-human-never-supplies-technical-metadata",
+        "fresh-laptop-rejects-eol-node-25-line",
+        "fresh-laptop-rejects-eol-node-line",
         "ordinary-server-uses-product-owned-setup",
         "ordinary-server-remote-manager-never-shells",
         "ordinary-server-missing-route-blocks",
+        "ordinary-server-tls-environment-apply-blocks-at-launcher",
+        "ordinary-server-tls-environment-blocks-before-mutation",
+        "ordinary-server-untrusted-public-route-blocks",
         "ordinary-server-request-v2-requires-explicit-artifact-mode",
         "ordinary-server-resumes-exact-request",
         "ordinary-server-rejects-home-runtime",
@@ -264,6 +271,12 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "OIDC discovery is public-only by default",
         "exact JWK thumbprints",
         "approval service readable or controllable by the enrolling harness",
+        "operator may separately install that CA into platform system trust visible to CPython or replace the route certificate",
+        "`SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` injection is not a supported remediation",
+        "Node.js 23 and 25 are unsupported despite the broad npm engine floor",
+        "Release/publish stays pinned to Node.js 24.18.0 LTS and npm 12.0.1",
+        "Skill-mediated installation must inspect `node --version` before running `npm install`, `npm exec`, or `pi install`",
+        "direct npm installation can warn or proceed according to the caller's npm configuration",
     ):
         assert required in commands
     assert "ordinary always-on server ceremony is defined only" in commands
@@ -420,6 +433,8 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         "PYTHONDONTWRITEBYTECODE",
         "PYTHONPYCACHEPREFIX",
         "privilegedSetupApply",
+        "unsupportedTlsEnvironment",
+        "Object.hasOwn(process.env, name)",
         'from "../lib/server-setup-preflight.mjs"',
         "privilegedApprovalDigest(userArguments, digestEnvironment)",
         "requireRootOwnedPath(packageRoot, { recursive: true })",
@@ -434,6 +449,7 @@ def test_npm_launcher_is_locked_shell_free_and_user_scoped() -> None:
         '"3.13.13"',
     ):
         assert required in launcher
+    assert launcher.index("unsupportedTlsEnvironment") < launcher.index("const systemPath")
     assert launcher.index("privilegedApprovalDigest(userArguments, digestEnvironment)") < launcher.index(
         'const setupRoot = "/var/lib/agentnet-setup"'
     )
@@ -504,6 +520,54 @@ def test_npm_launcher_rejects_unsupported_uv_before_runtime_creation(tmp_path: P
         "AgentNet requires uv 0.11.28 or newer; found 0.9.13. "
         "Upgrade uv explicitly, then retry.\n"
     )
+    assert not state_root.exists()
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None or sys.platform != "linux",
+    reason="setup apply launcher guard requires Linux and Node.js",
+)
+@pytest.mark.parametrize("variable", ["SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"])
+def test_npm_launcher_rejects_tls_environment_before_setup_work(
+    tmp_path: Path,
+    variable: str,
+) -> None:
+    state_root = tmp_path / "state"
+    private_value = str(tmp_path / "private-tls-state")
+    environment = os.environ.copy()
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"):
+        environment.pop(name, None)
+    environment.update(
+        {
+            variable: private_value,
+            "AGENTNET_UV": str(tmp_path / "must-not-run-uv"),
+            "XDG_STATE_HOME": str(state_root),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "node",
+            str(ROOT / "npm/bin/agentnet.mjs"),
+            "server-agent",
+            "setup",
+            "--request",
+            str(tmp_path / "missing-request.json"),
+            "--apply",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == (
+        "AgentNet setup rejects ambient TLS trust and key-log configuration.\n"
+    )
+    assert private_value not in completed.stdout + completed.stderr
+    assert "must-not-run-uv" not in completed.stdout + completed.stderr
     assert not state_root.exists()
 
 

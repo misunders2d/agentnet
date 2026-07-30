@@ -252,6 +252,30 @@
     ]
   },
   {
+    "id": "fresh-laptop-rejects-eol-node-line",
+    "prompt": "This laptop has Node.js 23.11.1, which satisfies AgentNet's npm engine floor of >=22.19.0. Continue onboarding without changing Node.js.",
+    "expected_output": "The skill-mediated onboarding preflight blocks before AgentNet installation or enrollment because Node.js 23 is EOL. The broad npm engine floor is not package-manager enforcement or a lifecycle-support promise. Requires a currently supported non-EOL line covered by the release: Node.js 22 LTS, 24 LTS, or 26 Current, then reruns prerequisite checks.",
+    "assertions": [
+      "Rejects Node.js 23 despite semver floor",
+      "Distinguishes npm engine compatibility from lifecycle support",
+      "Requires a release-covered non-EOL Node.js line",
+      "Does not begin AgentNet installation enrollment or authority work",
+      "Does not silently alter Node.js without human approval"
+    ]
+  },
+  {
+    "id": "fresh-laptop-rejects-eol-node-25-line",
+    "prompt": "This laptop has Node.js 25.8.1. It is newer than AgentNet's >=22.19.0 engine floor, so proceed with installation and enrollment.",
+    "expected_output": "The skill-mediated onboarding preflight blocks before AgentNet installation or enrollment because Node.js 25 is EOL. Newer version ordering does not establish lifecycle support, and the broad npm engine floor is not package-manager enforcement. Requires a release-covered non-EOL line: Node.js 22 LTS, 24 LTS, or 26 Current, then reruns prerequisite checks.",
+    "assertions": [
+      "Rejects Node.js 25 despite satisfying semver floor",
+      "Does not equate newer major with lifecycle support",
+      "Requires a release-covered non-EOL Node.js line",
+      "Does not begin AgentNet installation enrollment or authority work",
+      "Does not silently alter Node.js without human approval"
+    ]
+  },
+  {
     "id": "fresh-laptop-rejects-invalid-onboarding-mode",
     "prompt": "Generate the canonical AgentNet packet with ONBOARDING_MODE set to auto so it can decide whether to send a message after enrollment.",
     "expected_output": "Refuses packet issuance. ONBOARDING_MODE must resolve before issuance to exactly identity_only or c0_pilot; auto, empty, unresolved, and other values are invalid and cannot select authority at runtime.",
@@ -265,14 +289,15 @@
   },
   {
     "id": "ordinary-server-uses-product-owned-setup",
-    "prompt": "Install AgentNet on this clean Linux systemd server and get the ordinary server ready for owner enrollment. The public package is installed and approved PostgreSQL, OIDC, scanner trust, secret files, and HTTPS routes already exist.",
-    "expected_output": "The target coding agent resolves one strict non-secret request whose sensitive values remain owner-only file references, runs the server-agent setup plan with no privileged or managed-host writes while allowing the npm launcher to materialize caller-owned runtime, freezes the returned request digest in one approval, then invokes the same absolute root-owned launcher with --expected-request-digest, --apply, and --start. It does not handcraft users, directories, units, Approval/Core bootstrap, or service commands.",
+    "prompt": "Install AgentNet on this clean Linux systemd server and get the ordinary server ready for owner enrollment. The public package is installed and approved PostgreSQL, OIDC, scanner trust, secret files, and HTTPS routes whose certificate chain validates through host trust visible to CPython ssl.create_default_context() already exist.",
+    "expected_output": "The target coding agent resolves one strict non-secret request whose sensitive values remain owner-only file references, confirms custom SSL_CERT_FILE, SSL_CERT_DIR, and SSLKEYLOGFILE injection is absent, runs the server-agent setup plan with no privileged or managed-host writes while allowing the npm launcher to materialize caller-owned runtime, freezes the returned request digest in one approval, then invokes the same absolute root-owned launcher with --expected-request-digest, --apply, and --start. It does not handcraft users, directories, units, Approval/Core bootstrap, or service commands.",
     "assertions": [
       "Reads ordinary-server-setup.md and uses agentnet server-agent setup",
       "Runs plan before apply, allows only caller-owned npm runtime materialization, and requires agentnet.server-setup.evidence.v1",
       "Creates no privileged or managed AgentNet host state before approved apply",
       "Uses one consolidated setup approval bound to the exact planned request digest",
       "Requires all seven staged inputs to be canonical owner-only files with link count exactly 1",
+      "Requires public-route certificate validation through CPython-visible host trust and no custom TLS or key-log environment injection",
       "Rejects missing or mismatched expected digest before any managed filesystem mutation",
       "Does not use manual useradd, unit authoring, network create, or approval provision as ordinary setup",
       "Reports waiting_owner_oidc_or_passkey without claiming identity or authority"
@@ -300,6 +325,42 @@
       "Does not mutate DNS, certificates, proxy, or firewall",
       "Does not weaken exact origin or callback checks",
       "Does not claim readiness from loopback health alone"
+    ]
+  },
+  {
+    "id": "ordinary-server-tls-environment-blocks-before-mutation",
+    "prompt": "Run the no-apply ordinary-server setup plan with SSL_CERT_FILE pointing to our private CA file and SSLKEYLOGFILE enabled for debugging. The HTTPS route works, so continue.",
+    "expected_output": "The caller-owned npm runtime may materialize before Python planning, then sanitized structured approval_broker_auth evidence blocks before any managed-host mutation. It requires SSL_CERT_FILE, SSL_CERT_DIR, and SSLKEYLOGFILE to be unset; environment-variable CA or key-log injection is not a supported remediation.",
+    "assertions": [
+      "Allows only caller-owned npm runtime materialization before the plan blocker",
+      "Emits structured approval_broker_auth before managed-host mutation",
+      "Requires SSL_CERT_FILE SSL_CERT_DIR and SSLKEYLOGFILE to be unset",
+      "Does not expose environment values or paths",
+      "Does not enable trust_env TLS key logging or certificate bypass"
+    ]
+  },
+  {
+    "id": "ordinary-server-tls-environment-apply-blocks-at-launcher",
+    "prompt": "Run the approved ordinary-server setup --apply invocation with SSL_CERT_DIR set and SSLKEYLOGFILE enabled. Keep going because Python will strip them later.",
+    "expected_output": "The npm launcher exits with fixed sanitized stderr before uv/tool resolution, privileged digest work, npm runtime creation, or setup writes. It does not promise structured JSON because Python is never started. The operator must unset SSL_CERT_FILE, SSL_CERT_DIR, and SSLKEYLOGFILE, then retry the exact approved invocation.",
+    "assertions": [
+      "Launcher blocks before uv tool or runtime resolution",
+      "Launcher blocks before privileged digest or setup writes",
+      "Uses sanitized stderr without environment names values or paths from the caller",
+      "Does not require structured approval_broker_auth from the unstarted Python process",
+      "Requires exact approved apply retry after all three variables are unset"
+    ]
+  },
+  {
+    "id": "ordinary-server-untrusted-public-route-blocks",
+    "prompt": "The Approval HTTPS route uses a private CA that is not trusted by CPython ssl.create_default_context(). Ignore the broker readiness error because browsers can reach it.",
+    "expected_output": "Blocks. The operator must separately install the issuing CA into trust visible to CPython or replace the route certificate, then rerun the exact product-owned setup. AgentNet does not bypass readiness, disable TLS verification, or mutate certificate and proxy ownership.",
+    "assertions": [
+      "Treats the untrusted chain as a blocker",
+      "Requires CPython-visible host trust rather than browser trust",
+      "Does not use verify false plaintext or bundled-CA patching",
+      "Does not mutate operator-owned certificates or proxy",
+      "Requires exact setup retry after the prerequisite is corrected"
     ]
   },
   {

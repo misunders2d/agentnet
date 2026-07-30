@@ -34,10 +34,16 @@ if (!supportedPlatform(process.platform)) {
 }
 
 const userArguments = process.argv.slice(2);
-const privilegedSetupApply = process.platform === "linux" &&
-  typeof process.getuid === "function" && process.getuid() === 0 &&
+const setupApply = process.platform === "linux" &&
   userArguments[0] === "server-agent" && userArguments[1] === "setup" &&
   userArguments.includes("--apply");
+const unsupportedTlsEnvironment = ["SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"];
+if (setupApply && unsupportedTlsEnvironment.some((name) => Object.hasOwn(process.env, name))) {
+  console.error("AgentNet setup rejects ambient TLS trust and key-log configuration.");
+  process.exit(1);
+}
+const privilegedSetupApply = setupApply &&
+  typeof process.getuid === "function" && process.getuid() === 0;
 
 const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const resolveCommand = (command, searchPath = process.env.PATH ?? "") => {

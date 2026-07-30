@@ -1,17 +1,17 @@
 {
   "run_id": "2026-07-29-v0.1.32",
-  "evaluated_at": "2026-07-30T05:28:45+00:00",
+  "evaluated_at": "2026-07-30T11:26:56+00:00",
   "scope": "v0_1_32_coordinated_first_c0_release_blocker_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "source_revision_kind": "release_source_tree_sha256",
-  "release_source_tree_sha256": "ca311a18240bd56ecf1d97838ca29a9a2981f9a99b11c2bdf80018a988b0ebbb",
+  "release_source_tree_sha256": "f40ee16103270cea48bc476e38685f066ea34af79a78ae461b5904dcf6a07cdb",
   "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
-  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Dedicated local PostgreSQL mutation evidence, a green clean-host systemd rerun for the corrected candidate, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated; cross-platform CI passed at e5e6c95.",
+  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin using explicit verified host system trust with SSL certificate/key-log environment rejected before setup and sanitized TLS failure; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Dedicated local PostgreSQL mutation evidence, a green clean-host systemd rerun for the system-trust-corrected candidate, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated; cross-platform CI passed at f329566; ordinary-server CI reached real PostgreSQL 18 and exposed the bundled-CA/system-trust mismatch now repaired locally.",
   "execution_context": {
     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
-    "packed_generations": "source plus two clean recursive npm installation generations are required to report 1579 passed and 16 expected platform/dedicated-PostgreSQL skips, complete package-tree digest equality, and no named verification residue",
+    "packed_generations": "source plus two clean recursive npm installation generations report 1595 passed and 16 expected platform/dedicated-PostgreSQL skips, complete package-tree digest equality, and no named verification residue",
     "root_installed_external_host": "NOT RUN: no 0.1.32 root-installed external-host setup, service start, enrollment, responder, timer, or C0 ceremony was authorized; prior 0.1.31 negative deployment evidence remains historical only",
     "callback_incident": "0.1.32 stores the exact OIDC begin idempotency key before network and same-key/same-request retries return the encrypted committed Core winner; no prior callback URL, state, code, cookie, continuation, or transaction is reused",
     "known_live_findings": "MEL-216, MEL-217, MEL-220, and MEL-226 have local source repairs; external proof is absent and no issue or release gate is promoted"
@@ -19,23 +19,23 @@
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
-      "result": "PASS: 586 passed, 7 expected dedicated-PostgreSQL skips"
+      "result": "PASS: 599 passed, 7 expected dedicated-PostgreSQL skips"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 1623 passed, 16 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 1639 passed, 16 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider",
-      "result": "BOUNDED NON-GREEN: 1656 passed, 16 expected platform/dedicated-PostgreSQL skips, and exactly two installed-harness G01 pin failures; failures remain non-green and are not waived or repinned"
+      "result": "BOUNDED NON-GREEN: 1672 passed, 16 expected platform/dedicated-PostgreSQL skips, and exactly 2 installed-harness G01 pin failures aggregating current version mismatches across Claude, Codex, Pi, and Antigravity; failures remain non-green and are not waived or repinned"
     },
     {
       "command": "npm run check",
-      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1579 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1595 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
     },
     {
       "command": "npm pack --json --ignore-scripts; clean npm install; Pi DefaultResourceLoader on packed agentnet-operator skill",
-      "result": "PASS: 0.1.32 npm tarball has 457 files, shasum 68b756a09ed0e2bf3b263e711fcd2062bec1b285, integrity sha512-SYPVYkiR0pzARCgEn2yoA05y+ArNYUmvDrPJtKKDFSzCKm5YX21mN6UHZZ0ij0RfQbeu7PS/vtGEeI7gPtdfOw==, and Pi loaded exactly one agentnet-operator skill with zero diagnostics"
+      "result": "PASS: source-tree package catalog and metadata checks passed; a clean packed install loaded exactly one agentnet-operator Pi skill with zero diagnostics; exact npm tarball shasum/integrity are measured only after the packaged evidence tree is frozen and remain external publication-handoff metadata to avoid self-referential evidence"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
@@ -43,7 +43,7 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
-      "result": "PASS: disposable package copy reported 1579 passed, 16 expected platform/dedicated-PostgreSQL skips and left immutable source/package custody unchanged"
+      "result": "PASS: direct disposable package copy reported 1595 passed and 16 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
@@ -51,24 +51,29 @@
     },
     {
       "command": "GitHub cross-platform and ordinary-server setup workflows",
-      "result": "BOUNDED NON-GREEN: cross-platform CI passed at e5e6c95; ordinary-server E2E reached real PostgreSQL 18 and then exposed the timer MainPID category error; the timer-aware correction has local proof but requires fresh CI before closure"
+      "result": "BOUNDED NON-GREEN: historical cross-platform CI passed at f329566; ordinary-server E2E reached real PostgreSQL 18 and then exposed bundled-CA rejection of its system-trusted synthetic Approval certificate; corrected same-commit clean-host E2E and exact Node.js 22.19.0/24.18.0/26.5.0 packed compatibility matrix remain pending"
     }
   ],
   "review_results": [
     {
-      "review": "Final code/security/reliability critic",
-      "model": "openai-codex/gpt-5.4",
-      "result": "REVISE then CONVERGE: release evidence and 0.1.32 verifier coverage were corrected; responder terminal cleanup is same-digest repairable, private-custody checked, directory-fsynced, disabled, and idempotent; narrow rereview found no blocker"
+      "review": "Final TLS code/security/reliability critic",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "CONVERGE: OpenSSL CSR/certificate-extension split, CA chain, system trust, hostname verification, and sanitized launcher/exception boundaries pass; fresh ordinary-server CI remains required"
     },
     {
       "review": "AgentNet operator skill Step 4a architecture review",
-      "model": "openai-codex/gpt-5.4",
-      "result": "CONVERGE: all ten categories PASS; source Pi loader found exactly one skill and zero diagnostics"
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "CONVERGE: plan/apply evidence split, CPython-visible trust remediation, deterministic TLS test isolation, and package/eval bindings pass"
     },
     {
       "review": "Constitution watcher",
-      "model": "openai-codex/gpt-5.4",
-      "result": "PASS: final retained-evidence closure found local claims narrowly scoped, verifier/ledger agreement fail-closed, no secret/private values, no unauthorized mutation, and blocked/nonproduction posture preserved"
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "PASS: fail-closed TLS, secret isolation, truthful nonproduction status, and no unauthorized mutation preserved"
+    },
+    {
+      "review": "Node.js lifecycle and compatibility skill architecture audit",
+      "model": "openai-codex/gpt-5.6-terra",
+      "result": "CONVERGE: skill-mediated preinstall rejection for EOL Node.js 23/25 is explicit and independently evaluated; packed compatibility matrix covers exact Node.js 22.19.0/24.18.0/26.5.0 while release/publish remains LTS-pinned"
     },
     {
       "review": "Ordinary-server timer-state code/security/reliability rereview",
@@ -84,11 +89,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32.tar.gz",
-      "sha256": "4967d74103e7471d16738007360a26885e178736c7aefd22fae9676eec925378"
+      "sha256": "c6445c0e2e6f2b60f41159a0310087d78c6b125f14528b264f21e5d2a1b64a8f"
     },
     {
       "path": "evidence/local/2026-07-29-v0.1.32/artifacts/agentnet-0.1.32-py3-none-any.whl",
-      "sha256": "b67492591b0f8c8ef062532d474203c9795552a1f348781ba8a567b201f409e3"
+      "sha256": "db866bc5a70098249920771e0521cb4d654e3dd7b8e68a5c780b339eae88fa73"
     }
   ]
 }

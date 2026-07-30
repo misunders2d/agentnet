@@ -193,11 +193,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "2bb3e9c6b3ca85d78a4920404fe84c8a50804bb4912ca9529a94af90b53d0f2c"
+      "sha256": "e171c20b6d52abe409c4305942f4b46e72524e3f175586fda198f0b497e69fd6"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "7ba63a822f3a63e33565baa54054fa16e1ea192362966823e4967ce2ac2d9976"
+      "sha256": "46367fc2d9a2c43d8b1efda952525ee5ee3c6a77433c7b02c53660873b7abd92"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "39ea9a7578ee4b78eb7609d425d99456db3488807c435fedc80757fee3f96911"
+      "sha256": "67ca3c1a6ef7569e32731a650130ee572c5c15dbf19b9330bc760862bdc63765"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "15c2904b0097c139bacbf26a3ca13594ef9dd3141697b8f8c983ba54668c9b76"
+      "sha256": "90bdf612588b7a4c3df55ce9f2be7f4e87f9bfa1fecb4bf088a8056e3b835c7e"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -245,13 +245,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "72871b7a5c7494e17b3be3469352c771f04a3098a4d9fecca0368f7d96b197fc"
+      "sha256": "0c159395afa28c81f68012eb9d067067fbf4e7dbf807bce79cfa67e7711b1f69"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "ca311a18240bd56ecf1d97838ca29a9a2981f9a99b11c2bdf80018a988b0ebbb"
+    "sha256": "f40ee16103270cea48bc476e38685f066ea34af79a78ae461b5904dcf6a07cdb"
   },
   "protocols": {
     "a2a": {

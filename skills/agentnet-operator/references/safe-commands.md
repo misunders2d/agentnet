@@ -11,7 +11,9 @@ node --version
 uv --version
 ```
 
-The npm/Pi launcher supports Linux, macOS, and Windows local profiles, requires Node.js 22.19 or newer, requires `uv` 0.11.28 or newer, and selects CPython 3.13.13. Production deployment remains Linux-first.
+The npm/Pi launcher supports Linux, macOS, and Windows local profiles, requires Node.js 22.19 or newer on a non-EOL release line, requires `uv` 0.11.28 or newer, and selects CPython 3.13.13. Current release coverage targets Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite the broad npm engine floor. Release/publish stays pinned to Node.js 24.18.0 LTS and npm 12.0.1. Production deployment remains Linux-first.
+
+Skill-mediated installation must inspect `node --version` before running `npm install`, `npm exec`, or `pi install`. If the major version is 23 or 25, stop before AgentNet installation or enrollment and ask the human to approve installation of a covered non-EOL line. The broad `engines.node` value is an npm compatibility floor, not package-manager enforcement of lifecycle support; direct npm installation can warn or proceed according to the caller's npm configuration.
 
 ## Install examples
 
@@ -127,7 +129,7 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
-The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, mode-applicable scanner trust, hardened units, bounded start/restart, and redacted evidence. Communication-only mode carries only `offline_custody`, creates no scanner trust/artifact key, and rejects artifact routes/bindings before custody; it does not prove FILE/G13 or ship readiness. It verifies existing operator-owned HTTPS routes to loopback Core and Approval. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
+The wrapper owns fixed dedicated identities, private roots, Approval provisioning, Core bootstrap, mode-applicable scanner trust, hardened units, bounded start/restart, and redacted evidence. Communication-only mode carries only `offline_custody`, creates no scanner trust/artifact key, and rejects artifact routes/bindings before custody; it does not prove FILE/G13 or ship readiness. It verifies existing operator-owned HTTPS routes to loopback Core and Approval using host trust visible to CPython `ssl.create_default_context()`. For a private issuing CA, the operator may separately install that CA into platform system trust visible to CPython or replace the route certificate, then rerun exact setup. `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` injection is not a supported remediation. It does not mutate DNS, TLS certificates, reverse-proxy configuration, PostgreSQL administration, firewall policy, identity, or authority. Missing infrastructure produces one blocker; never make the operator build glue or assemble an undocumented stack.
 
 ### Destructive package-owned server reset
 

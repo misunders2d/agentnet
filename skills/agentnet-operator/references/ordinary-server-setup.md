@@ -17,7 +17,7 @@ Operator-owned prerequisites remain:
 
 - immutable system-wide root-owned package plus Node.js, `uv`, `systemctl`, and `useradd` executables visible to hardened services;
 - local PostgreSQL cluster, role/database, exact peer-auth rule, and PostgreSQL reload;
-- distinct public DNS/TLS reverse-proxy routes;
+- distinct public DNS/TLS reverse-proxy routes whose certificate chain validates through host trust visible to CPython `ssl.create_default_context()`; custom `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` injection is unsupported and must be unset;
 - workforce OIDC registrations and owner-only runtime secret files;
 - maintained scanner public trust when artifacts are enabled; no scanner input when communication-only mode is selected;
 - human OIDC/WebAuthn ceremonies and policy decisions.
@@ -156,6 +156,8 @@ Require:
 - `production_durability_proven=false`.
 
 Plan performs no privileged or managed-host mutation: it does not create service identities, AgentNet roots, secret copies, database schema/config, units, or services. The npm launcher may materialize its caller-owned Python runtime before Python preflight; that is code-install/runtime state, not server setup state. Any invalid runtime, input custody, secret policy, OIDC contract, callback, mode-applicable scanner trust, DB contract, or digest blocks before managed-host mutation.
+
+TLS-environment failure is phase-specific. No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation. Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution, privileged digest work, npm runtime creation, or Python startup; therefore apply does not return Python JSON evidence.
 
 Show human concise frozen scope. Ask again when scope or executable bytes change, or when a separate destructive/restart/privilege-expanding/high-risk action appears. PostgreSQL administration/reload remains separate even when plan describes exact required rule.
 

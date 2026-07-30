@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,6 +48,8 @@ def _stable_synthetic_runtime_hashes(
 ) -> None:
     import agentnet.operations.server_setup as setup
 
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(
         setup,
         "_sha256_stable_file",
@@ -970,6 +973,10 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" in rendered
     assert "SupplementaryGroups=" in rendered
     assert "UnsetEnvironment=NODE_OPTIONS NODE_PATH PYTHONPATH" in rendered
+    for unit in (APPROVAL_UNIT, CORE_UNIT, C0_RESPONDER_UNIT, CREDENTIAL_RENEW_UNIT):
+        service = units[unit].decode("utf-8")
+        assert "SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE" in service
+    assert "UnsetEnvironment=" not in units[CREDENTIAL_RENEW_TIMER].decode("utf-8")
     assert "synthetic-test-secret" not in rendered
     assert "AGENTNET_APPROVAL_CORE_TOKEN=" not in rendered
     assert "ConditionPathExists=/var/lib/agentnet-c0/config.json" in units[C0_RESPONDER_UNIT].decode()
@@ -977,6 +984,29 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert "c0-pilot responder --run" in units[C0_RESPONDER_UNIT].decode()
     assert 'credential renew --identity "/var/lib/agentnet/server-agent-identity.json"' in units[CREDENTIAL_RENEW_UNIT].decode()
     assert f"Unit={CREDENTIAL_RENEW_UNIT}" in units[CREDENTIAL_RENEW_TIMER].decode()
+
+
+@pytest.mark.parametrize("variable", ["SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"])
+def test_plan_rejects_tls_environment_before_runtime_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    request = load_server_setup_request(_request(tmp_path))
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setenv(variable, "/private/unsupported-tls-state")
+
+    def unexpected_runtime() -> setup.SetupRuntime:
+        raise AssertionError("runtime resolution must not precede TLS environment rejection")
+
+    monkeypatch.setattr(setup, "_resolve_setup_runtime", unexpected_runtime)
+    with pytest.raises(ServerSetupError, match="TLS environment is unsupported") as exc_info:
+        plan_server_setup(request)
+    assert exc_info.value.blocker == "approval_broker_auth"
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "unsupported-tls-state" not in rendered
+    assert exc_info.value.__cause__ is None
 
 
 def test_plan_is_read_only_and_emits_redacted_fixed_steps(
@@ -3132,7 +3162,32 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     assert exc_info.value.blocker == "approval_broker_auth"
+    assert "private broker detail" not in "".join(traceback.format_exception(exc_info.value))
+    assert exc_info.value.__cause__ is None
     assert exc_info.value.identity_enrolled is True
+
+    class UnavailableBrokerClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise setup.GateBlocked(
+                "approval_broker_unavailable",
+                "private TLS context detail",
+            )
+
+    monkeypatch.setattr(setup, "ApprovalServiceClient", UnavailableBrokerClient)
+    with pytest.raises(ServerSetupError, match="Approval broker readiness failed") as exc_info:
+        apply_server_setup(
+            request,
+            start=True,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.blocker == "approval_broker_unavailable"
+    rendered_error = "".join(traceback.format_exception(exc_info.value))
+    assert "private TLS context detail" not in rendered_error
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.identity_enrolled is True
+
     monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
     systemctl_calls[:] = successful_systemctl_calls
     health_requests[:] = successful_health_requests
@@ -3284,6 +3339,33 @@ def test_unexpected_setup_error_is_redacted(
     assert rc == 1
     assert output["blocker"] == "internal_setup_failure"
     assert "private-token" not in json.dumps(output)
+
+
+def test_plan_cli_returns_structured_tls_environment_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request = _request(tmp_path)
+    private_value = str(tmp_path / "private-ca.pem")
+    monkeypatch.setenv("SSL_CERT_FILE", private_value)
+
+    rc = command_server_agent_setup(
+        build_parser().parse_args(["server-agent", "setup", "--request", str(request)])
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert output == {
+        "schema": "agentnet.server-setup.evidence.v1",
+        "status": "blocked",
+        "blocker": "approval_broker_auth",
+        "message": "Approval broker TLS environment is unsupported",
+        "authority_granted": False,
+        "identity_enrolled": False,
+        "production_durability_proven": False,
+    }
+    assert private_value not in json.dumps(output)
 
 
 def test_apply_requires_frozen_plan_digest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -33,6 +33,13 @@ jobs:
           node-version: "24.18.0"
           package-manager-cache: false
 
+      - name: Install pinned npm CLI
+        shell: bash
+        run: |
+          npm install --global npm@12.0.1 --ignore-scripts --no-audit --no-fund
+          test "$(node --version)" = "v24.18.0"
+          test "$(npm --version)" = "12.0.1"
+
       - name: Configure uv and Python
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
@@ -57,6 +64,61 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/agentnet-pack"
           PREFIX="$RUNNER_TEMP/agentnet-prefix"
           UNRELATED="$RUNNER_TEMP/agentnet-unrelated"
+          mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
+          PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
+          npm install --prefix "$PREFIX" --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
+          cd "$UNRELATED"
+          node "$PREFIX/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs" --version
+
+  node-compatibility:
+    name: Ubuntu / Node.js ${{ matrix.node }} compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - "22.19.0"
+          - "24.18.0"
+          - "26.5.0"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Install pinned npm CLI
+        shell: bash
+        run: |
+          npm install --global npm@12.0.1 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = "12.0.1"
+
+      - name: Configure uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          python-version: "3.13.13"
+          enable-cache: false
+
+      - name: Install locked dependencies
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Pack, install, and launch compatibility artifact
+        shell: bash
+        run: |
+          test "$(node --version)" = "v${{ matrix.node }}"
+          node npm/scripts/check-package.mjs
+          PACK_DIR="$RUNNER_TEMP/agentnet-node-${{ matrix.node }}-pack"
+          PREFIX="$RUNNER_TEMP/agentnet-node-${{ matrix.node }}-prefix"
+          UNRELATED="$RUNNER_TEMP/agentnet-node-${{ matrix.node }}-unrelated"
           mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
           PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
           npm install --prefix "$PREFIX" --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"

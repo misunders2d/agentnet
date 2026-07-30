@@ -1009,7 +1009,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         npm_result = command_results.get("npm run check", "")
         if (
             not npm_result.startswith("PASS:")
-            or "1579 passed and 16 expected" not in npm_result
+            or "1595 passed and 16 expected" not in npm_result
             or "generations 1 and 2" not in npm_result
             or "excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence" not in npm_result
             or "two installed-harness pin failures remain non-green" not in npm_result
@@ -1036,7 +1036,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
                 "uv run pytest -q -p no:cacheprovider "
             )
             and all(path in command.split() for path in required_focused_paths)
-            and result == "PASS: 586 passed, 7 expected dedicated-PostgreSQL skips"
+            and result == "PASS: 599 passed, 7 expected dedicated-PostgreSQL skips"
             for command, result in command_results.items()
         ):
             failures.append("0.1.32 focused release-blocker evidence is incomplete")

@@ -35,7 +35,10 @@ if os.name == "posix":
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from agentnet import __version__
-from agentnet.approval.internal_client import ApprovalServiceClient
+from agentnet.approval.internal_client import (
+    ApprovalServiceClient,
+    require_approval_tls_environment,
+)
 from agentnet.approval.config import (
     ApprovalOwnerOIDCConfig,
     ApprovalServiceConfig,
@@ -1153,7 +1156,7 @@ def render_units(
     common = "\n".join(
         (
             "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "UnsetEnvironment=NODE_OPTIONS NODE_PATH PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_CONFIG_FILE UV_PROJECT UV_WORKING_DIR VIRTUAL_ENV",
+            "UnsetEnvironment=NODE_OPTIONS NODE_PATH PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_CONFIG_FILE UV_PROJECT UV_WORKING_DIR VIRTUAL_ENV SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE",
             "NoNewPrivileges=true",
             "PrivateTmp=true",
             "PrivateDevices=true",
@@ -1358,6 +1361,13 @@ def _server_setup_preflight(
     *,
     layout: SetupLayout,
 ) -> ServerSetupPreflight:
+    try:
+        require_approval_tls_environment()
+    except GateBlocked:
+        raise ServerSetupError(
+            "approval_broker_auth",
+            "Approval broker TLS environment is unsupported",
+        ) from None
     if os.name != "posix" or not Path("/proc/1/comm").exists():
         raise ServerSetupError("unsupported_host", "ordinary server setup requires Linux with systemd")
     try:
@@ -4535,11 +4545,12 @@ def _apply_server_setup(
             _health(f"{request.core_public_origin}/healthz", expected=core_health)
             if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
                 raise ServerSetupError("approval_broker_auth", "Approval broker configuration is unavailable")
-            broker_client = ApprovalServiceClient(
-                oidc.approval_service,
-                core_values[_BROKER_CREDENTIAL_NAME],
-            )
+            broker_client: ApprovalServiceClient | None = None
             try:
+                broker_client = ApprovalServiceClient(
+                    oidc.approval_service,
+                    core_values[_BROKER_CREDENTIAL_NAME],
+                )
                 broker_client.readiness()
             except GateBlocked as exc:
                 blocker = (
@@ -4547,9 +4558,10 @@ def _apply_server_setup(
                     if exc.gate in {"approval_broker_auth", "approval_broker_unavailable"}
                     else "approval_broker_auth"
                 )
-                raise ServerSetupError(blocker, "Approval broker readiness failed") from exc
+                raise ServerSetupError(blocker, "Approval broker readiness failed") from None
             finally:
-                broker_client.close()
+                if broker_client is not None:
+                    broker_client.close()
             steps.append({"id": "approval_broker_readiness", "status": "completed"})
             steps.append({"id": "service_start", "status": start_status})
             steps.append({"id": "managed_unit_runtime", "status": "validated_hermetic_live_binding"})

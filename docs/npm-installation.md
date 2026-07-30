@@ -23,8 +23,10 @@ pi install git:github.com/misunders2d/agentnet
 ## Requirements
 
 - Linux, macOS, or Windows
-- Node.js 22.19 or newer
+- Node.js 22.19 or newer on a non-EOL release line; current coverage targets Node.js 22 LTS, 24 LTS, and 26 Current, while Node.js 23 and 25 are unsupported
 - [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer on `PATH`
+
+Release/publish automation stays pinned to Node.js 24.18.0 LTS and npm 12.0.1. Ubuntu compatibility CI additionally proves the exact minimum Node.js 22.19.0 and forward Node.js 26.5.0 targets.
 
 The launcher uses the committed `uv.lock` and selects the release-certified CPython `3.13.13` runtime. The Python package remains compatible with `>=3.13,<3.15`, but the npm launcher is deliberately stricter so different hosts cannot silently verify the same release with different interpreter minors. It keeps an environment keyed by package version and install identity under the current user's state directory. Global npm and Pi-managed copies therefore do not rebind each other's Python environment. Override that location with an absolute `AGENTNET_NPM_RUNTIME_DIR` when needed.
 

@@ -67,7 +67,7 @@ Phase 1 — prerequisites
    npm --version
    uv --version
 
-3. Node.js must be at least <NODE_MIN_VERSION>; uv must be at least <UV_MIN_VERSION>. If missing or old, explain why, then request human action 2 using only:
+3. Before any AgentNet install, parse `node --version`. Node.js must be at least <NODE_MIN_VERSION> and on a release-covered non-EOL line; Node.js 23 or 25 blocks installation despite satisfying the broad npm engine floor. uv must be at least <UV_MIN_VERSION>. If missing, old, or EOL, explain why, then request human action 2 using only:
    - https://nodejs.org/
    - https://docs.astral.sh/uv/getting-started/installation/
    Rerun checks. Stop if still unsupported.

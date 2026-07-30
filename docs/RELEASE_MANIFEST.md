@@ -257,23 +257,30 @@ both remain unresolved in `0.1.31` and are assigned to the next release. Final
 fresh-laptop message/ACK/revocation proof remains pending.
 
 Candidate `0.1.32` repairs these blockers as one release boundary: signed
-Approval broker readiness through the configured public path; authoritative
+Approval broker readiness through the configured public path using explicit
+host trust with certificate/key-log environment denied before setup; authoritative
 post-enrollment setup evidence; recoverable OIDC begin; finite current credential
 renewal; Core schema v5; current-package clean-state custody; an isolated
 package-owned C0 responder; and exact five-unit setup/reset lifecycle. Current
-affected source lane reports `586 passed, 7 expected dedicated-PostgreSQL skips`.
+affected source lane reports `599 passed, 7 expected dedicated-PostgreSQL skips`.
 The source regression lane excluding only installed-harness pins and release
-manifest self-check reports `1623 passed, 16 expected platform/dedicated-
-PostgreSQL skips`. The unfiltered run reports `1656 passed, 16 expected skips,
-2 installed-harness G01 failures`; both failures remain non-green and unwaived.
-Source and both recursive packed generations each report
-`1579 passed, 16 expected skips`; release verifier, package-tree digest/no-residue
-checks, source/packed Pi skill loaders, retained byte-identical archives, and code
-and skill rereviews pass; final Constitution evidence-only closure also passes.
-Cross-platform CI passed at `e5e6c95`; ordinary-server E2E then exposed the timer
-`MainPID` category error. The timer-aware correction has local proof and requires
-a fresh clean-host run. Mutation-authorized local PostgreSQL and external C0
-evidence remain absent. No gate is promoted.
+manifest self-check reports `1639 passed, 16 expected platform/dedicated-
+PostgreSQL skips`. The final unfiltered run reports `1672 passed, 16 expected
+skips, 2 installed-harness G01 pin failures`; those two tests aggregate current
+version mismatches across all four installed harnesses and remain non-green and
+unwaived.
+Source and both recursive packed generations each report `1595 passed, 16
+expected skips`; release verifier and package-tree digest/no-residue checks pass.
+Final TLS security and skill-architecture reviews converge, Constitution review
+passes, and the Node-lifecycle skill audit converges. Node.js compatibility policy
+keeps exact Node.js `24.18.0` LTS plus npm `12.0.1` for three-OS/release paths and
+adds packed Ubuntu targets for Node.js `22.19.0`, `24.18.0`, and `26.5.0`; Node.js
+23 and 25 are EOL and unsupported. Historical cross-platform CI passed at
+`f329566`; ordinary-server E2E then reached real PostgreSQL 18 and exposed
+bundled-CA rejection of its system-trusted synthetic Approval certificate.
+Explicit verified host trust has local proof; corrected same-commit clean-host and
+expanded Node-matrix CI remain pending. Mutation-authorized local PostgreSQL and
+external C0 evidence remain absent. No gate is promoted.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

@@ -204,8 +204,11 @@ A remote Manager does not execute target-host commands. Target coding agent
 follows bundled
 `skills/agentnet-operator/references/ordinary-server-setup.md`; remote peers may
 provide immutable package instructions and inspect sanitized evidence only.
-Start verifies local and public Core/Approval health. Before owner enrollment,
-honest status is `waiting_owner_oidc_or_passkey`.
+Start verifies local and public Core/Approval health. Signed broker readiness uses
+host trust visible to CPython `ssl.create_default_context()` with certificate and
+hostname verification; ambient `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE`
+are unsupported, fail closed before setup, and are removed from all four process-spawning service units; the fifth unit is the timer that invokes the hardened renewal service. Before owner enrollment, honest status is
+`waiting_owner_oidc_or_passkey`.
 
 Owner registration, workforce OIDC, WebAuthn UV, and exact server-harness
 enrollment remain explicit human ceremonies. Server-local manager stages remote

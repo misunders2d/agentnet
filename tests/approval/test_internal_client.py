@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ssl
+import threading
+import traceback
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from agentnet.approval.internal_broker import (
     INTERNAL_BROKER_PROOF_HEADER,
@@ -19,6 +29,12 @@ from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.operations.config import ApprovalServiceClientConfig
 
 
+@pytest.fixture(autouse=True)
+def _clear_tls_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _config() -> ApprovalServiceClientConfig:
     return ApprovalServiceClientConfig(
         origin="https://approval.corp.example",
@@ -27,6 +43,241 @@ def _config() -> ApprovalServiceClientConfig:
         approver_principal_id="security-owner",
         remote_activation_oidc_subject="approved-owner-subject",
     )
+
+
+def test_internal_client_uses_explicit_system_tls_context_without_environment_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    captured: dict[str, object] = {}
+    real_client = httpx.Client
+
+    def create_context(*_args: object, **_kwargs: object) -> ssl.SSLContext:
+        return context
+
+    def capture_client(*args: object, **kwargs: object) -> httpx.Client:
+        captured.update(kwargs)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(ssl, "create_default_context", create_context)
+    monkeypatch.setattr(httpx, "Client", capture_client)
+    client = ApprovalServiceClient(
+        _config(),
+        "S" * 43,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
+    )
+    try:
+        assert captured["verify"] is context
+        assert captured["trust_env"] is False
+        assert captured["follow_redirects"] is False
+        assert str(captured["base_url"]) == "https://approval-public.corp.example"
+        assert context.check_hostname is True
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.keylog_filename is None
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("variable", ["SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"])
+def test_internal_client_rejects_ambient_tls_trust_override(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    monkeypatch.setenv(variable, "/private/hostile-ca.pem")
+    with pytest.raises(GateBlocked) as exc_info:
+        ApprovalServiceClient(_config(), "S" * 43)
+    assert exc_info.value.gate == "approval_broker_auth"
+    assert "hostile-ca" not in str(exc_info.value)
+
+
+def test_internal_client_sanitizes_system_tls_context_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+
+    def unavailable_context(*_args: object, **_kwargs: object) -> ssl.SSLContext:
+        raise OSError("private trust-store detail")
+
+    monkeypatch.setattr(ssl, "create_default_context", unavailable_context)
+    with pytest.raises(GateBlocked) as exc_info:
+        ApprovalServiceClient(_config(), "S" * 43)
+    assert exc_info.value.gate == "approval_broker_unavailable"
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "private trust-store detail" not in rendered
+    assert exc_info.value.__cause__ is None
+
+
+class _ReadinessHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        payload = (
+            b'{"schema":"agentnet.approval.internal-readiness-result.v1",'
+            b'"status":"ready"}'
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format: str, *args: object) -> None:
+        del args
+
+
+def _tls_material(tmp_path: Path, *, server_name: str) -> tuple[Path, Path, Path]:
+    now = datetime.now(UTC)
+    root_key = ec.generate_private_key(ec.SECP256R1())
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "AgentNet test root")])
+    root = (
+        x509.CertificateBuilder()
+        .subject_name(root_name)
+        .issuer_name(root_name)
+        .public_key(root_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(root_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()),
+            critical=False,
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+    server_key = ec.generate_private_key(ec.SECP256R1())
+    server = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, server_name)]))
+        .issuer_name(root.subject)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(server_name)]), critical=False)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+    root_path = tmp_path / "root.pem"
+    cert_path = tmp_path / "server.pem"
+    key_path = tmp_path / "server-key.pem"
+    root_path.write_bytes(root.public_bytes(serialization.Encoding.PEM))
+    cert_path.write_bytes(server.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return root_path, cert_path, key_path
+
+
+@pytest.mark.parametrize(
+    ("server_name", "trust_root", "expected_gate"),
+    [
+        ("wrong-host.example", True, "approval_broker_unavailable"),
+        ("localhost", False, "approval_broker_unavailable"),
+        ("localhost", True, None),
+    ],
+)
+def test_internal_client_enforces_trusted_matching_tls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_name: str,
+    trust_root: bool,
+    expected_gate: str | None,
+) -> None:
+    root_path, cert_path, key_path = _tls_material(tmp_path, server_name=server_name)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ReadinessHandler)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(cert_path, key_path)
+    server.socket = server_context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client_context = (
+        ssl.create_default_context(cafile=root_path)
+        if trust_root
+        else ssl.create_default_context()
+    )
+    monkeypatch.setattr(
+        "agentnet.approval.internal_client._system_tls_context",
+        lambda: client_context,
+    )
+    origin = f"https://localhost:{server.server_port}"
+    config = ApprovalServiceClientConfig(
+        origin=origin,
+        public_origin=origin,
+        service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
+        approver_principal_id="security-owner",
+        request_timeout_seconds=1.0,
+    )
+    client = ApprovalServiceClient(config, "S" * 43)
+    try:
+        if expected_gate is None:
+            assert client.readiness() == {
+                "schema": "agentnet.approval.internal-readiness-result.v1",
+                "status": "ready",
+            }
+        else:
+            with pytest.raises(GateBlocked) as exc_info:
+                client.readiness()
+            assert exc_info.value.gate == expected_gate
+            assert server_name not in str(exc_info.value)
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_internal_client_sanitizes_transport_failure() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.TransportError("private endpoint and certificate detail")
+
+    client = ApprovalServiceClient(
+        _config(),
+        "S" * 43,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(GateBlocked) as exc_info:
+            client.readiness()
+        assert exc_info.value.gate == "approval_broker_unavailable"
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert "private endpoint and certificate detail" not in rendered
+        assert exc_info.value.__cause__ is None
+    finally:
+        client.close()
 
 
 def test_internal_client_binds_runtime_secret_and_exact_bounded_routes() -> None:

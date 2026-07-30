@@ -163,6 +163,8 @@ for (const required of [
   "Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state",
   "Request-v2 writes marker-v3 binding exact `artifact_mode`",
   "communication-only restricted",
+  "No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation",
+  "Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution",
 ]) {
   if (!ordinaryServerText.includes(required)) {
     fail(`ordinary-server setup reference is missing canonical contract: ${required}`);
@@ -172,6 +174,12 @@ for (const required of [
   "/var/lib/agentnet-approval/config.json",
   "/var/lib/agentnet-approval/state",
   "deliberately non-ordinary",
+  "operator may separately install that CA into platform system trust visible to CPython or replace the route certificate",
+  "`SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` injection is not a supported remediation",
+  "Node.js 23 and 25 are unsupported despite the broad npm engine floor",
+  "Release/publish stays pinned to Node.js 24.18.0 LTS and npm 12.0.1",
+  "Skill-mediated installation must inspect `node --version` before running `npm install`, `npm exec`, or `pi install`",
+  "direct npm installation can warn or proceed according to the caller's npm configuration",
 ]) {
   if (!safeCommandsText.includes(required)) {
     fail(`safe commands reference is missing canonical ordinary-server boundary: ${required}`);
@@ -223,6 +231,8 @@ for (const required of [
   "Infisical or other named secret manager",
   "per-command setup approvals",
   "Never ask for another command packet, hostname, URL, callback, hash, identifier, config value",
+  "Before any AgentNet install, parse `node --version`",
+  "Node.js 23 or 25 blocks installation despite satisfying the broad npm engine floor",
 ]) {
   if (!onboardingExampleText.includes(required)) fail(`fresh-laptop prompt example is missing: ${required}`);
 }
@@ -260,6 +270,8 @@ const expectedOnboardingEvalIds = [
   "fresh-laptop-messaging-authority-blocked",
   "fresh-laptop-never-requires-infisical",
   "fresh-laptop-one-consolidated-setup-approval",
+  "fresh-laptop-rejects-eol-node-25-line",
+  "fresh-laptop-rejects-eol-node-line",
   "fresh-laptop-rejects-invalid-onboarding-mode",
   "fresh-laptop-rejects-three-grant-c0-fallback",
   "guided-join-terminal-recovery-is-explicit-and-key-preserving",
@@ -282,6 +294,9 @@ const expectedOnboardingEvalIds = [
   "ordinary-server-request-v2-requires-explicit-artifact-mode",
   "ordinary-server-resumes-exact-request",
   "ordinary-server-runtime-drift-invalidates-digest",
+  "ordinary-server-tls-environment-apply-blocks-at-launcher",
+  "ordinary-server-tls-environment-blocks-before-mutation",
+  "ordinary-server-untrusted-public-route-blocks",
   "ordinary-server-uses-product-owned-setup",
   "repository-candidate-does-not-unblock-installed-release",
   "server-reset-is-destructive-manager-only-recovery",
@@ -309,6 +324,8 @@ if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
 }
 for (const marker of [
   "privilegedSetupApply",
+  "unsupportedTlsEnvironment",
+  "Object.hasOwn(process.env, name)",
   "PATHEXT",
   'from "../lib/server-setup-preflight.mjs"',
   "privilegedApprovalDigest(userArguments, digestEnvironment)",

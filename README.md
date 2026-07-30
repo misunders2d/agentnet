@@ -162,6 +162,9 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
+Only non-EOL Node.js release lines are supported: current `0.1.32` coverage targets
+Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
+the broad npm engine floor.
 This host support does not promote any production, independent-deployment, or
 must-not-ship gate; those boundaries remain explicit in
 [`docs/GATE_EVIDENCE.md`](docs/GATE_EVIDENCE.md).
@@ -246,7 +249,10 @@ rerun the same AgentNet digest afterward.
 
 The wrapper then owns only AgentNet's three locked identities, private roots,
 Approval/Core/C0-responder state, mode-dependent scanner trust, five hardened
-systemd units, bounded start, and exact loopback/public health. Retry reloads realized state
+systemd units, bounded start, and exact loopback/public health. Signed Approval
+broker readiness uses host trust visible to CPython `ssl.create_default_context()`
+with certificate and hostname verification; ambient `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+and `SSLKEYLOGFILE` fail closed before setup and are removed from all four process-spawning service units; the fifth unit is the timer that invokes the hardened renewal service. Retry reloads realized state
 and commits the request-versioned marker only through same-request
 compare-and-swap; manual marker/unit surgery is unsupported. It never mutates
 DNS, TLS, proxy/firewall policy, PostgreSQL

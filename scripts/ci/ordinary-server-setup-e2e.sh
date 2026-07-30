@@ -63,7 +63,7 @@ cleanup() {
   sudo rm -f /etc/nginx/sites-enabled/agentnet-e2e /etc/nginx/sites-available/agentnet-e2e
   sudo systemctl reload nginx >/dev/null 2>&1
   sudo sed -i '/# agentnet-e2e$/d' /etc/hosts
-  sudo rm -f /usr/local/share/ca-certificates/agentnet-e2e.crt /etc/ssl/certs/agentnet-e2e.crt /etc/ssl/certs/agentnet-e2e.pem /etc/ssl/private/agentnet-e2e.key
+  sudo rm -f /usr/local/share/ca-certificates/agentnet-e2e-root.crt /etc/ssl/certs/agentnet-e2e.crt /etc/ssl/private/agentnet-e2e.key
   sudo update-ca-certificates >/dev/null 2>&1
   sudo -u postgres dropdb --if-exists agentnet >/dev/null 2>&1
   sudo -u postgres dropuser --if-exists agentnet >/dev/null 2>&1
@@ -101,22 +101,37 @@ cat >"$WORK/openssl.cnf" <<'EOF'
 [req]
 prompt = no
 distinguished_name = subject
-x509_extensions = extensions
+req_extensions = request_extensions
 [subject]
 CN = agentnet-e2e
+[request_extensions]
+subjectAltName = @alt_names
 [extensions]
 subjectAltName = @alt_names
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
 [alt_names]
 DNS.1 = core.agentnet.test
 DNS.2 = approval.agentnet.test
 EOF
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -config "$WORK/openssl.cnf" >/dev/null 2>&1
-chmod 600 "$WORK/tls.key"
-sudo install -o root -g root -m 0644 "$WORK/tls.crt" /usr/local/share/ca-certificates/agentnet-e2e.crt
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
+  -subj '/CN=AgentNet E2E root' \
+  -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' \
+  -keyout "$WORK/root-ca.key" -out "$WORK/root-ca.crt" >/dev/null 2>&1
+openssl req -new -newkey rsa:2048 -nodes -sha256 \
+  -keyout "$WORK/tls.key" -out "$WORK/tls.csr" -config "$WORK/openssl.cnf" >/dev/null 2>&1
+openssl x509 -req -days 1 -sha256 \
+  -in "$WORK/tls.csr" -CA "$WORK/root-ca.crt" -CAkey "$WORK/root-ca.key" \
+  -CAcreateserial -extfile "$WORK/openssl.cnf" -extensions extensions \
+  -out "$WORK/tls.crt" >/dev/null 2>&1
+openssl verify -CAfile "$WORK/root-ca.crt" "$WORK/tls.crt" | grep -F ': OK' >/dev/null
+chmod 600 "$WORK/root-ca.key" "$WORK/tls.key"
+sudo install -o root -g root -m 0644 "$WORK/root-ca.crt" /usr/local/share/ca-certificates/agentnet-e2e-root.crt
 sudo update-ca-certificates >/dev/null
 sudo install -o root -g root -m 0600 "$WORK/tls.key" /etc/ssl/private/agentnet-e2e.key
 sudo install -o root -g root -m 0644 "$WORK/tls.crt" /etc/ssl/certs/agentnet-e2e.crt

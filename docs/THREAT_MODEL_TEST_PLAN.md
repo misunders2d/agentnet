@@ -330,7 +330,7 @@ of approval, headless no-TTY refusal before begin/materialization, private URL
 absence from normal output/errors, control-byte rejection, partial terminal
 writes without retry, and resume without a second enrollment begin. Hermetic WebAuthn seams prove logic only; real workforce IdP,
 authenticator, independent channel/host/device/OS account/TLS administration,
-platform custody, and owner-approved ceremony remain required.
+platform custody, and owner-approved ceremony remain required. Approval broker TLS tests also require explicit system-trust wiring, certificate-required and hostname-mismatch rejection, untrusted-chain rejection, ambient `SSL_CERT_FILE`/`SSL_CERT_DIR`/`SSLKEYLOGFILE` denial before setup, sanitized context/transport failure, and a real ordinary-server system-CA public-route pass.
 
 ### Gate 7 — Local IPC and signing oracle
 

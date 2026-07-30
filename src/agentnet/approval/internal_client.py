@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
+import ssl
 from typing import Any
 
 import httpx
@@ -32,6 +34,39 @@ def _reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 _APPROVAL_STATES = frozenset({"pending", "issued", "rejected", "expired"})
+_TLS_TRUST_ENVIRONMENT = ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE")
+
+
+def require_approval_tls_environment() -> None:
+    if any(name in os.environ for name in _TLS_TRUST_ENVIRONMENT):
+        raise GateBlocked(
+            "approval_broker_auth",
+            "approval broker TLS trust configuration is unavailable",
+        )
+
+
+def _system_tls_context() -> ssl.SSLContext:
+    require_approval_tls_environment()
+    try:
+        context = ssl.create_default_context()
+        context.keylog_filename = None
+        if context.minimum_version < ssl.TLSVersion.TLSv1_2:
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+    except (OSError, TypeError, ValueError):
+        raise GateBlocked(
+            "approval_broker_unavailable",
+            "approval broker TLS trust is unavailable",
+        ) from None
+    if (
+        not context.check_hostname
+        or context.verify_mode != ssl.CERT_REQUIRED
+        or context.keylog_filename is not None
+    ):
+        raise GateBlocked(
+            "approval_broker_auth",
+            "approval broker TLS trust configuration is unavailable",
+        )
+    return context
 
 
 def _require_exact_keys(value: dict[str, Any], expected: frozenset[str]) -> None:
@@ -88,6 +123,7 @@ class ApprovalServiceClient:
             timeout=config.request_timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            verify=_system_tls_context(),
             transport=transport,
         )
 
@@ -134,8 +170,8 @@ class ApprovalServiceClient:
                     chunks.append(chunk)
         except (AuthenticationError, GateBlocked):
             raise
-        except httpx.HTTPError as exc:
-            raise GateBlocked("approval_service", "approval service is unavailable") from exc
+        except httpx.HTTPError:
+            raise GateBlocked("approval_service", "approval service is unavailable") from None
         return _strict_object(b"".join(chunks))
 
     def readiness(self) -> dict[str, str]:
@@ -199,11 +235,11 @@ class ApprovalServiceClient:
                 )
         except GateBlocked:
             raise
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             raise GateBlocked(
                 "approval_broker_unavailable",
                 "Approval broker readiness is unavailable",
-            ) from exc
+            ) from None
 
     def create_request(
         self,
