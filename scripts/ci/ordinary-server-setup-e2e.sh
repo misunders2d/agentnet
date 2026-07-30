@@ -32,8 +32,14 @@ APPLY_BLOCKED="$WORK/apply-postgres-blocked.json"
 APPLY1="$WORK/apply-1.json"
 APPLY2="$WORK/apply-2.json"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
-RUNTIME_PREFIX="/usr/local/agentnet-e2e"
+RUNTIME_PREFIX="/opt/agentnet-e2e"
 RUNTIME_PATH="$RUNTIME_PREFIX/bin:/usr/bin:/bin"
+RUNTIME_NODE="$RUNTIME_PREFIX/bin/node"
+RUNTIME_UV="$RUNTIME_PREFIX/bin/uv"
+RUNTIME_LAUNCHER="$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs"
+OPT_UID="$(stat -c '%u' /opt)"
+OPT_GID="$(stat -c '%g' /opt)"
+OPT_MODE="$(stat -c '%a' /opt)"
 HBA_FILE=""
 mkdir -p "$INPUTS" "$PACK"
 chmod 700 "$WORK" "$INPUTS"
@@ -72,6 +78,8 @@ cleanup() {
     sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' >/dev/null 2>&1
   fi
   sudo rm -rf "$RUNTIME_PREFIX"
+  sudo chown "$OPT_UID:$OPT_GID" /opt
+  sudo chmod "$OPT_MODE" /opt
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -87,13 +95,76 @@ run_evidence() {
   fi
 }
 
+require_service_safe_executable() {
+  local label="$1"
+  local target="$2"
+  local resolved=""
+  local current=""
+  local uid=""
+  local mode_hex=""
+  local permissions=0
+  local required=0
+  if ! resolved="$(realpath "$target")" || [[ ! -f "$resolved" || ! -x "$resolved" ]]; then
+    echo "ordinary server setup E2E: $label executable is unavailable: $target" >&2
+    return 1
+  fi
+  current="$resolved"
+  while [[ "$current" != "/" ]]; do
+    if ! uid="$(stat -c '%u' "$current")" || ! mode_hex="$(stat -c '%f' "$current")"; then
+      echo "ordinary server setup E2E: cannot inspect $label lineage component: $current" >&2
+      return 1
+    fi
+    # stat %f is hexadecimal; mask to the permission bits Python evaluates.
+    permissions=$((16#$mode_hex & 0777))
+    required=1
+    if [[ "$current" == "$resolved" ]]; then
+      required=5
+    fi
+    if ((uid != 0 || (permissions & 022) != 0 || (permissions & required) != required)); then
+      echo "ordinary server setup E2E: unsafe $label lineage component: $current" >&2
+      return 1
+    fi
+    current="$(dirname "$current")"
+  done
+}
+
+require_service_safe_tree() {
+  local root="$1"
+  local unsafe=""
+  if ! unsafe="$(sudo find "$root" \
+      \( ! -user root -o -perm /022 -o -type l -o \
+         \( -type d ! -perm -005 \) -o \( -type f ! -perm -004 \) \) \
+      -print -quit)"; then
+    echo "ordinary server setup E2E: cannot inspect the installed AgentNet package tree" >&2
+    return 1
+  fi
+  if [[ -n "$unsafe" ]]; then
+    echo "ordinary server setup E2E: unsafe AgentNet package-tree component: $unsafe" >&2
+    return 1
+  fi
+}
+
 # Install exact packed source under a root-owned system prefix. Service units must
 # not depend on setup-node/setup-uv paths under runner home.
 PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
+sudo chown root:root /opt
+sudo chmod 0755 /opt
 sudo install -o root -g root -m 0755 -d "$RUNTIME_PREFIX/bin"
-sudo install -o root -g root -m 0755 "$(command -v node)" "$RUNTIME_PREFIX/bin/node"
-sudo install -o root -g root -m 0755 "$(command -v uv)" "$RUNTIME_PREFIX/bin/uv"
+sudo install -o root -g root -m 0755 "$(command -v node)" "$RUNTIME_NODE"
+sudo install -o root -g root -m 0755 "$(command -v uv)" "$RUNTIME_UV"
 sudo -- "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
+[[ "$(realpath "$RUNTIME_PREFIX/bin/agentnet")" == "$(realpath "$RUNTIME_LAUNCHER")" ]] || {
+  echo "ordinary server setup E2E: global AgentNet command does not resolve to the installed launcher" >&2
+  exit 1
+}
+[[ "$(env PATH="$RUNTIME_PATH" node -p 'require("node:fs").realpathSync(process.execPath)')" == "$RUNTIME_NODE" ]] || {
+  echo "ordinary server setup E2E: runtime PATH did not select the root-owned Node.js copy" >&2
+  exit 1
+}
+require_service_safe_executable "Node.js" "$RUNTIME_NODE"
+require_service_safe_executable "uv" "$RUNTIME_UV"
+require_service_safe_executable "AgentNet launcher" "$RUNTIME_LAUNCHER"
+require_service_safe_tree "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet"
 
 # Operator-owned local TLS reverse proxy for exact public-route health probes.
 echo '127.0.0.1 core.agentnet.test approval.agentnet.test # agentnet-e2e' | sudo tee -a /etc/hosts >/dev/null
@@ -202,7 +273,7 @@ chmod 600 "$INPUTS"/* "$WORK/scanner.key" "$WORK/scanner.pub"
 
 # No privileged or managed-host writes; caller-owned npm runtime is allowed.
 run_evidence "$PLAN" env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
-  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup --request "$INPUTS/server-setup.json"
+  "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" server-agent setup --request "$INPUTS/server-setup.json"
 echo "ordinary server setup E2E: plan command complete"
 jq -e '.schema == "agentnet.server-setup.evidence.v1" and .status == "planned" and .identity_enrolled == false and .authority_granted == false and .prerequisites.postgresql.hba_rule == "local agentnet agentnet peer"' "$PLAN" >/dev/null
 for user in agentnet agentnet-approval; do ! getent passwd "$user" >/dev/null; done
@@ -215,7 +286,7 @@ echo "ordinary server setup E2E: plan assertions complete"
 # runtime/lock, then must block before AgentNet config/schema/unit/service writes.
 set +e
 sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
-  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
+  "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply \
   >"$APPLY_BLOCKED"
 BLOCKED_EXIT=$?
@@ -256,7 +327,7 @@ echo "ordinary server setup E2E: PostgreSQL boundary complete"
 # Same approved digest resumes, starts services, and proves exact public health
 # without granting identity, authority, or production durability.
 run_evidence "$APPLY1" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
-  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
+  "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY1" >/dev/null
 sudo systemctl is-active --quiet agentnet-core.service
@@ -275,7 +346,7 @@ echo "ordinary server setup E2E: first converged apply complete"
 
 # Same-digest retry revalidates realized state; marker/config/unit bytes remain exact.
 run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
-  "$RUNTIME_PREFIX/bin/agentnet" server-agent setup \
+  "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
 jq -c '{status, steps: [.steps[] | {id, status}]}' "$APPLY2"
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$APPLY2" >/dev/null || { echo "ordinary server setup E2E: stable retry evidence mismatch" >&2; exit 1; }

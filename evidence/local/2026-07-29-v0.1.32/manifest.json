@@ -1,6 +1,6 @@
 {
   "run_id": "2026-07-29-v0.1.32",
-  "evaluated_at": "2026-07-30T14:32:24+00:00",
+  "evaluated_at": "2026-07-30T15:07:43+00:00",
   "scope": "v0_1_32_coordinated_first_c0_release_blocker_candidate",
   "verification_status": "PASS",
   "release_certified": false,
@@ -8,7 +8,7 @@
   "release_source_tree_sha256": "f40ee16103270cea48bc476e38685f066ea34af79a78ae461b5904dcf6a07cdb",
   "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
-  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin using explicit verified host system trust with SSL certificate/key-log environment rejected before setup and sanitized TLS failure; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Corrected minimum-floor cross-platform and ordinary-server E2E CI passed at a26af8f6c06ee90530809f9c9e32ca320432218b. The first pushed v0.1.32 tag at that commit produced staging run 30543641242, which remains BOUNDED NON-GREEN because the documented packed checker expected only service_executable_inaccessible while the GitHub tool-cache Node truthfully failed closed as unsafe_executable; failure occurred inside prepublishOnly before upload. The checker correction derives one exact expected blocker from Node then uv ownership/service visibility and preserves all schema, status, authority, enrollment, and exit-code pins. New same-commit CI, dedicated local PostgreSQL mutation evidence, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated.",
+  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin using explicit verified host system trust with SSL certificate/key-log environment rejected before setup and sanitized TLS failure; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Corrected minimum-floor cross-platform and ordinary-server E2E CI passed at a26af8f6c06ee90530809f9c9e32ca320432218b. The first pushed v0.1.32 tag at that commit produced staging run 30543641242, which remains BOUNDED NON-GREEN because the documented packed checker expected only service_executable_inaccessible while the GitHub tool-cache Node truthfully failed closed as unsafe_executable; failure occurred inside prepublishOnly before upload. The checker correction derives one exact expected blocker from Node then uv ownership/service visibility and preserves all schema, status, authority, enrollment, and exit-code pins. At aefaafbe0e24d3106e7fb2a60dd36e1520ea6395, main-push cross-platform run 30553084697 and ordinary-server run 30553084681 passed, but tag ordinary-server run 30553729024 on runner image 20260726.254.1 failed closed before setup because executable lineage under /usr/local did not satisfy custody; cleanup passed. Trusted run 30553729045 created one non-public stage before cancellation completed; the exact stage identifier is retained out of band, the stage must not be approved, and interactive maintainer rejection is required before the same version can be restaged. Public registry reads still return 0.1.31 as latest. A deterministic /opt runtime fixture with full Node, uv, launcher, and package-tree custody assertions is pending same-commit CI. Dedicated local PostgreSQL mutation evidence, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated.",
   "execution_context": {
     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
     "packed_generations": "source plus two clean recursive npm installation generations report 1595 passed and 16 expected platform/dedicated-PostgreSQL skips, complete package-tree digest equality, and no named verification residue",
@@ -19,7 +19,10 @@
   "candidate_tag_history": {
     "superseded_v0_1_32_target": "a26af8f6c06ee90530809f9c9e32ca320432218b",
     "superseded_stage_run": "30543641242 BOUNDED NON-GREEN: packed setup probe rejected the truthful unsafe_executable blocker before any npm upload; the failure is retained, never reclassified, and not waived",
-    "replacement_v0_1_32_target": "PENDING: record the exact replacement target in PUBLIC_RELEASE_STATUS.md only after the owner-authorized remote tag replacement",
+    "first_replacement_v0_1_32_target": "aefaafbe0e24d3106e7fb2a60dd36e1520ea6395",
+    "first_replacement_ci": "Main-push cross-platform run 30553084697 and ordinary-server run 30553084681 passed; tag cross-platform run 30553729116 passed; tag ordinary-server run 30553729024 remains BOUNDED NON-GREEN on runner image 20260726.254.1 because the pre-existing /usr/local ancestor failed executable-lineage custody before setup; cleanup passed; the failure is retained, never reclassified, and not waived",
+    "first_replacement_private_stage": "Run 30553729045 created one non-public stage before cancellation completed; the exact stage identifier is retained out of band; do not approve; interactive maintainer rejection is required before 0.1.32 can be restaged",
+    "next_replacement_v0_1_32_target": "PENDING: require same-commit cross-platform and ordinary-server E2E PASS before another owner-authorized remote tag replacement",
     "release_posture": "BLOCKED; production_ready=false; ship_eligible=false; no must-not-ship gate is promoted"
   },
   "commands": [
@@ -65,7 +68,7 @@
     },
     {
       "command": "GitHub cross-platform and ordinary-server setup workflows",
-      "result": "BOUNDED NON-GREEN release history: corrected minimum-floor cross-platform and ordinary-server E2E CI passed at a26af8f6c06ee90530809f9c9e32ca320432218b, then staging run 30543641242 failed before upload on an environment-specific packed-checker blocker assertion; new same-commit cross-platform and ordinary-server E2E CI for the checker correction remains pending"
+      "result": "BOUNDED NON-GREEN release history: at aefaafbe0e24d3106e7fb2a60dd36e1520ea6395, main-push cross-platform run 30553084697 and ordinary-server run 30553084681 passed, and tag cross-platform run 30553729116 passed; tag ordinary-server run 30553729024 failed closed before setup on runner image 20260726.254.1 because the pre-existing /usr/local ancestor failed executable-lineage custody; cleanup passed; deterministic /opt runtime-fixture correction and fresh same-commit workflows remain pending"
     }
   ],
   "review_results": [
@@ -98,6 +101,11 @@
       "review": "Ordinary-server timer-state Constitution rereview",
       "model": "openai-codex/gpt-5.6-sol",
       "result": "REVISE then PASS: blocked/nonproduction posture preserved; corrected E2E remains explicitly non-green pending a fresh run; no A2A or secret-handling change"
+    },
+    {
+      "review": "Tag-level ordinary-server runner-image drift review",
+      "model": "Claude Opus 5",
+      "result": "REVISE: the first direct-launch proposal did not address ancestor custody; the correction must use a service-safe system prefix, assert full Node/uv/launcher/package-tree custody, preserve the exact fail-closed product guard, retain failed run 30553729024, reject the out-of-band private stage, and pass fresh same-commit CI before retagging"
     }
   ],
   "artifacts": [

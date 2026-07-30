@@ -98,7 +98,7 @@ jobs:
           ! getent group agentnet-approval >/dev/null
           ! getent group agentnet-c0 >/dev/null
           for path in \
-            /usr/local/agentnet-e2e \
+            /opt/agentnet-e2e \
             /var/lib/agentnet \
             /var/lib/agentnet-approval \
             /var/lib/agentnet-c0 \
