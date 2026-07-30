@@ -164,7 +164,9 @@ host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
 Only non-EOL Node.js release lines are supported: current `0.1.32` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
-the broad npm engine floor.
+the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
+compatible npm 10.9.3; the deployed Hub compatibility target is reported
+separately as Node.js 22.23.2 with npm 11.18.0.
 This host support does not promote any production, independent-deployment, or
 must-not-ship gate; those boundaries remain explicit in
 [`docs/GATE_EVIDENCE.md`](docs/GATE_EVIDENCE.md).

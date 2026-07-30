@@ -273,14 +273,16 @@ Source and both recursive packed generations each report `1595 passed, 16
 expected skips`; release verifier and package-tree digest/no-residue checks pass.
 Final TLS security and skill-architecture reviews converge, Constitution review
 passes, and the Node-lifecycle skill audit converges. Node.js compatibility policy
-keeps exact Node.js `24.18.0` LTS plus npm `12.0.1` for three-OS/release paths and
-adds packed Ubuntu targets for Node.js `22.19.0`, `24.18.0`, and `26.5.0`; Node.js
-23 and 25 are EOL and unsupported. Historical cross-platform CI passed at
-`f329566`; ordinary-server E2E then reached real PostgreSQL 18 and exposed
-bundled-CA rejection of its system-trusted synthetic Approval certificate.
-Explicit verified host trust has local proof; corrected same-commit clean-host and
-expanded Node-matrix CI remain pending. Mutation-authorized local PostgreSQL and
-external C0 evidence remain absent. No gate is promoted.
+pairs the exact Node.js `22.19.0` minimum floor with npm `10.9.3`; exact Node.js
+`24.18.0` LTS plus npm `12.0.1` remains the three-OS/release baseline, and the
+Node.js `24.18.0`/`26.5.0` compatibility lanes also use npm `12.0.1`. The deployed
+Hub compatibility target is separately verified as Node.js `22.23.2` with npm
+`11.18.0`; Node.js 23 and 25 are EOL and unsupported. Same-commit ordinary-server
+E2E passed at `81315a6`, while its cross-platform run preserved the impossible
+Node.js `22.19.0`/npm `12.0.1` pairing as a failure before correction. Explicit
+verified host trust has clean-host proof; corrected same-commit cross-platform CI
+remains pending. Mutation-authorized local PostgreSQL and external C0 evidence
+remain absent. No gate is promoted.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
