@@ -52,4 +52,7 @@ jobs:
       # AgentNet's prepublishOnly script runs package checks, the test suite,
       # and release-manifest verification before npm accepts the staged package.
       - name: Stage package
-        run: npm stage publish --access public
+        shell: bash
+        run: |
+          umask 022
+          npm stage publish --access public

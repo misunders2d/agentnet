@@ -66,6 +66,7 @@ jobs:
           UNRELATED="$RUNNER_TEMP/agentnet-unrelated"
           mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
           PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
+          umask 022
           npm install --prefix "$PREFIX" --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
           cd "$UNRELATED"
           node "$PREFIX/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs" --version
@@ -129,6 +130,7 @@ jobs:
           UNRELATED="$RUNNER_TEMP/agentnet-node-${{ matrix.node }}-unrelated"
           mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
           PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
+          umask 022
           npm install --prefix "$PREFIX" --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
           cd "$UNRELATED"
           node "$PREFIX/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs" --version

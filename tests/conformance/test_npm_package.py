@@ -68,6 +68,10 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "lineageBlocker(",
         'initName === "systemd" && !isProtectedServicePath(path.resolve(temporary))',
         "expected=${expectedBlocker}",
+        'process.platform !== "win32") process.umask(0o022)',
+        'entry.path === "npm/bin/agentnet.mjs"',
+        "launcherArchiveEntry?.mode !== 0o755",
+        "installedLauncherMode !== 0o755",
     ):
         assert required in packed_checker
     for rejected_blocker in (

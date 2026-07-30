@@ -74,6 +74,9 @@ Required:
   rejects package-root symbolic links, then transfers only the exact resolved
   non-root installation prefix to root without dereferencing links, and
   revalidates every owner and mode component;
+- system installation runs under `umask 022` because npm's bin-link step derives
+  launcher mode from the privileged install process umask; a more permissive
+  value can create a launcher that AgentNet must reject;
 - no blanket package-mode repair; writable, service-inaccessible, or
   non-executable packaged entries remain defects and fail closed;
 - Node.js, uv, AgentNet, `systemctl`, and `useradd` executable bytes stable between plan and locked apply;

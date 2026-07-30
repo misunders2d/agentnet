@@ -44,7 +44,10 @@ invoking user. The separately approved system-install step must first reject
 symbolic links inside the exact AgentNet package root, then transfer only the
 resolved non-root installation prefix into root custody without dereferencing
 links, and finally verify every Node.js, uv, launcher, prefix, and package-tree
-owner/mode component. Do not blanket-repair package modes: group/other
+owner/mode component. Run that system install under `umask 022`: npm's
+bin-link step derives the launcher mode from the privileged install process
+umask, and a more permissive value can create a launcher that AgentNet must
+reject. Do not blanket-repair package modes: group/other
 writability, missing service-read bits, or a non-executable launcher is a
 package/install defect that must remain fail-closed.
 

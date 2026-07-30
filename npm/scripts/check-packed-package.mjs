@@ -19,6 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stablePackageTreeSha256 } from "../lib/server-setup-preflight.mjs";
 
+if (process.platform !== "win32") process.umask(0o022);
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temporary = mkdtempSync(path.join(os.tmpdir(), "agentnet-packed-check-"));
 chmodSync(temporary, 0o755);
@@ -208,6 +210,14 @@ try {
     const parsed = JSON.parse(packed.stdout);
     const manifest = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
     if (!manifest?.filename) throw new Error("npm pack did not report a tarball filename");
+    const launcherArchiveEntry = (manifest.files ?? []).find(
+      (entry) => entry.path === "npm/bin/agentnet.mjs",
+    );
+    if (launcherArchiveEntry?.mode !== 0o755) {
+      throw new Error(
+        `generation ${generation} packed launcher mode must be 0755, got ${String(launcherArchiveEntry?.mode)}`,
+      );
+    }
     const names = new Set((manifest.files ?? []).map((entry) => entry.path));
     if (names.has(".gitignore") || names.has(".npmignore")) {
       throw new Error(`generation ${generation} tarball depends on a root ignore file`);
@@ -230,6 +240,16 @@ try {
       "@misunders2d",
       "agentnet",
     );
+    if (initName === "systemd") {
+      const installedLauncherMode = (
+        statSync(path.join(packageRoot, "npm", "bin", "agentnet.mjs")).mode & 0o777
+      );
+      if (installedLauncherMode !== 0o755) {
+        throw new Error(
+          `generation ${generation} installed launcher mode must be 0755, got ${installedLauncherMode.toString(8)}`,
+        );
+      }
+    }
     const environment = {
       ...process.env,
       HOME: home,

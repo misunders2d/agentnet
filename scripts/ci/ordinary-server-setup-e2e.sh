@@ -155,7 +155,11 @@ sudo chmod 0755 /opt
 sudo install -o root -g root -m 0755 -d "$RUNTIME_PREFIX/bin"
 sudo install -o root -g root -m 0755 "$(command -v node)" "$RUNTIME_NODE"
 sudo install -o root -g root -m 0755 "$(command -v uv)" "$RUNTIME_UV"
-sudo -- "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
+# npm's bin-link step rewrites executable targets from the privileged process
+# umask. Set it inside sudo rather than trusting host sudoers inheritance.
+sudo -- sh -c 'umask 022; exec "$@"' sh \
+  "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" \
+  --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
 if ! PACKAGE_SYMLINK="$(sudo find "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet" -type l -print -quit)"; then
   echo "ordinary server setup E2E: cannot inspect the installed AgentNet package tree for symbolic links" >&2
   exit 1
