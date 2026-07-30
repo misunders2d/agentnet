@@ -12,7 +12,7 @@ jobs:
   package-host:
     name: ${{ matrix.host }} package host
     runs-on: ${{ matrix.host }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +69,11 @@ jobs:
           npm install --prefix "$PREFIX" --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
           cd "$UNRELATED"
           node "$PREFIX/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs" --version
+
+      - name: Verify recursive packed package and server preflight
+        if: runner.os == 'Linux'
+        shell: bash
+        run: npm run check:packed
 
   node-compatibility:
     name: Ubuntu / Node.js ${{ matrix.node }} compatibility

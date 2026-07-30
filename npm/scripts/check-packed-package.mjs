@@ -1,7 +1,19 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants as fsConstants,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,11 +22,15 @@ import { stablePackageTreeSha256 } from "../lib/server-setup-preflight.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temporary = mkdtempSync(path.join(os.tmpdir(), "agentnet-packed-check-"));
 chmodSync(temporary, 0o755);
+const initName = process.platform === "linux" && (() => {
+  try { return readFileSync("/proc/1/comm", "utf8").trim(); } catch { return ""; }
+})();
 const unrelated = path.join(temporary, "unrelated");
 const state = path.join(temporary, "state");
 const home = path.join(temporary, "home");
 const npmCache = path.join(temporary, "npm-cache");
 const timeout = 10 * 60 * 1000;
+const protectedServiceRoots = ["/home", "/root", "/run/user", "/tmp", "/var/tmp"];
 
 for (const directory of [unrelated, state, home, npmCache]) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -72,7 +88,70 @@ const requireNoVerificationResidue = (packageRoot) => {
   }
 };
 
+const isProtectedServicePath = (candidate) => protectedServiceRoots.some((rootPath) => (
+  candidate === rootPath || candidate.startsWith(`${rootPath}${path.sep}`)
+));
+
+if (initName === "systemd" && !isProtectedServicePath(path.resolve(temporary))) {
+  rmSync(temporary, { recursive: true, force: true });
+  throw new Error("packed setup probe temporary root is not hidden by the managed service sandbox");
+}
+
+const resolveCommand = (command, searchPath) => {
+  for (const entry of searchPath.split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(entry, command);
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return realpathSync(candidate);
+    } catch {
+      // Try the next PATH entry.
+    }
+  }
+  return null;
+};
+
+const lineageBlocker = (target) => {
+  const filesystemRoot = path.parse(target).root;
+  for (let item = target; item !== filesystemRoot; item = path.dirname(item)) {
+    const metadata = statSync(item);
+    if (metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) {
+      return "unsafe_executable";
+    }
+    const required = metadata.isDirectory() ? 0o001 : 0o005;
+    if ((metadata.mode & required) !== required) {
+      return "service_executable_inaccessible";
+    }
+  }
+  return null;
+};
+
+const expectedBlockedSetupBlocker = (environment) => {
+  const nodeExecutable = realpathSync(process.execPath);
+  const pathNodeExecutable = resolveCommand("node", environment.PATH ?? "");
+  const uvExecutable = resolveCommand("uv", environment.PATH ?? "");
+  if (!pathNodeExecutable) {
+    throw new Error("packed setup probe could not resolve Node from PATH");
+  }
+  if (pathNodeExecutable !== nodeExecutable) {
+    throw new Error("packed setup probe PATH Node does not match the checker runtime");
+  }
+  if (!uvExecutable) {
+    throw new Error("packed setup probe could not resolve uv from PATH");
+  }
+  for (const target of [nodeExecutable, uvExecutable]) {
+    if (isProtectedServicePath(target)) {
+      return "service_executable_inaccessible";
+    }
+    const blocker = lineageBlocker(target);
+    if (blocker) return blocker;
+  }
+  // Service-safe Node and uv executables reach the installed package tree next.
+  // The tree is deliberately under the protected temporary root asserted above.
+  return "service_executable_inaccessible";
+};
+
 const requireBlockedSetup = (launcher, request, options) => {
+  const expectedBlocker = expectedBlockedSetupBlocker(options.env);
   const completed = spawnSync(
     launcher,
     ["server-agent", "setup", "--request", request],
@@ -98,12 +177,12 @@ const requireBlockedSetup = (launcher, request, options) => {
   if (
     evidence.schema !== "agentnet.server-setup.evidence.v1" ||
     evidence.status !== "blocked" ||
-    evidence.blocker !== "service_executable_inaccessible" ||
+    evidence.blocker !== expectedBlocker ||
     evidence.authority_granted !== false ||
     evidence.identity_enrolled !== false
   ) {
     throw new Error(
-      `packed setup probe returned unexpected blocker evidence: status=${String(evidence.status)} blocker=${String(evidence.blocker)}`,
+      `packed setup probe returned unexpected blocker evidence: status=${String(evidence.status)} blocker=${String(evidence.blocker)} expected=${expectedBlocker}`,
     );
   }
 };
@@ -183,9 +262,6 @@ try {
     }
     run(launcher, ["server-agent", "setup", "--help"], { cwd: unrelated, env: environment });
 
-    const initName = process.platform === "linux" && (() => {
-      try { return readFileSync("/proc/1/comm", "utf8").trim(); } catch { return ""; }
-    })();
     if (initName === "systemd") {
       const inputs = path.join(temporary, `server-setup-inputs-${generation}`);
       mkdirSync(inputs, { mode: 0o700 });

@@ -1,6 +1,6 @@
 {
   "run_id": "2026-07-29-v0.1.32",
-  "evaluated_at": "2026-07-30T12:17:08+00:00",
+  "evaluated_at": "2026-07-30T14:32:24+00:00",
   "scope": "v0_1_32_coordinated_first_c0_release_blocker_candidate",
   "verification_status": "PASS",
   "release_certified": false,
@@ -8,13 +8,19 @@
   "release_source_tree_sha256": "f40ee16103270cea48bc476e38685f066ea34af79a78ae461b5904dcf6a07cdb",
   "prior_runtime_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-07-28-v0.1.31/manifest.json",
-  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin using explicit verified host system trust with SSL certificate/key-log environment rejected before setup and sanitized TLS failure; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Same-commit ordinary-server E2E passed at 81315a6; its cross-platform run preserved the impossible Node.js 22.19.0/npm 12.0.1 pairing as a failure before the minimum-floor correction to npm 10.9.3. Corrected same-commit cross-platform CI, dedicated local PostgreSQL mutation evidence, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated.",
+  "change_boundary": "One coordinated first-C0 release-blocker repair: signed non-mutating Approval broker readiness through the configured public origin using explicit verified host system trust with SSL certificate/key-log environment rejected before setup and sanitized TLS failure; authoritative post-enrollment setup reconciliation; Core migration 5 exact OIDC-begin response-loss replay; finite current always-on credential renewal; isolated package-owned C0 responder; current-package clean-state setup-attempt custody; recoverable terminal-marker/config cleanup; exact five-unit systemd setup/reset lifecycle; and timer-aware inactive auxiliary-unit runtime proof. This local PASS certifies only reproducible source/package integrity and hermetic behavior. Corrected minimum-floor cross-platform and ordinary-server E2E CI passed at a26af8f6c06ee90530809f9c9e32ca320432218b. The first pushed v0.1.32 tag at that commit produced staging run 30543641242, which remains BOUNDED NON-GREEN because the documented packed checker expected only service_executable_inaccessible while the GitHub tool-cache Node truthfully failed closed as unsafe_executable; failure occurred inside prepublishOnly before upload. The checker correction derives one exact expected blocker from Node then uv ownership/service visibility and preserves all schema, status, authority, enrollment, and exit-code pins. New same-commit CI, dedicated local PostgreSQL mutation evidence, live OIDC/WebAuthn, fresh-laptop native message/recipient commitment/COMPLETED_C0_ROUND_TRIP/five-power revocation, production certification, ship eligibility, and gate promotion remain absent or separately gated.",
   "execution_context": {
     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
     "packed_generations": "source plus two clean recursive npm installation generations report 1595 passed and 16 expected platform/dedicated-PostgreSQL skips, complete package-tree digest equality, and no named verification residue",
     "root_installed_external_host": "NOT RUN: no 0.1.32 root-installed external-host setup, service start, enrollment, responder, timer, or C0 ceremony was authorized; prior 0.1.31 negative deployment evidence remains historical only",
     "callback_incident": "0.1.32 stores the exact OIDC begin idempotency key before network and same-key/same-request retries return the encrypted committed Core winner; no prior callback URL, state, code, cookie, continuation, or transaction is reused",
     "known_live_findings": "MEL-216, MEL-217, MEL-220, and MEL-226 have local source repairs; external proof is absent and no issue or release gate is promoted"
+  },
+  "candidate_tag_history": {
+    "superseded_v0_1_32_target": "a26af8f6c06ee90530809f9c9e32ca320432218b",
+    "superseded_stage_run": "30543641242 BOUNDED NON-GREEN: packed setup probe rejected the truthful unsafe_executable blocker before any npm upload; the failure is retained, never reclassified, and not waived",
+    "replacement_v0_1_32_target": "PENDING: record the exact replacement target in PUBLIC_RELEASE_STATUS.md only after the owner-authorized remote tag replacement",
+    "release_posture": "BLOCKED; production_ready=false; ship_eligible=false; no must-not-ship gate is promoted"
   },
   "commands": [
     {
@@ -31,7 +37,15 @@
     },
     {
       "command": "npm run check",
-      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1595 passed and 16 expected platform/dedicated-PostgreSQL skips; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue"
+      "result": "PASS: source and clean installed npm generations 1 and 2 each reported 1595 passed and 16 expected platform/dedicated-PostgreSQL skips; release verifier PASS; package excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; each launcher-driven verify preserved the complete installed package-tree content digest and left no .hypothesis, .pytest_cache, __pycache__, or .pyc residue; the corrected packed setup probe derives one exact fail-closed blocker from Node then uv ownership and service visibility"
+    },
+    {
+      "command": "PATH=<user-owned-node-outside-protected-roots>:$PATH npm run check:packed",
+      "result": "PASS: exact non-root-owned Node branch outside /home, /root, /run/user, /tmp, and /var/tmp produced truthful unsafe_executable evidence; both recursive packed generations reported 1595 passed and 16 expected skips; temporary fixture removed"
+    },
+    {
+      "command": "PATH=<user-owned-uv-outside-protected-roots>:/usr/bin:... npm run check:packed",
+      "result": "PASS: root-owned service-visible /usr/bin/node reached the next uv provenance gate; user-owned uv outside protected roots produced truthful unsafe_executable evidence; both recursive packed generations reported 1595 passed and 16 expected skips; temporary fixture removed"
     },
     {
       "command": "npm pack --json --ignore-scripts; clean npm install; Pi DefaultResourceLoader on packed agentnet-operator skill",
@@ -51,7 +65,7 @@
     },
     {
       "command": "GitHub cross-platform and ordinary-server setup workflows",
-      "result": "BOUNDED NON-GREEN: same-commit ordinary-server E2E passed at 81315a6; same-commit cross-platform CI passed three-OS Node.js 24.18.0/npm 12.0.1 package hosts plus Node.js 24.18.0 and 26.5.0 compatibility lanes, but correctly preserved the impossible Node.js 22.19.0/npm 12.0.1 pairing as failed before correction; corrected minimum-floor Node.js 22.19.0/npm 10.9.3 same-commit CI remains pending"
+      "result": "BOUNDED NON-GREEN release history: corrected minimum-floor cross-platform and ordinary-server E2E CI passed at a26af8f6c06ee90530809f9c9e32ca320432218b, then staging run 30543641242 failed before upload on an environment-specific packed-checker blocker assertion; new same-commit cross-platform and ordinary-server E2E CI for the checker correction remains pending"
     }
   ],
   "review_results": [

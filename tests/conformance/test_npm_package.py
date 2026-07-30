@@ -50,6 +50,33 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     assert "evidence/**/*.gz" not in package["files"]
     assert package["scripts"]["check:packed"] == "node npm/scripts/check-packed-package.mjs"
     assert package["scripts"]["check"].endswith("&& npm run check:packed")
+    packed_checker = (
+        ROOT / "npm/scripts/check-packed-package.mjs"
+    ).read_text(encoding="utf-8")
+    for required in (
+        '"agentnet.server-setup.evidence.v1"',
+        '"service_executable_inaccessible"',
+        '"unsafe_executable"',
+        'evidence.status !== "blocked"',
+        "evidence.authority_granted !== false",
+        "evidence.identity_enrolled !== false",
+        "completed.status !== 1",
+        "expectedBlockedSetupBlocker(options.env)",
+        "evidence.blocker !== expectedBlocker",
+        'resolveCommand("uv", environment.PATH ?? "")',
+        "for (const target of [nodeExecutable, uvExecutable])",
+        "lineageBlocker(",
+        'initName === "systemd" && !isProtectedServicePath(path.resolve(temporary))',
+        "expected=${expectedBlocker}",
+    ):
+        assert required in packed_checker
+    for rejected_blocker in (
+        "missing_package_provenance",
+        "missing_executable",
+        "missing_host_tool",
+        "unsupported_host",
+    ):
+        assert f'"{rejected_blocker}"' not in packed_checker
     assert package["os"] == ["linux", "darwin", "win32"]
     assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", package["version"])
     assert package["peerDependenciesMeta"] == {

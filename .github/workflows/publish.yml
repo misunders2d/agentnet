@@ -13,7 +13,7 @@ jobs:
   stage:
     if: github.repository == 'misunders2d/agentnet'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out tagged source
