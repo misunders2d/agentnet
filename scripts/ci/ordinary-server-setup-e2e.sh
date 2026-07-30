@@ -188,7 +188,7 @@ sudo chown -Rh root:root "$RUNTIME_PREFIX"
   echo "ordinary server setup E2E: server install unexpectedly created an ambient AgentNet command" >&2
   exit 1
 }
-[[ "$(env PATH="$RUNTIME_PATH" node -p 'require("node:fs").realpathSync(process.execPath)')" == "$RUNTIME_NODE" ]] || {
+[[ "$(env PATH="$RUNTIME_PATH" node -p 'require("node:fs").realpathSync(process.execPath)')" == "$(realpath "$RUNTIME_NODE")" ]] || {
   echo "ordinary server setup E2E: runtime PATH did not select the root-owned Node.js copy" >&2
   exit 1
 }
