@@ -38,6 +38,16 @@ Installation does not enroll a person, create an identity, start a supervisor, a
 
 The default self-hosted profile is installed and operated locally by the target server's coding agent. Server setup requires system-wide root-owned AgentNet, Node.js, and `uv` executables readable/executable by locked service identities. Target coding agent must reject any per-user, home, temporary, writable, or request-selected launcher before privileged invocation; code inside an untrusted launcher cannot make its own execution as root safe. Launcher and Python provenance checks are defense in depth after that precondition. A remote Manager may provide immutable public package/version instructions and inspect sanitized evidence, but must not shell into the host or invent users, directories, units, or recovery steps.
 
+Do not assume `sudo npm install -g` produces a root-owned package tree. npm may
+honor `SUDO_UID`/`SUDO_GID` and leave the exact installed prefix owned by the
+invoking user. The separately approved system-install step must first reject
+symbolic links inside the exact AgentNet package root, then transfer only the
+resolved non-root installation prefix into root custody without dereferencing
+links, and finally verify every Node.js, uv, launcher, prefix, and package-tree
+owner/mode component. Do not blanket-repair package modes: group/other
+writability, missing service-read bits, or a non-executable launcher is a
+package/install defect that must remain fail-closed.
+
 Prepare the strict non-secret request with owner-only sensitive file references described by the bundled `skills/agentnet-operator/references/ordinary-server-setup.md`, then plan without privileged or managed-host writes. The npm launcher may materialize its caller-owned Python runtime as part of installed-code execution:
 
 ```bash

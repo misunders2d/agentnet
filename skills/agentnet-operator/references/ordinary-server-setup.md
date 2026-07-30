@@ -69,6 +69,13 @@ Required:
 - canonical absolute paths;
 - root-owned, not group/other writable;
 - package tree root-owned and service-readable;
+- no assumption that `sudo npm install -g` established root custody: npm may
+  honor `SUDO_UID`/`SUDO_GID`; the separately approved install step first
+  rejects package-root symbolic links, then transfers only the exact resolved
+  non-root installation prefix to root without dereferencing links, and
+  revalidates every owner and mode component;
+- no blanket package-mode repair; writable, service-inaccessible, or
+  non-executable packaged entries remain defects and fail closed;
 - Node.js, uv, AgentNet, `systemctl`, and `useradd` executable bytes stable between plan and locked apply;
 - no selected path or resolved ancestor under `/root`, `/home`, or `/run/user` because units use `ProtectHome=true`;
 - no temporary, per-user, NVM-home, shell-wrapper, request-selected, or ambient-PATH fallback at apply.

@@ -163,6 +163,8 @@ for (const required of [
   "Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state",
   "Request-v2 writes marker-v3 binding exact `artifact_mode`",
   "communication-only restricted",
+  "`sudo npm install -g` established root custody",
+  "no blanket package-mode repair",
   "No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation",
   "Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution",
 ]) {

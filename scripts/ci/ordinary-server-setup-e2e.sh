@@ -102,6 +102,7 @@ require_service_safe_executable() {
   local current=""
   local uid=""
   local mode_hex=""
+  local mode_display=""
   local permissions=0
   local required=0
   if ! resolved="$(realpath "$target")" || [[ ! -f "$resolved" || ! -x "$resolved" ]]; then
@@ -110,7 +111,9 @@ require_service_safe_executable() {
   fi
   current="$resolved"
   while [[ "$current" != "/" ]]; do
-    if ! uid="$(stat -c '%u' "$current")" || ! mode_hex="$(stat -c '%f' "$current")"; then
+    if ! uid="$(stat -c '%u' "$current")" ||
+       ! mode_hex="$(stat -c '%f' "$current")" ||
+       ! mode_display="$(stat -c '%a' "$current")"; then
       echo "ordinary server setup E2E: cannot inspect $label lineage component: $current" >&2
       return 1
     fi
@@ -121,7 +124,7 @@ require_service_safe_executable() {
       required=5
     fi
     if ((uid != 0 || (permissions & 022) != 0 || (permissions & required) != required)); then
-      echo "ordinary server setup E2E: unsafe $label lineage component: $current" >&2
+      echo "ordinary server setup E2E: unsafe $label lineage component: $current uid=$uid mode=$mode_display" >&2
       return 1
     fi
     current="$(dirname "$current")"
@@ -153,6 +156,17 @@ sudo install -o root -g root -m 0755 -d "$RUNTIME_PREFIX/bin"
 sudo install -o root -g root -m 0755 "$(command -v node)" "$RUNTIME_NODE"
 sudo install -o root -g root -m 0755 "$(command -v uv)" "$RUNTIME_UV"
 sudo -- "$(command -v npm)" install --global --prefix "$RUNTIME_PREFIX" --ignore-scripts --no-audit --no-fund "$PACK/$PACKED" >/dev/null
+if ! PACKAGE_SYMLINK="$(sudo find "$RUNTIME_PREFIX/lib/node_modules/@misunders2d/agentnet" -type l -print -quit)"; then
+  echo "ordinary server setup E2E: cannot inspect the installed AgentNet package tree for symbolic links" >&2
+  exit 1
+fi
+if [[ -n "$PACKAGE_SYMLINK" ]]; then
+  echo "ordinary server setup E2E: installed AgentNet package tree contains a symbolic link: $PACKAGE_SYMLINK" >&2
+  exit 1
+fi
+# npm may honor SUDO_UID/SUDO_GID for global installs. The frozen E2E deployment
+# step explicitly transfers the exact prefix into root custody before setup.
+sudo chown -Rh root:root "$RUNTIME_PREFIX"
 [[ "$(realpath "$RUNTIME_PREFIX/bin/agentnet")" == "$(realpath "$RUNTIME_LAUNCHER")" ]] || {
   echo "ordinary server setup E2E: global AgentNet command does not resolve to the installed launcher" >&2
   exit 1
