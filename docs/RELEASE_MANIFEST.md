@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-29
-Candidate: `agentnet 0.1.32`
-Latest published package: `agentnet 0.1.31`
-Evidence profile: coordinated first-C0 release-blocker candidate
+Snapshot: 2026-07-31
+Candidate: `agentnet 0.1.33`
+Latest published package: `agentnet 0.1.32`
+Evidence profile: exact setup-migration recovery candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `58245ee0d1147734744fd7a9bef85baa18ecab9680163c6c92bf15299d2e8f85` |
-| `pyproject.toml` | SHA-256 `e66a7bed77bf852509934edfee7c20f369db4372dbd38454c32a1ec34957ee12` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `dda8e8f37d9e573ba49a9f45ebca11fbfab112a29ac1a3ecc57a54e67bea3280` |
+| `pyproject.toml` | SHA-256 `84340d6ea7e391734967e8abb9f3d2d5f5aca34824c68b47a95a26f281c9bfd8` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -256,7 +256,7 @@ registration ordering) and MEL-217 (false final setup health/identity status);
 both remain unresolved in `0.1.31` and are assigned to the next release. Final
 fresh-laptop message/ACK/revocation proof remains pending.
 
-Candidate `0.1.32` repairs these blockers as one release boundary: signed
+Published `0.1.32` repairs these blockers as one release boundary: signed
 Approval broker readiness through the configured public path using explicit
 host trust with certificate/key-log environment denied before setup; authoritative
 post-enrollment setup evidence; recoverable OIDC begin; finite current credential
@@ -280,9 +280,34 @@ Hub compatibility target is separately verified as Node.js `22.23.2` with npm
 `11.18.0`; Node.js 23 and 25 are EOL and unsupported. Same-commit ordinary-server
 E2E passed at `81315a6`, while its cross-platform run preserved the impossible
 Node.js `22.19.0`/npm `12.0.1` pairing as a failure before correction. Explicit
-verified host trust has clean-host proof; corrected same-commit cross-platform CI
-remains pending. Mutation-authorized local PostgreSQL and external C0 evidence
-remain absent. No gate is promoted.
+verified host trust has clean-host proof. The corrected package was later
+published from commit `77f5240c3df5c0328fbfbc154b623b79992b2a11`. One exact
+digest-bound Hub apply failed closed at `setup_marker_conflict` before managed
+reconciliation, daemon reload, service activation, PostgreSQL migration,
+credential, identity, responder, or authority mutation: the live `0.1.31`
+marker records a two-unit communication-only profile that `0.1.32` does not
+admit.
+
+Candidate `0.1.33` adds exact migration contracts for the deployed `0.1.31`
+two-unit profile and an exact `0.1.32` five-unit predecessor. Admission binds
+the complete source profile and digests; the two-unit edge rejects target-only
+residue; all five units are quiesced before the forward-only PostgreSQL
+boundary; the target marker is committed before migration; and a lost marker
+response is reconciled only when the exact target marker is observable. Once
+the marker commits, old-state rollback is disarmed and exact retry retains the
+upgrade journal. The hermetic setup/recovery lane reports `103 passed`, and an
+independent Pi re-review passes after the forward-only and response-loss
+corrections. The affected lane reports `625 passed, 7 expected dedicated-
+PostgreSQL skips`; the source regression lane reports `1665 passed, 16
+expected skips`; and npm source plus both clean recursive packed generations
+each report `1621 passed, 16 expected skips`. The unfiltered lane preserves
+`1698 passed, 16 expected skips, 2 installed-harness G01 pin failures`; those
+failures remain non-green and unwaived. Direct disposable-package verification,
+release verification, package-tree digest/no-residue checks, and byte-identical
+wheel/sdist builds pass. Same-commit CI, mutation-authorized PostgreSQL, live
+Hub migration, and external C0 evidence remain pending. No reset, manual marker
+edit, database downgrade, deployment, authority, or gate promotion is
+authorized or claimed.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

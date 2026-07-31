@@ -1,10 +1,10 @@
 # Public Package Status
 
-Snapshot: 2026-07-30
+Snapshot: 2026-07-31
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.31` first-message onboarding release and unreleased `0.1.32`
-release-blocker candidate. It does not replace requirements, gate ledgers, or
+published `0.1.32` first-C0 blocker repair and corrective `0.1.33`
+setup-migration candidate. It does not replace requirements, gate ledgers, or
 accountable-owner evidence.
 
 ## Current public package
@@ -12,9 +12,9 @@ accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.31`
-- published source commit: `dc10f86c9ac15ffc29c4dd5dd37e6c6d5bf15382`
-- annotated tag object: `edcca20208d8d8551206dbb2ac5e14d8f4ce086b`
+- latest published version: `0.1.32`
+- published source commit: `77f5240c3df5c0328fbfbc154b623b79992b2a11`
+- annotated tag object: `2bf40a1c4185d35112296d339cc19463aec03fd1`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -46,17 +46,38 @@ Exact public `0.1.29` then passed installed verification on the Hub, but that ve
 
 Published `0.1.31` addresses the first-message blockers known before its live server ceremony: browser-only fixed remote activation with exact approved-owner OIDC policy; purpose-separated automatic Approval receipt delivery; hermetic supported `0.1.28/0.1.30` setup migration/recovery; status-scoped guided-join polling through fresh Approval-challenge expiry; Core-authenticated argument-bound terminal replacement with same-key reuse; enabled-unit reconciliation; and destructive package-only reset under a permanent coordination lock. Latest local full-suite evidence is `1625 passed, 16 expected skips`, with two installed-harness pin failures and pre-refresh release-manifest drift kept non-green. A packed focused recovery/conformance lane reports `72 passed`, one Pi skill, zero loader diagnostics, and no residue. Official source and two recursive packed generations each report `1549 passed, 16 expected skips` with complete package-tree digest/no-residue checks green. Narrow Claude Opus 5 closure reports no blockers and PASS for skill architecture, code security, and Constitution. The first exact untagged Hub artifact installed byte-identically into an inert root-owned prefix and then failed closed before setup because its embedded release bindings were stale. The later live server ceremony completed after operator recovery but exposed MEL-216 (owner-passkey registration ordering) and MEL-217 (false final setup health/identity status); both remain unresolved in `0.1.31` and are assigned to the next release. Replacement internally bound verification, fresh-laptop enrollment, native message/ACK, completion marker, and five-power revocation evidence remain pending. Package availability enables that proof; it does not certify production readiness or close either defect.
 
-Unreleased `0.1.32` is one coordinated repair for the ceremony blockers: signed public-path Approval broker readiness using explicit host trust with certificate/key-log environment denied before setup; authoritative setup reconciliation; OIDC-begin exact replay after response loss/concurrency; finite current-credential renewal; clean current-package setup-attempt custody; and a package-owned isolated C0 responder under a five-unit systemd lifecycle. Terminal responder state is owner-only, and same-digest setup repairs a marker-before-config-cleanup interruption without resurrecting the responder. The first-C0 path rejects reuse of `0.1.31` state. Current affected and source-regression lanes report `599 passed, 7 expected dedicated-PostgreSQL skips` and `1639 passed, 16 expected skips`; source and two recursive packed npm generations each report `1595 passed, 16 expected skips`. Final TLS security and skill-architecture reviews converge, Constitution review passes, and the later Node-lifecycle skill audit converges. Exact CI policy pairs the Node.js 22.19.0 minimum floor with npm 10.9.3 and retains Node.js 24.18.0 LTS plus npm 12.0.1 for three-OS/release paths and Node.js 24.18.0/26.5.0 compatibility lanes. The deployed Hub compatibility target is separately verified as Node.js 22.23.2 with npm 11.18.0; Node.js 23 and 25 are EOL and unsupported.
+Published `0.1.32` is one coordinated repair for the ceremony blockers: signed public-path Approval broker readiness using explicit host trust with certificate/key-log environment denied before setup; authoritative setup reconciliation; OIDC-begin exact replay after response loss/concurrency; finite current-credential renewal; clean current-package setup-attempt custody; and a package-owned isolated C0 responder under a five-unit systemd lifecycle. Terminal responder state is owner-only, and same-digest setup repairs a marker-before-config-cleanup interruption without resurrecting the responder. The first-C0 path rejects reuse of `0.1.31` state. Retained affected and source-regression lanes report `599 passed, 7 expected dedicated-PostgreSQL skips` and `1639 passed, 16 expected skips`; source and two recursive packed npm generations each report `1595 passed, 16 expected skips`. Final TLS security and skill-architecture reviews converge, Constitution review passes, and the later Node-lifecycle skill audit converges. Exact CI policy pairs the Node.js 22.19.0 minimum floor with npm 10.9.3 and retains Node.js 24.18.0 LTS plus npm 12.0.1 for three-OS/release paths and Node.js 24.18.0/26.5.0 compatibility lanes. The deployed Hub compatibility target is separately verified as Node.js 22.23.2 with npm 11.18.0; Node.js 23 and 25 are EOL and unsupported.
 
-At `aefaafbe0e24d3106e7fb2a60dd36e1520ea6395`, main-push cross-platform run `30553084697` and ordinary-server run `30553084681` passed, and tag cross-platform run `30553729116` passed. Tag ordinary-server run `30553729024` remains BOUNDED NON-GREEN: runner image `20260726.254.1` rejected executable lineage under `/usr/local` before AgentNet setup mutation; cleanup passed. Trusted run `30553729045` completed `npm stage publish` before cancellation, creating one non-public stage whose exact identifier is retained out of band. That stage must not be approved; npm requires interactive maintainer authentication and 2FA to reject it before `0.1.32` can be restaged. A public registry read on 2026-07-30 still reports `0.1.31` as latest.
+At `aefaafbe0e24d3106e7fb2a60dd36e1520ea6395`, main-push cross-platform run `30553084697` and ordinary-server run `30553084681` passed, and tag cross-platform run `30553729116` passed. Tag ordinary-server run `30553729024` remains BOUNDED NON-GREEN: runner image `20260726.254.1` rejected executable lineage under `/usr/local` before AgentNet setup mutation; cleanup passed. Trusted run `30553729045` completed `npm stage publish` before cancellation, creating one non-public stage whose exact identifier is retained out of band. That stage was not the later public release. At the time of this bounded snapshot, npm still reported `0.1.31` as latest.
 
-At `4ae4dca320456100ada77b51f60af44042b645ce`, ordinary-server run `30557431270` remains BOUNDED NON-GREEN: the new fixture precondition proved that the npm-installed launcher remained outside root custody after `sudo npm install --global`, consistent with npm honoring `SUDO_UID`/`SUDO_GID`; the run stopped before AgentNet setup and cleanup passed. The corrected fixture rejects package-root symlinks, transfers only the exact resolved installation prefix to root custody without dereferencing links, leaves package modes unchanged, and then proves full Node/uv/launcher/package-tree custody. A future green run proves that explicit deployment step; it does not claim that `sudo npm install -g` alone creates safe root custody. Fresh same-commit workflows, replacement tag, and replacement trusted stage remain pending. The two installed-harness G01 failures remain non-green and unwaived. Mutation-authorized PostgreSQL and external fresh-host/C0 evidence remain absent; no `0.1.32` artifact is publicly published, deployed, or certified.
+At `4ae4dca320456100ada77b51f60af44042b645ce`, ordinary-server run `30557431270` remains BOUNDED NON-GREEN: the new fixture precondition proved that the npm-installed launcher remained outside root custody after `sudo npm install --global`, consistent with npm honoring `SUDO_UID`/`SUDO_GID`; the run stopped before AgentNet setup and cleanup passed. The corrected fixture rejects package-root symlinks, transfers only the exact resolved installation prefix to root custody without dereferencing links, leaves package modes unchanged, and then proves full Node/uv/launcher/package-tree custody. A future green run proves that explicit deployment step; it does not claim that `sudo npm install -g` alone creates safe root custody. At that time fresh same-commit workflows, replacement tag, and replacement trusted stage remained pending. The two installed-harness G01 failures remain non-green and unwaived. Mutation-authorized PostgreSQL and external fresh-host/C0 evidence remain absent.
 
 At `1146ba324b70d85f3814b9179474966434e4cc64`, cross-platform run `30558716514` passed, while ordinary-server run `30558716146` remains BOUNDED NON-GREEN: after the exact prefix was transferred to root custody, the installed package launcher was directly measured as `uid=0 mode=777`; AgentNet rejected it before setup and cleanup passed. The archive entry remains normalized to `0755`; npm's post-extraction bin-link step derives the installed executable mode from the install process umask. The correction pins `umask 022` inside the privileged install and every release packed-install path, asserts the packed launcher is `0755`, and asserts the installed systemd launcher remains `0755` without a chmod repair. Fresh same-commit workflows, replacement tag, and replacement trusted stage remain pending.
 
 At `d1bf8c647a812d782d5607fa8cb49ed503699d4c`, cross-platform run `30560778746` passed, while ordinary-server run `30560778776` remains BOUNDED NON-GREEN: the privileged shell umask alone did not constrain npm's separate extraction configuration, and the exact root-owned launcher again measured `mode=777`; setup did not run and cleanup passed. Direct npm 12 source inspection and hostile-umask reproduction show that the server installation must combine process `umask 022`, npm `--umask=0022`, and `--bin-links=false`. The server profile creates no ambient global command and invokes the verified absolute Node/launcher pair directly; the normal laptop install retains npm bin links. The checker now asserts the archive launcher mode, installed launcher mode, and safe modes across the full installed package tree. Fresh same-commit workflows, replacement tag, and replacement trusted stage remain pending.
 
 At `477c9ef54256dd771a2908ab57c98e93ae603e8a`, cross-platform run `30562170819` and ordinary-server run `30562170931` remain BOUNDED NON-GREEN. The ordinary-server fixture proved the launcher file was corrected, then rejected the first npm-created package-root ancestor at `uid=0 mode=777`; setup did not run and cleanup passed. The correction normalizes only the four exact npm-created install-topology ancestors to `0755`, leaves archived descendants unchanged, and retains full lineage/tree checks. The packed unit lane also exposed non-hermetic tests that mocked Node/uv/package resolution but inherited GitHub runner host-tool custody; those tests now mock the host-tool resolver inside the existing fixture, while the dedicated resolver test still proves fixed-path selection and custody-check invocation. The real E2E does not shadow host tools: it directly measures the exact fixed-path `systemctl` and `useradd` lineage before setup. Fresh same-commit workflows, replacement tag, and replacement trusted stage remain pending.
+
+The corrected `0.1.32` source was subsequently published from commit
+`77f5240c3df5c0328fbfbc154b623b79992b2a11`. One exact digest-bound Hub apply
+then failed closed at `setup_marker_conflict`: the live `0.1.31` marker records
+the communication-only two-unit profile, while `0.1.32` accepts no supported
+in-place transition from that profile. The refusal occurred before managed
+reconciliation, daemon reload, service activation, database migration,
+credential, identity, responder, or authority mutation. Active Core and
+Approval remain `0.1.31`; Core is live but not ready, and enrollment/C0 remain
+blocked.
+
+Corrective candidate `0.1.33` adds only exact `0.1.31` two-unit and `0.1.32`
+five-unit predecessor profiles, digest-bound marker admission, pre-migration
+five-unit quiescence, committed-marker response-loss reconciliation, and
+forward-only retry after the schema boundary. Hermetic migration/recovery,
+source, recursively packed package, deterministic artifact, and release
+verification pass locally; the two installed-harness G01 failures remain
+non-green and unwaived. Same-commit CI, public publication, Hub application,
+fresh enrollment, and the first native message remain pending. This candidate
+does not authorize a Hub reset, manual marker edit, database downgrade,
+deployment, or gate promotion.
 
 ## Release and gate posture
 

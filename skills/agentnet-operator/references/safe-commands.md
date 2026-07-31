@@ -267,7 +267,7 @@ certification.
 ## Release-gated fixed C0 pilot
 
 Use this section only after verifying the installed release and its C0 release
-evidence. Published `0.1.18` does not qualify. In 0.1.32, ordinary-server setup
+evidence. Published `0.1.18` does not qualify. In 0.1.33, ordinary-server setup
 owns the dedicated responder service, config, and systemd-delivered credential;
 do not recreate it with generic `supervisor-run` or expose its private paths.
 Its package-internal diagnostic surface is `agentnet c0-pilot responder

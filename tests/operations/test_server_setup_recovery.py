@@ -150,6 +150,10 @@ class _Harness:
     layout: SetupLayout
     runtime_generation: list[int]
     product_calls: list[list[str]]
+    active_units: set[str]
+    disabled_units: set[str]
+    loaded_units: set[str]
+    systemctl_calls: list[list[str]]
 
     @property
     def marker_path(self) -> Path:
@@ -198,6 +202,10 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         setup.C0_RESPONDER_USER: SimpleNamespace(pw_name=setup.C0_RESPONDER_USER, pw_uid=uid, pw_gid=gid),
     }
     generation = [0]
+    active_units: set[str] = set()
+    disabled_units: set[str] = set()
+    loaded_units: set[str] = set()
+    systemctl_calls: list[list[str]] = []
 
     monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/node"))
     monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/uv"))
@@ -207,6 +215,65 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         lambda *_args, **_kwargs: Path(f"/opt/agentnet-{generation[0]}/npm/bin/agentnet.mjs"),
     )
     monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    def fake_systemd_show(_executable: Path, unit: str) -> dict[str, str]:
+        path = layout.unit(unit)
+        if not path.exists() or unit not in loaded_units:
+            return {
+                "LoadState": "not-found",
+                "UnitFileState": "disabled",
+                "ActiveState": "inactive",
+                "FragmentPath": "",
+                "DropInPaths": "",
+                "MainPID": "0",
+            }
+        return {
+            "LoadState": "loaded",
+            "UnitFileState": (
+                "static"
+                if unit == setup.CREDENTIAL_RENEW_UNIT
+                else "disabled" if unit in disabled_units else "enabled"
+            ),
+            "ActiveState": "active" if unit in active_units else "inactive",
+            "FragmentPath": str(path),
+            "DropInPaths": "",
+            "MainPID": (
+                "1"
+                if unit.endswith(".service") and unit in active_units
+                else "0"
+            ),
+        }
+
+    def fake_run_systemctl(
+        _executable: Path,
+        arguments: list[str],
+        *,
+        failure_message: str,
+    ) -> None:
+        systemctl_calls.append(list(arguments))
+        if arguments[:1] == ["daemon-reload"]:
+            loaded_units.update(
+                unit for unit in setup.MANAGED_UNITS if layout.unit(unit).exists()
+            )
+        elif arguments[:2] == ["disable", "--now"]:
+            unit = arguments[2]
+            disabled_units.add(unit)
+            active_units.discard(unit)
+        elif arguments[:2] == ["enable", "--now"]:
+            unit = arguments[2]
+            disabled_units.discard(unit)
+            active_units.add(unit)
+        elif arguments[:1] == ["enable"]:
+            disabled_units.discard(arguments[1])
+        elif arguments[:1] == ["restart"]:
+            active_units.add(arguments[1])
+        elif arguments[:1] == ["stop"]:
+            active_units.discard(arguments[1])
+        elif arguments[:2] == ["is-active", "--quiet"]:
+            if arguments[2] not in active_units:
+                raise ServerSetupError("systemd_start", failure_message)
+
+    monkeypatch.setattr(setup, "_systemd_show", fake_systemd_show)
+    monkeypatch.setattr(setup, "_run_systemctl", fake_run_systemctl)
     monkeypatch.setattr(
         setup,
         "_sha256_stable_file",
@@ -217,7 +284,13 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         "_sha256_stable_tree",
         lambda path: hashlib.sha256(f"tree:{path}:{generation[0]}".encode()).hexdigest(),
     )
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(
+        setup,
+        "_account_fact",
+        lambda _name, home: (
+            "already_satisfied" if layout.host(home).is_dir() else "create"
+        ),
+    )
     monkeypatch.setattr(setup, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
     monkeypatch.setattr(
         setup,
@@ -319,6 +392,10 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         layout=layout,
         runtime_generation=generation,
         product_calls=product_calls,
+        active_units=active_units,
+        disabled_units=disabled_units,
+        loaded_units=loaded_units,
+        systemctl_calls=systemctl_calls,
     )
 
 
@@ -331,6 +408,55 @@ def _realized_0130_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     harness.apply(digest)
     assert harness.marker()["package_version"] == "0.1.30"
     assert harness.marker()["revision"] == 1
+    return harness, digest
+
+
+def _realized_0132_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Harness, str]:
+    """One completed 0.1.32 five-unit apply, ready for an upgrade attempt."""
+
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.32")
+    digest = harness.plan_digest()
+    harness.apply(digest)
+    assert harness.marker()["package_version"] == "0.1.32"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    return harness, digest
+
+
+def _realized_public_0131_communication_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Harness, str]:
+    """One exact released 0.1.31 two-unit marker and realized unit topology."""
+
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    digest = harness.plan_digest()
+    harness.apply(digest)
+
+    marker = harness.marker()
+    for unit in set(setup.MANAGED_UNITS) - set(setup.LEGACY_COMMUNICATION_ONLY_UNITS):
+        harness.layout.unit(unit).unlink()
+    shutil.rmtree(harness.layout.host(setup.C0_RESPONDER_DATA))
+    marker["units"] = list(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    marker["unit_digests"] = {
+        unit: marker["unit_digests"][unit]
+        for unit in setup.LEGACY_COMMUNICATION_ONLY_UNITS
+    }
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.marker_path.chmod(0o600)
+
+    assert harness.marker()["schema"] == "agentnet.server-setup.marker.v3"
+    assert harness.marker()["artifact_mode"] == "disabled"
+    assert harness.marker()["package_version"] == "0.1.31"
+    assert harness.marker()["units"] == list(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    harness.active_units.update(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    harness.loaded_units.update(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
     return harness, digest
 
 
@@ -490,6 +616,119 @@ def test_marker_upgrade_still_rejects_malformed_recorded_digest(
     assert exc_info.value.blocker == "setup_marker_conflict"
 
 
+@pytest.mark.parametrize(
+    ("artifact_mode", "units"),
+    [
+        ("enabled", setup.LEGACY_COMMUNICATION_ONLY_UNITS),
+        ("disabled", setup.MANAGED_UNITS),
+        ("disabled", (setup.CORE_UNIT, setup.APPROVAL_UNIT)),
+    ],
+)
+def test_0131_topology_upgrade_accepts_only_the_exact_released_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+    units: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    value = json.loads(
+        _marker_payload(
+            schema="agentnet.server-setup.marker.v3",
+            package_version="0.1.31",
+            artifact_mode=artifact_mode,
+        )
+    )
+    value["units"] = list(units)
+    value["unit_digests"] = {unit: "4" * 64 for unit in units}
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
+def test_0131_topology_upgrade_accepts_exact_two_unit_communication_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    value = json.loads(
+        _marker_payload(
+            schema="agentnet.server-setup.marker.v3",
+            package_version="0.1.31",
+            artifact_mode="disabled",
+        )
+    )
+    value["units"] = list(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    value["unit_digests"] = {
+        unit: "4" * 64 for unit in setup.LEGACY_COMMUNICATION_ONLY_UNITS
+    }
+
+    marker = setup._validated_setup_marker(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode="disabled",
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+
+
+@pytest.mark.parametrize("revision", [True, False])
+def test_setup_marker_rejects_boolean_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    revision: bool,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    value = json.loads(
+        _marker_payload(
+            schema="agentnet.server-setup.marker.v3",
+            package_version="0.1.31",
+            artifact_mode="disabled",
+        )
+    )
+    value["revision"] = revision
+    value["units"] = list(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    value["unit_digests"] = {
+        unit: "4" * 64 for unit in setup.LEGACY_COMMUNICATION_ONLY_UNITS
+    }
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_0132_upgrade_accepts_exact_released_five_unit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.32",
+        artifact_mode=artifact_mode,
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode=artifact_mode,
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
 def _marker_payload(
     *,
     schema: str,
@@ -642,6 +881,600 @@ def test_supported_upgrade_is_atomic_and_leaves_no_journal(
     replayed = harness.apply(upgrade_digest)
     assert {"id": "package_upgrade", "status": "not_required"} in replayed["steps"]
     assert harness.marker()["revision"] == marker["revision"]
+    assert not harness.journal_path.exists()
+
+
+def test_public_0131_two_unit_topology_expands_atomically_to_five_units(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker_payload = harness.marker_path.read_bytes()
+    before_marker = harness.marker()
+    before_units = harness.unit_payloads()
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    assert upgrade_digest != first_digest
+
+    upgraded = harness.apply(upgrade_digest)
+
+    assert {
+        "id": "package_upgrade",
+        "status": "validated_pre_upgrade_realized_state",
+    } in upgraded["steps"]
+    marker = harness.marker()
+    assert marker["package_version"] == "0.1.33"
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+    assert set(marker["unit_digests"]) == set(setup.MANAGED_UNITS)
+    assert marker["revision"] == before_marker["revision"] + 1
+    assert marker["previous_marker_digest"] == hashlib.sha256(
+        before_marker_payload
+    ).hexdigest()
+    assert harness.unit_payloads() != before_units
+    assert all(harness.layout.unit(unit).is_file() for unit in setup.MANAGED_UNITS)
+    assert not harness.journal_path.exists()
+
+
+def test_public_0132_five_unit_topology_upgrades_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, first_digest = _realized_0132_deployment(tmp_path, monkeypatch)
+    before_marker = harness.marker()
+    before_units = {
+        unit: harness.layout.unit(unit).read_bytes() for unit in setup.MANAGED_UNITS
+    }
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    assert upgrade_digest != first_digest
+    upgraded = harness.apply(upgrade_digest)
+
+    assert {
+        "id": "package_upgrade",
+        "status": "validated_pre_upgrade_realized_state",
+    } in upgraded["steps"]
+    marker = harness.marker()
+    assert marker["package_version"] == "0.1.33"
+    assert marker["revision"] == before_marker["revision"] + 1
+    assert any(
+        harness.layout.unit(unit).read_bytes() != before_units[unit]
+        for unit in setup.MANAGED_UNITS
+    )
+    assert marker["unit_digests"] == {
+        unit: hashlib.sha256(harness.layout.unit(unit).read_bytes()).hexdigest()
+        for unit in setup.MANAGED_UNITS
+    }
+    assert not harness.journal_path.exists()
+
+
+def test_0132_upgrade_bootstrap_failure_is_forward_only_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_0132_deployment(tmp_path, monkeypatch)
+    harness.active_units.update(setup.MANAGED_UNITS)
+    harness.loaded_units.update(setup.MANAGED_UNITS)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_bootstrap = setup._run_bootstrap_idempotently
+    monkeypatch.setattr(
+        setup,
+        "_run_bootstrap_idempotently",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected 0.1.32 bootstrap failure")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected 0.1.32 bootstrap failure"):
+        harness.apply(upgrade_digest)
+
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert harness.journal_path.exists()
+    assert not harness.active_units
+
+    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    recovered = harness.apply(upgrade_digest)
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_committed_forward_only_upgrade",
+    } in recovered["steps"]
+    assert not harness.journal_path.exists()
+
+
+def test_0132_upgrade_marker_response_loss_never_rolls_back_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_0132_deployment(tmp_path, monkeypatch)
+    harness.active_units.update(setup.MANAGED_UNITS)
+    harness.loaded_units.update(setup.MANAGED_UNITS)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_commit = setup._commit_setup_marker
+
+    def committed_then_lost(*args: object, **kwargs: object) -> str:
+        original_commit(*args, **kwargs)
+        raise ServerSetupError(
+            "setup_marker_response_lost",
+            "injected marker response loss",
+        )
+
+    monkeypatch.setattr(setup, "_commit_setup_marker", committed_then_lost)
+
+    with pytest.raises(ServerSetupError, match="injected marker response loss"):
+        harness.apply(upgrade_digest)
+
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert harness.journal_path.exists()
+    assert harness.active_units == set(setup.MANAGED_UNITS)
+
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    recovered = harness.apply(upgrade_digest)
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_committed_forward_only_upgrade",
+    } in recovered["steps"]
+    assert not harness.active_units
+    assert not harness.journal_path.exists()
+
+
+@pytest.mark.parametrize("source_version", ["0.1.31", "0.1.32"])
+def test_0133_upgrade_orders_marker_then_quiescence_then_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_version: str,
+) -> None:
+    if source_version == "0.1.31":
+        harness, _first_digest = _realized_public_0131_communication_deployment(
+            tmp_path,
+            monkeypatch,
+        )
+    else:
+        harness, _first_digest = _realized_0132_deployment(tmp_path, monkeypatch)
+        harness.active_units.update(setup.MANAGED_UNITS)
+        harness.loaded_units.update(setup.MANAGED_UNITS)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    events: list[str] = []
+    original_commit = setup._commit_setup_marker
+    original_sequence = setup._run_systemctl_sequence_or_reconcile
+    original_bootstrap = setup._run_bootstrap_idempotently
+
+    def recorded_commit(*args: object, **kwargs: object) -> str:
+        events.append("marker")
+        return original_commit(*args, **kwargs)
+
+    def recorded_sequence(
+        executable: Path,
+        sequence: tuple[list[str], ...],
+        *,
+        reconcile: object,
+    ) -> str:
+        result = original_sequence(
+            executable,
+            sequence,
+            reconcile=reconcile,
+        )
+        if ["disable", "--now", setup.CORE_UNIT] in sequence:
+            events.append("quiescence")
+        return result
+
+    def recorded_bootstrap(*args: object, **kwargs: object) -> tuple[dict[str, object], str]:
+        events.append("bootstrap")
+        return original_bootstrap(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "_commit_setup_marker", recorded_commit)
+    monkeypatch.setattr(
+        setup,
+        "_run_systemctl_sequence_or_reconcile",
+        recorded_sequence,
+    )
+    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", recorded_bootstrap)
+
+    harness.apply(upgrade_digest)
+
+    assert events[:3] == ["marker", "quiescence", "bootstrap"]
+
+
+def test_0132_upgrade_reconciles_lost_quiescence_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_0132_deployment(tmp_path, monkeypatch)
+    harness.active_units.update(setup.MANAGED_UNITS)
+    harness.loaded_units.update(setup.MANAGED_UNITS)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_systemctl = setup._run_systemctl
+    response_lost = [False]
+
+    def lose_one_response(
+        executable: Path,
+        arguments: list[str],
+        *,
+        failure_message: str,
+    ) -> None:
+        original_systemctl(
+            executable,
+            arguments,
+            failure_message=failure_message,
+        )
+        if (
+            arguments == ["disable", "--now", setup.CORE_UNIT]
+            and not response_lost[0]
+        ):
+            response_lost[0] = True
+            raise ServerSetupError("systemd_start", "injected lost systemd response")
+
+    monkeypatch.setattr(setup, "_run_systemctl", lose_one_response)
+
+    upgraded = harness.apply(upgrade_digest)
+
+    assert response_lost == [True]
+    assert {
+        "id": "package_upgrade_service_quiescence",
+        "status": "reconciled_after_response_loss",
+    } in upgraded["steps"]
+    assert not harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_bootstrap = setup._run_bootstrap_idempotently
+    monkeypatch.setattr(
+        setup,
+        "_run_bootstrap_idempotently",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected post-marker bootstrap failure")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected post-marker bootstrap failure"):
+        harness.apply(upgrade_digest)
+
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert all(harness.layout.unit(unit).is_file() for unit in setup.MANAGED_UNITS)
+    assert harness.journal_path.exists()
+    assert not harness.active_units
+    assert not harness.layout.host(setup.C0_RESPONDER_DATA).exists()
+
+    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    recovered = harness.apply(upgrade_digest)
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_committed_forward_only_upgrade",
+    } in recovered["steps"]
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.layout.host(setup.C0_RESPONDER_DATA).is_dir()
+
+
+def test_0131_topology_upgrade_quiescence_failure_remains_forward_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_systemctl = setup._run_systemctl
+    monkeypatch.setattr(
+        setup,
+        "_run_systemctl",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("systemd_start", "injected quiescence failure")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected quiescence failure"):
+        harness.apply(upgrade_digest)
+
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert harness.journal_path.exists()
+    assert harness.active_units == set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    assert not harness.layout.host(setup.C0_RESPONDER_DATA).exists()
+
+    monkeypatch.setattr(setup, "_run_systemctl", original_systemctl)
+    recovered = harness.apply(upgrade_digest)
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_committed_forward_only_upgrade",
+    } in recovered["steps"]
+    assert not harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_rejects_target_state_before_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    renewal_state = harness.layout.host(setup.CREDENTIAL_RENEW_STATE)
+    renewal_state.write_text("{}\n", encoding="utf-8")
+    renewal_state.chmod(0o600)
+    before_marker = harness.marker()
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert harness.marker() == before_marker
+    assert not harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_requires_exact_legacy_environment_before_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    harness.layout.host(setup.CORE_ENV).write_text(
+        "AGENTNET_DATABASE_URL=postgresql:///wrong\n",
+        encoding="utf-8",
+    )
+    harness.layout.host(setup.CORE_ENV).chmod(0o600)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert harness.marker() == before_marker
+    assert not harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_rejects_loaded_target_unit_before_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    monkeypatch.setattr(
+        setup,
+        "_systemd_show",
+        lambda _executable, unit: (
+            {
+                "LoadState": "loaded",
+                "UnitFileState": "enabled",
+                "ActiveState": "active",
+                "FragmentPath": f"/run/systemd/system/{unit}",
+                "DropInPaths": "",
+                "MainPID": "71",
+            }
+            if unit == setup.C0_RESPONDER_UNIT
+            else {
+                "LoadState": "not-found",
+                "UnitFileState": "disabled",
+                "ActiveState": "inactive",
+                "FragmentPath": "",
+                "DropInPaths": "",
+                "MainPID": "0",
+            }
+        ),
+    )
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert harness.marker() == before_marker
+    assert not harness.journal_path.exists()
+
+
+def test_failed_0131_topology_upgrade_removes_target_only_units_on_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    before_units = harness.unit_payloads()
+    target_only = set(setup.MANAGED_UNITS) - set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    original_commit = setup._commit_setup_marker
+    monkeypatch.setattr(
+        setup,
+        "_commit_setup_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected topology marker interruption")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected topology marker interruption"):
+        harness.apply(harness.plan_digest())
+
+    assert harness.marker() == before_marker
+    assert harness.unit_payloads() == before_units
+    assert all(not harness.layout.unit(unit).exists() for unit in target_only)
+    assert harness.active_units == set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+    assert not harness.journal_path.exists()
+
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    recovered = harness.apply(harness.plan_digest())
+    assert {
+        "id": "package_upgrade",
+        "status": "validated_pre_upgrade_realized_state",
+    } in recovered["steps"]
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert not harness.journal_path.exists()
+
+
+def test_interrupted_0131_topology_upgrade_resumes_from_absence_aware_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    target_only = set(setup.MANAGED_UNITS) - set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_commit = setup._commit_setup_marker
+    original_rollback = setup._rollback_pending_upgrade
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(
+        setup,
+        "_commit_setup_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected topology power loss")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected topology power loss"):
+        harness.apply(upgrade_digest)
+
+    journal = json.loads(harness.journal_path.read_text(encoding="utf-8"))
+    assert journal["schema"] == "agentnet.server-setup.upgrade-journal.v2"
+    assert journal["from_package_version"] == "0.1.31"
+    assert journal["to_package_version"] == "0.1.33"
+    assert all(journal["previous_units"][unit] is None for unit in target_only)
+    assert all(harness.layout.unit(unit).is_file() for unit in setup.MANAGED_UNITS)
+    assert harness.marker() == before_marker
+
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", original_rollback)
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    resumed = harness.apply(upgrade_digest)
+
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_journaled_upgrade",
+    } in resumed["steps"]
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert not harness.journal_path.exists()
+
+
+def test_interrupted_0131_topology_upgrade_refuses_tampered_created_unit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    upgrade_digest = harness.plan_digest()
+    original_commit = setup._commit_setup_marker
+    original_rollback = setup._rollback_pending_upgrade
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(
+        setup,
+        "_commit_setup_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected topology power loss")
+        ),
+    )
+    with pytest.raises(ServerSetupError, match="injected topology power loss"):
+        harness.apply(upgrade_digest)
+
+    tampered_path = harness.layout.unit(setup.C0_RESPONDER_UNIT)
+    tampered_path.write_bytes(tampered_path.read_bytes() + b"# tampered after interruption\n")
+    tampered_path.chmod(0o644)
+    tampered = tampered_path.read_bytes()
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", original_rollback)
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(upgrade_digest)
+
+    assert exc_info.value.blocker == "managed_path_conflict"
+    assert tampered_path.read_bytes() == tampered
+    assert harness.marker() == before_marker
+    assert harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_rejects_preexisting_target_only_unit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    before_marker = harness.marker()
+    unexpected = harness.layout.unit(setup.C0_RESPONDER_UNIT)
+    unexpected.write_bytes(b"[Unit]\nDescription=operator-owned collision\n")
+    unexpected.chmod(0o644)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert unexpected.read_bytes() == b"[Unit]\nDescription=operator-owned collision\n"
+    assert harness.marker() == before_marker
+    assert not harness.journal_path.exists()
+
+
+def test_0131_topology_upgrade_validates_source_before_creating_c0_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_public_0131_communication_deployment(
+        tmp_path,
+        monkeypatch,
+    )
+    core_unit = harness.layout.unit(setup.CORE_UNIT)
+    core_unit.write_bytes(core_unit.read_bytes() + b"# source drift\n")
+    core_unit.chmod(0o644)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert not harness.layout.host(setup.C0_RESPONDER_DATA).exists()
     assert not harness.journal_path.exists()
 
 

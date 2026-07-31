@@ -1,0 +1,150 @@
+{
+  "run_id": "2026-07-31-v0.1.33",
+  "evaluated_at": "2026-07-31T01:53:09+03:00",
+  "scope": "v0_1_33_exact_server_setup_migration_recovery_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "b8b5d9bc44bf6dc67b7bc5ace91a0539793ac5e3958e43a0161e8cd99992185c",
+  "prior_runtime_evidence": "evidence/local/2026-07-29-v0.1.32/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-07-29-v0.1.32/manifest.json",
+  "change_boundary": "Corrective setup-migration release after exact public 0.1.32 failed closed on the live 0.1.31 communication-only marker. Exact 0.1.31 two-unit and 0.1.32 five-unit source profiles are separately admitted only into 0.1.33. Both upgrades journal exact prior managed bytes, commit the target marker as the forward-only boundary, disarm source rollback, quiesce all five units before Core bootstrap/PostgreSQL migration, retain the journal across post-marker failure, and resume only through exact committed-marker evidence. The 0.1.31 topology expansion additionally rejects target-only accounts, groups, state, units, overrides, enablement, and live residue before the marker. Expired or unready credentials keep renewal and C0 responder disabled. Setup still grants no identity or authority. Public 0.1.32 availability, the failed Hub apply, and all prior non-green staging/E2E evidence remain historical and unwaived. Local package verification and reproducible archives pass; same-commit CI, exact public 0.1.33 publication, Hub transition, owner credential renewal, five-unit readiness, fresh-laptop enrollment, native message/ACK, completion, and revocation evidence remain pending.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1621 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
+    "root_installed_external_host": "NOT RUN: exact public 0.1.32 apply on the Hub failed closed at setup_marker_conflict before managed mutation; no 0.1.33 Hub apply, service transition, credential renewal, responder, or C0 ceremony is authorized in this local refreeze",
+    "callback_incident": "No stale 0.1.31 or failed 0.1.32 transaction, callback, state, code, cookie, continuation, credential, or C0 state may be reused; the corrected package migration must complete before a fresh owner ceremony",
+    "known_live_findings": "Public 0.1.32 is installed inertly while active Hub services remain 0.1.31; Core readiness, credential renewal, five-unit activation, effective C0 authority, fresh-laptop enrollment, and native messaging remain blocked"
+  },
+  "candidate_tag_history": {
+    "public_v0_1_32_source": "77f5240c3df5c0328fbfbc154b623b79992b2a11",
+    "public_v0_1_32_status": "Published on npm and immutable in git; availability did not prove Hub upgrade compatibility",
+    "hub_v0_1_32_apply": "BOUNDED NON-GREEN: exact digest-bound apply failed closed at setup_marker_conflict before managed reconciliation, daemon reload, service action, database mutation, credential action, identity action, C0 action, or authority change",
+    "active_hub_after_failure": "Core and Approval remain active at 0.1.31 with the exact communication-only two-unit marker; Core readiness is false; credential renewal, five-unit setup, C0 responder, effective authority, and fresh-laptop packet remain blocked",
+    "v0_1_33_candidate": "LOCAL PASS, EXTERNAL PENDING: exact 0.1.31 two-unit and 0.1.32 five-unit forward-only setup migrations, package/archive verification, and independent review pass; same-commit CI and external runtime proof remain required",
+    "release_posture": "BLOCKED; production_ready=false; ship_eligible=false; no must-not-ship gate is promoted"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 625 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1665 passed, 16 expected platform/dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider",
+      "result": "PASS WITH KNOWN NON-GREEN G01 GATES: 1698 passed, 16 expected skips, 2 installed-harness G01 pin failures; the failures remain non-green and unwaived"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: after bounded pre-freeze test-fixture failures, source and generations 1 and 2 each 1621 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived; the initial source run was 1620 passed, 16 skipped, 1 failed because one negative conformance fixture still targeted the prior uv.lock digest, and its focused correction rerun exposed two stale ledger-date mutation literals before the same existing test passed; no test ID changed"
+    },
+    {
+      "command": "PATH=<user-owned-node-outside-protected-roots>:$PATH npm run check:packed",
+      "result": "NOT RERUN: packed-checker custody logic is unchanged from the retained 0.1.32 user-owned-Node reproduction; no new claim is made"
+    },
+    {
+      "command": "PATH=<user-owned-uv-outside-protected-roots>:/usr/bin:... npm run check:packed",
+      "result": "NOT RERUN: packed-checker custody logic is unchanged from the retained 0.1.32 user-owned-uv reproduction; no new claim is made"
+    },
+    {
+      "command": "npm pack --json --ignore-scripts; clean npm install; Pi DefaultResourceLoader on packed agentnet-operator skill",
+      "result": "PASS: npm package catalog and retained operator-skill/package bindings are exact; fresh packed Pi-loader evidence remains separately required before publication"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds were byte-identical; sdist 70ed0c875efe20e13547e576449d0e4ae4ba8b0b2a19f3b0808bce9de3d8eae4; wheel 1874399ac1b88e99e5d179bb4db26229d75cc7fce88f5eddfe5e3991b31772b9"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.33 direct disposable-package verification completed outside the sandbox with 1621 passed and 16 expected skips and no source-tree residue; one preceding sandbox-bound attempt was interrupted after bwrap appeared as PID 1 and produced environment-only systemd failures"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production/shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform and ordinary-server setup workflows",
+      "result": "NOT RUN: exact 0.1.33 same-commit cross-platform and ordinary-server workflows require a future committed revision; all prior 0.1.32 non-green runs remain historical and unwaived"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Final TLS code/security/reliability critic",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "CONVERGE: OpenSSL CSR/certificate-extension split, CA chain, system trust, hostname verification, and sanitized launcher/exception boundaries pass; fresh ordinary-server CI remains required"
+    },
+    {
+      "review": "AgentNet operator skill Step 4a architecture review",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "CONVERGE: plan/apply evidence split, CPython-visible trust remediation, deterministic TLS test isolation, and package/eval bindings pass"
+    },
+    {
+      "review": "Constitution watcher",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "PASS: fail-closed TLS, secret isolation, truthful nonproduction status, and no unauthorized mutation preserved"
+    },
+    {
+      "review": "Node.js lifecycle and compatibility skill architecture audit",
+      "model": "openai-codex/gpt-5.6-terra",
+      "result": "CONVERGE: skill-mediated preinstall rejection for EOL Node.js 23/25 is explicit and independently evaluated; compatibility policy keeps the exact Node.js 22.19.0 minimum-floor lane on npm 10.9.3, keeps Node.js 24.18.0/26.5.0 and release/publish on npm 12.0.1, and reports the substantive signed Hub runtime separately as Node.js 22.23.2/npm 11.18.0"
+    },
+    {
+      "review": "Ordinary-server timer-state code/security/reliability rereview",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "REVISE then CONVERGE: stale count and CI-boundary wording corrected; timer-aware inactive proof remains fail-closed, service MainPID remains required, and five-unit cleanup is complete"
+    },
+    {
+      "review": "Ordinary-server timer-state Constitution rereview",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "REVISE then PASS: blocked/nonproduction posture preserved; corrected E2E remains explicitly non-green pending a fresh run; no A2A or secret-handling change"
+    },
+    {
+      "review": "Tag-level ordinary-server runner-image drift review",
+      "model": "Claude Opus 5",
+      "result": "REVISE: the first direct-launch proposal did not address ancestor custody; the correction must use a service-safe system prefix, assert full Node/uv/launcher/package-tree custody, preserve the exact fail-closed product guard, retain failed run 30553729024, reject the out-of-band private stage, and pass fresh same-commit CI before retagging"
+    },
+    {
+      "review": "Ordinary-server npm package-tree custody follow-up",
+      "model": "Claude Opus 5",
+      "result": "REVISE: reject package-root symlinks before recursive work; because npm may honor SUDO_UID/SUDO_GID, transfer the entire exact prefix to root custody without dereferencing links; do not blanket-repair package modes; retain run 30557431270 and document that future green E2E proves explicit deployment custody rather than sudo npm ownership"
+    },
+    {
+      "review": "npm bin-link umask and launcher-mode follow-up",
+      "model": "Claude Opus 5",
+      "result": "REVISE then CONVERGE: npm archive creation normalizes the launcher to 0755, while the post-extraction bin-link step derives the installed target mode from the install process umask; pin umask 022 inside the privileged and release packed-install paths, assert archive and installed modes, retain run 30558716146, and perform no chmod repair"
+    },
+    {
+      "review": "npm extraction and bin-link final mode review",
+      "model": "Claude Opus 5",
+      "result": "REVISE then CONVERGE: npm extraction has a distinct config umask defaulting to zero and bin-link creation separately uses process umask; the server install must combine process umask 022, --umask=0022, and --bin-links=false, create no ambient command, use the direct verified launcher, assert the full installed tree, and remain distinct from ordinary laptop installation"
+    },
+    {
+      "review": "npm topology and host-tool CI-boundary review",
+      "model": "Claude Opus 5",
+      "result": "REVISE then CONVERGE: normalizing only four literal npm-created topology directories masks no archive fact; hermetic host-tool mocking is valid when the dedicated fixed-path test also proves custody-check invocation; do not shadow systemctl or useradd in E2E, and obtain exact lineage diagnostics from the real fixed-path tools"
+    },
+    {
+      "review": "Exact 0.1.31/0.1.32 to 0.1.33 setup-migration critic",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "REVISE then PASS: same-named target group conflict moved before the marker; both exact source edges now commit the forward-only marker, disarm rollback, quiesce all five units before bootstrap/PostgreSQL migration, retain the journal across post-marker failure, and retry from exact committed evidence; expired credentials keep renewal/C0 disabled"
+    },
+    {
+      "review": "Forward-only marker response-loss rereview",
+      "model": "openai-codex/gpt-5.6-sol",
+      "result": "PASS: successful marker CAS disarms rollback before evidence append; an observable exact target after marker-writer failure is revalidated against target version, revision, predecessor digest, configs, and units, retains the journal, and fails for exact forward retry"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-07-31-v0.1.33/artifacts/agentnet-0.1.33.tar.gz",
+      "sha256": "70ed0c875efe20e13547e576449d0e4ae4ba8b0b2a19f3b0808bce9de3d8eae4"
+    },
+    {
+      "path": "evidence/local/2026-07-31-v0.1.33/artifacts/agentnet-0.1.33-py3-none-any.whl",
+      "sha256": "1874399ac1b88e99e5d179bb4db26229d75cc7fce88f5eddfe5e3991b31772b9"
+    }
+  ]
+}

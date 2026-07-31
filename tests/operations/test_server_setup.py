@@ -524,6 +524,28 @@ def test_account_requires_one_private_nonprivileged_group(
         setup._validate_account(account, "agentnet", tmp_path)
 
 
+def test_account_creation_rejects_preexisting_same_named_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    monkeypatch.setattr(
+        setup.pwd,
+        "getpwnam",
+        lambda _name: (_ for _ in ()).throw(KeyError),
+    )
+    monkeypatch.setattr(
+        setup.grp,
+        "getgrnam",
+        lambda name: SimpleNamespace(gr_name=name, gr_gid=1234, gr_mem=[]),
+    )
+
+    with pytest.raises(ServerSetupError, match="group conflicts") as exc_info:
+        setup._account_fact("agentnet-c0", tmp_path)
+    assert exc_info.value.blocker == "identity_conflict"
+
+
 def test_identity_drop_clears_supplementary_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     import agentnet.operations.server_setup as setup
 
@@ -3046,11 +3068,6 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
     systemctl_calls: list[list[str]] = []
     health_requests: list[tuple[str, dict[str, object]]] = []
-    monkeypatch.setattr(
-        setup.subprocess,
-        "run",
-        lambda argv, **_kwargs: systemctl_calls.append(argv) or SimpleNamespace(returncode=0),
-    )
     live_pids = {
         setup.APPROVAL_UNIT: 4321,
         setup.CORE_UNIT: 4322,
@@ -3074,6 +3091,22 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         ),
     }
     disabled_units: set[str] = set()
+
+    def fake_systemctl_run(argv, **_kwargs):
+        systemctl_calls.append(argv)
+        arguments = argv[1:]
+        if len(arguments) >= 3 and arguments[:2] == ["disable", "--now"]:
+            unit = arguments[2]
+            disabled_units.add(unit)
+            live_pids.pop(unit, None)
+        elif len(arguments) >= 3 and arguments[:2] == ["enable", "--now"]:
+            unit = arguments[2]
+            disabled_units.discard(unit)
+            if unit == setup.C0_RESPONDER_UNIT:
+                live_pids[unit] = 4323
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(setup.subprocess, "run", fake_systemctl_run)
     monkeypatch.setattr(
         setup,
         "_systemd_show",
@@ -3144,8 +3177,57 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     assert exc_info.value.identity_enrolled is True
+    assert not layout.host(setup.C0_RESPONDER_CONFIG).exists()
+    assert [
+        "/usr/bin/systemctl",
+        "enable",
+        "--now",
+        setup.CREDENTIAL_RENEW_TIMER,
+    ] not in systemctl_calls
+    assert [
+        "/usr/bin/systemctl",
+        "enable",
+        "--now",
+        setup.C0_RESPONDER_UNIT,
+    ] not in systemctl_calls
+
+    def fail_operational_readiness(url: str, **_kwargs: object) -> None:
+        if url.endswith("/readyz"):
+            raise ServerSetupError(
+                "service_readiness",
+                "injected expired deployment binding",
+            )
+        health_requests.append((url, dict(_kwargs["expected"])))
+
     systemctl_calls.clear()
     health_requests.clear()
+    monkeypatch.setattr(setup, "_health", fail_operational_readiness)
+    with pytest.raises(ServerSetupError, match="expired deployment binding") as exc_info:
+        apply_server_setup(
+            request,
+            start=True,
+            expected_request_digest=approved_digest,
+            layout=layout,
+            _allow_test_layout=True,
+        )
+    assert exc_info.value.identity_enrolled is True
+    assert not layout.host(setup.C0_RESPONDER_CONFIG).exists()
+    assert [
+        "/usr/bin/systemctl",
+        "enable",
+        "--now",
+        setup.CREDENTIAL_RENEW_TIMER,
+    ] not in systemctl_calls
+    assert [
+        "/usr/bin/systemctl",
+        "enable",
+        "--now",
+        setup.C0_RESPONDER_UNIT,
+    ] not in systemctl_calls
+
+    systemctl_calls.clear()
+    health_requests.clear()
+    monkeypatch.setattr(setup, "_health", health_with_interruption)
     started = apply_server_setup(
         request,
         start=True,
@@ -3201,13 +3283,26 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert exc_info.value.identity_enrolled is True
 
     monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
+    recovered_after_broker_failure = apply_server_setup(
+        request,
+        start=True,
+        expected_request_digest=approved_digest,
+        layout=layout,
+        _allow_test_layout=True,
+    )
+    assert recovered_after_broker_failure["status"] == "operational"
     systemctl_calls[:] = successful_systemctl_calls
     health_requests[:] = successful_health_requests
     assert systemctl_calls == [
         ["/usr/bin/systemctl", "daemon-reload"],
+        ["/usr/bin/systemctl", "disable", "--now", setup.CREDENTIAL_RENEW_TIMER],
+        ["/usr/bin/systemctl", "disable", "--now", setup.C0_RESPONDER_UNIT],
+        ["/usr/bin/systemctl", "stop", setup.CREDENTIAL_RENEW_UNIT],
         ["/usr/bin/systemctl", "enable", "--now", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "enable", setup.CORE_UNIT],
         ["/usr/bin/systemctl", "restart", setup.CORE_UNIT],
+        ["/usr/bin/systemctl", "is-active", "--quiet", setup.APPROVAL_UNIT],
+        ["/usr/bin/systemctl", "is-active", "--quiet", setup.CORE_UNIT],
         ["/usr/bin/systemctl", "enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
         ["/usr/bin/systemctl", "enable", "--now", setup.C0_RESPONDER_UNIT],
         ["/usr/bin/systemctl", "stop", setup.CREDENTIAL_RENEW_UNIT],

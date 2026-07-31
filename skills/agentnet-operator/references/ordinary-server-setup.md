@@ -117,7 +117,7 @@ Copy the exact mode-matching example and replace every illustrative value with a
 - confidential Approval OIDC secret only when selected method requires it;
 - same `AGENTNET_APPROVAL_CORE_TOKEN` value.
 
-Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.32 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
+Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.33 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
 
 Environment syntax is strict unquoted `NAME=value`. Whitespace, shell quoting, backslashes, duplicate names, empty values, or setup-owned interpreter variables are rejected.
 
@@ -219,7 +219,8 @@ Start scope is limited to:
 
 Same approved request is deliberately retryable.
 
-- Fresh 0.1.32 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`. First-C0 setup does not migrate or reuse 0.1.31 state.
+- Fresh 0.1.33 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`.
+- Exact package upgrade accepts only the released 0.1.31 two-unit communication marker or 0.1.32 five-unit marker. It journals exact managed bytes, commits the 0.1.33 marker as the no-rollback boundary, quiesces all five units before Core bootstrap/PostgreSQL migration, and retains the journal for exact forward retry. The 0.1.31 expansion rejects any target-only account/group/state/unit, override, enablement, or live-runtime residue before crossing the boundary. Do not reset or edit markers to bypass this path.
 - Bootstrap is rerun/revalidated for preexisting Core state; old marker never causes bootstrap skip.
 - Core config is reloaded after bootstrap.
 - Approval trust is reloaded and revalidated.

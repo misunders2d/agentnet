@@ -83,6 +83,10 @@ MANAGED_UNITS = (
     CREDENTIAL_RENEW_UNIT,
     CREDENTIAL_RENEW_TIMER,
 )
+LEGACY_COMMUNICATION_ONLY_UNITS = (
+    APPROVAL_UNIT,
+    CORE_UNIT,
+)
 CORE_DATA = Path("/var/lib/agentnet")
 APPROVAL_DATA = Path("/var/lib/agentnet-approval")
 C0_RESPONDER_DATA = Path("/var/lib/agentnet-c0")
@@ -104,6 +108,23 @@ SECRET_ROOT = Path("/etc/agentnet-secrets")
 CORE_ENV = SECRET_ROOT / "core.env"
 APPROVAL_ENV = SECRET_ROOT / "approval.env"
 SYSTEMD_UNIT_ROOT = Path("/etc/systemd/system")
+_SYSTEMD_UNIT_SEARCH_ROOTS = (
+    Path("/etc/systemd/system.control"),
+    Path("/run/systemd/system.control"),
+    Path("/run/systemd/transient"),
+    Path("/run/systemd/generator.early"),
+    SYSTEMD_UNIT_ROOT,
+    Path("/etc/systemd/system.attached"),
+    Path("/run/systemd/system"),
+    Path("/run/systemd/system.attached"),
+    Path("/run/systemd/generator"),
+    Path("/usr/local/lib/systemd/system"),
+    Path("/usr/local/share/systemd/system"),
+    Path("/usr/lib/systemd/system"),
+    Path("/usr/share/systemd/system"),
+    Path("/lib/systemd/system"),
+    Path("/run/systemd/generator.late"),
+)
 CORE_PORT = 8080
 APPROVAL_PORT = 8090
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
@@ -124,15 +145,28 @@ _PROTECTED_SERVICE_PATHS = (
     Path("/tmp"),
     Path("/var/tmp"),
 )
-# One exact supported setup-marker upgrade window.  A package upgrade is the only
-# reason an already realized deployment may present a different request digest,
-# and only these source versions were released with a runtime-bound digest.
-_MARKER_UPGRADE_TARGET = "0.1.31"
-_SUPPORTED_MARKER_UPGRADE_SOURCES = frozenset({"0.1.28", "0.1.30"})
+# Exact supported setup-marker upgrade windows.  A package upgrade is the only
+# reason an already realized deployment may present a different request digest.
+# The 0.1.31 -> 0.1.33 window is deliberately narrower than the historical
+# same-topology windows: only the released communication-only Core+Approval
+# profile may expand to the current five-unit profile.
+_SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
+    ("0.1.28", "0.1.31"): MANAGED_UNITS,
+    ("0.1.30", "0.1.31"): MANAGED_UNITS,
+    ("0.1.31", "0.1.33"): LEGACY_COMMUNICATION_ONLY_UNITS,
+    ("0.1.32", "0.1.33"): MANAGED_UNITS,
+}
+_FORWARD_ONLY_SETUP_UPGRADES = frozenset(
+    {
+        ("0.1.31", "0.1.33"),
+        ("0.1.32", "0.1.33"),
+    }
+)
 # Blockers that mean "the response was lost", not "the operation was refused".
 # Only these justify one bounded idempotent retry of a product command.
 _RESPONSE_LOSS_BLOCKERS = frozenset({"invalid_product_evidence", "product_command_failed"})
-_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
+_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v2"
+_LEGACY_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
 _MAX_UNIT_BYTES = 65_536
 _MAX_CONFIG_BYTES = 1_048_576
 _JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
@@ -1123,7 +1157,14 @@ def _account_fact(name: str, home: Path) -> str:
     try:
         account = pwd.getpwnam(name)
     except KeyError:
-        return "create"
+        try:
+            grp.getgrnam(name)
+        except KeyError:
+            return "create"
+        raise ServerSetupError(
+            "identity_conflict",
+            f"existing {name} group conflicts with fixed profile",
+        )
     _validate_account(account, name, home)
     return "already_satisfied"
 
@@ -1140,6 +1181,54 @@ def _require_no_unit_overrides(layout: SetupLayout, unit: str) -> None:
     )
     if any(layout.host(path).exists() or layout.host(path).is_symlink() for path in override_paths):
         raise ServerSetupError("unit_override_conflict", "managed AgentNet unit has unsupported overrides")
+
+
+def _require_absent_topology_upgrade_unit(
+    layout: SetupLayout,
+    systemctl_executable: Path,
+    unit: str,
+    *,
+    journaled: bool,
+) -> None:
+    """Prove one target-only unit is absent/inert before topology expansion."""
+
+    for root in _SYSTEMD_UNIT_SEARCH_ROOTS:
+        candidate = layout.host(root / unit)
+        present = candidate.exists() or candidate.is_symlink()
+        if present and (not journaled or candidate != layout.unit(unit)):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "target-only managed unit exists before topology upgrade",
+            )
+    properties = _systemd_show(systemctl_executable, unit)
+    service_pid_invalid = (
+        unit.endswith(".service")
+        and properties.get("MainPID") not in {"", "0"}
+    )
+    load_state = properties.get("LoadState")
+    unit_file_state = properties.get("UnitFileState")
+    fragment_path = properties.get("FragmentPath", "")
+    absent = (
+        load_state == "not-found"
+        and unit_file_state in {"", "disabled"}
+        and not fragment_path
+    )
+    inert_journaled = (
+        journaled
+        and load_state == "loaded"
+        and unit_file_state in {"disabled", "static"}
+        and fragment_path == str(layout.unit(unit))
+    )
+    if (
+        not (absent or inert_journaled)
+        or properties.get("ActiveState") != "inactive"
+        or properties.get("DropInPaths", "").strip()
+        or service_pid_invalid
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "target-only managed unit is loaded, enabled, or active before topology upgrade",
+        )
 
 
 def _unit_arg(value: str) -> str:
@@ -1644,32 +1733,63 @@ def _read_managed_unit(path: Path, *, uid: int, gid: int, blocker: str) -> bytes
     )
 
 
-def _supported_marker_upgrade(marker_package_version: object) -> bool:
+def _marker_upgrade_unit_profile(marker: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """Return the exact released source-unit profile eligible for this target."""
+
+    source = marker.get("package_version")
+    if not isinstance(source, str) or source == __version__:
+        return None
+    profile = _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES.get((source, __version__))
+    if profile is None:
+        return None
+    if (
+        source == "0.1.31"
+        and (
+            marker.get("schema") != "agentnet.server-setup.marker.v3"
+            or marker.get("artifact_mode") != "disabled"
+        )
+    ):
+        return None
+    units = marker.get("units")
+    unit_digests = marker.get("unit_digests")
+    if (
+        units != list(profile)
+        or not isinstance(unit_digests, dict)
+        or set(unit_digests) != set(profile)
+    ):
+        return None
+    return profile
+
+
+def _supported_marker_upgrade(marker: Mapping[str, Any]) -> bool:
     """Report whether a realized marker may present one package-caused digest drift.
 
     ``request_digest`` binds the runtime identity, so every package upgrade
     changes it even when the operator's request and inputs are byte-identical.
-    Exactly one released source window is supported, and the same version never
-    counts: same-version drift means the request itself changed and must keep
-    failing closed.
+    Only explicitly mapped released source/target profiles are supported, and
+    the same version never counts: same-version drift means the request itself
+    changed and must keep failing closed.
     """
 
+    return _marker_upgrade_unit_profile(marker) is not None
+
+
+def _forward_only_setup_upgrade(source: object, target: object) -> bool:
     return (
-        __version__ == _MARKER_UPGRADE_TARGET
-        and isinstance(marker_package_version, str)
-        and marker_package_version in _SUPPORTED_MARKER_UPGRADE_SOURCES
-        and marker_package_version != __version__
+        isinstance(source, str)
+        and isinstance(target, str)
+        and (source, target) in _FORWARD_ONLY_SETUP_UPGRADES
     )
 
 
 def _accepted_marker_request_digest(marker: Mapping[str, Any], request_digest: str) -> bool:
     recorded = marker.get("request_digest")
     if recorded == request_digest:
-        return True
+        return marker.get("package_version") == __version__
     return (
         isinstance(recorded, str)
         and bool(_HEX64.fullmatch(recorded))
-        and _supported_marker_upgrade(marker.get("package_version"))
+        and _supported_marker_upgrade(marker)
     )
 
 
@@ -1683,6 +1803,8 @@ def _validated_setup_marker(
     if payload is None:
         return None
     marker = _strict_json_bytes(payload, label="setup marker")
+    upgrade_profile = _marker_upgrade_unit_profile(marker)
+    expected_units = upgrade_profile or MANAGED_UNITS
     common = {
         "schema",
         "request_digest",
@@ -1692,7 +1814,7 @@ def _validated_setup_marker(
     }
     digests = (marker.get("approval_config_digest"), marker.get("core_config_digest"))
     if (
-        marker.get("units") != list(MANAGED_UNITS)
+        marker.get("units") != list(expected_units)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in digests)
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker does not match the fixed profile")
@@ -1720,11 +1842,12 @@ def _validated_setup_marker(
             or set(marker) != v2_keys
             or not _accepted_marker_request_digest(marker, request_digest)
             or not isinstance(marker.get("revision"), int)
+            or isinstance(marker.get("revision"), bool)
             or marker["revision"] < 1
             or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
             or not isinstance(marker.get("package_version"), str)
             or not isinstance(unit_digests, dict)
-            or set(unit_digests) != set(MANAGED_UNITS)
+            or set(unit_digests) != set(expected_units)
             or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
         ):
             raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
@@ -1737,11 +1860,12 @@ def _validated_setup_marker(
         or marker.get("artifact_mode") != artifact_mode
         or not _accepted_marker_request_digest(marker, request_digest)
         or not isinstance(marker.get("revision"), int)
+        or isinstance(marker.get("revision"), bool)
         or marker["revision"] < 1
         or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
         or not isinstance(marker.get("package_version"), str)
         or not isinstance(unit_digests, dict)
-        or set(unit_digests) != set(MANAGED_UNITS)
+        or set(unit_digests) != set(expected_units)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
@@ -1897,6 +2021,55 @@ def _write_managed_unit(
     return _atomic_write(path, payload, mode=0o644, uid=uid, gid=gid)
 
 
+def _remove_managed_unit_exact(
+    path: Path,
+    *,
+    expected: bytes,
+    uid: int,
+    gid: int,
+) -> None:
+    """Remove one upgrade-created unit only while its exact bytes remain."""
+
+    current = _read_managed_unit(
+        path,
+        uid=uid,
+        gid=gid,
+        blocker="setup_upgrade_conflict",
+    )
+    if current is None:
+        return
+    if current != expected:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "upgrade-created managed unit changed before rollback",
+        )
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != uid
+        or before.st_gid != gid
+        or stat.S_IMODE(before.st_mode) != 0o644
+        or _read_managed_unit(
+            path,
+            uid=uid,
+            gid=gid,
+            blocker="setup_upgrade_conflict",
+        )
+        != expected
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "upgrade-created managed unit changed before rollback",
+        )
+    path.unlink()
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def _write_journaled_core_config(
     path: Path,
     payload: bytes,
@@ -1991,10 +2164,39 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
     if payload is None:
         return None
     journal = _strict_json_bytes(payload, label="setup upgrade journal")
+    schema = journal.get("schema")
     units = journal.get("previous_units")
     configs = journal.get("previous_configs")
+    from_package_version = journal.get("from_package_version")
+    to_package_version = journal.get("to_package_version")
+    source_profile = (
+        _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES.get(
+            (from_package_version, to_package_version)
+        )
+        if isinstance(from_package_version, str) and isinstance(to_package_version, str)
+        else None
+    )
+    legacy_unit_shape = (
+        schema == _LEGACY_UPGRADE_JOURNAL_SCHEMA
+        and source_profile == MANAGED_UNITS
+        and isinstance(units, dict)
+        and set(units) == set(MANAGED_UNITS)
+        and all(isinstance(value, str) for value in units.values())
+    )
+    current_unit_shape = (
+        schema == _UPGRADE_JOURNAL_SCHEMA
+        and source_profile is not None
+        and isinstance(units, dict)
+        and set(units) == set(MANAGED_UNITS)
+        and all(
+            isinstance(units[unit], str)
+            if unit in source_profile
+            else units[unit] is None
+            for unit in MANAGED_UNITS
+        )
+    )
     if (
-        journal.get("schema") != _UPGRADE_JOURNAL_SCHEMA
+        schema not in {_LEGACY_UPGRADE_JOURNAL_SCHEMA, _UPGRADE_JOURNAL_SCHEMA}
         or set(journal)
         != {
             "schema",
@@ -2010,16 +2212,17 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
             not isinstance(journal.get(key), str) or not _HEX64.fullmatch(str(journal.get(key)))
             for key in ("from_marker_sha256", "from_request_digest", "to_request_digest")
         )
-        or not isinstance(journal.get("from_package_version"), str)
-        or not isinstance(journal.get("to_package_version"), str)
-        or not isinstance(units, dict)
-        or set(units) != set(MANAGED_UNITS)
+        or not isinstance(from_package_version, str)
+        or not isinstance(to_package_version, str)
+        or not (legacy_unit_shape or current_unit_shape)
         or not isinstance(configs, dict)
         or set(configs) != _JOURNALED_CONFIG_KEYS
     ):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
     for value in units.values():
-        if not isinstance(value, str) or len(value) > 4 * _MAX_UNIT_BYTES:
+        if value is not None and (
+            not isinstance(value, str) or len(value) > 4 * _MAX_UNIT_BYTES
+        ):
             raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
     for value in configs.values():
         if not isinstance(value, str) or len(value) > 2 * _MAX_CONFIG_BYTES:
@@ -2029,10 +2232,14 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
     return journal
 
 
-def _journaled_unit_payloads(journal: Mapping[str, Any]) -> dict[str, bytes]:
+def _journaled_unit_payloads(journal: Mapping[str, Any]) -> dict[str, bytes | None]:
     try:
         return {
-            unit: base64.b64decode(str(value), validate=True)
+            unit: (
+                None
+                if value is None
+                else base64.b64decode(str(value), validate=True)
+            )
             for unit, value in dict(journal["previous_units"]).items()
         }
     except (KeyError, ValueError, TypeError) as exc:
@@ -3596,11 +3803,22 @@ def _prepare_supported_upgrade(
                 uid=uid,
                 gid=gid,
             )
+            if _forward_only_setup_upgrade(
+                journal["from_package_version"],
+                journal["to_package_version"],
+            ):
+                pending.update(
+                    forward_only_upgrade=True,
+                    journal_path=journal_path,
+                )
+                return "resumed_committed_forward_only_upgrade"
             _clear_upgrade_journal(journal_path)
             return "cleared_committed_upgrade"
         if (
             existing_marker_payload is None
             or journal["from_marker_sha256"] != hashlib.sha256(existing_marker_payload).hexdigest()
+            or journal["from_package_version"] != existing_marker.get("package_version")
+            or journal["from_request_digest"] != existing_marker.get("request_digest")
             or journal["to_request_digest"] != approved_digest
             or journal["to_package_version"] != __version__
         ):
@@ -3624,6 +3842,13 @@ def _prepare_supported_upgrade(
     if not upgrading:
         return "not_required"
     assert existing_marker is not None and existing_marker_payload is not None
+    source_profile = _marker_upgrade_unit_profile(existing_marker)
+    if source_profile is None:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "recorded setup marker is not an exact supported upgrade source",
+        )
+    source_unit_paths = {unit: unit_paths[unit] for unit in source_profile}
     if not approval_preexisting or not core_preexisting:
         raise ServerSetupError(
             "setup_upgrade_conflict",
@@ -3642,12 +3867,20 @@ def _prepare_supported_upgrade(
             blocker="core_custody",
             exclude_top_level=frozenset({"enrolled_harness_id", "enrolled_credential_id"}),
         ),
-        unit_paths=unit_paths,
+        unit_paths=source_unit_paths,
         uid=uid,
         gid=gid,
     )
-    previous_units: dict[str, str] = {}
+    previous_units: dict[str, str | None] = {}
     for unit, path in unit_paths.items():
+        if unit not in source_profile:
+            if path.exists() or path.is_symlink():
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "target-only managed unit exists before topology upgrade",
+                )
+            previous_units[unit] = None
+            continue
         payload = _read_managed_unit(path, uid=uid, gid=gid, blocker="setup_upgrade_conflict")
         if payload is None:
             raise ServerSetupError(
@@ -3740,19 +3973,41 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
                 previous=replacement,
             )
         previous = _journaled_unit_payloads(journal)
-        for unit, path in dict(pending["unit_paths"]).items():
-            _write_managed_unit(
+        unit_paths = dict(pending["unit_paths"])
+        replacements = pending.get("replacement_units", {})
+        if set(previous) != set(unit_paths) or not isinstance(replacements, Mapping):
+            raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
+        for unit, path in unit_paths.items():
+            current = _read_managed_unit(
                 path,
-                previous[unit],
                 uid=int(pending["uid"]),
                 gid=int(pending["gid"]),
-                previous=_read_managed_unit(
+                blocker="setup_upgrade_conflict",
+            )
+            previous_payload = previous[unit]
+            if current == previous_payload:
+                continue
+            replacement = replacements.get(unit)
+            if not isinstance(replacement, bytes) or current != replacement:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "managed unit changed before upgrade rollback",
+                )
+            if previous_payload is None:
+                _remove_managed_unit_exact(
                     path,
+                    expected=replacement,
                     uid=int(pending["uid"]),
                     gid=int(pending["gid"]),
-                    blocker="setup_upgrade_conflict",
-                ),
-            )
+                )
+            else:
+                _write_managed_unit(
+                    path,
+                    previous_payload,
+                    uid=int(pending["uid"]),
+                    gid=int(pending["gid"]),
+                    previous=replacement,
+                )
     except Exception:
         return
     try:
@@ -3859,6 +4114,7 @@ def _apply_server_setup(
         approval_state = layout.host(APPROVAL_STATE)
         setup_marker = layout.host(SETUP_MARKER)
         setup_attempt = layout.host(SETUP_ATTEMPT)
+        journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
         core_env_path = layout.host(CORE_ENV)
         approval_env_path = layout.host(APPROVAL_ENV)
 
@@ -3888,12 +4144,104 @@ def _apply_server_setup(
                 else None
             ),
         )
+        upgrade_profile = (
+            _marker_upgrade_unit_profile(existing_marker)
+            if existing_marker is not None
+            else None
+        )
+        topology_expansion = upgrade_profile == LEGACY_COMMUNICATION_ONLY_UNITS
+        forward_only_upgrade = (
+            existing_marker is not None
+            and _forward_only_setup_upgrade(
+                existing_marker.get("package_version"),
+                __version__,
+            )
+        )
+        journal_present = journal_path.exists() or journal_path.is_symlink()
+        journal_preview = (
+            _read_upgrade_journal(journal_path, uid=root_uid, gid=root_gid)
+            if journal_present
+            else None
+        )
+        journaled_topology = (
+            journal_preview is not None
+            and any(
+                payload is None
+                for payload in _journaled_unit_payloads(journal_preview).values()
+            )
+        )
+        topology_transition = topology_expansion or journaled_topology
+        journaled_forward_only_upgrade = (
+            journal_preview is not None
+            and _forward_only_setup_upgrade(
+                journal_preview.get("from_package_version"),
+                journal_preview.get("to_package_version"),
+            )
+        )
+        forward_only_transition = (
+            forward_only_upgrade or journaled_forward_only_upgrade
+        )
+        if topology_transition:
+            if (
+                c0_responder_data.exists()
+                or c0_responder_data.is_symlink()
+                or layout.host(CREDENTIAL_RENEW_STATE).exists()
+                or layout.host(CREDENTIAL_RENEW_STATE).is_symlink()
+                or _account_fact(C0_RESPONDER_USER, C0_RESPONDER_DATA) != "create"
+            ):
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "legacy communication-only state has unexpected target-only state",
+                )
+            for unit in set(MANAGED_UNITS) - set(LEGACY_COMMUNICATION_ONLY_UNITS):
+                _require_absent_topology_upgrade_unit(
+                    layout,
+                    systemctl_executable,
+                    unit,
+                    journaled=journal_present,
+                )
         for unit in MANAGED_UNITS:
             _require_no_unit_overrides(layout, unit)
         core_input = input_bundle["core_environment_file"]
         approval_input = input_bundle["approval_environment_file"]
         core_values = preflight.core_values
         approval_values = preflight.approval_values
+        if topology_transition:
+            if (
+                _account_fact(CORE_USER, CORE_DATA) != "already_satisfied"
+                or _account_fact(APPROVAL_USER, APPROVAL_DATA)
+                != "already_satisfied"
+                or not core_data.is_dir()
+                or core_data.is_symlink()
+                or not approval_data.is_dir()
+                or approval_data.is_symlink()
+                or not layout.host(SECRET_ROOT).is_dir()
+                or layout.host(SECRET_ROOT).is_symlink()
+                or _read_managed_exact(
+                    core_env_path,
+                    uid=root_uid,
+                    gid=root_gid,
+                    mode=0o600,
+                    blocker="setup_upgrade_conflict",
+                    label="legacy Core environment",
+                    max_bytes=_MAX_CONFIG_BYTES,
+                )
+                != core_input
+                or _read_managed_exact(
+                    approval_env_path,
+                    uid=root_uid,
+                    gid=root_gid,
+                    mode=0o600,
+                    blocker="setup_upgrade_conflict",
+                    label="legacy Approval environment",
+                    max_bytes=_MAX_CONFIG_BYTES,
+                )
+                != approval_input
+            ):
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "legacy communication-only prerequisite state is incomplete",
+                )
         core_account = _ensure_account(
             CORE_USER,
             CORE_DATA,
@@ -3905,21 +4253,35 @@ def _apply_server_setup(
             APPROVAL_DATA,
             useradd_executable=useradd_executable,
         )
-        c0_responder_account = _ensure_account(
-            C0_RESPONDER_USER,
-            C0_RESPONDER_DATA,
-            useradd_executable=useradd_executable,
+        c0_responder_account = (
+            None
+            if topology_transition
+            else _ensure_account(
+                C0_RESPONDER_USER,
+                C0_RESPONDER_DATA,
+                useradd_executable=useradd_executable,
+            )
         )
         steps: list[dict[str, Any]] = [
             {"id": "preflight", "status": "completed"},
             {"id": "core_identity", "status": "completed"},
             {"id": "postgres_service_identity", "status": postgres_evidence["status"]},
             {"id": "approval_identity", "status": "completed"},
-            {"id": "c0_responder_identity", "status": "completed"},
         ]
+        if c0_responder_account is not None:
+            steps.append({"id": "c0_responder_identity", "status": "completed"})
         steps.append({"id": "core_private_root", "status": _ensure_private_root(core_data, core_account)})
         steps.append({"id": "approval_private_root", "status": _ensure_private_root(approval_data, approval_account)})
-        steps.append({"id": "c0_responder_private_root", "status": _ensure_private_root(c0_responder_data, c0_responder_account)})
+        if c0_responder_account is not None:
+            steps.append(
+                {
+                    "id": "c0_responder_private_root",
+                    "status": _ensure_private_root(
+                        c0_responder_data,
+                        c0_responder_account,
+                    ),
+                }
+            )
         approval_preexisting = _private_entry_exists(
             approval_config_path,
             approval_account,
@@ -3938,17 +4300,25 @@ def _apply_server_setup(
             expected="file",
             blocker="core_custody",
         )
-        c0_responder_config_preexisting = _private_entry_exists(
-            c0_responder_config_path,
-            c0_responder_account,
-            expected="file",
-            blocker="c0_responder_custody",
+        c0_responder_config_preexisting = (
+            False
+            if c0_responder_account is None
+            else _private_entry_exists(
+                c0_responder_config_path,
+                c0_responder_account,
+                expected="file",
+                blocker="c0_responder_custody",
+            )
         )
-        c0_responder_terminal_preexisting = _private_entry_exists(
-            c0_responder_terminal_path,
-            c0_responder_account,
-            expected="file",
-            blocker="c0_responder_custody",
+        c0_responder_terminal_preexisting = (
+            False
+            if c0_responder_account is None
+            else _private_entry_exists(
+                c0_responder_terminal_path,
+                c0_responder_account,
+                expected="file",
+                blocker="c0_responder_custody",
+            )
         )
         core_runtime = core_data / "core"
         core_oidc_path = layout.host(CORE_OIDC_CONFIG)
@@ -4035,7 +4405,6 @@ def _apply_server_setup(
                 oidc=prevalidated_oidc,
                 scanner_trust=scanner_trust,
             )
-        journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
         upgrade_status = _prepare_supported_upgrade(
             existing_marker=existing_marker,
             existing_marker_payload=existing_marker_payload,
@@ -4059,6 +4428,115 @@ def _apply_server_setup(
             if _pending_upgrade.get("journal") is not None
             else {}
         )
+
+        def commit_setup_profile() -> dict[str, bytes]:
+            """Commit exact managed files and marker, then cross forward-only."""
+
+            unit_payloads = render_units(
+                node_executable,
+                executable,
+                uv_executable,
+            )
+            if _pending_upgrade.get("journal") is not None:
+                _pending_upgrade["replacement_units"] = dict(unit_payloads)
+            for unit, payload in unit_payloads.items():
+                steps.append(
+                    {
+                        "id": f"unit:{unit}",
+                        "status": _write_managed_unit(
+                            unit_paths[unit],
+                            payload,
+                            uid=root_uid,
+                            gid=root_gid,
+                            previous=journaled_units.get(unit),
+                        ),
+                    }
+                )
+            approval_config_digest = _managed_config_digest(
+                approval_config_path,
+                approval_account,
+                blocker="approval_config",
+            )
+            core_config_digest = _managed_config_digest(
+                core_config_path,
+                core_account,
+                blocker="core_custody",
+                exclude_top_level=frozenset(
+                    {"enrolled_harness_id", "enrolled_credential_id"}
+                ),
+            )
+            artifact_mode = (
+                request.effective_artifact_mode
+                if request.schema_version == "agentnet.server-setup.request.v2"
+                else None
+            )
+            try:
+                marker_status = _commit_setup_marker(
+                    setup_marker,
+                    existing_payload=existing_marker_payload,
+                    existing_marker=existing_marker,
+                    request_digest=approved_digest,
+                    approval_config_digest=approval_config_digest,
+                    core_config_digest=core_config_digest,
+                    unit_payloads=unit_payloads,
+                    artifact_mode=artifact_mode,
+                    uid=root_uid,
+                    gid=root_gid,
+                )
+            except BaseException:
+                # A directory-fsync or response failure may occur after the
+                # compare-and-swap became observable.  Never restore source
+                # files over an exact target marker: retain the journal and
+                # force the next invocation through committed-marker recovery.
+                if forward_only_upgrade and existing_marker_payload is not None:
+                    try:
+                        observed_payload = _read_setup_marker(
+                            setup_marker,
+                            uid=root_uid,
+                            gid=root_gid,
+                        )
+                        observed_marker = _validated_setup_marker(
+                            observed_payload,
+                            request_digest=approved_digest,
+                            legacy_request_digest=preflight.legacy_request_digest,
+                            artifact_mode=artifact_mode,
+                        )
+                        if (
+                            observed_marker is None
+                            or observed_marker.get("package_version") != __version__
+                            or observed_marker.get("revision")
+                            != int(existing_marker.get("revision", 0)) + 1
+                            or observed_marker.get("previous_marker_digest")
+                            != hashlib.sha256(existing_marker_payload).hexdigest()
+                        ):
+                            raise ServerSetupError(
+                                "setup_upgrade_conflict",
+                                "setup marker commit outcome is not the exact upgrade target",
+                            )
+                        _require_marker_realized_state(
+                            observed_marker,
+                            approval_config_digest=approval_config_digest,
+                            core_config_digest=core_config_digest,
+                            unit_paths=unit_paths,
+                            uid=root_uid,
+                            gid=root_gid,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        _pending_upgrade.clear()
+                raise
+            # The marker records only managed config/unit provenance.  Crossing
+            # it disarms byte rollback; database/bootstrap, target identity, and
+            # service reconciliation after this point resume forward on retry.
+            _pending_upgrade.clear()
+            steps.append({"id": "setup_marker", "status": marker_status})
+            if not forward_only_upgrade:
+                _clear_upgrade_journal(journal_path)
+            if attempt_active:
+                _clear_upgrade_journal(setup_attempt)
+            return unit_payloads
+
         if legacy_owner_policy:
             if prevalidated_oidc is None:  # pragma: no cover - guarded above
                 raise ServerSetupError(
@@ -4240,6 +4718,47 @@ def _apply_server_setup(
             oidc=oidc,
             scanner_trust=scanner_trust,
         )
+        profile_committed_early = False
+        unit_payloads: dict[str, bytes] | None = None
+        if forward_only_upgrade:
+            unit_payloads = commit_setup_profile()
+            profile_committed_early = True
+        if forward_only_transition:
+            def verify_upgrade_quiescence() -> None:
+                expected_states = {
+                    APPROVAL_UNIT: "disabled",
+                    CORE_UNIT: "disabled",
+                    C0_RESPONDER_UNIT: "disabled",
+                    CREDENTIAL_RENEW_UNIT: "static",
+                    CREDENTIAL_RENEW_TIMER: "disabled",
+                }
+                for unit, expected_state in expected_states.items():
+                    _validate_inactive_auxiliary_unit_state(
+                        unit=unit,
+                        expected_unit_file_state=expected_state,
+                        properties=_systemd_show(systemctl_executable, unit),
+                    )
+
+            quiesce_status = _run_systemctl_sequence_or_reconcile(
+                systemctl_executable,
+                [
+                    ["daemon-reload"],
+                    ["disable", "--now", C0_RESPONDER_UNIT],
+                    ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+                    ["stop", CREDENTIAL_RENEW_UNIT],
+                    ["disable", "--now", CORE_UNIT],
+                    ["disable", "--now", APPROVAL_UNIT],
+                ],
+                reconcile=verify_upgrade_quiescence,
+            )
+            if quiesce_status == "completed":
+                verify_upgrade_quiescence()
+            steps.append(
+                {
+                    "id": "package_upgrade_service_quiescence",
+                    "status": quiesce_status,
+                }
+            )
         if core_preexisting:
             _, bootstrap_status = _run_bootstrap_idempotently(
                 core_account,
@@ -4258,8 +4777,27 @@ def _apply_server_setup(
                 oidc=oidc,
                 scanner_trust=scanner_trust,
             )
+        if forward_only_transition:
+            _clear_upgrade_journal(journal_path)
+        if c0_responder_account is None:
+            c0_responder_account = _ensure_account(
+                C0_RESPONDER_USER,
+                C0_RESPONDER_DATA,
+                useradd_executable=useradd_executable,
+            )
+            steps.append({"id": "c0_responder_identity", "status": "completed"})
+            steps.append(
+                {
+                    "id": "c0_responder_private_root",
+                    "status": _ensure_private_root(
+                        c0_responder_data,
+                        c0_responder_account,
+                    ),
+                }
+            )
         identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
         c0_responder_required = False
+        responder_payload: bytes | None = None
         steps.append({"id": "core_bootstrap", "status": bootstrap_status})
         if identity_enrolled and start:
             identity_path = layout.host(SERVER_AGENT_IDENTITY)
@@ -4319,18 +4857,6 @@ def _apply_server_setup(
                     indent=2,
                     sort_keys=True,
                 ).encode() + b"\n"
-                steps.append(
-                    {
-                        "id": "c0_responder_config",
-                        "status": _atomic_write(
-                            c0_responder_config_path,
-                            responder_payload,
-                            mode=0o600,
-                            uid=c0_responder_account.pw_uid,
-                            gid=c0_responder_account.pw_gid,
-                        ),
-                    }
-                )
         elif not identity_enrolled and any(
             path.exists() or path.is_symlink()
             for path in (c0_responder_config_path, c0_responder_terminal_path)
@@ -4355,59 +4881,9 @@ def _apply_server_setup(
         if trusted_after != trusted:
             raise ServerSetupError("approval_conflict", "Approval trust changed during setup")
 
-        unit_payloads = render_units(node_executable, executable, uv_executable)
-        for unit, payload in unit_payloads.items():
-            steps.append(
-                {
-                    "id": f"unit:{unit}",
-                    "status": _write_managed_unit(
-                        unit_paths[unit],
-                        payload,
-                        uid=root_uid,
-                        gid=root_gid,
-                        previous=journaled_units.get(unit),
-                    ),
-                }
-            )
-        steps.append(
-            {
-                "id": "setup_marker",
-                "status": _commit_setup_marker(
-                    setup_marker,
-                    existing_payload=existing_marker_payload,
-                    existing_marker=existing_marker,
-                    request_digest=approved_digest,
-                    approval_config_digest=_managed_config_digest(
-                        approval_config_path,
-                        approval_account,
-                        blocker="approval_config",
-                    ),
-                    core_config_digest=_managed_config_digest(
-                        core_config_path,
-                        core_account,
-                        blocker="core_custody",
-                        exclude_top_level=frozenset(
-                            {"enrolled_harness_id", "enrolled_credential_id"}
-                        ),
-                    ),
-                    unit_payloads=unit_payloads,
-                    artifact_mode=(
-                        request.effective_artifact_mode
-                        if request.schema_version == "agentnet.server-setup.request.v2"
-                        else None
-                    ),
-                    uid=root_uid,
-                    gid=root_gid,
-                ),
-            }
-        )
-        # Marker now records realized state.  Disarm rollback before journal
-        # cleanup: a crash during unlink must leave target configs/units intact so
-        # the next run can verify the committed marker and clear the stale journal.
-        _pending_upgrade.clear()
-        _clear_upgrade_journal(journal_path)
-        if attempt_active:
-            _clear_upgrade_journal(setup_attempt)
+        if not profile_committed_early:
+            unit_payloads = commit_setup_profile()
+        assert unit_payloads is not None
         if start:
             approval_health = {
                 "schema": "agentnet.approval.health.v1",
@@ -4438,11 +4914,11 @@ def _apply_server_setup(
                 "runtime_instance_id": request.runtime_instance_id,
             }
 
-            def verify_live_service_state() -> None:
+            def verify_live_service_state(*, auxiliary_ready: bool) -> None:
                 active_units = [APPROVAL_UNIT, CORE_UNIT]
-                if identity_enrolled:
+                if auxiliary_ready and identity_enrolled:
                     active_units.append(CREDENTIAL_RENEW_TIMER)
-                if c0_responder_required:
+                if auxiliary_ready and c0_responder_required:
                     active_units.append(C0_RESPONDER_UNIT)
                 for unit in active_units:
                     _run_systemctl(
@@ -4480,7 +4956,7 @@ def _apply_server_setup(
                     ),
                     layout=layout,
                 )
-                if c0_responder_required:
+                if auxiliary_ready and c0_responder_required:
                     _validate_systemd_service_runtime(
                         systemctl_executable,
                         unit=C0_RESPONDER_UNIT,
@@ -4497,9 +4973,9 @@ def _apply_server_setup(
                         layout=layout,
                     )
                 expected_states = {CREDENTIAL_RENEW_UNIT: "static"}
-                if not c0_responder_required:
+                if not auxiliary_ready or not c0_responder_required:
                     expected_states[C0_RESPONDER_UNIT] = "disabled"
-                if not identity_enrolled:
+                if not auxiliary_ready or not identity_enrolled:
                     expected_states[CREDENTIAL_RENEW_TIMER] = "disabled"
                 for unit, expected_state in expected_states.items():
                     _validate_inactive_auxiliary_unit_state(
@@ -4507,40 +4983,32 @@ def _apply_server_setup(
                         expected_unit_file_state=expected_state,
                         properties=_systemd_show(systemctl_executable, unit),
                     )
-                _health(
-                    f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
-                    expected=approval_health,
-                    attempts=_START_HEALTH_ATTEMPTS,
-                )
-                _health(
-                    f"http://127.0.0.1:{CORE_PORT}/healthz",
-                    expected=core_health,
-                    attempts=_START_HEALTH_ATTEMPTS,
-                )
-
-            systemctl_commands: list[list[str]] = [
+            base_systemctl_commands: list[list[str]] = [
                 ["daemon-reload"],
+                ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+                ["disable", "--now", C0_RESPONDER_UNIT],
+                ["stop", CREDENTIAL_RENEW_UNIT],
                 ["enable", "--now", APPROVAL_UNIT],
                 ["enable", CORE_UNIT],
                 ["restart", CORE_UNIT],
             ]
-            if identity_enrolled:
-                systemctl_commands.append(["enable", "--now", CREDENTIAL_RENEW_TIMER])
-            else:
-                systemctl_commands.append(["disable", "--now", CREDENTIAL_RENEW_TIMER])
-            systemctl_commands.append(
-                ["enable", "--now", C0_RESPONDER_UNIT]
-                if c0_responder_required
-                else ["disable", "--now", C0_RESPONDER_UNIT]
-            )
-            systemctl_commands.append(["stop", CREDENTIAL_RENEW_UNIT])
-            start_status = _run_systemctl_sequence_or_reconcile(
+            base_start_status = _run_systemctl_sequence_or_reconcile(
                 systemctl_executable,
-                systemctl_commands,
-                reconcile=verify_live_service_state,
+                base_systemctl_commands,
+                reconcile=lambda: verify_live_service_state(auxiliary_ready=False),
             )
-            if start_status == "completed":
-                verify_live_service_state()
+            if base_start_status == "completed":
+                verify_live_service_state(auxiliary_ready=False)
+            _health(
+                f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
+                expected=approval_health,
+                attempts=_START_HEALTH_ATTEMPTS,
+            )
+            _health(
+                f"http://127.0.0.1:{CORE_PORT}/healthz",
+                expected=core_health,
+                attempts=_START_HEALTH_ATTEMPTS,
+            )
             _health(f"{request.approval_public_origin}/healthz", expected=approval_health)
             _health(f"{request.core_public_origin}/healthz", expected=core_health)
             if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
@@ -4563,9 +5031,7 @@ def _apply_server_setup(
                 if broker_client is not None:
                     broker_client.close()
             steps.append({"id": "approval_broker_readiness", "status": "completed"})
-            steps.append({"id": "service_start", "status": start_status})
-            steps.append({"id": "managed_unit_runtime", "status": "validated_hermetic_live_binding"})
-            steps.append({"id": "public_https_routes", "status": "completed"})
+            start_status = base_start_status
             if identity_enrolled:
                 readiness = {
                     "schema": "agentnet.core.readiness.v1",
@@ -4602,12 +5068,58 @@ def _apply_server_setup(
                         str(exc),
                         identity_enrolled=True,
                     ) from exc
+                if c0_responder_required:
+                    if responder_payload is None:  # pragma: no cover - fixed branch invariant
+                        raise ServerSetupError(
+                            "c0_responder_conflict",
+                            "C0 responder configuration is unavailable",
+                        )
+                    steps.append(
+                        {
+                            "id": "c0_responder_config",
+                            "status": _atomic_write(
+                                c0_responder_config_path,
+                                responder_payload,
+                                mode=0o600,
+                                uid=c0_responder_account.pw_uid,
+                                gid=c0_responder_account.pw_gid,
+                            ),
+                        }
+                    )
+                auxiliary_commands: list[list[str]] = [
+                    ["enable", "--now", CREDENTIAL_RENEW_TIMER],
+                    (
+                        ["enable", "--now", C0_RESPONDER_UNIT]
+                        if c0_responder_required
+                        else ["disable", "--now", C0_RESPONDER_UNIT]
+                    ),
+                    ["stop", CREDENTIAL_RENEW_UNIT],
+                ]
+                auxiliary_status = _run_systemctl_sequence_or_reconcile(
+                    systemctl_executable,
+                    auxiliary_commands,
+                    reconcile=lambda: verify_live_service_state(
+                        auxiliary_ready=True
+                    ),
+                )
+                if auxiliary_status == "completed":
+                    verify_live_service_state(auxiliary_ready=True)
+                if auxiliary_status != "completed":
+                    start_status = auxiliary_status
                 steps.append({"id": "operational_readiness", "status": "completed"})
                 status = "operational"
                 next_action = "enroll additional ordinary laptops with agentnet join guided"
             else:
                 status = "waiting_owner_oidc_or_passkey"
                 next_action = "complete owner passkey registration and guided identity-only enrollment"
+            steps.append({"id": "service_start", "status": start_status})
+            steps.append(
+                {
+                    "id": "managed_unit_runtime",
+                    "status": "validated_hermetic_live_binding",
+                }
+            )
+            steps.append({"id": "public_https_routes", "status": "completed"})
         else:
             steps.append({"id": "service_start", "status": "pending_explicit_start"})
             status = "configured_not_started"
