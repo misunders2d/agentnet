@@ -1790,6 +1790,13 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
         config_value = config.model_dump(mode="python")
         config_value["enrolled_credential_id"] = result.credential_id
         candidate = ExtensionConfig.model_validate(config_value)
+        config_replacement = json.loads(config_raw)
+        if not isinstance(config_replacement, dict):
+            raise SystemExit("managed-server config must be one object")
+        # Preserve every validated field exactly as installed.  In particular,
+        # frozenset-backed config fields have no semantic order, so re-dumping
+        # the model here would make crash recovery depend on PYTHONHASHSEED.
+        config_replacement["enrolled_credential_id"] = candidate.enrolled_credential_id
         updated_actor = actor.model_copy(
             update={
                 "credential_id": result.credential_id,
@@ -1801,7 +1808,7 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
         config_status = _cas_managed_private_json(
             config_path,
             expected_sha256=request.managed_config_sha256,
-            replacement=candidate.redacted_export(),
+            replacement=config_replacement,
             label="managed server configuration",
             expected_uid=config_metadata.st_uid,
         )
