@@ -25,6 +25,7 @@ ALLOWED_PURPOSES = frozenset(
         "agentnet.enrollment.pop.v1",
         "agentnet.internal-invitation.acceptance-pop.v1",
         "agentnet.credential.rotation.pop.v1",
+        "agentnet.managed-server-credential-reauthorization.pop.v1",
         "agentnet.recovery.pop.v1",
         "agentnet.approval.receipt.v1",
         "agentnet.event.origin.v1",

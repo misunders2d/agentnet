@@ -18,6 +18,7 @@ from agentnet.security.signatures import canonical_json
 
 _REQUEST_MESSAGE = "AgentNet C0 pilot request: fixed harmless transport check."
 _REPLY_MESSAGE = "AgentNet C0 pilot reply: fixed harmless transport check."
+_MANAGED_SERVER_REAUTHORIZATION_PURPOSE = "identity.credential.recover.approve"
 
 
 def _denied() -> AuthenticationError:
@@ -167,6 +168,70 @@ def _validate_enrollment(transaction: dict[str, Any], digest: str) -> dict[str, 
             f"Laptop: {harness['display_name']} ({harness['kind']})",
             f"Verified account: {human['verified_email']}",
             f"Corporate domain: {transaction['domain_id']}",
+            "Authority granted: none",
+        ],
+        "advanced_digest": digest,
+    }
+
+
+def _validate_managed_server_credential_reauthorization(
+    transaction: dict[str, Any],
+    digest: str,
+) -> dict[str, Any]:
+    _keys(
+        transaction,
+        {
+            "schema",
+            "approval_purpose",
+            "request_id",
+            "domain_id",
+            "principal_id",
+            "harness_id",
+            "expired_credential_id",
+            "expected_credential_epoch",
+            "expected_expired_at",
+            "expected_key_id",
+            "expected_binding_assurance",
+            "managed_config_sha256",
+            "managed_identity_sha256",
+            "maximum_new_credential_ttl_seconds",
+            "managed_profile",
+            "key_binding",
+            "old_credential_action",
+            "authority_granted",
+        },
+    )
+    if (
+        transaction["schema"] != "agentnet.managed-server-credential-reauthorization.v1"
+        or transaction["approval_purpose"] != _MANAGED_SERVER_REAUTHORIZATION_PURPOSE
+        or not _string(transaction["request_id"])
+        or not _string(transaction["domain_id"])
+        or not _string(transaction["principal_id"])
+        or not _string(transaction["harness_id"])
+        or not _string(transaction["expired_credential_id"])
+        or not _positive_int(transaction["expected_credential_epoch"])
+        or not _positive_int(transaction["expected_expired_at"])
+        or not _string(transaction["expected_key_id"])
+        or transaction["expected_binding_assurance"] not in {"os_bound", "hardware_bound"}
+        or not _sha256(transaction["managed_config_sha256"])
+        or not _sha256(transaction["managed_identity_sha256"])
+        or type(transaction["maximum_new_credential_ttl_seconds"]) is not int
+        or not 3_600 <= transaction["maximum_new_credential_ttl_seconds"] <= 604_800
+        or transaction["managed_profile"] != "always_on_server_agent"
+        or transaction["key_binding"] != "same_managed_key_with_fresh_possession_proof"
+        or transaction["old_credential_action"] != "retire_without_extension"
+        or transaction["authority_granted"] is not False
+    ):
+        raise _denied()
+    hours = transaction["maximum_new_credential_ttl_seconds"] // 3_600
+    return {
+        "title": "Reauthorize an expired server-agent credential",
+        "statements": [
+            "Server identity: existing managed server agent",
+            "Key custody: the existing managed key must prove fresh possession",
+            "Old credential: remains expired and is retired, never extended",
+            f"New credential lifetime: no more than {hours} hour{'s' if hours != 1 else ''}",
+            "Scope: same corporate owner, domain, harness, key, config, and identity",
             "Authority granted: none",
         ],
         "advanced_digest": digest,
@@ -525,6 +590,15 @@ def validate_and_summarize_approval_transaction(
     transaction = _strict_object(canonical_transaction)
     if purpose == "identity.enrollment.approve":
         return _validate_enrollment(transaction, transaction_digest)
+    if (
+        purpose == _MANAGED_SERVER_REAUTHORIZATION_PURPOSE
+        and transaction.get("schema")
+        == "agentnet.managed-server-credential-reauthorization.v1"
+    ):
+        return _validate_managed_server_credential_reauthorization(
+            transaction,
+            transaction_digest,
+        )
     if purpose == BOOTSTRAP_PLAN_APPROVAL_PURPOSE:
         return _validate_bootstrap(transaction)
     raise _denied()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +15,7 @@ from agentnet import cli
 from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.config import (
+    ApprovalServiceClientConfig,
     ExtensionConfig,
     IndependentApproverConfig,
     OIDCEnrollmentConfig,
@@ -384,6 +388,256 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert captured["lease_owner_id"] != state.config.runtime_instance_id
     assert captured["run_migrations"] is False
     assert captured["start_lease_keeper"] is False
+
+    captured.clear()
+    assert cli._open_server_agent_activation_store(
+        state.config,
+        database_url_override="postgresql://runtime-secret@postgres/agentnet",
+    ) is fake_store
+    assert captured["database_url"] == "postgresql://runtime-secret@postgres/agentnet"
+    parser = cli.build_parser()
+    reauthorization = parser.parse_args(
+        [
+            "server-agent",
+            "reauthorize-expired-credential",
+            "--config",
+            str(state.config_path),
+            "--identity",
+            str(state.identity_path),
+            "--state",
+            str(tmp_path / "reauthorization.json"),
+        ]
+    )
+    assert reauthorization.func is cli.command_server_agent_reauthorize_expired_credential
+    assert reauthorization.replace_terminal_state is False
+    defaults = parser.parse_args(["server-agent", "reauthorize-expired-credential"])
+    assert defaults.config == str(cli.CORE_CONFIG)
+    assert defaults.identity == str(cli.SERVER_AGENT_IDENTITY)
+    assert defaults.state == str(cli.SETUP_ROOT / "credential-reauthorization.json")
+    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", tmp_path / "absent-terminal.json")
+    cli._require_managed_server_reauthorization_topology(state.config)
+    monkeypatch.setattr(cli.os.path, "lexists", lambda _path: True)
+    with pytest.raises(SystemExit, match="no retained C0 terminal"):
+        cli._require_managed_server_reauthorization_topology(state.config)
+
+    managed = tmp_path / "managed.json"
+    managed.write_text('{"old":true}\n', encoding="utf-8")
+    managed.chmod(0o600)
+    before = managed.stat()
+    assert cli._cas_managed_private_json(
+        managed,
+        expected_sha256=__import__("hashlib").sha256(managed.read_bytes()).hexdigest(),
+        replacement={"new": True},
+        label="managed test file",
+        expected_uid=before.st_uid,
+    ) == "updated"
+    after = managed.stat()
+    assert (after.st_uid, after.st_gid, after.st_mode & 0o777) == (
+        before.st_uid,
+        before.st_gid,
+        0o600,
+    )
+
+    # Exercise the complete two-call CLI ceremony and its most important crash
+    # seam without another test ID: config committed, identity still old, state
+    # retained.  The exact retry must reconcile instead of issuing a second
+    # database credential or Approval request.
+    managed_root = tmp_path / "managed"
+    setup_root = tmp_path / "setup"
+    managed_root.mkdir(mode=0o700)
+    setup_root.mkdir(mode=0o700)
+    config_path = managed_root / "agentnet.json"
+    identity_path = managed_root / "server-agent-identity.json"
+    key_path = managed_root / "guided-join.key.pem"
+    state_path = setup_root / "credential-reauthorization.json"
+    actor = state.actor
+    approver = state.config.oidc_enrollment.trusted_approvers[0].model_copy(
+        update={"principal_id": actor.principal_id}
+    )
+    oidc = state.config.oidc_enrollment.model_copy(
+        update={
+            "trusted_approvers": (approver,),
+            "approval_service": ApprovalServiceClientConfig(
+                origin="https://approval.corp.example",
+                public_origin="https://approval.corp.example",
+                service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
+                approver_principal_id=actor.principal_id,
+            ),
+        }
+    )
+    managed_config = ExtensionConfig.model_validate(
+        {
+            **state.config.model_dump(mode="python"),
+            "data_dir": managed_root,
+            "database_url_env": "AGENTNET_DATABASE_URL",
+            "oidc_enrollment": oidc,
+            "enrolled_harness_id": actor.harness_id,
+            "enrolled_credential_id": actor.credential_id,
+        }
+    )
+    managed_identity = {
+        **state.identity,
+        "actor": actor.model_dump(mode="json"),
+        "private_key_path": str(key_path),
+    }
+    files: dict[Path, bytes] = {
+        config_path: json.dumps(managed_config.redacted_export(), indent=2, sort_keys=True).encode() + b"\n",
+        identity_path: json.dumps(managed_identity, indent=2, sort_keys=True).encode() + b"\n",
+        key_path: state.key.private_pem,
+    }
+    monkeypatch.setattr(cli, "CORE_CONFIG", config_path)
+    monkeypatch.setattr(cli, "SERVER_AGENT_IDENTITY", identity_path)
+    monkeypatch.setattr(cli, "SERVER_AGENT_KEY", key_path)
+    monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
+    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", tmp_path / "no-c0-terminal.json")
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    import pwd
+
+    account = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+    monkeypatch.setattr(pwd, "getpwnam", lambda _name: account)
+    original_lstat = Path.lstat
+
+    def managed_lstat(path: Path):
+        if path == managed_root:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=account.pw_uid, st_gid=account.pw_gid)
+        if path == setup_root:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=0, st_gid=0)
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", managed_lstat)
+    monkeypatch.setattr(
+        cli.os.path,
+        "lexists",
+        lambda path: Path(path) in files,
+    )
+
+    def managed_read(path: Path, *, label: str, expected_uid=None):
+        raw = files[path]
+        return raw, SimpleNamespace(
+            st_uid=account.pw_uid,
+            st_gid=account.pw_gid,
+            st_dev=1,
+            st_ino=hash(path),
+        )
+
+    monkeypatch.setattr(cli, "_managed_private_file", managed_read)
+    monkeypatch.setattr(
+        cli,
+        "_parse_environment_file",
+        lambda _path, *, label: {
+            "AGENTNET_DATABASE_URL": "postgresql://agentnet@postgres/agentnet",
+            "AGENTNET_APPROVAL_CORE_TOKEN": "x" * 43,
+        },
+    )
+
+    def write_state(path: Path, value: dict[str, object], *, force=False):
+        assert path == state_path
+        if not force:
+            assert path not in files
+        files[path] = json.dumps(value, indent=2, sort_keys=True).encode() + b"\n"
+
+    monkeypatch.setattr(cli, "_write_private_config", write_state)
+    monkeypatch.setattr(cli, "_owner_only_file", lambda path, *, label: files[path])
+    monkeypatch.setattr(cli, "_remove_private_state", lambda path: files.pop(path, None))
+    expired_binding = SimpleNamespace(
+        domain_id=actor.domain_id,
+        principal_id=actor.principal_id,
+        harness_id=actor.harness_id,
+        credential_epoch=actor.credential_epoch,
+        harness_credential_epoch=actor.credential_epoch,
+        credential_status="active",
+        harness_status="active",
+        principal_status="active",
+        domain_status="active",
+        binding_assurance=actor.binding_assurance,
+        public_key_pem=state.key.public_pem,
+        key_id=state.key.thumbprint,
+        expires_at=100,
+    )
+    stores: list[FakeStore] = []
+
+    def open_reauthorization_store(_config, *, database_url_override=None):
+        assert database_url_override == "postgresql://agentnet@postgres/agentnet"
+        opened_store = FakeStore()
+        stores.append(opened_store)
+        return opened_store
+
+    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_reauthorization_store)
+    monkeypatch.setattr(cli, "load_credential_binding", lambda _store, _credential_id: expired_binding)
+    monkeypatch.setattr(cli.time, "time", lambda: 1_000)
+
+    class Broker:
+        issued = False
+        creates = 0
+        retrieves = 0
+
+        def create_request(self, **_kwargs):
+            self.creates += 1
+            return {"request_id": "approval-request-1"}
+
+        def request_status(self, **_kwargs):
+            return {"state": "issued" if self.issued else "pending"}
+
+        def retrieve_receipt(self, **_kwargs):
+            self.retrieves += 1
+            return {"signed": "receipt"}
+
+        def close(self):
+            return None
+
+    broker = Broker()
+    monkeypatch.setattr(cli, "_managed_server_reauthorization_client", lambda *_args, **_kwargs: broker)
+    service_calls: list[str] = []
+
+    class Recovery:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def reauthorize(self, *, request, approval):
+            assert approval == {"signed": "receipt"}
+            service_calls.append(request.request_id)
+            return SimpleNamespace(
+                credential_id="credential-2",
+                credential_epoch=2,
+                idempotent_repeat=len(service_calls) > 1,
+            )
+
+    monkeypatch.setattr(cli, "ManagedServerCredentialReauthorizationService", Recovery)
+    fail_after_config = {"armed": True}
+
+    def crashable_cas(path: Path, *, expected_sha256: str, replacement, label: str, expected_uid: int):
+        current = files[path]
+        if json.loads(current) == replacement:
+            return "reconciled"
+        assert hashlib.sha256(current).hexdigest() == expected_sha256
+        files[path] = json.dumps(replacement, indent=2, sort_keys=True).encode() + b"\n"
+        if label == "managed server configuration" and fail_after_config["armed"]:
+            fail_after_config["armed"] = False
+            raise RuntimeError("injected crash after config CAS")
+        return "updated"
+
+    monkeypatch.setattr(cli, "_cas_managed_private_json", crashable_cas)
+    args = argparse.Namespace(
+        config=str(config_path),
+        identity=str(identity_path),
+        state=str(state_path),
+        replace_terminal_state=False,
+    )
+    assert cli.command_server_agent_reauthorize_expired_credential(args) == 2
+    assert broker.creates == 1
+    broker.issued = True
+    with pytest.raises(RuntimeError, match="injected crash"):
+        cli.command_server_agent_reauthorize_expired_credential(args)
+    assert state_path in files
+    assert json.loads(files[config_path])["enrolled_credential_id"] == "credential-2"
+    assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-1"
+    assert cli.command_server_agent_reauthorize_expired_credential(args) == 0
+    assert broker.creates == 1
+    assert broker.retrieves == 2
+    assert len(service_calls) == 2 and len(set(service_calls)) == 1
+    assert state_path not in files
+    assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-2"
+    assert all(opened_store.closed for opened_store in stores)
 
 
 def test_server_agent_activate_store_unavailable_leaves_config_unchanged(

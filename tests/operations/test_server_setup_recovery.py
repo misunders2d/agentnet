@@ -1161,14 +1161,49 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     assert not harness.active_units
     assert not harness.layout.host(setup.C0_RESPONDER_DATA).exists()
 
+    # Reproduce the exact released 0.1.33 interruption: the target marker and
+    # journal are committed, but Approval retains systemd's failed latch after
+    # its otherwise successful SIGTERM quiescence.
+    failed_units = {setup.APPROVAL_UNIT}
+    original_systemd_show = setup._systemd_show
+    original_systemctl = setup._run_systemctl
+
+    def show_failed_until_reset(executable: Path, unit: str) -> dict[str, str]:
+        properties = original_systemd_show(executable, unit)
+        if unit in failed_units:
+            properties = {**properties, "ActiveState": "failed"}
+        return properties
+
+    def clear_failed_state(
+        executable: Path,
+        arguments: list[str],
+        *,
+        failure_message: str,
+    ) -> None:
+        original_systemctl(
+            executable,
+            arguments,
+            failure_message=failure_message,
+        )
+        if arguments[:1] == ["reset-failed"]:
+            failed_units.discard(arguments[1])
+
+    monkeypatch.setattr(setup, "_systemd_show", show_failed_until_reset)
+    monkeypatch.setattr(setup, "_run_systemctl", clear_failed_state)
     monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
-    recovered = harness.apply(upgrade_digest)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.34")
+    recovery_digest = harness.plan_digest()
+    recovered = harness.apply(recovery_digest)
     assert {
         "id": "package_upgrade",
-        "status": "resumed_committed_forward_only_upgrade",
+        "status": "validated_pre_upgrade_realized_state",
     } in recovered["steps"]
-    assert harness.marker()["package_version"] == "0.1.33"
+    assert not failed_units
+    assert ["reset-failed", setup.APPROVAL_UNIT] in harness.systemctl_calls
+    assert harness.marker()["package_version"] == "0.1.34"
     assert harness.layout.host(setup.C0_RESPONDER_DATA).is_dir()
+    assert not harness.journal_path.exists()
 
 
 def test_0131_topology_upgrade_quiescence_failure_remains_forward_only(

@@ -1,8 +1,8 @@
 # Release Manifest
 
 Snapshot: 2026-07-31
-Candidate: `agentnet 0.1.33`
-Latest published package: `agentnet 0.1.32`
+Candidate: `agentnet 0.1.34`
+Latest published package: `agentnet 0.1.33`
 Evidence profile: exact setup-migration recovery candidate
 
 This is not a production release. It is the human projection of
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `dda8e8f37d9e573ba49a9f45ebca11fbfab112a29ac1a3ecc57a54e67bea3280` |
-| `pyproject.toml` | SHA-256 `84340d6ea7e391734967e8abb9f3d2d5f5aca34824c68b47a95a26f281c9bfd8` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `751cfb3048892e4768127c1ef1650ba1c67c4e7afa361ca578ef53976c6e40df` |
+| `pyproject.toml` | SHA-256 `2b77603c49ec2b8b42775a467c9566f6434d491d46aeb3ee8ec09357ab56f63b` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -288,26 +288,37 @@ credential, identity, responder, or authority mutation: the live `0.1.31`
 marker records a two-unit communication-only profile that `0.1.32` does not
 admit.
 
-Candidate `0.1.33` adds exact migration contracts for the deployed `0.1.31`
-two-unit profile and an exact `0.1.32` five-unit predecessor. Admission binds
-the complete source profile and digests; the two-unit edge rejects target-only
-residue; all five units are quiesced before the forward-only PostgreSQL
-boundary; the target marker is committed before migration; and a lost marker
-response is reconciled only when the exact target marker is observable. Once
-the marker commits, old-state rollback is disarmed and exact retry retains the
-upgrade journal. The hermetic setup/recovery lane reports `103 passed`, and an
-independent Pi re-review passes after the forward-only and response-loss
-corrections. The affected lane reports `625 passed, 7 expected dedicated-
-PostgreSQL skips`; the source regression lane reports `1665 passed, 16
-expected skips`; and npm source plus both clean recursive packed generations
-each report `1621 passed, 16 expected skips`. The unfiltered lane preserves
-`1698 passed, 16 expected skips, 2 installed-harness G01 pin failures`; those
-failures remain non-green and unwaived. Direct disposable-package verification,
-release verification, package-tree digest/no-residue checks, and byte-identical
-wheel/sdist builds pass. Same-commit CI, mutation-authorized PostgreSQL, live
-Hub migration, and external C0 evidence remain pending. No reset, manual marker
-edit, database downgrade, deployment, authority, or gate promotion is
-authorized or claimed.
+Published `0.1.33` reached the forward-only marker and five-unit boundary on the
+Hub while preserving PostgreSQL, identity, config, and credential state, then
+failed closed because Approval's package-issued SIGTERM produced exit status
+143 and systemd retained `ActiveState=failed`. The strict validator required
+`inactive`; the installed release had neither Approval's successful-SIGTERM
+contract nor failed-latch reconciliation. Its unchanged retry is not a
+recovery, and every failed attempt remains BOUNDED NON-GREEN.
+
+Candidate `0.1.34` accepts only the exact `0.1.33` five-unit marker produced by
+the separately released legacy migration boundary. Approval now shares Core's successful
+SIGTERM/status 143 contract. Quiescence clears only the failed latch of each
+exact managed unit after bounded stop/disable, then still requires exact
+loaded/unit-file/inactive/PID state. A committed 0.1.33 journal may be
+superseded only after marker/config/unit provenance revalidation; a separate
+0.1.33→0.1.34 journal is written before changing managed bytes. The hermetic
+setup/runtime recovery lane reports `209 passed`, including the exact retained
+Approval failed latch. The same candidate also adds a root-only, purpose-bound
+reauthorization ceremony for the Hub's exact expired-but-still-possessed
+managed-server key: same-key PoP plus fresh owner WebAuthn Approval retires the
+old row without extending it and issues one finite next-epoch credential, with
+no authority or restart. The command is deliberately limited to the pre-C0
+communication-only topology; A2A, relay, and retained C0-terminal bindings fail
+closed. Its focused identity/Approval/CLI lane reports `46 passed`; the final
+unfiltered source run reports `1698 passed, 16 expected skips`, plus only the
+two unwaived installed-harness G01 failures. Source and both recursive packed
+npm generations report `1621 passed, 16 expected skips`. Full affected lanes,
+deterministic archives, direct disposable-package verification, release
+verification, same-commit CI, mutation-authorized PostgreSQL, live Hub
+recovery, and external C0 evidence remain pending. No reset, manual marker
+edit, database downgrade, identity replacement, deployment, authority, or gate
+promotion is authorized or claimed.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

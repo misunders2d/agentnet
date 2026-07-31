@@ -76,6 +76,18 @@ expired/revoked/rotated binding cannot renew or satisfy readiness. These labels
 and server capability limits can only narrow process eligibility; protected
 operations still derive and authorize their exact caller independently.
 
+Candidate 0.1.34 adds one narrower recovery for the released Hub condition: an
+expired, still-possessed managed-server key in the pre-C0 communication-only
+topology. The root-only command freezes the exact expired binding and managed
+config/identity digests, proves possession with that same key, and requires a
+fresh owner WebAuthn-UV Approval receipt before one PostgreSQL transaction
+retires the expired row unchanged and creates a finite next-epoch credential.
+It grants no authority and performs no service restart. Service-owned config
+and identity files are then updated by inode-checked, mode/owner-preserving CAS;
+an interrupted update is idempotently reconciled before setup is rerun. A2A,
+relay, or retained C0-terminal bindings are refused rather than silently
+rewritten or excluded from marker evidence.
+
 ## Canonical state and evidence
 
 - Canonical implementation state: this repository.
@@ -599,6 +611,26 @@ After database gate, wrapper owns only locked Approval/Core/C0 service identitie
 
 Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. A root-owned current-package attempt record is written before first product mutation and removed only after marker commit, allowing exact interruption recovery while rejecting unowned pre-existing state.
 
-The `0.1.33` migration boundary admits only exact released `0.1.31` two-unit communication-only and `0.1.32` five-unit markers. Exact prior managed configs/units are journaled before writes. For both edges, the target marker is the forward-only boundary: successful or exactly reconciled marker commit disarms source-byte rollback; all five units are quiesced before Core bootstrap may migrate PostgreSQL; and the journal is retained until bootstrap succeeds so a later invocation must validate and resume the exact committed target. Only the `0.1.31` topology expansion may create the responder account/root and target-only units, and it rejects pre-existing account/group/state/unit, override, enablement, or live-runtime residue before marker commit. There is no automatic `0.1.31` rollback after the boundary. Marker never proves identity, authority, service health, readiness, PostgreSQL durability, HA, or production certification. OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain explicit ceremonies. Remote Managers may provide immutable package guidance and inspect sanitized evidence only; target coding agents own host execution.
+The `0.1.34` corrective migration boundary admits only the exact released
+`0.1.33` five-unit marker. Earlier sources use the separately released 0.1.33
+boundary first; 0.1.34 does not add another direct legacy edge. Exact prior
+managed configs/units are journaled before writes. For this edge, the
+target marker is the forward-only boundary: successful or exactly reconciled
+marker commit disarms source-byte rollback; all five units are quiesced before
+Core bootstrap may migrate PostgreSQL; and the journal is retained until
+bootstrap succeeds. A retained journal whose exact committed target is 0.1.33
+may be superseded only after its marker/config/unit provenance is revalidated;
+then 0.1.34 writes a separate new journal before changing managed bytes.
+Quiescence clears systemd's failed latch only after bounded stop/disable and
+still requires exact loaded/unit-file/inactive/PID postconditions. Approval and
+Core both declare SIGTERM/status 143 successful. Only the `0.1.31` topology
+expansion may create the responder account/root and target-only units, and it
+rejects pre-existing account/group/state/unit, override, enablement, or
+live-runtime residue before marker commit. There is no automatic rollback after
+the boundary. Marker never proves identity, authority, service health,
+readiness, PostgreSQL durability, HA, or production certification.
+OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain
+explicit ceremonies. Remote Managers may provide immutable package guidance
+and inspect sanitized evidence only; target coding agents own host execution.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path.

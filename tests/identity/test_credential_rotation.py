@@ -7,17 +7,26 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from agentnet.approval.service import (
+    IndependentApprovalVerifier,
+    TrustedApprover,
+    create_independent_approval_receipt,
+)
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
-from agentnet.errors import AuthenticationError, ConflictError
+from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError
 from agentnet.http_api import create_app
 from agentnet.identity.credentials import (
     CREDENTIAL_ROTATION_POP_PURPOSE,
+    MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+    MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
     CredentialRenewalRequest,
     CredentialRenewalResult,
     CredentialRenewalService,
     CredentialRotationRequest,
     CredentialRotationService,
+    ManagedServerCredentialReauthorizationRequest,
+    ManagedServerCredentialReauthorizationService,
 )
 from agentnet.operations.config import ExtensionConfig
 from agentnet.security.dpop import create_request_proof
@@ -54,7 +63,7 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
     store,
     identity_factory,
 ) -> None:
-    actor, _key = identity_factory(binding_assurance="os_bound")
+    actor, key = identity_factory(binding_assurance="os_bound")
     original_expiry = int(
         store.fetch_one(
             "SELECT expires_at FROM credentials WHERE credential_id=?",
@@ -99,6 +108,176 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
             actor=actor,
             request=CredentialRenewalRequest(request_id=str(uuid4())),
         )
+
+    reauthorization_time = renewed.expires_at + 1
+    signer = P256KeyPair.generate()
+    trusted = TrustedApprover(
+        principal_id=actor.principal_id,
+        domain_id=actor.domain_id,
+        signer_key_id=signer.thumbprint,
+        public_key_pem=signer.public_pem,
+        allowed_purposes=frozenset(
+            {MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE}
+        ),
+    )
+    verifier = IndependentApprovalVerifier(
+        {signer.thumbprint: trusted},
+        verifier_id="managed-server-recovery.example",
+    )
+    request_values = {
+        "request_id": str(uuid4()),
+        "domain_id": actor.domain_id,
+        "principal_id": actor.principal_id,
+        "harness_id": actor.harness_id,
+        "expired_credential_id": actor.credential_id,
+        "expected_credential_epoch": actor.credential_epoch,
+        "expected_expired_at": renewed.expires_at,
+        "expected_key_id": key.thumbprint,
+        "expected_binding_assurance": actor.binding_assurance,
+        "managed_config_sha256": "a" * 64,
+        "managed_identity_sha256": "b" * 64,
+        "maximum_new_credential_ttl_seconds": 86_400,
+    }
+    unsigned = ManagedServerCredentialReauthorizationRequest(
+        **request_values,
+        old_key_possession_signature="pending",
+    )
+    request = ManagedServerCredentialReauthorizationRequest(
+        **request_values,
+        old_key_possession_signature=key.sign(
+            MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+            unsigned.possession_fields(),
+        ),
+    )
+    receipt = create_independent_approval_receipt(
+        signer,
+        approver=trusted,
+        verifier_id=verifier.verifier_id,
+        approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical_transaction=request.canonical_transaction,
+        issued_at=reauthorization_time,
+        expires_at=reauthorization_time + 300,
+    )
+    before_expiry = renewed.expires_at - 1
+    before_receipt = create_independent_approval_receipt(
+        signer,
+        approver=trusted,
+        verifier_id=verifier.verifier_id,
+        approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical_transaction=request.canonical_transaction,
+        issued_at=before_expiry,
+        expires_at=before_expiry + 300,
+    )
+    with pytest.raises(AuthenticationError, match="signature verification failed"):
+        ManagedServerCredentialReauthorizationService(
+            store,
+            verifier,
+            credential_ttl_seconds=86_400,
+            clock=lambda: reauthorization_time,
+        ).reauthorize(
+            request=request.model_copy(
+                update={
+                    "old_key_possession_signature": P256KeyPair.generate().sign(
+                        MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                        request.possession_fields(),
+                    )
+                }
+            ),
+            approval=receipt,
+        )
+    with pytest.raises(AuthorizationError, match="not expired"):
+        ManagedServerCredentialReauthorizationService(
+            store,
+            verifier,
+            credential_ttl_seconds=86_400,
+            clock=lambda: before_expiry,
+        ).reauthorize(request=request, approval=before_receipt)
+    wrong_purpose = create_independent_approval_receipt(
+        signer,
+        approver=trusted,
+        verifier_id=verifier.verifier_id,
+        approval_purpose="identity.enrollment.approve",
+        canonical_transaction=request.canonical_transaction,
+        issued_at=reauthorization_time,
+        expires_at=reauthorization_time + 300,
+    )
+    with pytest.raises(AuthenticationError, match="purpose or domain mismatch"):
+        ManagedServerCredentialReauthorizationService(
+            store,
+            verifier,
+            credential_ttl_seconds=86_400,
+            clock=lambda: reauthorization_time,
+        ).reauthorize(request=request, approval=wrong_purpose)
+    other_signer = P256KeyPair.generate()
+    other = TrustedApprover(
+        principal_id="different-owner",
+        domain_id=actor.domain_id,
+        signer_key_id=other_signer.thumbprint,
+        public_key_pem=other_signer.public_pem,
+        allowed_purposes=trusted.allowed_purposes,
+    )
+    other_verifier = IndependentApprovalVerifier(
+        {other_signer.thumbprint: other},
+        verifier_id=verifier.verifier_id,
+    )
+    other_receipt = create_independent_approval_receipt(
+        other_signer,
+        approver=other,
+        verifier_id=verifier.verifier_id,
+        approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical_transaction=request.canonical_transaction,
+        issued_at=reauthorization_time,
+        expires_at=reauthorization_time + 300,
+    )
+    with pytest.raises(AuthorizationError, match="configured owner"):
+        ManagedServerCredentialReauthorizationService(
+            store,
+            other_verifier,
+            credential_ttl_seconds=86_400,
+            clock=lambda: reauthorization_time,
+        ).reauthorize(request=request, approval=other_receipt)
+    recovery = ManagedServerCredentialReauthorizationService(
+        store,
+        verifier,
+        credential_ttl_seconds=86_400,
+        clock=lambda: reauthorization_time,
+    )
+    rebound = recovery.reauthorize(request=request, approval=receipt)
+    assert rebound.credential_epoch == actor.credential_epoch + 1
+    assert rebound.key_id == key.thumbprint
+    assert rebound.expires_at == reauthorization_time + 86_400
+    assert rebound.authority_granted is False
+    assert dict(
+        store.fetch_one(
+            "SELECT status,expires_at FROM credentials WHERE credential_id=?",
+            (actor.credential_id,),
+        )
+    ) == {"status": "retired", "expires_at": renewed.expires_at}
+    repeated = recovery.reauthorize(request=request, approval=receipt)
+    assert repeated.credential_id == rebound.credential_id
+    assert repeated.idempotent_repeat is True
+    drifted_unsigned = request.model_copy(
+        update={"managed_config_sha256": "c" * 64, "old_key_possession_signature": "pending"}
+    )
+    drifted = drifted_unsigned.model_copy(
+        update={
+            "old_key_possession_signature": key.sign(
+                MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                drifted_unsigned.possession_fields(),
+            )
+        }
+    )
+    drifted_receipt = create_independent_approval_receipt(
+        signer,
+        approver=trusted,
+        verifier_id=verifier.verifier_id,
+        approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical_transaction=drifted.canonical_transaction,
+        issued_at=reauthorization_time,
+        expires_at=reauthorization_time + 300,
+    )
+    with pytest.raises(ConflictError, match="expired binding changed"):
+        recovery.reauthorize(request=drifted, approval=drifted_receipt)
 
 
 def test_rotation_atomically_retires_current_key_and_fences_replay_without_touching_sibling(
@@ -299,4 +478,3 @@ async def test_authenticated_renewal_http_is_selector_free_and_actor_bound(
         "actor": actor,
         "request": CredentialRenewalRequest(request_id=request_id),
     }
-

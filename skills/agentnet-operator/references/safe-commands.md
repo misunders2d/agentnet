@@ -264,10 +264,29 @@ or capability and does not restart anything. These commands do not themselves
 prove HA, PITR, KMS custody, independent enrollment approval, or production
 certification.
 
+For the exact 0.1.34 pre-C0 communication-only case where the retained managed
+server credential has expired but its package-owned key remains intact, run:
+
+```bash
+sudo -- env -u SSL_CERT_FILE -u SSL_CERT_DIR -u SSLKEYLOGFILE \
+  AGENTNET_UV=<server-prefix>/bin/uv \
+  <server-prefix>/bin/node \
+  <server-prefix>/lib/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs \
+  server-agent reauthorize-expired-credential
+```
+
+Tell the owner only to use the fixed public Approval `/approval` page. After
+WebAuthn approval, rerun the same command, then rerun the exact digest-bound
+`server-agent setup --apply --start`. This retires the old expired row and
+creates one finite next-epoch credential for the same key; it grants no
+authority and restarts nothing. It refuses A2A, relay, or retained C0-terminal
+bindings. Never delete or edit its root-only state; use
+`--replace-terminal-state` only for a broker-proven rejected or expired request.
+
 ## Release-gated fixed C0 pilot
 
 Use this section only after verifying the installed release and its C0 release
-evidence. Published `0.1.18` does not qualify. In 0.1.33, ordinary-server setup
+evidence. Published `0.1.18` does not qualify. In 0.1.34, ordinary-server setup
 owns the dedicated responder service, config, and systemd-delivered credential;
 do not recreate it with generic `supervisor-run` or expose its private paths.
 Its package-internal diagnostic surface is `agentnet c0-pilot responder

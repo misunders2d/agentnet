@@ -3,18 +3,17 @@
 Snapshot: 2026-07-31
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.32` first-C0 blocker repair and corrective `0.1.33`
-setup-migration candidate. It does not replace requirements, gate ledgers, or
-accountable-owner evidence.
+published `0.1.33` setup-migration release and corrective `0.1.34`
+identity-preserving recovery candidate. It does not replace requirements, gate
+ledgers, or accountable-owner evidence.
 
 ## Current public package
 
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.32`
-- published source commit: `77f5240c3df5c0328fbfbc154b623b79992b2a11`
-- annotated tag object: `2bf40a1c4185d35112296d339cc19463aec03fd1`
+- latest published version: `0.1.33`
+- published source commit: `466c96d50e8aeeb060be92e8d01c024af9fd35c6`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -68,16 +67,33 @@ credential, identity, responder, or authority mutation. Active Core and
 Approval remain `0.1.31`; Core is live but not ready, and enrollment/C0 remain
 blocked.
 
-Corrective candidate `0.1.33` adds only exact `0.1.31` two-unit and `0.1.32`
-five-unit predecessor profiles, digest-bound marker admission, pre-migration
-five-unit quiescence, committed-marker response-loss reconciliation, and
-forward-only retry after the schema boundary. Hermetic migration/recovery,
-source, recursively packed package, deterministic artifact, and release
-verification pass locally; the two installed-harness G01 failures remain
-non-green and unwaived. Same-commit CI, public publication, Hub application,
-fresh enrollment, and the first native message remain pending. This candidate
-does not authorize a Hub reset, manual marker edit, database downgrade,
-deployment, or gate promotion.
+Published `0.1.33` admitted the exact `0.1.31` two-unit and `0.1.32` five-unit
+predecessor profiles. On the Hub it committed marker v3 revision 2 and the five
+unit bytes while preserving PostgreSQL, identity, configuration, and credential
+state, then failed closed during quiescence. `agentnet-approval.service` exited
+with status 143 and systemd retained `ActiveState=failed`; 0.1.33 required
+`inactive`, lacked Approval's successful-SIGTERM declaration, and did not clear
+the failed latch. A same-digest repeat made no further mutation and cannot
+recover this state. Services remain offline, PostgreSQL remains schema 4/5, the
+preserved credential is expired, authority is false, and no enrollment or C0
+message occurred.
+
+Corrective candidate `0.1.34` preserves the strict inactive postcondition. It
+adds Approval's successful-SIGTERM contract, clears only the failed latch for
+the five exact managed units after bounded stop/disable, and admits the exact
+0.1.33 five-unit marker only. A committed 0.1.33 forward journal is superseded only
+after exact marker/config/unit revalidation and before a separately journaled
+0.1.33→0.1.34 edge. Earlier sources use the separately released 0.1.33
+migration first. No reset,
+manual marker/database edit, identity replacement, or authority grant is added.
+For the Hub's additional expired-credential blocker, 0.1.34 adds an exact
+pre-C0 communication-only recovery: root-only same-key possession proof plus a
+fresh owner WebAuthn Approval retires the old expired row unchanged and creates
+one finite next-epoch credential. It performs no authority grant or restart and
+refuses A2A, relay, or retained C0-terminal topologies. Local recovery tests
+pass; complete release verification, same-commit CI, publication, Hub recovery,
+the live owner ceremony, fresh enrollment, and the first native message remain
+pending.
 
 ## Release and gate posture
 

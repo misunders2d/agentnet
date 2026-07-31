@@ -21,7 +21,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import uvicorn
 import httpx
@@ -36,6 +36,8 @@ from agentnet._terminal_handoff import (
     require_private_terminal,
 )
 from agentnet.approval.cli_commands import configure_approval_parser
+from agentnet.approval.internal_client import ApprovalServiceClient
+from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
 from agentnet.audit.service import AuditService
 from agentnet.authorization import (
     AUTHORITY_COMMAND_PURPOSE,
@@ -64,7 +66,14 @@ from agentnet.gateways.a2a import (
     generate_opaque_route,
 )
 from agentnet.identity.actors import ActorKind, VerifiedActor
-from agentnet.identity.credentials import load_credential_binding, public_key_thumbprint
+from agentnet.identity.credentials import (
+    MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+    MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+    ManagedServerCredentialReauthorizationRequest,
+    ManagedServerCredentialReauthorizationService,
+    load_credential_binding,
+    public_key_thumbprint,
+)
 from agentnet.identity.invitations import (
     INTERNAL_INVITATION_POP_PURPOSE,
     INTERNAL_INVITATION_REVOKE_ACTION,
@@ -84,7 +93,15 @@ from agentnet.operations.config import (
 from agentnet.operations.config_migration import load_config_json
 from agentnet.operations.server_reset import ServerSetupResetError, reset_server_setup
 from agentnet.operations.server_setup import (
+    C0_RESPONDER_TERMINAL,
+    CORE_CONFIG,
+    CORE_ENV,
+    CORE_USER,
+    SERVER_AGENT_IDENTITY,
+    SERVER_AGENT_KEY,
+    SETUP_ROOT,
     ServerSetupError,
+    _parse_environment_file,
     apply_server_setup,
     load_server_setup_request,
     plan_server_setup,
@@ -94,6 +111,7 @@ from agentnet.operations.incident import (
     IncidentMode,
     IncidentModeChange,
 )
+from agentnet.operations.outage import OutageGate
 from agentnet.operations.backup import (
     BackupBinding,
     ManifestSeal,
@@ -665,7 +683,11 @@ def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P2
     return client, actor, key
 
 
-def _open_server_agent_activation_store(config: ExtensionConfig) -> PostgreSQLStore:
+def _open_server_agent_activation_store(
+    config: ExtensionConfig,
+    *,
+    database_url_override: str | None = None,
+) -> PostgreSQLStore:
     """Open the exact runtime lease without migrations or background work.
 
     Reusing the configured runtime instance lease proves the ordinary server
@@ -679,7 +701,7 @@ def _open_server_agent_activation_store(config: ExtensionConfig) -> PostgreSQLSt
         create=False,
     )
     return PostgreSQLStore(
-        config.resolved_database_url(),
+        database_url_override or config.resolved_database_url(),
         cipher,
         instance_id=config.runtime_instance_id,
         lease_owner_id=f"activation-{uuid4().hex}",
@@ -1223,6 +1245,593 @@ def command_server_agent_reset(args: argparse.Namespace) -> int:
         )
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def _managed_server_reauthorization_verifier(
+    config: ExtensionConfig,
+) -> tuple[IndependentApprovalVerifier, object]:
+    oidc = config.oidc_enrollment
+    if oidc is None or oidc.approval_service is None:
+        raise SystemExit("managed-server credential reauthorization requires configured Approval")
+    approval = oidc.approval_service
+    if not any(
+        item.principal_id == approval.approver_principal_id
+        and MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE
+        in item.allowed_purposes
+        for item in oidc.trusted_approvers
+    ):
+        raise SystemExit("configured Approval owner cannot authorize credential recovery")
+    trusted: dict[str, TrustedApprover] = {}
+    for item in oidc.trusted_approvers:
+        if public_key_thumbprint(item.public_key_pem) != item.signer_key_id:
+            raise SystemExit("configured Approval trust key is invalid")
+        trusted[item.signer_key_id] = TrustedApprover(
+            principal_id=item.principal_id,
+            domain_id=config.domain_id,
+            signer_key_id=item.signer_key_id,
+            public_key_pem=item.public_key_pem,
+            allowed_purposes=item.allowed_purposes,
+            authority_kind=item.authority_kind,
+        )
+    return IndependentApprovalVerifier(trusted, verifier_id=oidc.verifier_id), approval
+
+
+def _managed_server_reauthorization_client(
+    config: ExtensionConfig,
+    *,
+    broker_credential: str,
+) -> ApprovalServiceClient:
+    _verifier, approval = _managed_server_reauthorization_verifier(config)
+    if not 43 <= len(broker_credential) <= 512:
+        raise SystemExit("Approval broker credential is unavailable")
+    return ApprovalServiceClient(approval, broker_credential)
+
+
+def _require_managed_server_reauthorization_topology(config: ExtensionConfig) -> None:
+    """Keep the corrective path inside the exact pre-C0 communication profile.
+
+    A2A/relay signing identities and a retained C0 terminal carry historical
+    credential bindings covered by separate marker semantics.  This release
+    does not silently rewrite or ignore those bindings.
+    """
+
+    if config.a2a is not None or config.relay is not None:
+        raise SystemExit(
+            "managed-server credential reauthorization requires the communication-only topology"
+        )
+    if os.path.lexists(C0_RESPONDER_TERMINAL):
+        raise SystemExit(
+            "managed-server credential reauthorization requires no retained C0 terminal binding"
+        )
+
+
+def _managed_private_file(
+    path: Path,
+    *,
+    label: str,
+    expected_uid: int | None = None,
+) -> tuple[bytes, os.stat_result]:
+    if not path.is_absolute():
+        raise SystemExit(f"{label} must be an absolute managed private file")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise SystemExit(f"{label} is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size < 1
+            or before.st_size > 65_536
+            or (expected_uid is not None and before.st_uid != expected_uid)
+            or (expected_uid is None and os.geteuid() != 0 and before.st_uid != os.geteuid())
+        ):
+            raise SystemExit(f"{label} custody is unsafe")
+        content = bytearray()
+        while True:
+            chunk = os.read(descriptor, 16_384)
+            if not chunk:
+                break
+            content.extend(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_gid,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_gid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise SystemExit(f"{label} changed while it was read")
+        return bytes(content), before
+    finally:
+        os.close(descriptor)
+
+
+def _cas_managed_private_json(
+    path: Path,
+    *,
+    expected_sha256: str,
+    replacement: dict[str, object],
+    label: str,
+    expected_uid: int,
+) -> str:
+    raw, metadata = _managed_private_file(path, label=label, expected_uid=expected_uid)
+    try:
+        current = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{label} is not readable JSON") from exc
+    if current == replacement:
+        return "reconciled"
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise SystemExit(f"{label} changed outside the approved reauthorization transaction")
+    parent = path.parent
+    directory = os.open(
+        parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    temporary_name = f".{path.name}.reauthorize-{uuid4().hex}"
+    descriptor: int | None = None
+    installed = False
+    try:
+        current_metadata = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+        if (current_metadata.st_dev, current_metadata.st_ino) != (metadata.st_dev, metadata.st_ino):
+            raise SystemExit(f"{label} changed before replacement")
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory,
+        )
+        payload = json.dumps(replacement, indent=2, sort_keys=True).encode() + b"\n"
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("managed private replacement made no progress")
+            remaining = remaining[written:]
+        os.fchmod(descriptor, 0o600)
+        os.fchown(descriptor, metadata.st_uid, metadata.st_gid)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary_name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+        installed = True
+        os.fsync(directory)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not installed:
+            try:
+                os.unlink(temporary_name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        os.close(directory)
+    verified, verified_metadata = _managed_private_file(
+        path,
+        label=label,
+        expected_uid=expected_uid,
+    )
+    if verified_metadata.st_gid != metadata.st_gid or json.loads(verified) != replacement:
+        raise SystemExit(f"{label} replacement could not be verified")
+    return "updated"
+
+
+def _remove_private_state(path: Path) -> None:
+    if not os.path.lexists(path):
+        return
+    _owner_only_file(path, label="managed-server reauthorization state")
+    path.unlink()
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace) -> int:
+    """Rebind one expired managed-server credential after exact owner approval."""
+
+    if os.geteuid() != 0:
+        raise SystemExit("managed-server credential reauthorization requires root")
+    config_path = Path(os.path.abspath(args.config))
+    identity_path = Path(os.path.abspath(args.identity))
+    state_path = Path(os.path.abspath(args.state))
+    if (
+        config_path != CORE_CONFIG
+        or identity_path != SERVER_AGENT_IDENTITY
+        or state_path != SETUP_ROOT / "credential-reauthorization.json"
+    ):
+        raise SystemExit("root managed-server reauthorization requires exact package-owned paths")
+    try:
+        import pwd as posix_pwd
+
+        core_account = posix_pwd.getpwnam(CORE_USER)
+        core_root = CORE_CONFIG.parent.lstat()
+        setup_root = SETUP_ROOT.lstat()
+    except (KeyError, OSError) as exc:
+        raise SystemExit("managed Core service custody is unavailable") from exc
+    if (
+        CORE_CONFIG.parent.is_symlink()
+        or not stat.S_ISDIR(core_root.st_mode)
+        or core_root.st_uid != core_account.pw_uid
+        or core_root.st_gid != core_account.pw_gid
+        or stat.S_IMODE(core_root.st_mode) != 0o700
+        or SETUP_ROOT.is_symlink()
+        or not stat.S_ISDIR(setup_root.st_mode)
+        or setup_root.st_uid != 0
+        or setup_root.st_gid != 0
+        or stat.S_IMODE(setup_root.st_mode) != 0o700
+    ):
+        raise SystemExit("managed Core service directory custody is unsafe")
+    config_raw, config_metadata = _managed_private_file(
+        config_path,
+        label="managed server configuration",
+        expected_uid=core_account.pw_uid,
+    )
+    identity_raw, identity_metadata = _managed_private_file(
+        identity_path,
+        label="managed server identity",
+        expected_uid=config_metadata.st_uid,
+    )
+    if (
+        config_metadata.st_gid != core_account.pw_gid
+        or identity_metadata.st_gid != core_account.pw_gid
+    ):
+        raise SystemExit("managed server file group custody is unsafe")
+    try:
+        config = load_config_json(config_raw.decode())
+        identity = json.loads(identity_raw)
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit("managed-server config or identity is invalid") from exc
+    if not isinstance(identity, dict) or set(identity) != {
+        "schema", "server_base_url", "audience", "actor", "private_key_path"
+    } or identity.get("schema") != "agentnet.identity-profile.v1":
+        raise SystemExit("managed server identity does not match the exact schema")
+    try:
+        actor = VerifiedActor.model_validate(identity["actor"])
+    except Exception as exc:
+        raise SystemExit("managed server identity actor is invalid") from exc
+    key_raw, _key_metadata = _managed_private_file(
+        Path(str(identity["private_key_path"])),
+        label="managed server identity key",
+        expected_uid=config_metadata.st_uid,
+    )
+    if (
+        Path(str(identity["private_key_path"])) != SERVER_AGENT_KEY
+        or _key_metadata.st_gid != core_account.pw_gid
+    ):
+        raise SystemExit("managed server identity key group custody is unsafe")
+    key = P256KeyPair.from_private_pem(key_raw)
+    if (
+        config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+        or actor.principal_id is None
+        or actor.harness_id is None
+        or actor.credential_id is None
+        or actor.binding_assurance not in {"os_bound", "hardware_bound"}
+        or actor.domain_id != config.domain_id
+        or actor.harness_id != config.enrolled_harness_id
+    ):
+        raise SystemExit("managed-server identity lineage is not eligible for reauthorization")
+    _require_managed_server_reauthorization_topology(config)
+    verifier, approval_config = _managed_server_reauthorization_verifier(config)
+    if approval_config.approver_principal_id != actor.principal_id:
+        raise SystemExit("configured Approval owner does not match the managed-server principal")
+    core_environment = _parse_environment_file(CORE_ENV, label="managed Core environment")
+    if any(name in os.environ for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE")):
+        raise SystemExit("ambient TLS trust overrides are forbidden for managed reauthorization")
+    if config.database_url_env is None or config.database_url_env not in core_environment:
+        raise SystemExit("managed Core database credential is unavailable")
+    broker_name = approval_config.service_credential_env
+    if broker_name not in core_environment:
+        raise SystemExit("managed Approval broker credential is unavailable")
+    database_url = core_environment[config.database_url_env]
+    broker_credential = core_environment[broker_name]
+    ttl_seconds = config.policies.identity.always_on_credential_ttl_seconds
+    now = int(time.time())
+    pending: dict[str, object]
+    state_preexisting = os.path.lexists(state_path)
+    if state_preexisting:
+        try:
+            pending_value = json.loads(
+                _owner_only_file(
+                    state_path,
+                    label="managed-server reauthorization state",
+                )
+            )
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise SystemExit("managed-server reauthorization state is invalid") from exc
+        if not isinstance(pending_value, dict):
+            raise SystemExit("managed-server reauthorization state must be one object")
+        pending = pending_value
+        expected_state_keys = {
+            "schema",
+            "config_path",
+            "identity_path",
+            "request",
+            "possession_secret",
+            "approval_request_id",
+            "transaction_digest",
+            "request_expires_at",
+        }
+        if set(pending) != expected_state_keys or pending.get("schema") != "agentnet.managed-server-credential-reauthorization-state.v1":
+            raise SystemExit("managed-server reauthorization state does not match the exact schema")
+        if pending["config_path"] != str(config_path) or pending["identity_path"] != str(identity_path):
+            raise SystemExit("managed-server reauthorization resume paths changed")
+        try:
+            request = ManagedServerCredentialReauthorizationRequest.model_validate(pending["request"])
+        except Exception as exc:
+            raise SystemExit("managed-server reauthorization request state is invalid") from exc
+        if (
+            request.domain_id != actor.domain_id
+            or request.principal_id != actor.principal_id
+            or request.harness_id != actor.harness_id
+            or request.expected_key_id != key.thumbprint
+            or request.maximum_new_credential_ttl_seconds != ttl_seconds
+            or pending["transaction_digest"] != hashlib.sha256(request.canonical_transaction).hexdigest()
+            or not isinstance(pending["possession_secret"], str)
+            or len(pending["possession_secret"]) != 43
+            or type(pending["request_expires_at"]) is not int
+        ):
+            raise SystemExit("managed-server reauthorization state binding changed")
+    else:
+        if args.replace_terminal_state:
+            raise SystemExit("terminal replacement requires existing reauthorization state")
+        if config.enrolled_credential_id != actor.credential_id:
+            raise SystemExit("managed-server config and identity credential labels differ")
+        store = _open_server_agent_activation_store(
+            config,
+            database_url_override=database_url,
+        )
+        try:
+            binding = load_credential_binding(store, actor.credential_id)
+            if (
+                binding.domain_id != actor.domain_id
+                or binding.principal_id != actor.principal_id
+                or binding.harness_id != actor.harness_id
+                or binding.credential_epoch != actor.credential_epoch
+                or binding.harness_credential_epoch != actor.credential_epoch
+                or binding.credential_status != "active"
+                or binding.harness_status != "active"
+                or binding.principal_status != "active"
+                or binding.domain_status != "active"
+                or binding.binding_assurance != actor.binding_assurance
+                or binding.public_key_pem != key.public_pem
+                or binding.key_id != key.thumbprint
+            ):
+                raise SystemExit("managed-server expired credential binding changed")
+            if now < binding.expires_at:
+                raise SystemExit("managed-server credential is not expired")
+        finally:
+            store.close()
+        config_sha256 = hashlib.sha256(config_raw).hexdigest()
+        identity_sha256 = hashlib.sha256(identity_raw).hexdigest()
+        request_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                "agentnet:managed-server-credential-reauthorization-request:"
+                f"{actor.domain_id}:{actor.harness_id}:{actor.credential_id}:"
+                f"{actor.credential_epoch}:{binding.expires_at}:{config_sha256}:{identity_sha256}",
+            )
+        )
+        values = {
+            "request_id": request_id,
+            "domain_id": actor.domain_id,
+            "principal_id": actor.principal_id,
+            "harness_id": actor.harness_id,
+            "expired_credential_id": actor.credential_id,
+            "expected_credential_epoch": actor.credential_epoch,
+            "expected_expired_at": binding.expires_at,
+            "expected_key_id": key.thumbprint,
+            "expected_binding_assurance": actor.binding_assurance,
+            "managed_config_sha256": config_sha256,
+            "managed_identity_sha256": identity_sha256,
+            "maximum_new_credential_ttl_seconds": ttl_seconds,
+        }
+        unsigned = ManagedServerCredentialReauthorizationRequest(
+            **values,
+            old_key_possession_signature="pending",
+        )
+        request = ManagedServerCredentialReauthorizationRequest(
+            **values,
+            old_key_possession_signature=key.sign(
+                MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                unsigned.possession_fields(),
+            ),
+        )
+        possession_secret = secrets.token_urlsafe(32)
+        request_expires_at = now + 300
+        pending = {
+            "schema": "agentnet.managed-server-credential-reauthorization-state.v1",
+            "config_path": str(config_path),
+            "identity_path": str(identity_path),
+            "request": request.model_dump(mode="json", by_alias=True),
+            "possession_secret": possession_secret,
+            "approval_request_id": None,
+            "transaction_digest": hashlib.sha256(request.canonical_transaction).hexdigest(),
+            "request_expires_at": request_expires_at,
+        }
+        _write_private_config(state_path, pending)
+
+    client = _managed_server_reauthorization_client(
+        config,
+        broker_credential=broker_credential,
+    )
+    try:
+        approval_request_id = pending["approval_request_id"]
+        if approval_request_id is None:
+            created = client.create_request(
+                idempotency_key=f"managed-server-credential-reauthorization:{request.request_id}",
+                domain_id=request.domain_id,
+                approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+                canonical_transaction=request.canonical_transaction,
+                transaction_digest=str(pending["transaction_digest"]),
+                possession_hash=hashlib.sha256(str(pending["possession_secret"]).encode()).hexdigest(),
+                request_expires_at=int(pending["request_expires_at"]),
+            )
+            approval_request_id = created["request_id"]
+            pending["approval_request_id"] = approval_request_id
+            _write_private_config(state_path, pending, force=True)
+        status = client.request_status(
+            request_id=str(approval_request_id),
+            transaction_digest=str(pending["transaction_digest"]),
+        )
+        if args.replace_terminal_state and status["state"] not in {"rejected", "expired"}:
+            raise SystemExit("terminal replacement requires broker-proven rejected or expired state")
+        if status["state"] in {"rejected", "expired"}:
+            if not args.replace_terminal_state:
+                raise SystemExit(
+                    "managed-server credential reauthorization is terminal; rerun with --replace-terminal-state"
+                )
+            if (
+                hashlib.sha256(config_raw).hexdigest() != request.managed_config_sha256
+                or hashlib.sha256(identity_raw).hexdigest() != request.managed_identity_sha256
+            ):
+                raise SystemExit("terminal reauthorization state cannot be replaced after managed-file drift")
+            replacement_values = request.model_dump(mode="python", by_alias=True)
+            replacement_values["request_id"] = str(uuid4())
+            replacement_values["old_key_possession_signature"] = "pending"
+            replacement_unsigned = ManagedServerCredentialReauthorizationRequest.model_validate(
+                replacement_values
+            )
+            replacement_values["old_key_possession_signature"] = key.sign(
+                MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                replacement_unsigned.possession_fields(),
+            )
+            request = ManagedServerCredentialReauthorizationRequest.model_validate(
+                replacement_values
+            )
+            possession_secret = secrets.token_urlsafe(32)
+            pending = {
+                "schema": "agentnet.managed-server-credential-reauthorization-state.v1",
+                "config_path": str(config_path),
+                "identity_path": str(identity_path),
+                "request": request.model_dump(mode="json", by_alias=True),
+                "possession_secret": possession_secret,
+                "approval_request_id": None,
+                "transaction_digest": hashlib.sha256(request.canonical_transaction).hexdigest(),
+                "request_expires_at": int(time.time()) + 300,
+            }
+            _write_private_config(state_path, pending, force=True)
+            created = client.create_request(
+                idempotency_key=f"managed-server-credential-reauthorization:{request.request_id}",
+                domain_id=request.domain_id,
+                approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+                canonical_transaction=request.canonical_transaction,
+                transaction_digest=str(pending["transaction_digest"]),
+                possession_hash=hashlib.sha256(possession_secret.encode()).hexdigest(),
+                request_expires_at=int(pending["request_expires_at"]),
+            )
+            pending["approval_request_id"] = created["request_id"]
+            approval_request_id = created["request_id"]
+            _write_private_config(state_path, pending, force=True)
+            status = client.request_status(
+                request_id=str(created["request_id"]),
+                transaction_digest=str(pending["transaction_digest"]),
+            )
+        if status["state"] == "pending":
+            print(
+                json.dumps(
+                    {
+                        "schema": "agentnet.managed-server-credential-reauthorization-cli.v1",
+                        "status": "waiting_owner_approval",
+                        "owner_action": f"Open {approval_config.public_origin}/approval and approve the expired server-agent credential reauthorization, then rerun this exact command.",
+                        "authority_granted": False,
+                        "service_restart": "not_performed",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 2
+        if status["state"] != "issued":
+            raise SystemExit("managed-server credential reauthorization was rejected or expired")
+        receipt = client.retrieve_receipt(
+            request_id=str(approval_request_id),
+            possession_secret=str(pending["possession_secret"]),
+            domain_id=request.domain_id,
+            approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+            transaction_digest=str(pending["transaction_digest"]),
+            idempotency_key=f"managed-server-credential-reauthorization-retrieve:{request.request_id}",
+        )
+    finally:
+        client.close()
+
+    store = _open_server_agent_activation_store(
+        config,
+        database_url_override=database_url,
+    )
+    try:
+        incidents = DomainIncidentService(store)
+        outage_gate = OutageGate(
+            config.policies.outage,
+            incident_mode_provider=lambda: incidents.current_mode(config.domain_id),
+        )
+        result = ManagedServerCredentialReauthorizationService(
+            store,
+            verifier,
+            credential_ttl_seconds=ttl_seconds,
+            outage_gate=outage_gate,
+        ).reauthorize(request=request, approval=receipt)
+        config_value = config.model_dump(mode="python")
+        config_value["enrolled_credential_id"] = result.credential_id
+        candidate = ExtensionConfig.model_validate(config_value)
+        updated_actor = actor.model_copy(
+            update={
+                "credential_id": result.credential_id,
+                "credential_epoch": result.credential_epoch,
+            }
+        )
+        identity_value = dict(identity)
+        identity_value["actor"] = updated_actor.model_dump(mode="json")
+        config_status = _cas_managed_private_json(
+            config_path,
+            expected_sha256=request.managed_config_sha256,
+            replacement=candidate.redacted_export(),
+            label="managed server configuration",
+            expected_uid=config_metadata.st_uid,
+        )
+        identity_status = _cas_managed_private_json(
+            identity_path,
+            expected_sha256=request.managed_identity_sha256,
+            replacement=identity_value,
+            label="managed server identity",
+            expected_uid=identity_metadata.st_uid,
+        )
+    finally:
+        store.close()
+    _remove_private_state(state_path)
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.managed-server-credential-reauthorization-cli.v1",
+                "status": "completed",
+                "idempotent_database_repeat": result.idempotent_repeat,
+                "config": config_status,
+                "identity": identity_status,
+                "credential_epoch": result.credential_epoch,
+                "authority_granted": False,
+                "service_restart": "not_performed",
+                "next": "rerun the exact package-owned server-agent setup --apply --start command",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3965,6 +4574,24 @@ def build_parser() -> argparse.ArgumentParser:
     server_agent_activate.add_argument("--config", default="agentnet.json")
     server_agent_activate.add_argument("--identity", default=".agentnet/identity.json")
     server_agent_activate.set_defaults(func=command_server_agent_activate)
+    server_agent_reauthorize = server_agent_commands.add_parser(
+        "reauthorize-expired-credential",
+        help="reauthorize one exact expired managed-server credential through Approval",
+    )
+    server_agent_reauthorize.add_argument("--config", default=str(CORE_CONFIG))
+    server_agent_reauthorize.add_argument("--identity", default=str(SERVER_AGENT_IDENTITY))
+    server_agent_reauthorize.add_argument(
+        "--state",
+        default="/var/lib/agentnet-setup/credential-reauthorization.json",
+    )
+    server_agent_reauthorize.add_argument(
+        "--replace-terminal-state",
+        action="store_true",
+        help="replace only a broker-proven rejected or expired pending ceremony",
+    )
+    server_agent_reauthorize.set_defaults(
+        func=command_server_agent_reauthorize_expired_credential
+    )
 
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")
     join_commands = join.add_subparsers(dest="join_command", required=True)

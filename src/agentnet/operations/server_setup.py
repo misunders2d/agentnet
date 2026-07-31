@@ -149,17 +149,20 @@ _PROTECTED_SERVICE_PATHS = (
 # reason an already realized deployment may present a different request digest.
 # The 0.1.31 -> 0.1.33 window is deliberately narrower than the historical
 # same-topology windows: only the released communication-only Core+Approval
-# profile may expand to the current five-unit profile.
+# profile may expand to the current five-unit profile.  The corrective 0.1.34
+# edge accepts only the exact five-unit 0.1.33 target it repairs.
 _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.28", "0.1.31"): MANAGED_UNITS,
     ("0.1.30", "0.1.31"): MANAGED_UNITS,
     ("0.1.31", "0.1.33"): LEGACY_COMMUNICATION_ONLY_UNITS,
     ("0.1.32", "0.1.33"): MANAGED_UNITS,
+    ("0.1.33", "0.1.34"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
         ("0.1.31", "0.1.33"),
         ("0.1.32", "0.1.33"),
+        ("0.1.33", "0.1.34"),
     }
 )
 # Blockers that mean "the response was lost", not "the operation was refused".
@@ -1280,6 +1283,7 @@ Environment=XDG_CACHE_HOME={APPROVAL_DATA}/.cache
 Environment=AGENTNET_NPM_RUNTIME_DIR={APPROVAL_DATA}/npm-runtime
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} approval serve --config {_unit_arg(str(APPROVAL_CONFIG))} --host 127.0.0.1 --port {APPROVAL_PORT}
+SuccessExitStatus=143 SIGTERM
 Restart=on-failure
 RestartSec=2
 {common}
@@ -3768,6 +3772,51 @@ def _prepare_supported_upgrade(
     journal = _read_upgrade_journal(journal_path, uid=uid, gid=gid)
     upgrading = existing_marker is not None and existing_marker.get("request_digest") != approved_digest
     if journal is not None:
+        superseded_committed_target = (
+            existing_marker is not None
+            and existing_marker_payload is not None
+            and existing_marker.get("request_digest") == journal["to_request_digest"]
+            and existing_marker.get("package_version") == journal["to_package_version"]
+            and existing_marker.get("previous_marker_digest")
+            == journal["from_marker_sha256"]
+            and journal["to_package_version"] != __version__
+            and _forward_only_setup_upgrade(
+                journal["from_package_version"],
+                journal["to_package_version"],
+            )
+            and _supported_marker_upgrade(existing_marker)
+        )
+        if superseded_committed_target:
+            if not approval_preexisting or not core_preexisting:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "committed setup marker has no realized Core and Approval state",
+                )
+            _require_marker_realized_state(
+                existing_marker,
+                approval_config_digest=_managed_config_digest(
+                    approval_config_path,
+                    approval_account,
+                    blocker="approval_config",
+                ),
+                core_config_digest=_managed_config_digest(
+                    core_config_path,
+                    core_account,
+                    blocker="core_custody",
+                    exclude_top_level=frozenset(
+                        {"enrolled_harness_id", "enrolled_credential_id"}
+                    ),
+                ),
+                unit_paths=unit_paths,
+                uid=uid,
+                gid=gid,
+            )
+            # The prior target marker is already the no-rollback boundary.
+            # Once its exact realized state is proved, discard only that
+            # superseded journal and prepare the separately approved next edge.
+            _clear_upgrade_journal(journal_path)
+            journal = None
+    if journal is not None:
         committed_target = (
             existing_marker is not None
             and existing_marker_payload is not None
@@ -4744,10 +4793,15 @@ def _apply_server_setup(
                 [
                     ["daemon-reload"],
                     ["disable", "--now", C0_RESPONDER_UNIT],
+                    ["reset-failed", C0_RESPONDER_UNIT],
                     ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+                    ["reset-failed", CREDENTIAL_RENEW_TIMER],
                     ["stop", CREDENTIAL_RENEW_UNIT],
+                    ["reset-failed", CREDENTIAL_RENEW_UNIT],
                     ["disable", "--now", CORE_UNIT],
+                    ["reset-failed", CORE_UNIT],
                     ["disable", "--now", APPROVAL_UNIT],
+                    ["reset-failed", APPROVAL_UNIT],
                 ],
                 reconcile=verify_upgrade_quiescence,
             )
