@@ -113,10 +113,13 @@ regression passes (`103 passed`); the full source lane, direct verifier, and
 both independently installed npm-tarball generations each pass with `1621
 passed, 16 expected skips`; the frozen wheel and sdist are byte-identical across
 two builds. The final local npm tarball has shasum
-`3b7dcc0d853b95089ec24c28d31b8c2bb1d1937e` and integrity
-`sha512-m65KdZWhGA1izkYhJAJAC0+6CPGjubzWaMYNEzkJG/XjC3cHHYeJlbuBzD/H87ItSni3cA6aUFNG7aaJz+jtpg==`;
-those are local package facts, not registry publication evidence. Fresh
-same-commit CI, publication, Hub recovery, the live owner
+`c70bdfdb5b8184c55f46c18c9cda16754d130a4f` and integrity
+`sha512-Eo+o7cP0PtsQfGVALJ0nqDB2XP7qWsUcrc3eLtsMmKEZF8aQKR8ZVagr1TSjZL0GPrFoBlHB6L3Ea0H2+R83jQ==`;
+those are local package facts, not registry publication evidence. On commit
+`c463de92c82e3ff2915df7b6af2dcf32a07988cb`, cross-platform/package run
+`30693899336`, clean ordinary-server setup run `30693899319`, and real
+0.1.31-to-0.1.33-failed-to-0.1.35 upgrade recovery run `30693899330` all
+passed. Publication, Hub recovery, the live owner
 ceremony, fresh enrollment, and the first native message remain pending.
 
 ## Release and gate posture
