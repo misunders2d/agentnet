@@ -76,7 +76,7 @@ expired/revoked/rotated binding cannot renew or satisfy readiness. These labels
 and server capability limits can only narrow process eligibility; protected
 operations still derive and authorize their exact caller independently.
 
-Candidate 0.1.35 adds one narrower recovery for the released Hub condition: an
+Published 0.1.35 adds one narrower recovery for the released Hub condition: an
 expired, still-possessed managed-server key in the pre-C0 communication-only
 topology. The root-only command freezes the exact expired binding and managed
 config/identity digests, proves possession with that same key, and requires a
@@ -634,4 +634,13 @@ OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain
 explicit ceremonies. Remote Managers may provide immutable package guidance
 and inspect sanitized evidence only; target coding agents own host execution.
 
-`agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path.
+Candidate `0.1.36` changes no migration edge. Setup rejects duplicate/non-finite
+JSON members, strictly parses the managed identity actor with canonical
+`VerifiedActor`, checks current domain/harness/credential labels, and retains
+exact profile shape plus private
+P-256 key custody/readability. It removes the impossible requirement for
+`actor.key_id`, which canonical actor serialization forbids and never emits.
+Database-backed credential-to-key proof remains owned by `server-agent
+activate`; setup does not replace it with a self-asserted profile field.
+
+`agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

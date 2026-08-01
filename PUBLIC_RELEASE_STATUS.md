@@ -3,17 +3,17 @@
 Snapshot: 2026-08-01
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.34` setup-recovery release and corrective `0.1.35`
-identity-preserving recovery candidate. It does not replace requirements, gate
-ledgers, or accountable-owner evidence.
+published `0.1.35` setup-recovery release and corrective `0.1.36` strict
+identity-profile candidate. It does not replace requirements, gate ledgers, or
+accountable-owner evidence.
 
 ## Current public package
 
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.34`
-- published source commit: `2cf6908ab3b5e7cb8af4bb0faf2a92b5f8b4f7a7`
+- latest published version: `0.1.35`
+- published source commit: `2dfd8edea213ac65e8d4eec215879af4fc53f259`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -92,7 +92,7 @@ diagnostic itself timed out at its orchestration watchdog without durable
 package-stage evidence; it is not treated as a diagnosis or a waiver of the
 deterministic journal-loss reproduction.
 
-Corrective candidate `0.1.35` preserves the strict inactive postcondition. It
+Published `0.1.35` preserves the strict inactive postcondition. It
 adds Approval's successful-SIGTERM contract, clears only the failed latch for
 the five exact managed units after bounded stop/disable, and admits the exact
 0.1.33 five-unit marker only. When a committed predecessor journal exists, it
@@ -119,8 +119,29 @@ those are local package facts, not registry publication evidence. On commit
 `c463de92c82e3ff2915df7b6af2dcf32a07988cb`, cross-platform/package run
 `30693899336`, clean ordinary-server setup run `30693899319`, and real
 0.1.31-to-0.1.33-failed-to-0.1.35 upgrade recovery run `30693899330` all
-passed. Publication, Hub recovery, the live owner
-ceremony, fresh enrollment, and the first native message remain pending.
+passed. The evidence-bound source is
+`2dfd8edea213ac65e8d4eec215879af4fc53f259`, and exact public `0.1.35` was
+independently verified before one approved Hub apply. That apply committed the
+marker and PostgreSQL migration, then exposed an unsatisfiable setup check:
+canonical `VerifiedActor` identity profiles forbid and never serialize
+`actor.key_id`, while setup required that nonexistent field to equal the
+private-key thumbprint. Five units remained inactive, authority stayed false,
+and no enrollment or C0 message occurred.
+
+Corrective candidate `0.1.36` rejects duplicate/non-finite JSON members,
+strictly parses the canonical actor, verifies its domain/harness/credential
+labels, retains exact profile shape and private P-256 key custody/readability
+checks, and removes only the impossible duplicate `actor.key_id` test. Active
+database credential-to-key binding remains proven by `server-agent activate`;
+setup does not manufacture a second self-asserted binding. This candidate adds
+no migration or compatibility edge. Selected recovery is package-owned
+AgentNet-only reset, followed only under a separate exact destructive approval
+by clean AgentNet database/role init after public package verification; that
+approval requires sanitized exact target inventory, an explicit backup/rollback
+decision, and redacted audit evidence. Prior AgentNet state is intentionally
+disposable. Unrelated/shared/valuable database targets fail closed. No unrelated
+service, database, toolchain, proxy, TLS, enrollment, authority, or C0 mutation
+is authorized by this source change.
 
 ## Release and gate posture
 

@@ -22,6 +22,7 @@ from agentnet.approval.config import (
 )
 from agentnet.operations.config import IndependentApproverConfig
 from agentnet.cli import build_parser, command_server_agent_setup
+from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 from agentnet.operations.server_setup import (
@@ -1346,6 +1347,140 @@ def test_exact_approval_policy_rejects_extra_approver(tmp_path: Path) -> None:
             owner_oidc=owner_oidc,
             approvers=(requested,),
             approval_state=state,
+        )
+
+
+def test_managed_identity_profile_accepts_only_canonical_strict_actor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    domain_id = "corp.example"
+    harness_id = "hub-harness"
+    credential_id = "hub-credential"
+    key = P256KeyPair.generate()
+    key_path = tmp_path / "guided-join.key.pem"
+    key_path.write_bytes(key.private_pem)
+    key_path.chmod(0o600)
+    identity_path = tmp_path / "server-agent-identity.json"
+    actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id=domain_id,
+        principal_id="owner-principal",
+        harness_id=harness_id,
+        credential_id=credential_id,
+        credential_epoch=1,
+        binding_assurance="hardware_bound",
+    ).model_dump(mode="json")
+    profile = {
+        "schema": "agentnet.identity-profile.v1",
+        "server_base_url": "https://core.corp.example",
+        "audience": "agentnet-core",
+        "actor": actor,
+        "private_key_path": str(key_path),
+    }
+    account = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+    config = SimpleNamespace(
+        enrolled_harness_id=harness_id,
+        enrolled_credential_id=credential_id,
+    )
+    request = SimpleNamespace(
+        domain_id=domain_id,
+        core_public_origin="https://core.corp.example",
+        service_audience="agentnet-core",
+    )
+
+    _private_json(identity_path, profile)
+    assert setup._validated_managed_identity_profile(
+        identity_path,
+        key_path,
+        account,
+        config=config,
+        request=request,
+    ) == profile
+
+    duplicate_top_level = json.dumps(profile)[:-1] + ', "schema": "agentnet.identity-profile.v1"}'
+    identity_path.write_text(duplicate_top_level, encoding="utf-8")
+    identity_path.chmod(0o600)
+    with pytest.raises(ServerSetupError, match="identity is invalid"):
+        setup._validated_managed_identity_profile(
+            identity_path,
+            key_path,
+            account,
+            config=config,
+            request=request,
+        )
+
+    duplicate_actor = json.dumps(profile).replace(
+        '"harness_id": "hub-harness"',
+        '"harness_id": "hub-harness", "harness_id": "hub-harness"',
+        1,
+    )
+    identity_path.write_text(duplicate_actor, encoding="utf-8")
+    identity_path.chmod(0o600)
+    with pytest.raises(ServerSetupError, match="identity is invalid"):
+        setup._validated_managed_identity_profile(
+            identity_path,
+            key_path,
+            account,
+            config=config,
+            request=request,
+        )
+
+    nonfinite_top_level = json.dumps(profile)[:-1] + ', "unexpected": NaN}'
+    nonfinite_actor = json.dumps(profile).replace('"credential_epoch": 1', '"credential_epoch": NaN', 1)
+    with monkeypatch.context() as strict_parser:
+        strict_parser.setattr(
+            setup.VerifiedActor,
+            "model_validate",
+            lambda *_args, **_kwargs: pytest.fail("non-finite JSON reached VerifiedActor validation"),
+        )
+        for payload in (nonfinite_top_level, nonfinite_actor):
+            identity_path.write_text(payload, encoding="utf-8")
+            identity_path.chmod(0o600)
+            with pytest.raises(ServerSetupError, match="identity is invalid"):
+                setup._validated_managed_identity_profile(
+                    identity_path,
+                    key_path,
+                    account,
+                    config=config,
+                    request=request,
+                )
+
+    profile["actor"] = {**actor, "key_id": key.thumbprint}
+    _private_json(identity_path, profile)
+    with pytest.raises(ServerSetupError, match="identity is invalid"):
+        setup._validated_managed_identity_profile(
+            identity_path,
+            key_path,
+            account,
+            config=config,
+            request=request,
+        )
+
+    profile["actor"] = {**actor, "harness_id": "other-harness"}
+    _private_json(identity_path, profile)
+    with pytest.raises(ServerSetupError, match="mismatches current binding"):
+        setup._validated_managed_identity_profile(
+            identity_path,
+            key_path,
+            account,
+            config=config,
+            request=request,
+        )
+
+    profile["actor"] = actor
+    _private_json(identity_path, profile)
+    key_path.write_bytes(b"not-a-private-key")
+    key_path.chmod(0o600)
+    with pytest.raises(ServerSetupError, match="key is invalid"):
+        setup._validated_managed_identity_profile(
+            identity_path,
+            key_path,
+            account,
+            config=config,
+            request=request,
         )
 
 

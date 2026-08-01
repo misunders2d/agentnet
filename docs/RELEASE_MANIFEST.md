@@ -1,9 +1,9 @@
 # Release Manifest
 
 Snapshot: 2026-08-01
-Candidate: `agentnet 0.1.35`
-Latest published package: `agentnet 0.1.34`
-Evidence profile: atomic setup-journal recovery candidate
+Candidate: `agentnet 0.1.36`
+Latest published package: `agentnet 0.1.35`
+Evidence profile: strict identity-profile fresh-init candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `663032cecccbdb23a1b8961304359007c5271523820f50ab7237b20101799248` |
-| `pyproject.toml` | SHA-256 `ead54a27e257378b5190f0385dc8a9178642d30a1030fb6241c8b04a9edc95b9` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `aeecba8a1b1ab7163347f9727ab08a87ada0f6b5ab73b39181d7170bea1b9e02` |
+| `pyproject.toml` | SHA-256 `66072a5744f37124767b6d6350f9a55e5827fc07e54d8c440a6e220ce0bfbcfa` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -296,7 +296,7 @@ failed closed because Approval's package-issued SIGTERM produced exit status
 contract nor failed-latch reconciliation. Its unchanged retry is not a
 recovery, and every failed attempt remains BOUNDED NON-GREEN.
 
-Candidate `0.1.35` accepts only the exact `0.1.33` five-unit marker produced by
+Published `0.1.35` accepts only the exact `0.1.33` five-unit marker produced by
 the separately released legacy migration boundary. Approval now shares Core's successful
 SIGTERM/status 143 contract. Quiescence clears only the failed latch of each
 exact managed unit after bounded stop/disable, then still requires exact
@@ -314,12 +314,24 @@ communication-only topology; A2A, relay, and retained C0-terminal bindings fail
 closed. Its focused identity/Approval/CLI lane reports `46 passed`; the final
 unfiltered source run reports `1698 passed, 16 expected skips`, plus only the
 two unwaived installed-harness G01 failures. Source and both recursive packed
-npm generations report `1621 passed, 16 expected skips`. Full affected lanes,
-deterministic archives, direct disposable-package verification, release
-verification, same-commit CI, mutation-authorized PostgreSQL, live Hub
-recovery, and external C0 evidence remain pending. No reset, manual marker
-edit, database downgrade, identity replacement, deployment, authority, or gate
-promotion is authorized or claimed.
+npm generations report `1621 passed, 16 expected skips`. Same-commit
+cross-platform, clean setup, and real upgrade workflows passed before public
+release. One exact Hub apply then committed the marker and PostgreSQL migration
+but failed on an impossible setup requirement for `actor.key_id`, a field that
+canonical strict `VerifiedActor` profiles forbid and never serialize.
+
+Candidate `0.1.36` rejects duplicate/non-finite JSON members, strictly parses
+that canonical actor, verifies its current domain/harness/credential labels,
+retains exact profile shape and private P-256 key custody/readability checks,
+and removes only the impossible duplicate field test. `server-agent activate`
+remains the database-backed key-binding proof. No compatibility edge is added.
+Selected recovery is package-owned AgentNet-only reset, followed only under a
+separate exact destructive approval by clean AgentNet database/role init because
+no prior AgentNet message/state must be preserved. That approval requires
+sanitized exact target inventory, an explicit backup/rollback decision, and
+redacted audit evidence; unrelated/shared/valuable database targets fail closed.
+No manual marker edit, database downgrade, identity substitution, deployment,
+authority, or gate promotion is authorized or claimed.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

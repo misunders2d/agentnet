@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.35` coverage targets
+Only non-EOL Node.js release lines are supported: current `0.1.36` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
 the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
 compatible npm 10.9.3; the deployed Hub compatibility target is reported
@@ -350,7 +350,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.33` at commit `466c96d50e8aeeb060be92e8d01c024af9fd35c6`.
+`0.1.35` at commit `2dfd8edea213ac65e8d4eec215879af4fc53f259`.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -358,8 +358,9 @@ published `0.1.30` repaired installed-verifier package custody; published
 message path. Published `0.1.32` repairs the ceremony blockers. Published
 `0.1.33` adds the exact migration from the live `0.1.31` two-unit marker, but
 the Hub transition exposed a retained systemd failed latch after its
-forward-only boundary. Candidate `0.1.35` adds identity-preserving reconciliation
-for that exact state. No release proves completed fresh-laptop enrollment, native
+forward-only boundary. Published `0.1.35` adds identity-preserving reconciliation
+for that exact state. Candidate `0.1.36` removes one unsatisfiable fresh-init
+identity-profile check. No release proves completed fresh-laptop enrollment, native
 cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
@@ -428,7 +429,7 @@ profile and exact `0.1.32` five-unit profile. The live Hub reached its committed
 systemd retained `ActiveState=failed`; the strict quiescence validator correctly
 refused to treat that as `inactive`, and 0.1.33 had no preservation-safe retry.
 
-The candidate `0.1.35` retains the strict inactive requirement. It gives Approval
+Published `0.1.35` retains the strict inactive requirement. It gives Approval
 the same successful-SIGTERM contract as Core, runs `reset-failed` only after
 bounded stop/disable for each exact managed unit, and accepts the exact 0.1.33
 five-unit marker. A retained committed 0.1.33 journal is superseded only after
@@ -442,10 +443,24 @@ still-possessed managed-server key before the first C0 exchange: same-key proof
 plus fresh WebAuthn Approval retires the old row unchanged and issues one finite
 next-epoch credential. It grants no authority, restarts nothing, and refuses
 A2A, relay, or retained C0-terminal topologies. No reset, manual edit, identity
-replacement, authority, production, or gate-promotion claim is added.
-Required next runtime proof remains exact public `0.1.35` Hub transition, fresh
-owner credential readiness, five active units, fresh-laptop enrollment, one
-native signed message, recipient `recipient_committed`, exact
+replacement, authority, production, or gate-promotion claim is added. Exact
+public `0.1.35` then reached marker and PostgreSQL migration on the Hub but
+failed because setup required `actor.key_id` even though strict canonical
+`VerifiedActor` profiles forbid and never serialize that field.
+
+Candidate `0.1.36` strictly validates the canonical actor and its current
+binding labels, retains exact profile shape plus P-256 private-key custody and
+readability checks, and removes only that impossible duplicate field test.
+`server-agent activate` remains the database-backed credential-to-key binding
+proof. No compatibility edge is added. Intended Hub recovery is a
+package-owned AgentNet-only clean reset, followed only under a separate exact
+destructive approval by clean AgentNet database/role init because no prior
+AgentNet message or state must be preserved. That approval requires sanitized
+exact target inventory, an explicit backup/rollback decision, and redacted
+audit evidence; unrelated/shared/valuable database targets fail closed.
+Required runtime proof remains exact public `0.1.36`, clean five-unit readiness,
+fresh enrollment, one native
+signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.
 
 Production adoption still requires deployment-specific evidence such as a real

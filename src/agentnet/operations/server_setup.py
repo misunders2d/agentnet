@@ -32,7 +32,7 @@ if os.name == "posix":
     import grp
     import pwd
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from agentnet import __version__
 from agentnet.approval.internal_client import (
@@ -46,6 +46,7 @@ from agentnet.approval.config import (
 )
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
+from agentnet.identity.actors import VerifiedActor
 from agentnet.operations.config import (
     ExtensionConfig,
     ApprovalServiceClientConfig,
@@ -1404,9 +1405,13 @@ def _validated_managed_identity_profile(
                 account,
                 blocker="server_agent_identity",
                 max_bytes=_MAX_CONFIG_BYTES,
-            )
+            ),
+            object_pairs_hook=_reject_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                ValueError("non-finite JSON number")
+            ),
         )
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ServerSetupError("server_agent_identity", "managed server-agent identity is invalid") from exc
     if (
         not isinstance(value, dict)
@@ -1418,11 +1423,14 @@ def _validated_managed_identity_profile(
         or not isinstance(value.get("actor"), dict)
     ):
         raise ServerSetupError("server_agent_identity", "managed server-agent identity mismatches fixed profile")
-    actor = value["actor"]
+    try:
+        actor = VerifiedActor.model_validate(value["actor"])
+    except ValidationError as exc:
+        raise ServerSetupError("server_agent_identity", "managed server-agent identity is invalid") from exc
     if (
-        actor.get("domain_id") != request.domain_id
-        or actor.get("harness_id") != config.enrolled_harness_id
-        or actor.get("credential_id") != config.enrolled_credential_id
+        actor.domain_id != request.domain_id
+        or actor.harness_id != config.enrolled_harness_id
+        or actor.credential_id != config.enrolled_credential_id
     ):
         raise ServerSetupError("server_agent_identity", "managed server-agent identity mismatches current binding")
     key_payload = _read_private_managed_file(
@@ -1432,11 +1440,9 @@ def _validated_managed_identity_profile(
         max_bytes=65_536,
     )
     try:
-        key = P256KeyPair.from_private_pem(key_payload)
+        P256KeyPair.from_private_pem(key_payload)
     except Exception as exc:
         raise ServerSetupError("server_agent_identity", "managed server-agent key is invalid") from exc
-    if actor.get("key_id") != key.thumbprint:
-        raise ServerSetupError("server_agent_identity", "managed server-agent key mismatches current binding")
     return value
 
 
