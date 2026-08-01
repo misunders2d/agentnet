@@ -729,6 +729,51 @@ def test_0132_upgrade_accepts_exact_released_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_0136_upgrade_accepts_exact_released_0133_five_unit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.36")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.33",
+        artifact_mode=artifact_mode,
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode=artifact_mode,
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
+@pytest.mark.parametrize("package_version", ["0.1.34", "0.1.35"])
+def test_0136_upgrade_rejects_unapproved_corrective_release_source(
+    monkeypatch: pytest.MonkeyPatch,
+    package_version: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.36")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version=package_version,
+        artifact_mode="disabled",
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            payload,
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
 def _marker_payload(
     *,
     schema: str,
@@ -1131,9 +1176,11 @@ def test_0132_upgrade_reconciles_lost_quiescence_response(
     assert not harness.journal_path.exists()
 
 
+@pytest.mark.parametrize("recovery_target", ["0.1.35", "0.1.36"])
 def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    recovery_target: str,
 ) -> None:
     harness, _first_digest = _realized_public_0131_communication_deployment(
         tmp_path,
@@ -1192,7 +1239,7 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     monkeypatch.setattr(setup, "_run_systemctl", clear_failed_state)
     monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.35")
+    monkeypatch.setattr(setup, "__version__", recovery_target)
     recovery_digest = harness.plan_digest()
     retained_journal = harness.journal_path.read_bytes()
     original_write_journal = setup._write_upgrade_journal
@@ -1218,7 +1265,7 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     } in recovered["steps"]
     assert not failed_units
     assert ["reset-failed", setup.APPROVAL_UNIT] in harness.systemctl_calls
-    assert harness.marker()["package_version"] == "0.1.35"
+    assert harness.marker()["package_version"] == recovery_target
     assert harness.layout.host(setup.C0_RESPONDER_DATA).is_dir()
     assert not harness.journal_path.exists()
 
@@ -2080,6 +2127,9 @@ def test_live_runtime_validation_rejects_a_process_outside_the_approved_runtime(
             live_executable=Path("/home/owner/.nvm/versions/node/bin/node"),
         )
     assert exc_info.value.blocker == "service_runtime"
+    assert str(exc_info.value) == (
+        "managed AgentNet service executable does not match the approved hermetic runtime"
+    )
 
     with pytest.raises(ServerSetupError) as exc_info:
         _validate_live(
@@ -2099,6 +2149,9 @@ def test_live_runtime_validation_rejects_a_process_outside_the_approved_runtime(
             ),
         )
     assert exc_info.value.blocker == "service_runtime"
+    assert str(exc_info.value) == (
+        "managed AgentNet service argv does not match the approved hermetic runtime"
+    )
 
 
 def test_lost_systemctl_response_succeeds_only_on_verified_live_evidence(

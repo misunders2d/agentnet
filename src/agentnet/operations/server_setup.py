@@ -159,6 +159,7 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.32", "0.1.33"): MANAGED_UNITS,
     ("0.1.33", "0.1.34"): MANAGED_UNITS,
     ("0.1.33", "0.1.35"): MANAGED_UNITS,
+    ("0.1.33", "0.1.36"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -166,6 +167,7 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.32", "0.1.33"),
         ("0.1.33", "0.1.34"),
         ("0.1.33", "0.1.35"),
+        ("0.1.33", "0.1.36"),
     }
 )
 # Blockers that mean "the response was lost", not "the operation was refused".
@@ -2551,10 +2553,15 @@ def _validate_systemd_service_runtime(
     if not main_pid.isdecimal() or int(main_pid) < 1:
         raise ServerSetupError("service_runtime", "managed AgentNet unit has no live main process")
     live_executable, live_argv = _read_live_process_identity(int(main_pid))
-    if live_executable != node_executable or live_argv != tuple(expected_argv):
+    if live_executable != node_executable:
         raise ServerSetupError(
             "service_runtime",
-            "managed AgentNet service process does not run the approved hermetic runtime",
+            "managed AgentNet service executable does not match the approved hermetic runtime",
+        )
+    if live_argv != tuple(expected_argv):
+        raise ServerSetupError(
+            "service_runtime",
+            "managed AgentNet service argv does not match the approved hermetic runtime",
         )
     if str(agentnet_executable) not in live_argv:
         raise ServerSetupError(
