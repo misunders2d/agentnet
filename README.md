@@ -460,7 +460,9 @@ AgentNet-only clean reset, followed only under a separate exact destructive
 approval by clean AgentNet database/role init because no prior AgentNet message
 or state must be preserved. That approval requires sanitized exact target
 inventory, an explicit backup/rollback decision, and redacted audit evidence;
-unrelated/shared/valuable database targets fail closed.
+unrelated/shared/valuable database targets fail closed. Release still requires
+external exact same-commit terminal-green cross-platform, clean-setup, and
+upgrade workflow evidence; post-push run IDs are not self-authored into source.
 Required runtime proof remains exact public `0.1.36`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact

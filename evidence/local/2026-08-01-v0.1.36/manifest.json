@@ -1,6 +1,6 @@
 {
   "run_id": "2026-08-01-v0.1.36",
-  "evaluated_at": "2026-08-01T19:38:00+03:00",
+  "evaluated_at": "2026-08-01T19:52:00+03:00",
   "scope": "v0_1_36_strict_identity_profile_and_setup_convergence_candidate",
   "verification_status": "PASS",
   "release_certified": false,
@@ -38,7 +38,7 @@
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
-      "result": "PASS: two independent builds were byte-identical; sdist 4420e41d6d529235d37a500d4235ca56ca3a027ab94b07ec4e42297d9c30b78e; wheel 128e157a567f7e406eb1835684546be07c12fb14765b76d839592d43dd2c7382"
+      "result": "PASS: two independent builds were byte-identical; sdist e5db03cf441fe5238504aa80bb6b92855206495d8323ce88f836e4bb3ab5c038; wheel 9b687fc6036c813629735056947a24c16a50d6d4d10e664b22027f9e47383330"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
@@ -49,8 +49,8 @@
       "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
     },
     {
-      "command": "GitHub cross-platform and ordinary-server setup workflows",
-      "result": "NOT RUN FOR CANDIDATE COMMIT: exact same-commit workflows remain required after commit and push; no prior non-green run is reclassified or waived"
+      "command": "GitHub cross-platform, ordinary-server setup, and ordinary-server upgrade workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
     }
   ],
   "review_results": [
@@ -88,11 +88,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36.tar.gz",
-      "sha256": "4420e41d6d529235d37a500d4235ca56ca3a027ab94b07ec4e42297d9c30b78e"
+      "sha256": "e5db03cf441fe5238504aa80bb6b92855206495d8323ce88f836e4bb3ab5c038"
     },
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36-py3-none-any.whl",
-      "sha256": "128e157a567f7e406eb1835684546be07c12fb14765b76d839592d43dd2c7382"
+      "sha256": "9b687fc6036c813629735056947a24c16a50d6d4d10e664b22027f9e47383330"
     }
   ]
 }

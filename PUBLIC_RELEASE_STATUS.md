@@ -144,7 +144,9 @@ sanitized exact target inventory, an explicit backup/rollback decision, and
 redacted audit evidence. Prior AgentNet state is intentionally disposable.
 Unrelated/shared/valuable database targets fail closed. No unrelated service,
 database, toolchain, proxy, TLS, enrollment, authority, or C0 mutation is
-authorized by this source change.
+authorized by this source change. Release requires external exact same-commit
+terminal-green cross-platform, clean-setup, and upgrade workflow evidence;
+post-push run IDs are not self-authored into candidate source.
 
 ## Release and gate posture
 

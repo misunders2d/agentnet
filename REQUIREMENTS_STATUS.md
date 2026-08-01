@@ -158,8 +158,10 @@ published and historical release evidence:
   destructive approval by clean AgentNet database/role init with sanitized
   target inventory, explicit backup/rollback decision, and redacted audit
   evidence; unrelated/shared/valuable targets fail closed. The two
-  installed-harness G01 failures remain non-green and unwaived. No requirement
-  or gate is promoted.
+  installed-harness G01 failures remain non-green and unwaived. Release requires
+  external exact same-commit terminal-green cross-platform, clean-setup, and
+  upgrade workflow evidence; post-push run IDs are not self-authored into source.
+  No requirement or gate is promoted.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

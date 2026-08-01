@@ -334,7 +334,9 @@ no prior AgentNet message/state must be preserved. That approval requires
 sanitized exact target inventory, an explicit backup/rollback decision, and
 redacted audit evidence; unrelated/shared/valuable database targets fail closed.
 No manual marker edit, database downgrade, identity substitution, deployment,
-authority, or gate promotion is authorized or claimed.
+authority, or gate promotion is authorized or claimed. Release requires
+external exact same-commit terminal-green cross-platform, clean-setup, and
+upgrade workflow evidence; post-push run IDs are not self-authored into source.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
