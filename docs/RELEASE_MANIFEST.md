@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-07-31
-Candidate: `agentnet 0.1.34`
-Latest published package: `agentnet 0.1.33`
-Evidence profile: exact setup-migration recovery candidate
+Snapshot: 2026-08-01
+Candidate: `agentnet 0.1.35`
+Latest published package: `agentnet 0.1.34`
+Evidence profile: atomic setup-journal recovery candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `751cfb3048892e4768127c1ef1650ba1c67c4e7afa361ca578ef53976c6e40df` |
-| `pyproject.toml` | SHA-256 `2b77603c49ec2b8b42775a467c9566f6434d491d46aeb3ee8ec09357ab56f63b` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `663032cecccbdb23a1b8961304359007c5271523820f50ab7237b20101799248` |
+| `pyproject.toml` | SHA-256 `ead54a27e257378b5190f0385dc8a9178642d30a1030fb6241c8b04a9edc95b9` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -296,13 +296,14 @@ failed closed because Approval's package-issued SIGTERM produced exit status
 contract nor failed-latch reconciliation. Its unchanged retry is not a
 recovery, and every failed attempt remains BOUNDED NON-GREEN.
 
-Candidate `0.1.34` accepts only the exact `0.1.33` five-unit marker produced by
+Candidate `0.1.35` accepts only the exact `0.1.33` five-unit marker produced by
 the separately released legacy migration boundary. Approval now shares Core's successful
 SIGTERM/status 143 contract. Quiescence clears only the failed latch of each
 exact managed unit after bounded stop/disable, then still requires exact
 loaded/unit-file/inactive/PID state. A committed 0.1.33 journal may be
-superseded only after marker/config/unit provenance revalidation; a separate
-0.1.33→0.1.34 journal is written before changing managed bytes. The hermetic
+superseded only after marker/config/unit provenance revalidation and remains
+durable until the separate 0.1.33→0.1.35 journal atomically replaces it before
+changing managed bytes. The hermetic
 setup/runtime recovery lane reports `209 passed`, including the exact retained
 Approval failed latch. The same candidate also adds a root-only, purpose-bound
 reauthorization ceremony for the Hub's exact expired-but-still-possessed

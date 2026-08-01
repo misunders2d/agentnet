@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-07-31. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-01. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -134,12 +134,15 @@ published and historical release evidence:
 - Published `0.1.30` affects `OPS-006`, `OPS-007`, `SEC-007`, and the practical `COM-001`/`AVL-005` first-message path. It runs installed verification from a bounded disposable package copy, rejects caller pytest arguments, and requires both a complete package-tree content digest match and no cache/bytecode residue across two recursive packed installations. This changes no requirement or gate status; real Hub setup, fresh-laptop enrollment, native cross-host message, and recipient ACK remain pending.
 - Published `0.1.31` affects `ARC-001`, `ID-001..006`, `AUTH-001..004`, `AUTH-007`, `SEC-002`, `SEC-005`, `SEC-007`, `OPS-003`, `OPS-006`, `OPS-007`, and the practical `COM-001`/`COM-011`/`AVL-005` first-message path. It adds fixed browser-only remote activation bound to exact approved OIDC owner identity; purpose-separated automatic Approval possession; exact supported `0.1.28/0.1.30` setup migration and response-loss recovery; status-scoped guided-join polling through fresh Approval-challenge expiry; Core-authenticated terminal replacement with argument-bound v2 state and same-key reuse; enabled-unit reconciliation; and package-only destructive reset under a permanent root-only coordination lock. Latest affected suite reports **344 passed**. Unfiltered local run reports **1625 passed and 16 expected platform/dedicated-PostgreSQL skips**, while two installed-harness pin failures and pre-refresh release-manifest drift remain non-green and unwaived. A packed focused recovery/conformance lane reports **72 passed**, one Pi skill, zero loader diagnostics, and no verification residue. Official source and two recursive packed generations each report **1549 passed and 16 expected skips** with complete package-tree digest/no-residue checks green. Two deterministic builds produced byte-identical wheel/sdist archives. Independent Opus 5 closure reports no blockers and PASS for skill architecture, code security, and Constitution. The first exact untagged Hub artifact installed byte-identically into an inert root-owned prefix and then failed closed before setup because its embedded release bindings were stale; replacement artifact verification and real browser/fresh-laptop message/ACK/revocation evidence remain pending. No requirement or gate status is promoted.
 - Published `0.1.32` affects `ARC-001`, `ID-001..006`, `AUTH-001..004`, `AUTH-007`, `COM-001`, `COM-009`, `COM-011`, `AVL-005`, `SEC-002`, `SEC-005`, `SEC-007`, `OPS-003`, `OPS-006`, and `OPS-007`. It adds signed Approval broker readiness through the configured public origin using explicit host trust with certificate/key-log environment denied before setup, authoritative setup reconciliation, Core schema v5 OIDC-begin replay and finite credential-renewal custody, a dedicated package-owned C0 responder, clean current-package attempt custody, and the exact five-unit systemd/reset lifecycle. Exact public-package apply on the Hub failed closed at `setup_marker_conflict` before managed mutation because the active `0.1.31` marker records the released two-unit communication-only profile. It promotes no requirement or gate.
-- Candidate `0.1.34` affects `SEC-007`, `OPS-003`, `OPS-006`, `OPS-007`,
+- Candidate `0.1.35` affects `SEC-007`, `OPS-003`, `OPS-006`, `OPS-007`,
   and the blocked `ID-001..006`/`COM-001`/`COM-011`/`AVL-005` first-message
   path. It accepts only the exact `0.1.33` five-unit marker produced by the
   separately released legacy migration boundary. After exact provenance revalidation, a
   committed 0.1.33 forward journal may be superseded by a separately journaled
-  0.1.33→0.1.34 edge. Approval now treats package-issued SIGTERM/status 143 as
+  0.1.33→0.1.35 edge. The superseded journal remains durable until the new
+  edge atomically replaces it, closing the crash window exposed by the exact
+  public `0.1.34` Hub attempt, which failed before marker or database advance.
+  Approval treats package-issued SIGTERM/status 143 as
   successful; quiescence clears only each exact managed unit's failed latch
   after bounded stop/disable and retains the strict inactive/PID checks. This
   preserves marker, PostgreSQL, identity, config, and credential state and

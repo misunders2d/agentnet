@@ -32,7 +32,7 @@ INPUTS="$WORK/inputs"
 PACK="$WORK/pack"
 PREFIX_0131="/opt/agentnet-upgrade-e2e-0.1.31"
 PREFIX_0133="/opt/agentnet-upgrade-e2e-0.1.33"
-PREFIX_0134="/opt/agentnet-upgrade-e2e-0.1.34"
+PREFIX_0135="/opt/agentnet-upgrade-e2e-0.1.35"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
 HOST_SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 OPT_UID="$(stat -c '%u' /opt)"
@@ -81,7 +81,7 @@ cleanup() {
     sudo sed -i '/# agentnet-upgrade-e2e$/d' "$HBA_FILE"
     sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' >/dev/null 2>&1
   fi
-  sudo rm -rf "$PREFIX_0131" "$PREFIX_0133" "$PREFIX_0134"
+  sudo rm -rf "$PREFIX_0131" "$PREFIX_0133" "$PREFIX_0135"
   sudo chown "$OPT_UID:$OPT_GID" /opt
   sudo chmod "$OPT_MODE" /opt
   rm -rf "$WORK"
@@ -155,7 +155,7 @@ sudo chmod 0755 /opt
 install_runtime "$PREFIX_0131" "@misunders2d/agentnet@0.1.31"
 install_runtime "$PREFIX_0133" "@misunders2d/agentnet@0.1.33"
 CANDIDATE_TARBALL="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
-install_runtime "$PREFIX_0134" "$PACK/$CANDIDATE_TARBALL"
+install_runtime "$PREFIX_0135" "$PACK/$CANDIDATE_TARBALL"
 
 # Operator-owned local TLS routes.
 echo '127.0.0.1 core.agentnet.test approval.agentnet.test # agentnet-upgrade-e2e' | sudo tee -a /etc/hosts >/dev/null
@@ -288,14 +288,14 @@ sudo test -f /var/lib/agentnet-setup/upgrade.json
 # Current candidate must consume that exact retained state, clear the failed
 # latch, migrate schema 4->5, converge five units, and start the unenrolled
 # profile without changing the operator request.
-PLAN_0134="$WORK/plan-0.1.34.json"
-APPLY_0134="$WORK/apply-0.1.34.json"
-RETRY_0134="$WORK/retry-0.1.34.json"
-plan_setup "$PREFIX_0134" "$PLAN_0134"
-DIGEST_0134="$(jq -r '.request_digest' "$PLAN_0134")"
-apply_setup "$PREFIX_0134" "$DIGEST_0134" "$APPLY_0134"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY_0134" >/dev/null
-sudo jq -e '.package_version == "0.1.34" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+PLAN_0135="$WORK/plan-0.1.35.json"
+APPLY_0135="$WORK/apply-0.1.35.json"
+RETRY_0135="$WORK/retry-0.1.35.json"
+plan_setup "$PREFIX_0135" "$PLAN_0135"
+DIGEST_0135="$(jq -r '.request_digest' "$PLAN_0135")"
+apply_setup "$PREFIX_0135" "$DIGEST_0135" "$APPLY_0135"
+jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY_0135" >/dev/null
+sudo jq -e '.package_version == "0.1.35" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
 [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "5" ]]
@@ -313,12 +313,12 @@ sudo systemctl is-enabled --quiet agentnet-approval.service
 env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
 env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
 
-MARKER_0134="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
-REVISION_0134="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
-apply_setup "$PREFIX_0134" "$DIGEST_0134" "$RETRY_0134"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$RETRY_0134" >/dev/null
-[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_0134" ]]
-[[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_0134" ]]
-! grep -Fq "$TOKEN" "$PLAN_0131" "$APPLY_0131" "$PLAN_0133" "$APPLY_0133" "$PLAN_0134" "$APPLY_0134" "$RETRY_0134"
+MARKER_0135="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
+REVISION_0135="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
+apply_setup "$PREFIX_0135" "$DIGEST_0135" "$RETRY_0135"
+jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$RETRY_0135" >/dev/null
+[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_0135" ]]
+[[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_0135" ]]
+! grep -Fq "$TOKEN" "$PLAN_0131" "$APPLY_0131" "$PLAN_0133" "$APPLY_0133" "$PLAN_0135" "$APPLY_0135" "$RETRY_0135"
 
 echo "ordinary server upgrade E2E: PASS"

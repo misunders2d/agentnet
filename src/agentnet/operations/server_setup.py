@@ -149,20 +149,22 @@ _PROTECTED_SERVICE_PATHS = (
 # reason an already realized deployment may present a different request digest.
 # The 0.1.31 -> 0.1.33 window is deliberately narrower than the historical
 # same-topology windows: only the released communication-only Core+Approval
-# profile may expand to the current five-unit profile.  The corrective 0.1.34
-# edge accepts only the exact five-unit 0.1.33 target it repairs.
+# profile may expand to the current five-unit profile.  Corrective releases
+# accept only the exact five-unit 0.1.33 target they repair.
 _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.28", "0.1.31"): MANAGED_UNITS,
     ("0.1.30", "0.1.31"): MANAGED_UNITS,
     ("0.1.31", "0.1.33"): LEGACY_COMMUNICATION_ONLY_UNITS,
     ("0.1.32", "0.1.33"): MANAGED_UNITS,
     ("0.1.33", "0.1.34"): MANAGED_UNITS,
+    ("0.1.33", "0.1.35"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
         ("0.1.31", "0.1.33"),
         ("0.1.32", "0.1.33"),
         ("0.1.33", "0.1.34"),
+        ("0.1.33", "0.1.35"),
     }
 )
 # Blockers that mean "the response was lost", not "the operation was refused".
@@ -3812,9 +3814,9 @@ def _prepare_supported_upgrade(
                 gid=gid,
             )
             # The prior target marker is already the no-rollback boundary.
-            # Once its exact realized state is proved, discard only that
-            # superseded journal and prepare the separately approved next edge.
-            _clear_upgrade_journal(journal_path)
+            # Keep its journal until the separately approved next-edge journal
+            # atomically replaces it.  Clearing it here creates a crash window
+            # where a failed write loses both recovery records.
             journal = None
     if journal is not None:
         committed_target = (

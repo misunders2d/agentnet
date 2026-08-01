@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.34` coverage targets
+Only non-EOL Node.js release lines are supported: current `0.1.35` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
 the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
 compatible npm 10.9.3; the deployed Hub compatibility target is reported
@@ -358,7 +358,7 @@ published `0.1.30` repaired installed-verifier package custody; published
 message path. Published `0.1.32` repairs the ceremony blockers. Published
 `0.1.33` adds the exact migration from the live `0.1.31` two-unit marker, but
 the Hub transition exposed a retained systemd failed latch after its
-forward-only boundary. Candidate `0.1.34` adds identity-preserving reconciliation
+forward-only boundary. Candidate `0.1.35` adds identity-preserving reconciliation
 for that exact state. No release proves completed fresh-laptop enrollment, native
 cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
@@ -428,21 +428,22 @@ profile and exact `0.1.32` five-unit profile. The live Hub reached its committed
 systemd retained `ActiveState=failed`; the strict quiescence validator correctly
 refused to treat that as `inactive`, and 0.1.33 had no preservation-safe retry.
 
-The candidate `0.1.34` retains the strict inactive requirement. It gives Approval
+The candidate `0.1.35` retains the strict inactive requirement. It gives Approval
 the same successful-SIGTERM contract as Core, runs `reset-failed` only after
 bounded stop/disable for each exact managed unit, and accepts the exact 0.1.33
 five-unit marker. A retained committed 0.1.33 journal is superseded only after
-exact marker/config/unit revalidation and before a new 0.1.33→0.1.34 journal is
-written. Earlier installations must first use the separately released 0.1.33
-migration boundary; 0.1.34 does not add another direct legacy edge. Expired or
+exact marker/config/unit revalidation and remains durable until the new
+0.1.33→0.1.35 journal atomically replaces it. Earlier installations must first
+use the separately released 0.1.33
+migration boundary; 0.1.35 does not add another direct legacy edge. Expired or
 unready credentials leave renewal and C0 disabled. For the exact current Hub
-condition, 0.1.34 adds a root-only, owner-approved recovery for an expired but
+condition, 0.1.35 adds a root-only, owner-approved recovery for an expired but
 still-possessed managed-server key before the first C0 exchange: same-key proof
 plus fresh WebAuthn Approval retires the old row unchanged and issues one finite
 next-epoch credential. It grants no authority, restarts nothing, and refuses
 A2A, relay, or retained C0-terminal topologies. No reset, manual edit, identity
 replacement, authority, production, or gate-promotion claim is added.
-Required next runtime proof remains exact public `0.1.34` Hub transition, fresh
+Required next runtime proof remains exact public `0.1.35` Hub transition, fresh
 owner credential readiness, five active units, fresh-laptop enrollment, one
 native signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.

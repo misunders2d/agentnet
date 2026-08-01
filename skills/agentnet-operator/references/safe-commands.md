@@ -264,7 +264,7 @@ or capability and does not restart anything. These commands do not themselves
 prove HA, PITR, KMS custody, independent enrollment approval, or production
 certification.
 
-For the exact 0.1.34 pre-C0 communication-only case where the retained managed
+For the exact 0.1.35 pre-C0 communication-only case where the retained managed
 server credential has expired but its package-owned key remains intact, run:
 
 ```bash
@@ -286,7 +286,7 @@ bindings. Never delete or edit its root-only state; use
 ## Release-gated fixed C0 pilot
 
 Use this section only after verifying the installed release and its C0 release
-evidence. Published `0.1.18` does not qualify. In 0.1.34, ordinary-server setup
+evidence. Published `0.1.18` does not qualify. In 0.1.35, ordinary-server setup
 owns the dedicated responder service, config, and systemd-delivered credential;
 do not recreate it with generic `supervisor-run` or expose its private paths.
 Its package-internal diagnostic surface is `agentnet c0-pilot responder

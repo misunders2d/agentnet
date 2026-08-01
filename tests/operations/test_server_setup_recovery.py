@@ -1192,8 +1192,25 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     monkeypatch.setattr(setup, "_run_systemctl", clear_failed_state)
     monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.34")
+    monkeypatch.setattr(setup, "__version__", "0.1.35")
     recovery_digest = harness.plan_digest()
+    retained_journal = harness.journal_path.read_bytes()
+    original_write_journal = setup._write_upgrade_journal
+    monkeypatch.setattr(
+        setup,
+        "_write_upgrade_journal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("injected next-edge journal write failure")
+        ),
+    )
+
+    with pytest.raises(OSError, match="injected next-edge journal write failure"):
+        harness.apply(recovery_digest)
+
+    assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.journal_path.read_bytes() == retained_journal
+
+    monkeypatch.setattr(setup, "_write_upgrade_journal", original_write_journal)
     recovered = harness.apply(recovery_digest)
     assert {
         "id": "package_upgrade",
@@ -1201,7 +1218,7 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     } in recovered["steps"]
     assert not failed_units
     assert ["reset-failed", setup.APPROVAL_UNIT] in harness.systemctl_calls
-    assert harness.marker()["package_version"] == "0.1.34"
+    assert harness.marker()["package_version"] == "0.1.35"
     assert harness.layout.host(setup.C0_RESPONDER_DATA).is_dir()
     assert not harness.journal_path.exists()
 

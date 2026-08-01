@@ -1,9 +1,9 @@
 # Public Package Status
 
-Snapshot: 2026-07-31
+Snapshot: 2026-08-01
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.33` setup-migration release and corrective `0.1.34`
+published `0.1.34` setup-recovery release and corrective `0.1.35`
 identity-preserving recovery candidate. It does not replace requirements, gate
 ledgers, or accountable-owner evidence.
 
@@ -12,8 +12,8 @@ ledgers, or accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.33`
-- published source commit: `466c96d50e8aeeb060be92e8d01c024af9fd35c6`
+- latest published version: `0.1.34`
+- published source commit: `2cf6908ab3b5e7cb8af4bb0faf2a92b5f8b4f7a7`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -78,22 +78,46 @@ recover this state. Services remain offline, PostgreSQL remains schema 4/5, the
 preserved credential is expired, authority is false, and no enrollment or C0
 message occurred.
 
-Corrective candidate `0.1.34` preserves the strict inactive postcondition. It
+Published `0.1.34` added the identity-preserving failed-unit reconciliation and
+was independently verified against its public npm integrity, registry
+attestation, and immutable tag before one exact digest-bound Hub apply. That
+apply passed frozen preflight and then failed before marker or PostgreSQL
+advance. It preserved the marker, five unit files, PostgreSQL, identity, key,
+credential, and operator inputs, but removed the retained committed
+0.1.31-to-0.1.33 journal before the separately approved next-edge journal was
+durably written. The Hub therefore has marker `0.1.33` revision 2 and no forward
+journal. Services remain offline, public endpoints return 502, authority is
+false, and no enrollment or C0 message occurred. The delayed read-only Hub
+diagnostic itself timed out at its orchestration watchdog without durable
+package-stage evidence; it is not treated as a diagnosis or a waiver of the
+deterministic journal-loss reproduction.
+
+Corrective candidate `0.1.35` preserves the strict inactive postcondition. It
 adds Approval's successful-SIGTERM contract, clears only the failed latch for
 the five exact managed units after bounded stop/disable, and admits the exact
-0.1.33 five-unit marker only. A committed 0.1.33 forward journal is superseded only
-after exact marker/config/unit revalidation and before a separately journaled
-0.1.33→0.1.34 edge. Earlier sources use the separately released 0.1.33
-migration first. No reset,
+0.1.33 five-unit marker only. When a committed predecessor journal exists, it
+is superseded only after exact marker/config/unit revalidation and remains
+durable until the separate 0.1.33-to-0.1.35 journal atomically replaces it; an
+injected next-edge write failure now proves the old bytes remain exact. The
+Hub's already-absent old journal does not authorize reconstruction or manual
+editing; the package creates the new edge journal from the exact validated
+0.1.33 marker/config/unit state. Earlier sources use the separately released
+0.1.33 migration first. No reset,
 manual marker/database edit, identity replacement, or authority grant is added.
-For the Hub's additional expired-credential blocker, 0.1.34 adds an exact
+For the Hub's additional expired-credential blocker, 0.1.35 adds an exact
 pre-C0 communication-only recovery: root-only same-key possession proof plus a
 fresh owner WebAuthn Approval retires the old expired row unchanged and creates
 one finite next-epoch credential. It performs no authority grant or restart and
-refuses A2A, relay, or retained C0-terminal topologies. Local recovery tests
-pass; complete release verification, same-commit CI, publication, Hub recovery,
-the live owner ceremony, fresh enrollment, and the first native message remain
-pending.
+refuses A2A, relay, or retained C0-terminal topologies. The injected recovery
+regression passes (`103 passed`); the full source lane, direct verifier, and
+both independently installed npm-tarball generations each pass with `1621
+passed, 16 expected skips`; the frozen wheel and sdist are byte-identical across
+two builds. The final local npm tarball has shasum
+`3b7dcc0d853b95089ec24c28d31b8c2bb1d1937e` and integrity
+`sha512-m65KdZWhGA1izkYhJAJAC0+6CPGjubzWaMYNEzkJG/XjC3cHHYeJlbuBzD/H87ItSni3cA6aUFNG7aaJz+jtpg==`;
+those are local package facts, not registry publication evidence. Fresh
+same-commit CI, publication, Hub recovery, the live owner
+ceremony, fresh enrollment, and the first native message remain pending.
 
 ## Release and gate posture
 
