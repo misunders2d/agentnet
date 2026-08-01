@@ -134,14 +134,17 @@ labels, retains exact profile shape and private P-256 key custody/readability
 checks, and removes only the impossible duplicate `actor.key_id` test. Active
 database credential-to-key binding remains proven by `server-agent activate`;
 setup does not manufacture a second self-asserted binding. This candidate adds
-no migration or compatibility edge. Selected recovery is package-owned
-AgentNet-only reset, followed only under a separate exact destructive approval
-by clean AgentNet database/role init after public package verification; that
-approval requires sanitized exact target inventory, an explicit backup/rollback
-decision, and redacted audit evidence. Prior AgentNet state is intentionally
-disposable. Unrelated/shared/valuable database targets fail closed. No unrelated
-service, database, toolchain, proxy, TLS, enrollment, authority, or C0 mutation
-is authorized by this source change.
+only the exact released `0.1.33` five-unit marker migration to `0.1.36`, with
+provenance-checked retained-journal recovery; `0.1.34`, `0.1.35`, and direct
+legacy sources remain rejected. Because the current Hub committed a `0.1.35`
+marker, selected Hub recovery remains package-owned AgentNet-only reset,
+followed only under a separate exact destructive approval by clean AgentNet
+database/role init after public package verification; that approval requires
+sanitized exact target inventory, an explicit backup/rollback decision, and
+redacted audit evidence. Prior AgentNet state is intentionally disposable.
+Unrelated/shared/valuable database targets fail closed. No unrelated service,
+database, toolchain, proxy, TLS, enrollment, authority, or C0 mutation is
+authorized by this source change.
 
 ## Release and gate posture
 

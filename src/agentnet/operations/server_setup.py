@@ -1278,7 +1278,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=exec
 User={APPROVAL_USER}
 Group={APPROVAL_USER}
 EnvironmentFile={APPROVAL_ENV}
@@ -1304,7 +1304,7 @@ Wants=network-online.target
 Requires={APPROVAL_UNIT}
 
 [Service]
-Type=simple
+Type=exec
 User={CORE_USER}
 Group={CORE_USER}
 EnvironmentFile={CORE_ENV}
@@ -1333,7 +1333,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Service]
-Type=simple
+Type=exec
 User={C0_RESPONDER_USER}
 Group={C0_RESPONDER_USER}
 Environment=HOME={C0_RESPONDER_DATA}

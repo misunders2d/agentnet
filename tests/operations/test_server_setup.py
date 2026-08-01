@@ -1008,6 +1008,10 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert "UnsetEnvironment=" not in units[CREDENTIAL_RENEW_TIMER].decode("utf-8")
     assert "synthetic-test-secret" not in rendered
     assert "AGENTNET_APPROVAL_CORE_TOKEN=" not in rendered
+    for unit in (APPROVAL_UNIT, CORE_UNIT, C0_RESPONDER_UNIT):
+        assert "Type=exec" in units[unit].decode()
+    assert "Type=simple" not in rendered
+    assert "Type=oneshot" in units[CREDENTIAL_RENEW_UNIT].decode()
     assert "SuccessExitStatus=143 SIGTERM" in units[APPROVAL_UNIT].decode()
     assert "ConditionPathExists=/var/lib/agentnet-c0/config.json" in units[C0_RESPONDER_UNIT].decode()
     assert "LoadCredential=signing-key.pem:/var/lib/agentnet/guided-join.key.pem" in units[C0_RESPONDER_UNIT].decode()

@@ -1,17 +1,17 @@
 {
   "run_id": "2026-08-01-v0.1.36",
-  "evaluated_at": "2026-08-01T18:02:00+03:00",
-  "scope": "v0_1_36_strict_identity_profile_fresh_init_candidate",
+  "evaluated_at": "2026-08-01T19:38:00+03:00",
+  "scope": "v0_1_36_strict_identity_profile_and_setup_convergence_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "source_revision_kind": "release_source_tree_sha256",
-  "release_source_tree_sha256": "dcb2e32f6cdf38367a19b47053c3c6fb50130a04b1a933dbce08b1f644314a83",
+  "release_source_tree_sha256": "8ffa24590800854304d64b3095bd8ea2e5010da076580eb557f91dc72a95abaf",
   "prior_runtime_evidence": "evidence/local/2026-08-01-v0.1.35/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-08-01-v0.1.35/manifest.json",
-  "change_boundary": "Exact public 0.1.35 reached marker and PostgreSQL migration on the Hub, then failed because setup required actor.key_id even though canonical strict VerifiedActor profiles forbid and never serialize that field. Version 0.1.36 rejects duplicate/non-finite profile JSON, strictly parses the canonical actor, verifies exact domain/harness/credential labels, preserves managed profile/key custody and P-256 readability checks, and removes only that impossible duplicate comparison. Database credential-to-key binding remains activation-owned. It adds no compatibility or migration edge. Selected external recovery is sanitized evidence capture followed only after public fixed-package verification by package-owned AgentNet reset, separately approved clean AgentNet database/role initialization, fresh setup/enrollment, and native C0. Database/role reinitialization requires sanitized exact target inventory, explicit named human confirmation, an explicit backup/rollback decision, redacted audit evidence, and fail-closed handling of unrelated/shared/valuable targets. No unrelated service, database, runtime, proxy, TLS, authority, federation, production, or gate mutation is authorized or claimed.",
+  "change_boundary": "Exact public 0.1.35 reached marker and PostgreSQL migration on the Hub, then failed because setup required actor.key_id even though canonical strict VerifiedActor profiles forbid and never serialize that field. Version 0.1.36 rejects duplicate/non-finite profile JSON, strictly parses the canonical actor, verifies exact domain/harness/credential labels, preserves managed profile/key custody and P-256 readability checks, and removes only that impossible duplicate comparison. Database credential-to-key binding remains activation-owned. It adds only the exact released 0.1.33 five-unit marker migration to 0.1.36 with provenance-checked retained-journal recovery; 0.1.34, 0.1.35, and direct legacy sources remain rejected. Approval, Core, and C0 responder units use Type=exec so live-runtime proof begins only after the approved Node executable replaces systemd transient execution; renewal remains oneshot. Because the current Hub committed a 0.1.35 marker, selected external recovery remains sanitized evidence capture followed only after public fixed-package verification by package-owned AgentNet reset, separately approved clean AgentNet database/role initialization, fresh setup/enrollment, and native C0. Database/role reinitialization requires sanitized exact target inventory, explicit named human confirmation, an explicit backup/rollback decision, redacted audit evidence, and fail-closed handling of unrelated/shared/valuable targets. No unrelated service, database, runtime, proxy, TLS, authority, federation, production, or gate mutation is authorized or claimed.",
   "execution_context": {
     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
-    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1622 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1627 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
     "root_installed_external_host": "BOUNDED NON-GREEN: exact public 0.1.35 apply committed its marker and PostgreSQL migration, then failed at the impossible managed identity-profile check. Five managed units remained inactive, Core and Approval unavailable, effective authority false, and no enrollment or C0 exchange occurred.",
     "callback_incident": "No prior AgentNet transaction, callback, state, credential, continuation, or C0 state will be reused. Fixed public package verification and exact AgentNet-only clean initialization must precede a fresh laptop ceremony."
   },
@@ -26,23 +26,23 @@
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
-      "result": "PASS: 626 passed, 7 expected dedicated-PostgreSQL skips"
+      "result": "PASS: 631 passed, 7 expected dedicated-PostgreSQL skips"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py",
-      "result": "PASS: 1622 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+      "result": "PASS: 1627 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each 1622 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each 1627 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
-      "result": "PASS: two independent builds were byte-identical; sdist 69a4934ddf2381657ff80bb9ad02c233e59255cba67fb7e17692008e3e703fce; wheel 7285b28ba9310475809aeda934aec255a4757ef3a1694f975c1236f0923d15cb"
+      "result": "PASS: two independent builds were byte-identical; sdist 4420e41d6d529235d37a500d4235ca56ca3a027ab94b07ec4e42297d9c30b78e; wheel 128e157a567f7e406eb1835684546be07c12fb14765b76d839592d43dd2c7382"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
-      "result": "PASS: exact 0.1.36 direct disposable-package verification completed with 1622 passed and 16 expected skips and no source-tree residue"
+      "result": "PASS: exact 0.1.36 direct disposable-package verification completed with 1627 passed and 16 expected skips and no source-tree residue"
     },
     {
       "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
@@ -73,16 +73,26 @@
       "review": "Constitution rereview",
       "model": "openai-codex/gpt-5.6-sol constitution-watcher",
       "result": "REVISE: duplicate/non-finite parser correction was accepted, but managed-profile top-level and nested non-finite tests were missing. Both negative cases were added to the existing strict-profile regression with a guard proving VerifiedActor validation is never reached; exact regression then passed. No runtime/security boundary changed after review."
+    },
+    {
+      "review": "Final corrective runtime critic",
+      "model": "openai-codex/gpt-5.6-sol critic",
+      "result": "PASS: exact 0.1.33-to-0.1.36 marker edge, Type=exec service convergence fix, fixed sanitized diagnostics, negative source tests, and retained renewal oneshot converged with no blocker."
+    },
+    {
+      "review": "Final corrective Constitution review",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE then corrected: code and fail-closed boundaries passed; stale operator claims of no migration edge were replaced with the exact 0.1.33-to-0.1.36-only edge, continued rejection of 0.1.34/0.1.35/direct legacy sources, and current-Hub reset boundary. Same-commit Type=exec E2E remains required before publication."
     }
   ],
   "artifacts": [
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36.tar.gz",
-      "sha256": "69a4934ddf2381657ff80bb9ad02c233e59255cba67fb7e17692008e3e703fce"
+      "sha256": "4420e41d6d529235d37a500d4235ca56ca3a027ab94b07ec4e42297d9c30b78e"
     },
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36-py3-none-any.whl",
-      "sha256": "7285b28ba9310475809aeda934aec255a4757ef3a1694f975c1236f0923d15cb"
+      "sha256": "128e157a567f7e406eb1835684546be07c12fb14765b76d839592d43dd2c7382"
     }
   ]
 }

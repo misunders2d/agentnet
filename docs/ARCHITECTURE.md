@@ -607,21 +607,22 @@ Approval digest v2 belongs only to request-v1. Approval digest v3 belongs to req
 
 Ordinary database contract is fixed local peer authentication: OS user, PostgreSQL role, and database are all `agentnet`; socket is `/var/run/postgresql`; DSN is `postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet`; loaded HBA must select an unshadowed `local agentnet agentnet peer` rule with no ident map. Apply may create the fixed Core OS identity, then forks a bounded read-only canary under that identity and inspects parsed current-file `pg_hba_file_rules`/`pg_ident_file_mappings` under local `postgres` identity. `pg_conf_load_time()` must be no older than both auth files, so current-file parsing plus service canary cannot masquerade as a loaded rule. Wrong transport/role/database, read-only/recovery server, parse error, mapped/broad/shadowing/non-peer rule, or stale unreloaded configuration blocks before AgentNet environment/config/database write. PostgreSQL role/database/HBA/ident administration and reload stay operator-owned separate approval boundaries.
 
-After database gate, wrapper owns only locked Approval/Core/C0 service identities, private AgentNet roots, Approval provisioning, Core schema/config bootstrap, mode-applicable scanner public trust, fixed loopback ports, five hardened systemd units, bounded service start/restart, and redacted evidence. Units are Approval, Core, an isolated fixed C0 responder, a static selector-free current-credential renewal oneshot, and its hourly persistent timer. Scanner trust is created and passed only for enabled mode; disabled mode rejects preexisting scanner trust and never provisions an artifact key. Before any Approval/Core product subprocess, direct child config/state/data paths are inspected with `lstat`; symlink, dangling-symlink, nonregular, ownership, or mode conflicts block. Existing private state trees and realized post-create/post-bootstrap Core custody are recursively revalidated as owner-only directories and single-link regular files before convergence continues. Existing operator-owned PostgreSQL administration, DNS, TLS/reverse-proxy routes, certificates, firewall, host system trust, and secret injection are explicit prerequisites and never mutated. Start verifies loopback and exact public HTTPS health, including exact artifact mode and capability set. Approval broker calls use an explicit TLS context backed by trust visible to CPython `ssl.create_default_context()` with certificate and hostname verification, never HTTPX's bundled CA fallback; ambient `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` fail closed before setup and all four process-spawning service units remove them; the fifth unit is the timer that invokes the hardened renewal service. Context-construction and transport failures remain sanitized. Post-activation start additionally proves `credential_state=current|renewal_needed`, performs a purpose-specific signed non-mutating Approval broker-readiness request through the configured public origin, starts the renewal timer, and starts the responder only while its exact terminal marker is absent. If terminal-marker commit succeeded but responder-config removal lost its response, same-digest setup validates both files' private custody and exact terminal binding, removes only the stale responder config, fsyncs the directory, and leaves the responder disabled; later retries never recreate it.
+After database gate, wrapper owns only locked Approval/Core/C0 service identities, private AgentNet roots, Approval provisioning, Core schema/config bootstrap, mode-applicable scanner public trust, fixed loopback ports, five hardened systemd units, bounded service start/restart, and redacted evidence. Approval, Core, and the isolated fixed C0 responder use systemd `Type=exec`, so successful start/restart evidence begins only after the approved Node executable has replaced systemd's transient executor; current-credential renewal remains a static selector-free oneshot with an hourly persistent timer. Scanner trust is created and passed only for enabled mode; disabled mode rejects preexisting scanner trust and never provisions an artifact key. Before any Approval/Core product subprocess, direct child config/state/data paths are inspected with `lstat`; symlink, dangling-symlink, nonregular, ownership, or mode conflicts block. Existing private state trees and realized post-create/post-bootstrap Core custody are recursively revalidated as owner-only directories and single-link regular files before convergence continues. Existing operator-owned PostgreSQL administration, DNS, TLS/reverse-proxy routes, certificates, firewall, host system trust, and secret injection are explicit prerequisites and never mutated. Start verifies loopback and exact public HTTPS health, including exact artifact mode and capability set. Approval broker calls use an explicit TLS context backed by trust visible to CPython `ssl.create_default_context()` with certificate and hostname verification, never HTTPX's bundled CA fallback; ambient `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` fail closed before setup and all four process-spawning service units remove them; the fifth unit is the timer that invokes the hardened renewal service. Context-construction and transport failures remain sanitized. Post-activation start additionally proves `credential_state=current|renewal_needed`, performs a purpose-specific signed non-mutating Approval broker-readiness request through the configured public origin, starts the renewal timer, and starts the responder only while its exact terminal marker is absent. If terminal-marker commit succeeded but responder-config removal lost its response, same-digest setup validates both files' private custody and exact terminal binding, removes only the stale responder config, fsyncs the directory, and leaves the responder disabled; later retries never recreate it.
 
 Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. A root-owned current-package attempt record is written before first product mutation and removed only after marker commit, allowing exact interruption recovery while rejecting unowned pre-existing state.
 
-The `0.1.35` corrective migration boundary admits only the exact released
+The `0.1.36` corrective migration boundary admits only the exact released
 `0.1.33` five-unit marker. Earlier sources use the separately released 0.1.33
-boundary first; 0.1.35 does not add another direct legacy edge. Exact prior
-managed configs/units are journaled before writes. For this edge, the
-target marker is the forward-only boundary: successful or exactly reconciled
-marker commit disarms source-byte rollback; all five units are quiesced before
-Core bootstrap may migrate PostgreSQL; and the journal is retained until
-bootstrap succeeds. A retained journal whose exact committed target is 0.1.33
-may be superseded only after its marker/config/unit provenance is revalidated;
-it remains durable until 0.1.35 atomically replaces it with the separate new
-journal before changing managed bytes.
+boundary first; 0.1.36 does not add another direct legacy edge and does not
+accept 0.1.34 or 0.1.35 as source markers. Exact prior managed configs/units are
+journaled before writes. For this edge, the target marker is the forward-only
+boundary: successful or exactly reconciled marker commit disarms source-byte
+rollback; all five units are quiesced before Core bootstrap may migrate
+PostgreSQL; and the journal is retained until bootstrap succeeds. A retained
+journal whose exact committed target is 0.1.33 may be superseded only after its
+marker/config/unit provenance is revalidated; it remains durable until 0.1.36
+atomically replaces it with the separate new journal before changing managed
+bytes.
 Quiescence clears systemd's failed latch only after bounded stop/disable and
 still requires exact loaded/unit-file/inactive/PID postconditions. Approval and
 Core both declare SIGTERM/status 143 successful. Only the `0.1.31` topology
@@ -634,10 +635,10 @@ OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain
 explicit ceremonies. Remote Managers may provide immutable package guidance
 and inspect sanitized evidence only; target coding agents own host execution.
 
-Candidate `0.1.36` changes no migration edge. Setup rejects duplicate/non-finite
-JSON members, strictly parses the managed identity actor with canonical
-`VerifiedActor`, checks current domain/harness/credential labels, and retains
-exact profile shape plus private
+Candidate `0.1.36` adds only the exact `0.1.33` five-unit corrective migration edge above.
+Setup rejects duplicate/non-finite JSON members, strictly parses the managed
+identity actor with canonical `VerifiedActor`, checks current
+domain/harness/credential labels, and retains exact profile shape plus private
 P-256 key custody/readability. It removes the impossible requirement for
 `actor.key_id`, which canonical actor serialization forbids and never emits.
 Database-backed credential-to-key proof remains owned by `server-agent

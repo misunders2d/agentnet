@@ -150,9 +150,12 @@ published and historical release evidence:
   domain/harness/credential labels, retains exact profile and P-256 private-key
   custody/readability checks, and removes only the impossible duplicate field
   test. Database-backed credential-to-key binding remains owned by
-  `server-agent activate`. It adds no compatibility or migration edge. Selected
-  recovery is package-owned AgentNet-only reset, followed only under separate
-  exact destructive approval by clean AgentNet database/role init with sanitized
+  `server-agent activate`. It adds only the exact released `0.1.33` five-unit
+  marker migration to `0.1.36`, with provenance-checked retained-journal
+  recovery; `0.1.34`, `0.1.35`, and direct legacy sources remain rejected.
+  Because the current Hub committed a `0.1.35` marker, selected Hub recovery
+  remains package-owned AgentNet-only reset, followed only under separate exact
+  destructive approval by clean AgentNet database/role init with sanitized
   target inventory, explicit backup/rollback decision, and redacted audit
   evidence; unrelated/shared/valuable targets fail closed. The two
   installed-harness G01 failures remain non-green and unwaived. No requirement

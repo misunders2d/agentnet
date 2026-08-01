@@ -98,35 +98,6 @@ run_evidence() {
   fi
 }
 
-report_runtime_executable_class() {
-  local unit="$1"
-  local pid=""
-  local executable=""
-  pid="$(sudo systemctl show "$unit" --property=MainPID --value 2>/dev/null || true)"
-  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]]; then
-    echo "ordinary server setup E2E: $unit runtime class=no-live-main-process" >&2
-    return
-  fi
-  executable="$(sudo readlink "/proc/$pid/exe" 2>/dev/null || true)"
-  case "$executable" in
-    "$RUNTIME_NODE")
-      echo "ordinary server setup E2E: $unit runtime class=approved-node" >&2
-      ;;
-    "$RUNTIME_NODE (deleted)")
-      echo "ordinary server setup E2E: $unit runtime class=approved-node-deleted" >&2
-      ;;
-    */node|*/node\ \(deleted\))
-      echo "ordinary server setup E2E: $unit runtime class=unexpected-node-path" >&2
-      ;;
-    "")
-      echo "ordinary server setup E2E: $unit runtime class=uninspectable" >&2
-      ;;
-    *)
-      echo "ordinary server setup E2E: $unit runtime class=unexpected-executable" >&2
-      ;;
-  esac
-}
-
 require_service_safe_executable() {
   local label="$1"
   local target="$2"
@@ -407,17 +378,9 @@ MARKER_1="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
 echo "ordinary server setup E2E: first converged apply complete"
 
 # Same-digest retry revalidates realized state; marker/config/unit bytes remain exact.
-set +e
 run_evidence "$APPLY2" sudo -- env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" server-agent setup \
   --request "$INPUTS/server-setup.json" --expected-request-digest "$DIGEST" --apply --start
-RETRY_EXIT=$?
-set -e
-if [[ "$RETRY_EXIT" -ne 0 ]]; then
-  report_runtime_executable_class agentnet-approval.service
-  report_runtime_executable_class agentnet-core.service
-  exit "$RETRY_EXIT"
-fi
 jq -c '{status, steps: [.steps[] | {id, status}]}' "$APPLY2"
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$APPLY2" >/dev/null || { echo "ordinary server setup E2E: stable retry evidence mismatch" >&2; exit 1; }
 [[ "$(sudo sha256sum /var/lib/agentnet/agentnet.json | cut -d' ' -f1)" == "$CORE_CONFIG_1" ]] || { echo "ordinary server setup E2E: Core config changed on retry" >&2; exit 1; }

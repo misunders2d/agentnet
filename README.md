@@ -452,12 +452,15 @@ Candidate `0.1.36` strictly validates the canonical actor and its current
 binding labels, retains exact profile shape plus P-256 private-key custody and
 readability checks, and removes only that impossible duplicate field test.
 `server-agent activate` remains the database-backed credential-to-key binding
-proof. No compatibility edge is added. Intended Hub recovery is a
-package-owned AgentNet-only clean reset, followed only under a separate exact
-destructive approval by clean AgentNet database/role init because no prior
-AgentNet message or state must be preserved. That approval requires sanitized
-exact target inventory, an explicit backup/rollback decision, and redacted
-audit evidence; unrelated/shared/valuable database targets fail closed.
+proof. It adds only the exact released `0.1.33` five-unit marker migration to
+`0.1.36`, including provenance-checked retained-journal recovery; `0.1.34`,
+`0.1.35`, and direct legacy sources remain rejected. Because the current Hub
+committed a `0.1.35` marker, its intended recovery remains a package-owned
+AgentNet-only clean reset, followed only under a separate exact destructive
+approval by clean AgentNet database/role init because no prior AgentNet message
+or state must be preserved. That approval requires sanitized exact target
+inventory, an explicit backup/rollback decision, and redacted audit evidence;
+unrelated/shared/valuable database targets fail closed.
 Required runtime proof remains exact public `0.1.36`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact

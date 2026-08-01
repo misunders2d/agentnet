@@ -324,8 +324,11 @@ Candidate `0.1.36` rejects duplicate/non-finite JSON members, strictly parses
 that canonical actor, verifies its current domain/harness/credential labels,
 retains exact profile shape and private P-256 key custody/readability checks,
 and removes only the impossible duplicate field test. `server-agent activate`
-remains the database-backed key-binding proof. No compatibility edge is added.
-Selected recovery is package-owned AgentNet-only reset, followed only under a
+remains the database-backed key-binding proof. It adds only the exact released
+`0.1.33` five-unit marker migration to `0.1.36`, with provenance-checked
+retained-journal recovery; `0.1.34`, `0.1.35`, and direct legacy sources remain
+rejected. Because the current Hub committed a `0.1.35` marker, selected Hub
+recovery remains package-owned AgentNet-only reset, followed only under a
 separate exact destructive approval by clean AgentNet database/role init because
 no prior AgentNet message/state must be preserved. That approval requires
 sanitized exact target inventory, an explicit backup/rollback decision, and
