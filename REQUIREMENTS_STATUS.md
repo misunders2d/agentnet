@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-01. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-02. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -144,14 +144,14 @@ published and historical release evidence:
   canonical strict `VerifiedActor` profiles forbid and never serialize
   `actor.key_id`, while setup required that field. Units remained inactive,
   authority false, and no enrollment or C0 message occurred.
-- Candidate `0.1.36` affects `AUTH-007`, `SEC-007`, `OPS-003`, `OPS-006`,
+- Candidate `0.1.37` affects `AUTH-007`, `SEC-007`, `OPS-003`, `OPS-006`,
   `OPS-007`, and the same blocked first-message path. It rejects duplicate/non-finite managed
   profile JSON, strictly parses the canonical actor, verifies current
   domain/harness/credential labels, retains exact profile and P-256 private-key
   custody/readability checks, and removes only the impossible duplicate field
   test. Database-backed credential-to-key binding remains owned by
   `server-agent activate`. It adds only the exact released `0.1.33` five-unit
-  marker migration to `0.1.36`, with provenance-checked retained-journal
+  marker migration to `0.1.37`, with provenance-checked retained-journal
   recovery; `0.1.34`, `0.1.35`, and direct legacy sources remain rejected.
   Because the current Hub committed a `0.1.35` marker, selected Hub recovery
   remains package-owned AgentNet-only reset, followed only under separate exact

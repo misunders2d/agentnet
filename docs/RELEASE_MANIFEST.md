@@ -1,7 +1,7 @@
 # Release Manifest
 
-Snapshot: 2026-08-01
-Candidate: `agentnet 0.1.36`
+Snapshot: 2026-08-02
+Candidate: `agentnet 0.1.37`
 Latest published package: `agentnet 0.1.35`
 Evidence profile: strict identity-profile fresh-init candidate
 
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `aeecba8a1b1ab7163347f9727ab08a87ada0f6b5ab73b39181d7170bea1b9e02` |
-| `pyproject.toml` | SHA-256 `66072a5744f37124767b6d6350f9a55e5827fc07e54d8c440a6e220ce0bfbcfa` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `0d20da004cd1573020f366fef9b7a89f0955367cfb16e1720f546e3f62648f55` |
+| `pyproject.toml` | SHA-256 `1c2c2b42543aa22d2b41a461173cd0945098ca1b6bf66194f65f6fbf34e9e1f6` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -320,12 +320,12 @@ release. One exact Hub apply then committed the marker and PostgreSQL migration
 but failed on an impossible setup requirement for `actor.key_id`, a field that
 canonical strict `VerifiedActor` profiles forbid and never serialize.
 
-Candidate `0.1.36` rejects duplicate/non-finite JSON members, strictly parses
+Candidate `0.1.37` rejects duplicate/non-finite JSON members, strictly parses
 that canonical actor, verifies its current domain/harness/credential labels,
 retains exact profile shape and private P-256 key custody/readability checks,
 and removes only the impossible duplicate field test. `server-agent activate`
 remains the database-backed key-binding proof. It adds only the exact released
-`0.1.33` five-unit marker migration to `0.1.36`, with provenance-checked
+`0.1.33` five-unit marker migration to `0.1.37`, with provenance-checked
 retained-journal recovery; `0.1.34`, `0.1.35`, and direct legacy sources remain
 rejected. Because the current Hub committed a `0.1.35` marker, selected Hub
 recovery remains package-owned AgentNet-only reset, followed only under a

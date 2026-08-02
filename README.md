@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.36` coverage targets
+Only non-EOL Node.js release lines are supported: current `0.1.37` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
 the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
 compatible npm 10.9.3; the deployed Hub compatibility target is reported
@@ -359,7 +359,7 @@ message path. Published `0.1.32` repairs the ceremony blockers. Published
 `0.1.33` adds the exact migration from the live `0.1.31` two-unit marker, but
 the Hub transition exposed a retained systemd failed latch after its
 forward-only boundary. Published `0.1.35` adds identity-preserving reconciliation
-for that exact state. Candidate `0.1.36` removes one unsatisfiable fresh-init
+for that exact state. Candidate `0.1.37` removes one unsatisfiable fresh-init
 identity-profile check. No release proves completed fresh-laptop enrollment, native
 cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
@@ -448,12 +448,12 @@ public `0.1.35` then reached marker and PostgreSQL migration on the Hub but
 failed because setup required `actor.key_id` even though strict canonical
 `VerifiedActor` profiles forbid and never serialize that field.
 
-Candidate `0.1.36` strictly validates the canonical actor and its current
+Candidate `0.1.37` strictly validates the canonical actor and its current
 binding labels, retains exact profile shape plus P-256 private-key custody and
 readability checks, and removes only that impossible duplicate field test.
 `server-agent activate` remains the database-backed credential-to-key binding
 proof. It adds only the exact released `0.1.33` five-unit marker migration to
-`0.1.36`, including provenance-checked retained-journal recovery; `0.1.34`,
+`0.1.37`, including provenance-checked retained-journal recovery; `0.1.34`,
 `0.1.35`, and direct legacy sources remain rejected. Because the current Hub
 committed a `0.1.35` marker, its intended recovery remains a package-owned
 AgentNet-only clean reset, followed only under a separate exact destructive
@@ -463,7 +463,7 @@ inventory, an explicit backup/rollback decision, and redacted audit evidence;
 unrelated/shared/valuable database targets fail closed. Release still requires
 external exact same-commit terminal-green cross-platform, clean-setup, and
 upgrade workflow evidence; post-push run IDs are not self-authored into source.
-Required runtime proof remains exact public `0.1.36`, clean five-unit readiness,
+Required runtime proof remains exact public `0.1.37`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.

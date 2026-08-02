@@ -91,9 +91,10 @@ trap cleanup EXIT
 
 run_evidence() {
   local output="$1"
+  local stderr_output="$output.stderr"
   shift
   local exit_code=0
-  "$@" >"$output" || exit_code=$?
+  "$@" >"$output" 2>"$stderr_output" || exit_code=$?
   if [[ "$exit_code" -ne 0 ]]; then
     jq -c '{schema, status, blocker, message}' "$output" >&2 || true
     return "$exit_code"
@@ -260,8 +261,28 @@ PLAN_0131="$WORK/plan-0.1.31.json"
 APPLY_0131="$WORK/apply-0.1.31.json"
 plan_setup "$PREFIX_0131" "$PLAN_0131"
 DIGEST_0131="$(jq -r '.request_digest' "$PLAN_0131")"
-apply_setup "$PREFIX_0131" "$DIGEST_0131" "$APPLY_0131"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY_0131" >/dev/null
+APPLY_0131_EXIT=0
+apply_setup "$PREFIX_0131" "$DIGEST_0131" "$APPLY_0131" || APPLY_0131_EXIT=$?
+if [[ "$APPLY_0131_EXIT" -eq 0 ]]; then
+  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0131" >/dev/null
+else
+  /usr/bin/python3 scripts/ci/verify_released_setup_runtime.py classify-transient \
+    --exit-code "$APPLY_0131_EXIT" --evidence "$APPLY_0131"
+  # Released 0.1.31 uses Type=simple, so systemd may expose its transient
+  # pre-exec MainPID before Node replaces it. Never rerun setup (which would
+  # restart Core and recreate the race); instead poll the immutable release's
+  # own exact runtime and health validators without mutating service state.
+  mapfile -t RUNTIME_0131_MATCHES < <(
+    sudo /usr/bin/sh -c \
+      'for path in /var/lib/agentnet-setup/npm-runtime/0.1.31-*; do test -d "$path" && printf "%s\n" "$path"; done'
+  )
+  [[ "${#RUNTIME_0131_MATCHES[@]}" -eq 1 ]]
+  RUNTIME_0131="${RUNTIME_0131_MATCHES[0]}"
+  sudo test -x "$RUNTIME_0131/bin/python"
+  sudo -- env -i PATH="$HOST_SYSTEM_PATH" HOME=/root LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+    "$RUNTIME_0131/bin/python" "$(pwd -P)/scripts/ci/verify_released_setup_runtime.py" \
+    wait-runtime --prefix "$PREFIX_0131"
+fi
 sudo jq -e '.package_version == "0.1.31" and .artifact_mode == "disabled" and (.units | length) == 2' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 sudo systemctl is-active --quiet agentnet-core.service
@@ -320,6 +341,11 @@ apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE"
 jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$RETRY_CANDIDATE" >/dev/null
 [[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_CANDIDATE" ]]
 [[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_CANDIDATE" ]]
-! grep -Fq "$TOKEN" "$PLAN_0131" "$APPLY_0131" "$PLAN_0133" "$APPLY_0133" "$PLAN_CANDIDATE" "$APPLY_CANDIDATE" "$RETRY_CANDIDATE"
+! grep -Fq "$TOKEN" \
+  "$PLAN_0131" "$PLAN_0131.stderr" "$APPLY_0131" "$APPLY_0131.stderr" \
+  "$PLAN_0133" "$PLAN_0133.stderr" "$APPLY_0133" "$APPLY_0133.stderr" \
+  "$PLAN_CANDIDATE" "$PLAN_CANDIDATE.stderr" \
+  "$APPLY_CANDIDATE" "$APPLY_CANDIDATE.stderr" \
+  "$RETRY_CANDIDATE" "$RETRY_CANDIDATE.stderr"
 
 echo "ordinary server upgrade E2E: PASS"

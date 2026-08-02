@@ -1,10 +1,10 @@
 # Public Package Status
 
-Snapshot: 2026-08-01
+Snapshot: 2026-08-02
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.35` setup-recovery release and corrective `0.1.36` strict
-identity-profile candidate. It does not replace requirements, gate ledgers, or
+published `0.1.35` setup-recovery release, immutable non-public `0.1.36` tag,
+and corrective `0.1.37` candidate. It does not replace requirements, gate ledgers, or
 accountable-owner evidence.
 
 ## Current public package
@@ -128,25 +128,38 @@ canonical `VerifiedActor` identity profiles forbid and never serialize
 private-key thumbprint. Five units remained inactive, authority stayed false,
 and no enrollment or C0 message occurred.
 
-Corrective candidate `0.1.36` rejects duplicate/non-finite JSON members,
+Immutable tagged candidate `0.1.36` rejects duplicate/non-finite JSON members,
 strictly parses the canonical actor, verifies its domain/harness/credential
 labels, retains exact profile shape and private P-256 key custody/readability
 checks, and removes only the impossible duplicate `actor.key_id` test. Active
 database credential-to-key binding remains proven by `server-agent activate`;
-setup does not manufacture a second self-asserted binding. This candidate adds
-only the exact released `0.1.33` five-unit marker migration to `0.1.36`, with
-provenance-checked retained-journal recovery; `0.1.34`, `0.1.35`, and direct
-legacy sources remain rejected. Because the current Hub committed a `0.1.35`
-marker, selected Hub recovery remains package-owned AgentNet-only reset,
-followed only under a separate exact destructive approval by clean AgentNet
-database/role init after public package verification; that approval requires
-sanitized exact target inventory, an explicit backup/rollback decision, and
-redacted audit evidence. Prior AgentNet state is intentionally disposable.
-Unrelated/shared/valuable database targets fail closed. No unrelated service,
-database, toolchain, proxy, TLS, enrollment, authority, or C0 mutation is
-authorized by this source change. Release requires external exact same-commit
-terminal-green cross-platform, clean-setup, and upgrade workflow evidence;
-post-push run IDs are not self-authored into candidate source.
+setup does not manufacture a second self-asserted binding. It admitted only the
+exact released `0.1.33` five-unit marker migration; `0.1.34`, `0.1.35`, and
+direct legacy sources remained rejected. Same-commit main-push cross-platform,
+clean-setup, and upgrade workflows passed. The immutable tag upgrade rerun then
+failed in the released `0.1.31` seed setup's post-start runtime sampling:
+`Type=simple` briefly exposed systemd's pre-exec shell as `MainPID` before Node
+replaced it. Cleanup passed, setup authority stayed false, and npm staging never
+ran. The tag remains immutable and non-public; no test waiver or tag rewrite is
+permitted.
+
+Corrective candidate `0.1.37` changes only that protected release gate and exact
+candidate migration edge. The upgrade E2E still performs one real released
+`0.1.31 --apply --start`; exact success evidence passes directly, while only
+exit 1 plus the exact `service_runtime` refusal and all three false safety flags
+may enter a bounded, non-mutating convergence probe. That probe imports the
+single root-owned released `0.1.31` private runtime and invokes its own exact
+Approval/Core systemd-runtime and loopback/public-health validators. It never
+restarts or reruns setup; malformed evidence, any other blocker, stable wrong
+runtime, health mismatch, module-provenance mismatch, or timeout fails closed.
+All command stderr is separately retained and included in synthetic-secret leak
+scanning. The candidate admits only exact `0.1.33` five-unit marker migration to
+`0.1.37`; `0.1.34`, `0.1.35`, `0.1.36`, and direct legacy sources are rejected.
+Local focused, source, recursive packed-package, direct-verifier, and
+byte-identical archive gates pass for this candidate. Exact same-commit CI, a
+new immutable tag, and trusted npm stage are still required. Hub recovery remains a separately approved action
+after exact public-package verification. No deployment, reset, database,
+enrollment, authority, C0, federation, production, or gate mutation is implied.
 
 ## Release and gate posture
 

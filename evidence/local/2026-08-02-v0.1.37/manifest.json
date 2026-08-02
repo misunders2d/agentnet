@@ -1,0 +1,88 @@
+{
+  "run_id": "2026-08-02-v0.1.37",
+  "evaluated_at": "2026-08-02T18:07:00+03:00",
+  "scope": "v0_1_37_released_seed_runtime_convergence_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "b9150543f59b41830fc4bfd622398626608dc0bf6557c758909a18a9aa936a77",
+  "prior_runtime_evidence": "evidence/local/2026-08-01-v0.1.36/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-01-v0.1.36/manifest.json",
+  "change_boundary": "Immutable tag 0.1.36 reached same-commit green main-push workflows but its tag upgrade rerun failed while released 0.1.31 Type=simple exposed systemd's transient pre-exec shell as MainPID before Node replacement. Version 0.1.37 does not modify released code or weaken runtime proof. The upgrade E2E performs one real released 0.1.31 apply/start. Exact success evidence proceeds directly; only exit 1 with exact schema/status/service_runtime/message and false authority_granted, identity_enrolled, and production_durability_proven may enter a bounded non-mutating probe. The probe loads the single root-owned released 0.1.31 private runtime, verifies module version/path provenance, and invokes that release's own exact Approval/Core systemd-runtime plus loopback/public health validators. It never reruns setup, reloads, restarts, or changes service state. Malformed, duplicate, non-finite, oversized, trailing, missing, or wrong evidence; any other exit/blocker; stable wrong runtime; health mismatch; provenance mismatch; or timeout fails closed. Command stderr is separately captured and included in synthetic broker-token scanning. Candidate migration admits only exact released 0.1.33 five-unit markers to 0.1.37; 0.1.34, 0.1.35, 0.1.36, and direct legacy sources remain rejected. No Hub, reset, database, enrollment, authority, C0, federation, production, or gate mutation is authorized or claimed.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1633 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
+    "root_installed_external_host": "BOUNDED NON-GREEN: immutable-tag 0.1.36 upgrade run 30750626969 failed in released 0.1.31 post-start runtime sampling before candidate migration; cleanup passed and npm staging did not run",
+    "callback_incident": "No prior AgentNet transaction, callback, state, credential, continuation, or C0 state is reused; exact public package verification and separate approval remain required before Hub action"
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.35",
+    "candidate": "0.1.37",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "NOT RUN: exact public package, clean Hub initialization, fresh enrollment, recipient commitment, completed C0 round trip, revocation, and refusal remain required"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/operations/test_released_setup_runtime_probe.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 637 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1606 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each 1633 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds were byte-identical and exactly match retained reviewed artifacts; source-tree digest b9150543f59b41830fc4bfd622398626608dc0bf6557c758909a18a9aa936a77; sdist 107d15b0edd9e1b586e35b3ed0e5a745c25c639d3e50dc5d284973a045110a74; wheel 38a261a74dce4047bb18e13073a4d17706275f2787cacab7cc8ccd21e380a0b0"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.37 direct disposable-package verification completed with 1633 passed and 16 expected skips and no source-tree residue"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform, ordinary-server setup, and ordinary-server upgrade workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Released-seed failure-boundary critic round 1",
+      "model": "openai-codex/gpt-5.6-sol critic",
+      "result": "REVISE: require exact exit-1 and safety-field classification; reject mandatory retry; add deterministic branch tests. Applied."
+    },
+    {
+      "review": "Released-seed failure-boundary critic round 2",
+      "model": "openai-codex/gpt-5.6-sol critic",
+      "result": "REVISE: use SetupLayout(Path(/)); complete old-release runtime and loopback/public health proof; capture and leak-scan stderr. Applied. Two-round critic cap reached; deterministic evidence owns closure."
+    },
+    {
+      "review": "Constitution review",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE: reject numeric false-lookalikes with actual-boolean checks and run the old-release convergence probe only on the strict classified exit-1 branch. Applied; focused and conformance lanes pass."
+    },
+    {
+      "review": "Constitution rereview",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE with code/security findings closed: only local ledgers still called already-executed package and deterministic-build evidence pending. PUBLIC_RELEASE_STATUS.md and docs/GATE_EVIDENCE.md now record the exact local PASS counts while preserving same-commit CI, tag, stage, deployment, and production gates as BLOCKED. Documentation-only correction; no material boundary changed."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37.tar.gz",
+      "sha256": "107d15b0edd9e1b586e35b3ed0e5a745c25c639d3e50dc5d284973a045110a74"
+    },
+    {
+      "path": "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37-py3-none-any.whl",
+      "sha256": "38a261a74dce4047bb18e13073a4d17706275f2787cacab7cc8ccd21e380a0b0"
+    }
+  ]
+}

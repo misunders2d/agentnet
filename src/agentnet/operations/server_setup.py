@@ -159,7 +159,7 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.32", "0.1.33"): MANAGED_UNITS,
     ("0.1.33", "0.1.34"): MANAGED_UNITS,
     ("0.1.33", "0.1.35"): MANAGED_UNITS,
-    ("0.1.33", "0.1.36"): MANAGED_UNITS,
+    ("0.1.33", "0.1.37"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -167,7 +167,7 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.32", "0.1.33"),
         ("0.1.33", "0.1.34"),
         ("0.1.33", "0.1.35"),
-        ("0.1.33", "0.1.36"),
+        ("0.1.33", "0.1.37"),
     }
 )
 # Blockers that mean "the response was lost", not "the operation was refused".

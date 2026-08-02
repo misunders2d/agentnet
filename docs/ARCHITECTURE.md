@@ -620,16 +620,16 @@ After database gate, wrapper owns only locked Approval/Core/C0 service identitie
 
 Exact reruns do not trust old marker as realized state. Apply reruns bootstrap, reloads and validates Core configuration, reloads and validates Approval trust, and writes exact unit bytes before marker commit. Request-v1 marker-v2 retains original request/package/config/unit provenance and same-request v1 migration semantics. Request-v2 marker-v3 additionally binds explicit artifact mode and rejects marker-v1/v2 as evidence. Both preserve monotonic revision, previous-marker digest, and exact prior-byte compare-and-swap under setup lock. A root-owned current-package attempt record is written before first product mutation and removed only after marker commit, allowing exact interruption recovery while rejecting unowned pre-existing state.
 
-The `0.1.36` corrective migration boundary admits only the exact released
+The `0.1.37` corrective migration boundary admits only the exact released
 `0.1.33` five-unit marker. Earlier sources use the separately released 0.1.33
-boundary first; 0.1.36 does not add another direct legacy edge and does not
+boundary first; 0.1.37 does not add another direct legacy edge and does not
 accept 0.1.34 or 0.1.35 as source markers. Exact prior managed configs/units are
 journaled before writes. For this edge, the target marker is the forward-only
 boundary: successful or exactly reconciled marker commit disarms source-byte
 rollback; all five units are quiesced before Core bootstrap may migrate
 PostgreSQL; and the journal is retained until bootstrap succeeds. A retained
 journal whose exact committed target is 0.1.33 may be superseded only after its
-marker/config/unit provenance is revalidated; it remains durable until 0.1.36
+marker/config/unit provenance is revalidated; it remains durable until 0.1.37
 atomically replaces it with the separate new journal before changing managed
 bytes.
 Quiescence clears systemd's failed latch only after bounded stop/disable and
@@ -644,7 +644,7 @@ OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain
 explicit ceremonies. Remote Managers may provide immutable package guidance
 and inspect sanitized evidence only; target coding agents own host execution.
 
-Candidate `0.1.36` adds only the exact `0.1.33` five-unit corrective migration edge above.
+Candidate `0.1.37` adds only the exact `0.1.33` five-unit corrective migration edge above.
 Setup rejects duplicate/non-finite JSON members, strictly parses the managed
 identity actor with canonical `VerifiedActor`, checks current
 domain/harness/credential labels, and retains exact profile shape plus private

@@ -730,11 +730,11 @@ def test_0132_upgrade_accepts_exact_released_five_unit_profile(
 
 
 @pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
-def test_0136_upgrade_accepts_exact_released_0133_five_unit_profile(
+def test_0137_upgrade_accepts_exact_released_0133_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.36")
+    monkeypatch.setattr(setup, "__version__", "0.1.37")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.33",
@@ -752,12 +752,12 @@ def test_0136_upgrade_accepts_exact_released_0133_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
-@pytest.mark.parametrize("package_version", ["0.1.34", "0.1.35"])
-def test_0136_upgrade_rejects_unapproved_corrective_release_source(
+@pytest.mark.parametrize("package_version", ["0.1.34", "0.1.35", "0.1.36"])
+def test_0137_upgrade_rejects_unapproved_corrective_release_source(
     monkeypatch: pytest.MonkeyPatch,
     package_version: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.36")
+    monkeypatch.setattr(setup, "__version__", "0.1.37")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=package_version,
@@ -1176,7 +1176,7 @@ def test_0132_upgrade_reconciles_lost_quiescence_response(
     assert not harness.journal_path.exists()
 
 
-@pytest.mark.parametrize("recovery_target", ["0.1.35", "0.1.36"])
+@pytest.mark.parametrize("recovery_target", ["0.1.35", "0.1.37"])
 def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
