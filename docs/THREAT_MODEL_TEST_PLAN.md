@@ -275,7 +275,7 @@ Cover Task versus direct Message, every StreamResponse variant, unspecified role
 
 ### Gate 5 — MCP and local API
 
-**Requirements:** ARC-002, ARC-005, AUTH-001, AUTH-002, AUTH-004  
+**Requirements:** ARC-002, ARC-005, AUTH-001, AUTH-002, AUTH-004, AUTH-007
 **Required evidence:** `H`, `L`, and real-binding `E`
 
 Planned tests:
@@ -285,7 +285,7 @@ Planned tests:
 - `tests/integration/test_pi_direct_ipc.py`
 - `tests/fuzz/test_local_api_framing_fuzz.py`
 
-Run one typed operation corpus through supervisor API, MCP bindings, and Pi direct IPC and compare canonical results. Spoofed identity arguments must not affect authenticated context. Corporate and A2A bearer tokens must never enter MCP. Fuzz JSON-RPC/framing, nested arguments, duplicate IDs, cancellation, partial writes, and reconnect.
+Run one typed operation corpus through supervisor API, MCP bindings, and Pi direct IPC and compare canonical results. Spoofed identity arguments must not affect authenticated context. Corporate and A2A bearer tokens must never enter MCP. Fuzz JSON-RPC/framing, nested arguments, duplicate IDs, cancellation, partial writes, and reconnect. Replace an owner-only Unix bootstrap socket at the same path and generation under immediate inode reuse; the retained non-inheritable path descriptor must force re-registration, survive a retryable failed renewal without dropping the old pin, swap only after success, and close on stop, post-publication startup failure, or terminal restart exhaustion. Terminal renewal/restart failures must stop retry cycling, remove the locator, and expose a fixed content-free failure code.
 
 ### Gate 6 — Identity and enrollment
 

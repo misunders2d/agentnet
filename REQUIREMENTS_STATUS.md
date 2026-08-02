@@ -144,8 +144,8 @@ published and historical release evidence:
   canonical strict `VerifiedActor` profiles forbid and never serialize
   `actor.key_id`, while setup required that field. Units remained inactive,
   authority false, and no enrollment or C0 message occurred.
-- Candidate `0.1.36` affects `SEC-007`, `OPS-003`, `OPS-006`, `OPS-007`, and
-  the same blocked first-message path. It rejects duplicate/non-finite managed
+- Candidate `0.1.36` affects `AUTH-007`, `SEC-007`, `OPS-003`, `OPS-006`,
+  `OPS-007`, and the same blocked first-message path. It rejects duplicate/non-finite managed
   profile JSON, strictly parses the canonical actor, verifies current
   domain/harness/credential labels, retains exact profile and P-256 private-key
   custody/readability checks, and removes only the impossible duplicate field
@@ -158,8 +158,12 @@ published and historical release evidence:
   destructive approval by clean AgentNet database/role init with sanitized
   target inventory, explicit backup/rollback decision, and redacted audit
   evidence; unrelated/shared/valuable targets fail closed. The two
-  installed-harness G01 failures remain non-green and unwaived. Release requires
-  external exact same-commit terminal-green cross-platform, clean-setup, and
+  installed-harness G01 failures remain non-green and unwaived. It also pins
+  accepted owner-only Unix MCP bootstrap sockets with non-inheritable stable
+  path descriptors, preserving the pin during retryable renewal but removing
+  the locator, closing the pin, stopping retry cycling, and reporting a fixed
+  content-free failure code after startup failure or terminal exhaustion.
+  Release requires external exact same-commit terminal-green cross-platform, clean-setup, and
   upgrade workflow evidence; post-push run IDs are not self-authored into source.
   No requirement or gate is promoted.
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
@@ -248,7 +252,7 @@ stable requirement's status or remaining external/owner boundary.
 | AUTH-004 — every action retains originating harness attribution | local-tested | `src/agentnet/messaging/events.py`; `src/agentnet/identity/context.py`; `src/agentnet/audit/service.py` | HTTP actor spoof rejection and audit hash-chain attribution: `tests/integration/test_http_api.py`; `tests/identity/test_context.py`; `tests/audit/test_audit_chain.py` | Target-host assurance remains an external deployment property, not a local overclaim. |
 | AUTH-005 — assignment/delegation cannot transfer another human's authority | local-tested | `src/agentnet/authorization/grants.py`; `src/agentnet/organization/assignment.py`; `src/agentnet/organization/relationships.py` | Grant dimension negatives, directional assignments, privilege noninheritance, and races: `tests/authorization/test_grants.py`; `tests/organization/test_assignment.py`; `tests/organization/test_task_custody.py` | Adaptive hostile-model trials are absent but local authority transfer is denied. |
 | AUTH-006 — sensitive release/effect is policy-gated and audited | local-tested | `src/agentnet/artifacts/service.py`; `src/agentnet/effects/workflow.py`; `src/agentnet/supervisor_http.py`; `src/agentnet/audit/service.py` | Artifact release killpoints, protected task payload audit-before-disclosure/rollback/current-state retry, and effect transaction rollback/reconciliation: `tests/artifacts/test_staged_artifact.py`; `tests/adapters/test_supervisor_core_composition.py`; `tests/effects/test_effect_reservation.py`; HTTP path: `tests/integration/test_product_http_api.py` | Real data connectors/KMS/witnesses remain external; task release grants no tool/effect authority. |
-| AUTH-007 — missing, stale, revoked, ambiguous state fails closed | local-tested | `src/agentnet/authorization/decision.py`; `src/agentnet/operations/outage.py`; `src/agentnet/operations/config.py`; `src/agentnet/approval/internal_broker.py`; `src/agentnet/approval/http.py`; `src/agentnet/approval/store.py` | Policy/outage/current-revision, feature-gate, malformed/stale proof, ambiguous header, and replay-store/migration negatives: `tests/operations/test_runtime_policy_enforcement.py`; `tests/operations/test_fail_closed_config.py`; `tests/authorization/test_policy.py`; `tests/approval/test_internal_broker.py`; `tests/approval/test_approval_http.py`; `tests/approval/test_approval_store_migration.py` | Local uncertainty handling is explicitly tested. |
+| AUTH-007 — missing, stale, revoked, ambiguous state fails closed | local-tested | `src/agentnet/authorization/decision.py`; `src/agentnet/operations/outage.py`; `src/agentnet/operations/config.py`; `src/agentnet/approval/internal_broker.py`; `src/agentnet/approval/http.py`; `src/agentnet/approval/store.py`; `src/agentnet/supervisor/runtime.py` | Policy/outage/current-revision, feature-gate, malformed/stale proof, ambiguous header, replay-store/migration negatives, and MCP bootstrap socket replacement/renewal/startup/exhaustion cleanup: `tests/operations/test_runtime_policy_enforcement.py`; `tests/operations/test_fail_closed_config.py`; `tests/authorization/test_policy.py`; `tests/approval/test_internal_broker.py`; `tests/approval/test_approval_http.py`; `tests/approval/test_approval_store_migration.py`; `tests/adapters/test_subprocess_lifecycle.py` | Local uncertainty handling is explicitly tested; privileged real-host path-substitution evidence remains external. |
 | AUTH-008 — temporary elevation requires independent human approval | owner-blocked | `src/agentnet/authorization/elevation.py`; `src/agentnet/approval/service.py`; `src/agentnet/approval/webauthn_uv.py`; `src/agentnet/identity_admin_http.py` | Independent receipt, UV ceremony purpose coverage, no self-approval, threshold, replay, and HTTP tests: `tests/approval/test_webauthn_service.py`; `tests/authorization/test_elevation.py`; `tests/integration/test_identity_admin_http.py` | Real independently administered approvers and signed PD-004 risk classes are absent. |
 | AUTH-009 — elevation is scoped, expiring, revocable, bounded, audited | local-tested | `src/agentnet/authorization/elevation.py`; `src/agentnet/authorization/grants.py`; `src/agentnet/effects/reservations.py` | TTL/use/scope/revoke and one-use effect evidence: `tests/authorization/test_elevation.py`; `tests/authorization/test_grants.py`; `tests/effects/test_effect_reservation.py` | Connector-specific execution evidence remains external. |
 | AUTH-010 — approver sets, thresholds, emergency override policy | owner-blocked | `src/agentnet/operations/policy_defaults.py`; `src/agentnet/authorization/elevation.py` | Secure floors and high-impact threshold rejection: `tests/operations/test_secure_policy_defaults.py`; `tests/authorization/test_elevation.py` | Accountable PD-004 approval and break-glass record is absent. |

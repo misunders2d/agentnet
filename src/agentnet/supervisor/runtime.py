@@ -64,6 +64,7 @@ class RuntimeStatus:
     version_match: bool
     clean_worker_admitted: bool
     last_heartbeat_at: int | None
+    last_failure: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,7 @@ class BackgroundAdapterRuntime:
         self._clean_worker_admission = clean_worker_admission
         self._local_binding_issuer = local_binding_issuer
         self._local_binding_socket_identity: tuple[int, int, str] | None = None
+        self._local_binding_socket_descriptor: int | None = None
         self._local_binding_expires_at: int | None = None
         self._local_binding_next_renewal = 0.0
         self._local_binding_renewal_failures = 0
@@ -164,6 +166,7 @@ class BackgroundAdapterRuntime:
         self._restart_count = 0
         self._restart_attempts_this_run = 0
         self._last_heartbeat_at: int | None = None
+        self._last_failure: str | None = None
         self._probe: ExecutableProbe | None = None
         self._stop_event = threading.Event()
         self._monitor_thread: threading.Thread | None = None
@@ -198,6 +201,7 @@ class BackgroundAdapterRuntime:
             "version_match": bool(self._probe and self._probe.matches_pin),
             "clean_worker_admitted": self._clean_worker_admission is not None,
             "last_heartbeat_at": self._last_heartbeat_at,
+            "last_failure": self._last_failure,
         }
         temporary = self._state_path.with_suffix(".tmp")
         temporary.write_text(
@@ -281,23 +285,143 @@ class BackgroundAdapterRuntime:
     def _mcp_locator_path(self) -> Path:
         return self.spec.state_dir / "mcp-bootstrap-locator.json"
 
+    def _release_mcp_socket_descriptor(self) -> None:
+        descriptor, self._local_binding_socket_descriptor = (
+            self._local_binding_socket_descriptor,
+            None,
+        )
+        self._local_binding_socket_identity = None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
     def _clear_mcp_locator(self) -> None:
         path = self._mcp_locator_path()
         if sys.platform == "win32":
-            if not path.exists():
-                return
-            from agentnet.windows_security import require_private_path
+            if path.exists():
+                from agentnet.windows_security import require_private_path
 
-            require_private_path(path, directory=False)
-            path.unlink()
+                require_private_path(path, directory=False)
+                path.unlink()
+            self._release_mcp_socket_descriptor()
             return
         try:
             metadata = path.lstat()
         except FileNotFoundError:
+            self._release_mcp_socket_descriptor()
             return
         if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
             raise GateBlocked("G05", "MCP bootstrap locator path is not an owner file")
         path.unlink()
+        self._release_mcp_socket_descriptor()
+
+    def _discard_mcp_locator_after_failure(self) -> bool:
+        """Invalidate failed launch state without masking its original error."""
+
+        cleanup_succeeded = True
+        try:
+            self._clear_mcp_locator()
+        except Exception:
+            cleanup_succeeded = False
+            try:
+                self._mcp_locator_path().unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._release_mcp_socket_descriptor()
+        return cleanup_succeeded
+
+    def _persist_failure_state(
+        self,
+        failure: str,
+        *,
+        phase: Literal["offline", "degraded"],
+        terminal: bool = False,
+    ) -> None:
+        if terminal:
+            self._stop_event.set()
+        self._phase = phase
+        self._last_failure = failure
+        try:
+            self._persist_content_free_state()
+        except Exception:
+            self._last_failure = "runtime_state_persist_failed"
+
+    def _cleanup_failed_start(
+        self,
+        driver: NativeHarnessDriver | None,
+        binding_delivery: Any | None,
+        failure: str,
+    ) -> None:
+        cleanup_succeeded = True
+        if driver is not None:
+            try:
+                driver.stop()
+            except Exception:
+                cleanup_succeeded = False
+        if binding_delivery is not None:
+            try:
+                binding_delivery.close()
+            except Exception:
+                cleanup_succeeded = False
+            if self._local_binding_delivery is binding_delivery:
+                self._local_binding_delivery = None
+        if not self._discard_mcp_locator_after_failure():
+            cleanup_succeeded = False
+        self._persist_failure_state(
+            failure if cleanup_succeeded else "native_start_cleanup_failed",
+            phase="offline",
+        )
+
+    def _terminate_monitor_failure(
+        self,
+        driver: NativeHarnessDriver | None,
+        failure: str,
+    ) -> None:
+        self._stop_event.set()
+        cleanup_succeeded = True
+        if driver is not None:
+            try:
+                driver.stop()
+            except Exception:
+                cleanup_succeeded = False
+        if not self._discard_mcp_locator_after_failure():
+            cleanup_succeeded = False
+        self._persist_failure_state(
+            failure if cleanup_succeeded else "native_monitor_cleanup_failed",
+            phase="degraded",
+            terminal=True,
+        )
+
+    @staticmethod
+    def _pin_mcp_socket(socket_path: Path) -> tuple[tuple[int, int], int]:
+        flags = os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        if hasattr(os, "O_PATH"):
+            flags |= os.O_PATH
+        elif sys.platform == "darwin" and hasattr(os, "O_EVTONLY"):
+            flags |= os.O_EVTONLY
+        else:
+            raise GateBlocked("G05", "stable MCP bootstrap socket identity is unavailable")
+        try:
+            descriptor = os.open(socket_path, flags)
+        except OSError as exc:
+            raise GateBlocked("G05", "MCP bootstrap socket is unavailable after registration") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISSOCK(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077
+            ):
+                raise GateBlocked("G05", "MCP bootstrap socket ownership or mode rejected")
+            current = socket_path.lstat()
+            if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                raise GateBlocked("G05", "MCP bootstrap socket changed during registration")
+            return (metadata.st_dev, metadata.st_ino), descriptor
+        except Exception:
+            os.close(descriptor)
+            raise
 
     def _publish_mcp_locator(self, issued: dict[str, Any]) -> None:
         if (
@@ -325,22 +449,13 @@ class BackgroundAdapterRuntime:
         ):
             raise GateBlocked("G05", "MCP launch registration response is invalid")
         socket_path = Path(issued["bootstrap_socket_path"])
+        socket_descriptor: int | None = None
         if sys.platform == "win32":
             if not issued["bootstrap_socket_path"].startswith(r"\\.\pipe\agentnet-mcp-"):
                 raise GateBlocked("G05", "MCP bootstrap named-pipe locator rejected")
             socket_identity = (0, 0)
         else:
-            try:
-                socket_metadata = socket_path.lstat()
-            except OSError as exc:
-                raise GateBlocked("G05", "MCP bootstrap socket is unavailable after registration") from exc
-            if (
-                not stat.S_ISSOCK(socket_metadata.st_mode)
-                or socket_metadata.st_uid != os.geteuid()
-                or socket_metadata.st_mode & 0o077
-            ):
-                raise GateBlocked("G05", "MCP bootstrap socket ownership or mode rejected")
-            socket_identity = (socket_metadata.st_dev, socket_metadata.st_ino)
+            socket_identity, socket_descriptor = self._pin_mcp_socket(socket_path)
         locator = canonical_json(
             {
                 "generation": issued["bootstrap_generation"],
@@ -367,11 +482,19 @@ class BackgroundAdapterRuntime:
                 metadata = path.lstat()
                 if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
                     raise GateBlocked("G05", "MCP bootstrap locator publication failed closed")
+            previous_descriptor = self._local_binding_socket_descriptor
             self._local_binding_socket_identity = (
                 socket_identity[0],
                 socket_identity[1],
                 issued["bootstrap_generation"],
             )
+            self._local_binding_socket_descriptor = socket_descriptor
+            socket_descriptor = None
+            if previous_descriptor is not None:
+                try:
+                    os.close(previous_descriptor)
+                except OSError:
+                    pass
             self._local_binding_expires_at = issued["expires_at"]
             remaining = issued["expires_at"] - int(time.time())
             self._local_binding_next_renewal = time.monotonic() + max(
@@ -379,6 +502,11 @@ class BackgroundAdapterRuntime:
             )
             self._local_binding_renewal_failures = 0
         finally:
+            if socket_descriptor is not None:
+                try:
+                    os.close(socket_descriptor)
+                except OSError:
+                    pass
             try:
                 temporary.unlink()
             except FileNotFoundError:
@@ -527,10 +655,24 @@ class BackgroundAdapterRuntime:
         with self._lock:
             if self._phase == "ready" and self._driver is not None and self._driver.alive:
                 return self.status()
-            self._probe = detect_executable(self.spec, timeout_seconds=self.request_timeout_seconds)
+            try:
+                self._probe = detect_executable(
+                    self.spec,
+                    timeout_seconds=self.request_timeout_seconds,
+                )
+            except Exception:
+                self._cleanup_failed_start(
+                    self._driver,
+                    self._local_binding_delivery,
+                    "native_executable_detection_failed",
+                )
+                raise
             if not self._probe.matches_pin:
-                self._phase = "offline"
-                self._persist_content_free_state()
+                self._cleanup_failed_start(
+                    self._driver,
+                    self._local_binding_delivery,
+                    "native_executable_not_pinned",
+                )
                 raise GateBlocked(
                     "G01",
                     f"{self.spec.harness} executable is absent or not pinned to {self.spec.pinned_version}",
@@ -550,18 +692,27 @@ class BackgroundAdapterRuntime:
     def _start_driver(self, *, recover: bool, restart: bool) -> None:
         if restart:
             if self._restart_attempts_this_run >= self.max_restart_attempts:
-                self._phase = "degraded"
-                self._persist_content_free_state()
-                return
+                cleanup_succeeded = self._discard_mcp_locator_after_failure()
+                self._persist_failure_state(
+                    (
+                        "native_restart_budget_exhausted"
+                        if cleanup_succeeded
+                        else "mcp_locator_cleanup_failed"
+                    ),
+                    phase="degraded",
+                    terminal=True,
+                )
+                raise AdapterProcessError("native background restart budget exhausted")
             self._restart_attempts_this_run += 1
             self._restart_count += 1
-        self._phase = "starting"
-        self._persist_content_free_state()
-        driver = create_native_driver(self.spec)
+        driver: NativeHarnessDriver | None = None
         binding_descriptor: int | None = None
         binding_writer: int | None = None
         binding_delivery: Any | None = None
         try:
+            self._phase = "starting"
+            self._persist_content_free_state()
+            driver = create_native_driver(self.spec)
             command = self._resolved_command()
             if self._auth is not None and not self._auth_materialized:
                 self._auth.materialize(self.spec)
@@ -613,32 +764,32 @@ class BackgroundAdapterRuntime:
                     else None
                 ),
             )
-        except GateBlocked:
-            driver.stop()
-            if binding_delivery is not None:
-                binding_delivery.close()
-                if self._local_binding_delivery is binding_delivery:
-                    self._local_binding_delivery = None
-            self._phase = "offline"
+            self._driver = driver
+            self._generation += 1
+            self._phase = "ready"
+            self._last_heartbeat_at = int(time.time())
+            self._last_failure = None
             self._persist_content_free_state()
+        except GateBlocked:
+            self._cleanup_failed_start(
+                driver,
+                binding_delivery,
+                "native_driver_start_blocked",
+            )
             raise
         except (AsyncCancelledError, FutureCancelledError):
-            driver.stop()
-            if binding_delivery is not None:
-                binding_delivery.close()
-                if self._local_binding_delivery is binding_delivery:
-                    self._local_binding_delivery = None
-            self._phase = "offline"
-            self._persist_content_free_state()
+            self._cleanup_failed_start(
+                driver,
+                binding_delivery,
+                "native_driver_start_cancelled",
+            )
             raise
         except Exception as exc:
-            driver.stop()
-            if binding_delivery is not None:
-                binding_delivery.close()
-                if self._local_binding_delivery is binding_delivery:
-                    self._local_binding_delivery = None
-            self._phase = "offline"
-            self._persist_content_free_state()
+            self._cleanup_failed_start(
+                driver,
+                binding_delivery,
+                "native_driver_start_failed",
+            )
             raise AdapterProcessError(f"{self.spec.harness} native driver startup failed") from exc
         finally:
             if binding_descriptor is not None:
@@ -651,11 +802,6 @@ class BackgroundAdapterRuntime:
                     os.close(binding_writer)
                 except OSError:
                     pass
-        self._driver = driver
-        self._generation += 1
-        self._phase = "ready"
-        self._last_heartbeat_at = int(time.time())
-        self._persist_content_free_state()
 
     def _monitor(self) -> None:
         while not self._stop_event.wait(self.heartbeat_interval_seconds):
@@ -668,12 +814,28 @@ class BackgroundAdapterRuntime:
                 driver = self._driver
                 if driver is None or not driver.alive:
                     self._phase = "offline"
-                    self._persist_content_free_state()
+                    try:
+                        self._persist_content_free_state()
+                    except Exception:
+                        self._terminate_monitor_failure(
+                            driver,
+                            "runtime_state_persist_failed",
+                        )
+                        return
                     if driver is not None:
-                        driver.stop()
+                        try:
+                            driver.stop()
+                        except Exception:
+                            self._terminate_monitor_failure(
+                                driver,
+                                "native_driver_stop_failed",
+                            )
+                            return
                     try:
                         self._start_driver(recover=True, restart=True)
-                    except AdapterProcessError:
+                    except (AdapterProcessError, GateBlocked):
+                        if self._stop_event.is_set():
+                            return
                         continue
                 elif self._phase in {"ready", "degraded"}:
                     try:
@@ -681,18 +843,43 @@ class BackgroundAdapterRuntime:
                     except Exception:
                         self._local_binding_renewal_failures += 1
                         self._phase = "degraded"
-                        self._persist_content_free_state()
+                        self._last_failure = "mcp_binding_renewal_failed"
+                        try:
+                            self._persist_content_free_state()
+                        except Exception:
+                            self._terminate_monitor_failure(
+                                driver,
+                                "runtime_state_persist_failed",
+                            )
+                            return
                         if self._local_binding_renewal_failures < 3:
                             continue
-                        driver.stop()
+                        try:
+                            driver.stop()
+                        except Exception:
+                            self._terminate_monitor_failure(
+                                driver,
+                                "native_driver_stop_failed",
+                            )
+                            return
                         try:
                             self._start_driver(recover=True, restart=True)
                         except (AdapterProcessError, GateBlocked):
+                            if self._stop_event.is_set():
+                                return
                             continue
                         continue
                     self._phase = "ready"
                     self._last_heartbeat_at = int(time.time())
-                    self._persist_content_free_state()
+                    self._last_failure = None
+                    try:
+                        self._persist_content_free_state()
+                    except Exception:
+                        self._terminate_monitor_failure(
+                            driver,
+                            "runtime_state_persist_failed",
+                        )
+                        return
 
     def require_ready(self) -> None:
         with self._lock:
@@ -773,6 +960,7 @@ class BackgroundAdapterRuntime:
                 version_match=bool(self._probe and self._probe.matches_pin),
                 clean_worker_admitted=self._clean_worker_admission is not None,
                 last_heartbeat_at=self._last_heartbeat_at,
+                last_failure=self._last_failure,
             )
 
     def content_free_status(self) -> dict[str, Any]:
@@ -784,6 +972,7 @@ class BackgroundAdapterRuntime:
         with self._lock:
             driver = self._driver
             self._phase = "stopped"
+            self._release_mcp_socket_descriptor()
             self._persist_content_free_state()
         if driver is not None:
             driver.stop()

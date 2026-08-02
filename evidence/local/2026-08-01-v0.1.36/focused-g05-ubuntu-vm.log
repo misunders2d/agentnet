@@ -1,0 +1,10 @@
+AgentNet 0.1.36 focused G05 disposable-host evidence
+Environment: Ubuntu 24.04.4 QEMU VM; Linux 6.8; CPython 3.13.13; PostgreSQL 18.4; bubblewrap installed; umask 022
+Command: AGENTNET_TEST_POSTGRES_URL=<dedicated-disposable-test-db> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 uv run --python 3.13.13 pytest -q -p no:cacheprovider tests/adapters/test_subprocess_lifecycle.py tests/components/test_bakeoff_evidence.py tests/operations/test_server_setup_recovery.py
+Coverage: exact Unix locator descriptor pin, retryable renewal, startup/detection/persistence/stop/cleanup fault injection, including non-GateBlocked cleanup authentication failure
+Source: current uncommitted 0.1.36 candidate synchronized from /media/misunderstood/DATA/projects/agentnet
+Result:
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+........................................                                 [100%]
+184 passed in 36.69s

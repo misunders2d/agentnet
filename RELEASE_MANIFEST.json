@@ -197,7 +197,7 @@
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "f00f530a652e04cedd7e1982f9658372d87d507c06b872a09d35cdbc42222f73"
+      "sha256": "f5c51fa69fae8267e47f02579421a1a60602157352ebe0e4692e834f5bcba55a"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -217,7 +217,7 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "9f5c9926034a21985da8b8342c57685258949650168070857748ed7fc09c3952"
+      "sha256": "17224e8b8bf4b7b871b504ec3d720a38a9b3f590ebf0bab0eea632d6005f5ab6"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
@@ -251,7 +251,7 @@
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "8ffa24590800854304d64b3095bd8ea2e5010da076580eb557f91dc72a95abaf"
+    "sha256": "a350849e5bc5e02fe486a5a5df6b1905b70030070093146fbd7c5011721f079a"
   },
   "protocols": {
     "a2a": {

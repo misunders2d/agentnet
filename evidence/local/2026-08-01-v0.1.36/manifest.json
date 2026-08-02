@@ -1,14 +1,14 @@
 {
   "run_id": "2026-08-01-v0.1.36",
-  "evaluated_at": "2026-08-01T19:52:00+03:00",
+  "evaluated_at": "2026-08-02T13:02:39+03:00",
   "scope": "v0_1_36_strict_identity_profile_and_setup_convergence_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "source_revision_kind": "release_source_tree_sha256",
-  "release_source_tree_sha256": "8ffa24590800854304d64b3095bd8ea2e5010da076580eb557f91dc72a95abaf",
+  "release_source_tree_sha256": "a350849e5bc5e02fe486a5a5df6b1905b70030070093146fbd7c5011721f079a",
   "prior_runtime_evidence": "evidence/local/2026-08-01-v0.1.35/manifest.json",
   "supersedes_package_evidence": "evidence/local/2026-08-01-v0.1.35/manifest.json",
-  "change_boundary": "Exact public 0.1.35 reached marker and PostgreSQL migration on the Hub, then failed because setup required actor.key_id even though canonical strict VerifiedActor profiles forbid and never serialize that field. Version 0.1.36 rejects duplicate/non-finite profile JSON, strictly parses the canonical actor, verifies exact domain/harness/credential labels, preserves managed profile/key custody and P-256 readability checks, and removes only that impossible duplicate comparison. Database credential-to-key binding remains activation-owned. It adds only the exact released 0.1.33 five-unit marker migration to 0.1.36 with provenance-checked retained-journal recovery; 0.1.34, 0.1.35, and direct legacy sources remain rejected. Approval, Core, and C0 responder units use Type=exec so live-runtime proof begins only after the approved Node executable replaces systemd transient execution; renewal remains oneshot. Because the current Hub committed a 0.1.35 marker, selected external recovery remains sanitized evidence capture followed only after public fixed-package verification by package-owned AgentNet reset, separately approved clean AgentNet database/role initialization, fresh setup/enrollment, and native C0. Database/role reinitialization requires sanitized exact target inventory, explicit named human confirmation, an explicit backup/rollback decision, redacted audit evidence, and fail-closed handling of unrelated/shared/valuable targets. No unrelated service, database, runtime, proxy, TLS, authority, federation, production, or gate mutation is authorized or claimed.",
+  "change_boundary": "Exact public 0.1.35 reached marker and PostgreSQL migration on the Hub, then failed because setup required actor.key_id even though canonical strict VerifiedActor profiles forbid and never serialize that field. Version 0.1.36 rejects duplicate/non-finite profile JSON, strictly parses the canonical actor, verifies exact domain/harness/credential labels, preserves managed profile/key custody and P-256 readability checks, and removes only that impossible duplicate comparison. Database credential-to-key binding remains activation-owned. It adds only the exact released 0.1.33 five-unit marker migration to 0.1.36 with provenance-checked retained-journal recovery; 0.1.34, 0.1.35, and direct legacy sources remain rejected. Approval, Core, and C0 responder units use Type=exec so live-runtime proof begins only after the approved Node executable replaces systemd transient execution; renewal remains oneshot. Because the current Hub committed a 0.1.35 marker, selected external recovery remains sanitized evidence capture followed only after public fixed-package verification by package-owned AgentNet reset, separately approved clean AgentNet database/role initialization, fresh setup/enrollment, and native C0. Database/role reinitialization requires sanitized exact target inventory, explicit named human confirmation, an explicit backup/rollback decision, redacted audit evidence, and fail-closed handling of unrelated/shared/valuable targets. No unrelated service, database, runtime, proxy, TLS, authority, federation, production, or gate mutation is authorized or claimed. Final local server-sandbox validation exposed a Unix MCP bootstrap inode-reuse false negative: immediate unlink/rebind could reuse st_dev, st_ino, and ctime. The candidate now pins each accepted owner-only Unix socket with a non-inheritable stable path descriptor; retryable renewal preserves the old pin, successful renewal swaps it, and startup failure or terminal restart exhaustion removes the locator, closes the pin, stops retry cycling, and records a fixed content-free failure code. AUTH-007 and G05 mappings remain non-promotional; macOS privileged host proof remains external.",
   "execution_context": {
     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
     "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1627 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
@@ -38,7 +38,7 @@
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
-      "result": "PASS: two independent builds were byte-identical; sdist e5db03cf441fe5238504aa80bb6b92855206495d8323ce88f836e4bb3ab5c038; wheel 9b687fc6036c813629735056947a24c16a50d6d4d10e664b22027f9e47383330"
+      "result": "PASS: two independent builds after the final test/evidence correction were byte-identical and exactly match the retained reviewed artifacts; source-tree digest a350849e5bc5e02fe486a5a5df6b1905b70030070093146fbd7c5011721f079a; sdist 14e555b96e35dfc947df2562de6da78e7f6c676d5eb0c12558303f002052a0e6; wheel 3225bd36491b8b5ed6805f566334f60ebeea4b8587a2f17e0dc8fec080602e34"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
@@ -51,6 +51,22 @@
     {
       "command": "GitHub cross-platform, ordinary-server setup, and ordinary-server upgrade workflows",
       "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --python 3.13.13 pytest -q -p no:cacheprovider tests/adapters/test_subprocess_lifecycle.py",
+      "result": "PASS: 23 passed; descriptor pin, retryable renewal, successful swap, detection/persistence/cleanup/stop fault injection, post-publication startup cleanup with the actual Windows-path AuthenticationError class and exact initiating-exception cause preservation, zero-budget terminal exhaustion, stop cleanup, and bounded restart contracts"
+    },
+    {
+      "command": "Ubuntu 24.04.4 disposable QEMU VM: exact Python 3.13.13 affected adapter, bake-off, and server recovery groups",
+      "result": "PASS: 184 passed; bubblewrap installed; umask 022; no host or Hub mutation; retained evidence: evidence/local/2026-08-01-v0.1.36/focused-g05-ubuntu-vm.log sha256 ae42e8015eebef015934e31b6be2b8a91b93e4f78f3590d5defdf829d97c1b96"
+    },
+    {
+      "command": "Ubuntu 24.04.4 disposable QEMU VM: AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 exact Python 3.13.13 functional suite excluding installed-harness and pre-refresh release-manifest gates",
+      "result": "PASS: 1683 passed, 9 expected platform skips; all seven mutation-authorized PostgreSQL 18 tests ran"
+    },
+    {
+      "command": "Host exact Python 3.13.13 functional suite excluding installed-harness and pre-refresh release-manifest gates",
+      "result": "PASS: 1676 passed, 16 expected platform/dedicated-PostgreSQL skips; the seven PostgreSQL cases are covered by the disposable VM run"
     }
   ],
   "review_results": [
@@ -83,16 +99,26 @@
       "review": "Final corrective Constitution review",
       "model": "openai-codex/gpt-5.6-sol constitution-watcher",
       "result": "REVISE then corrected: code and fail-closed boundaries passed; stale operator claims of no migration edge were replaced with the exact 0.1.33-to-0.1.36-only edge, continued rejection of 0.1.34/0.1.35/direct legacy sources, and current-Hub reset boundary. Same-commit Type=exec E2E remains required before publication."
+    },
+    {
+      "review": "Final Unix MCP descriptor-pin security critic",
+      "model": "openai-codex/gpt-5.6-sol critic",
+      "result": "CONVERGE: no blocking objection; requested terminal-exhaustion and post-publication cleanup tests were then added under the Constitution correction."
+    },
+    {
+      "review": "Final AgentNet 0.1.36 Constitution review",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE then corrected without runtime-boundary change: reviewer confirmed fail-closed cleanup, initiating-error preservation, stable descriptor release, and honest BLOCKED/nonproduction posture, but found stale deterministic-build hashes and a fault injection using AuthorizationError instead of the actual Windows-path AuthenticationError. The test now raises AuthenticationError and asserts the original startup exception is the exact chained cause; 23 focused tests pass. Two post-correction deterministic builds are byte-identical and exactly match retained artifacts 14e555.../3225bd... plus source-tree digest a350849.... Per the Constitution cadence, these test/evidence-only corrections require deterministic validation rather than a third substantive review. Windows privileged qualification remains external and blocked."
     }
   ],
   "artifacts": [
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36.tar.gz",
-      "sha256": "e5db03cf441fe5238504aa80bb6b92855206495d8323ce88f836e4bb3ab5c038"
+      "sha256": "14e555b96e35dfc947df2562de6da78e7f6c676d5eb0c12558303f002052a0e6"
     },
     {
       "path": "evidence/local/2026-08-01-v0.1.36/artifacts/agentnet-0.1.36-py3-none-any.whl",
-      "sha256": "9b687fc6036c813629735056947a24c16a50d6d4d10e664b22027f9e47383330"
+      "sha256": "3225bd36491b8b5ed6805f566334f60ebeea4b8587a2f17e0dc8fec080602e34"
     }
   ]
 }

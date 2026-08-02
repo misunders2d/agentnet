@@ -59,9 +59,18 @@ and replay nonce. Payload fields never establish those facts. Windows npm
 runtime roots and private state reject reparse points and broad allow ACEs.
 macOS/Windows executable hashing is path-based with before/after identity checks;
 it remains a documented lower-assurance boundary than Linux's live executable
-handle until privileged host trials establish a stronger mechanism. Real-host
-CI proves only the named package/local contracts, not production deployment or
-semantic clean-worker qualification.
+handle until privileged host trials establish a stronger mechanism. For MCP
+bootstrap discovery, the runtime pins each accepted owner-only Unix socket with
+a non-inheritable platform path descriptor before publishing its locator. The
+open reference prevents an unlinked socket inode from being immediately reused;
+renewal compares the live pathname against that pinned object, swaps the pin
+only after successful re-registration, and closes it on restart, stop,
+post-publication startup failure, or terminal restart exhaustion. Retryable
+renewal keeps the old pin; terminal failure removes the locator, stops the retry
+loop, and records a fixed content-free failure code. A host without a stable
+path-descriptor primitive fails the MCP binding closed.
+Real-host CI proves only the named package/local contracts, not production
+deployment or semantic clean-worker qualification.
 
 An always-on process has a separate deployment-identity binding step. After
 real enrollment, `server-agent activate` holds the exact runtime lease under a

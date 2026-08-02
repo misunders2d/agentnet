@@ -18,7 +18,7 @@ from agentnet.adapters.auth import (
 )
 from agentnet.adapters.native import NativeHarnessDriver, NativeTurnResult
 from agentnet.adapters.specs import build_launch_spec
-from agentnet.errors import AuthorizationError, GateBlocked
+from agentnet.errors import AuthenticationError, AuthorizationError, GateBlocked
 from agentnet.supervisor import runtime as runtime_module
 from agentnet.supervisor.runtime import AdapterProcessError, BackgroundAdapterRuntime
 
@@ -453,11 +453,24 @@ def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_withou
             "socket_path": str(bootstrap_path),
         }
         assert (spec.state_dir / "mcp-bootstrap-locator.json").stat().st_mode & 0o777 == 0o600
+        original_socket = bootstrap_path.lstat()
+        pinned_descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(pinned_descriptor, int)
+        assert os.get_inheritable(pinned_descriptor) is False
+        assert (os.fstat(pinned_descriptor).st_dev, os.fstat(pinned_descriptor).st_ino) == (
+            original_socket.st_dev,
+            original_socket.st_ino,
+        )
         bootstrap_socket.close()
         bootstrap_path.unlink()
         bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         bootstrap_socket.bind(str(bootstrap_path))
         os.chmod(bootstrap_path, 0o600)
+        replacement_socket = bootstrap_path.lstat()
+        assert (replacement_socket.st_dev, replacement_socket.st_ino) != (
+            original_socket.st_dev,
+            original_socket.st_ino,
+        )
         wait_until(lambda: issued_pids.count(first_pid) >= 2)
         assert runtime.status().phase == "ready"
 
@@ -474,7 +487,11 @@ def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_withou
             if entry["kind"] == "launch"
         )
     finally:
+        pinned_descriptor = runtime._local_binding_socket_descriptor
         runtime.stop()
+        if pinned_descriptor is not None:
+            with pytest.raises(OSError):
+                os.fstat(pinned_descriptor)
         bootstrap_socket.close()
         bootstrap_path.unlink(missing_ok=True)
 
@@ -524,6 +541,9 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
         runtime.start()
         first_pid = runtime.pid
         assert isinstance(first_pid, int)
+        initial_descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(initial_descriptor, int)
+        os.fstat(initial_descriptor)
 
         bootstrap_socket.close()
         bootstrap_path.unlink()
@@ -535,10 +555,18 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
         with pytest.raises(AdapterProcessError, match="offline"):
             runtime.healthcheck()
         assert runtime.pid == first_pid
+        assert runtime._local_binding_socket_descriptor == initial_descriptor
+        os.fstat(initial_descriptor)
 
         available = True
         wait_until(lambda: runtime.status().phase == "ready" and len(registrations) >= 2)
         assert runtime.pid == first_pid
+        renewed_descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(renewed_descriptor, int)
+        assert renewed_descriptor != initial_descriptor
+        with pytest.raises(OSError):
+            os.fstat(initial_descriptor)
+        os.fstat(renewed_descriptor)
 
         bootstrap_socket.close()
         bootstrap_path.unlink()
@@ -549,6 +577,367 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
         wait_until(lambda: runtime.status().restart_count >= 1)
         assert runtime.status().phase != "ready"
         assert runtime.status().restart_count <= 2
+    finally:
+        runtime.stop()
+        bootstrap_socket.close()
+        bootstrap_path.unlink(missing_ok=True)
+
+
+def test_mcp_detection_failure_invalidates_existing_locator_and_pin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec = build_launch_spec(
+        "codex",
+        harness_id="detection-failure-local-binding-codex",
+        root=tmp_path / "runtime-detection-failure",
+        executable="/unused/codex",
+        local_bindings=True,
+    )
+    bootstrap_path = Path("/tmp") / f"agentnet-detect-{os.getpid()}-{time.time_ns()}.sock"
+    bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bootstrap_socket.bind(str(bootstrap_path))
+    os.chmod(bootstrap_path, 0o600)
+    runtime = BackgroundAdapterRuntime(spec, local_binding_issuer=lambda _pid, _session: {})
+    runtime._publish_mcp_locator(
+        {
+            "schema": "agentnet.mcp.registered-launch.v1",
+            "session_id": spec.session_id,
+            "harness_id": spec.harness_id,
+            "credential_id": "credential-current-epoch",
+            "credential_epoch": 1,
+            "expires_at": int(time.time()) + 300,
+            "bootstrap_socket_path": str(bootstrap_path),
+            "bootstrap_generation": "detection-failure-bootstrap-generation-001",
+            "assurance": "server_derived_account_process_parent_module",
+        }
+    )
+    pinned_descriptor = runtime._local_binding_socket_descriptor
+    assert isinstance(pinned_descriptor, int)
+    monkeypatch.setattr(
+        runtime_module,
+        "detect_executable",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("simulated executable detection failure")
+        ),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="executable detection failure"):
+            runtime.start()
+        assert runtime.status().last_failure == "native_executable_detection_failed"
+        assert not runtime._mcp_locator_path().exists()
+        assert runtime._local_binding_socket_descriptor is None
+        with pytest.raises(OSError):
+            os.fstat(pinned_descriptor)
+    finally:
+        runtime.stop()
+        bootstrap_socket.close()
+        bootstrap_path.unlink(missing_ok=True)
+
+
+def test_mcp_prestart_state_persistence_failure_preserves_error_and_cleans_pin(
+    tmp_path: Path,
+    fake_harnesses,
+    monkeypatch,
+) -> None:
+    spec = build_launch_spec(
+        "codex",
+        harness_id="persistence-failure-local-binding-codex",
+        root=tmp_path / "runtime-persistence-failure",
+        executable=fake_harnesses["codex"],
+        local_bindings=True,
+    )
+    bootstrap_path = Path("/tmp") / f"agentnet-persist-{os.getpid()}-{time.time_ns()}.sock"
+    bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bootstrap_socket.bind(str(bootstrap_path))
+    os.chmod(bootstrap_path, 0o600)
+    runtime = BackgroundAdapterRuntime(spec, local_binding_issuer=lambda _pid, _session: {})
+    runtime._publish_mcp_locator(
+        {
+            "schema": "agentnet.mcp.registered-launch.v1",
+            "session_id": spec.session_id,
+            "harness_id": spec.harness_id,
+            "credential_id": "credential-current-epoch",
+            "credential_epoch": 1,
+            "expires_at": int(time.time()) + 300,
+            "bootstrap_socket_path": str(bootstrap_path),
+            "bootstrap_generation": "persistence-failure-bootstrap-generation-001",
+            "assurance": "server_derived_account_process_parent_module",
+        }
+    )
+    pinned_descriptor = runtime._local_binding_socket_descriptor
+    assert isinstance(pinned_descriptor, int)
+    monkeypatch.setattr(
+        runtime,
+        "_persist_content_free_state",
+        lambda: (_ for _ in ()).throw(RuntimeError("simulated state persistence failure")),
+    )
+    try:
+        with pytest.raises(AdapterProcessError, match="startup failed") as raised:
+            runtime.start()
+        assert isinstance(raised.value.__cause__, RuntimeError)
+        assert runtime.status().last_failure == "runtime_state_persist_failed"
+        assert not runtime._mcp_locator_path().exists()
+        assert runtime._local_binding_socket_descriptor is None
+        with pytest.raises(OSError):
+            os.fstat(pinned_descriptor)
+    finally:
+        monkeypatch.undo()
+        runtime.stop()
+        bootstrap_socket.close()
+        bootstrap_path.unlink(missing_ok=True)
+
+
+def test_mcp_terminal_renewal_failure_invalidates_locator_and_stops_retrying(
+    tmp_path: Path,
+    fake_harnesses,
+) -> None:
+    spec = build_launch_spec(
+        "codex",
+        harness_id="terminal-renewal-local-binding-codex",
+        root=tmp_path / "runtime-terminal-renewal",
+        executable=fake_harnesses["codex"],
+        local_bindings=True,
+    )
+    bootstrap_path = Path("/tmp") / f"agentnet-terminal-{os.getpid()}-{time.time_ns()}.sock"
+    bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bootstrap_socket.bind(str(bootstrap_path))
+    os.chmod(bootstrap_path, 0o600)
+    available = True
+
+    def issue(pid: int, session_id: str) -> dict[str, Any]:
+        del pid
+        if not available:
+            raise RuntimeError("simulated terminal extension outage")
+        return {
+            "schema": "agentnet.mcp.registered-launch.v1",
+            "session_id": session_id,
+            "harness_id": spec.harness_id,
+            "credential_id": "credential-current-epoch",
+            "credential_epoch": 1,
+            "expires_at": int(time.time()) + 300,
+            "bootstrap_socket_path": str(bootstrap_path),
+            "bootstrap_generation": "terminal-renewal-bootstrap-generation-001",
+            "assurance": "server_derived_account_process_parent_module",
+        }
+
+    runtime = BackgroundAdapterRuntime(
+        spec,
+        request_timeout_seconds=1,
+        heartbeat_interval_seconds=0.05,
+        max_restart_attempts=0,
+        local_binding_issuer=issue,
+    )
+    try:
+        runtime.start()
+        pinned_descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(pinned_descriptor, int)
+        assert runtime._mcp_locator_path().is_file()
+
+        bootstrap_socket.close()
+        bootstrap_path.unlink()
+        bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bootstrap_socket.bind(str(bootstrap_path))
+        os.chmod(bootstrap_path, 0o600)
+        available = False
+
+        wait_until(
+            lambda: runtime.status().last_failure == "native_restart_budget_exhausted"
+        )
+        assert runtime.status().phase == "degraded"
+        assert runtime._stop_event.is_set()
+        assert not runtime._mcp_locator_path().exists()
+        assert runtime._local_binding_socket_descriptor is None
+        with pytest.raises(OSError):
+            os.fstat(pinned_descriptor)
+        with pytest.raises(AdapterProcessError, match="offline"):
+            runtime.healthcheck()
+    finally:
+        runtime.stop()
+        bootstrap_socket.close()
+        bootstrap_path.unlink(missing_ok=True)
+
+
+def test_mcp_renewal_driver_stop_failure_is_terminal_and_cleans_pin(
+    tmp_path: Path,
+    fake_harnesses,
+    monkeypatch,
+) -> None:
+    spec = build_launch_spec(
+        "codex",
+        harness_id="stop-failure-local-binding-codex",
+        root=tmp_path / "runtime-stop-failure",
+        executable=fake_harnesses["codex"],
+        local_bindings=True,
+    )
+    bootstrap_path = Path("/tmp") / f"agentnet-stop-failure-{os.getpid()}-{time.time_ns()}.sock"
+    bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bootstrap_socket.bind(str(bootstrap_path))
+    os.chmod(bootstrap_path, 0o600)
+    available = True
+
+    def issue(pid: int, session_id: str) -> dict[str, Any]:
+        del pid
+        if not available:
+            raise RuntimeError("simulated renewal outage")
+        return {
+            "schema": "agentnet.mcp.registered-launch.v1",
+            "session_id": session_id,
+            "harness_id": spec.harness_id,
+            "credential_id": "credential-current-epoch",
+            "credential_epoch": 1,
+            "expires_at": int(time.time()) + 300,
+            "bootstrap_socket_path": str(bootstrap_path),
+            "bootstrap_generation": "stop-failure-bootstrap-generation-001",
+            "assurance": "server_derived_account_process_parent_module",
+        }
+
+    runtime = BackgroundAdapterRuntime(
+        spec,
+        request_timeout_seconds=1,
+        heartbeat_interval_seconds=0.05,
+        max_restart_attempts=2,
+        local_binding_issuer=issue,
+    )
+    try:
+        runtime.start()
+        driver = runtime._driver
+        assert driver is not None
+        pinned_descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(pinned_descriptor, int)
+
+        def fail_stop() -> None:
+            raise RuntimeError("simulated native driver stop failure")
+
+        monkeypatch.setattr(driver, "stop", fail_stop)
+        bootstrap_socket.close()
+        bootstrap_path.unlink()
+        bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bootstrap_socket.bind(str(bootstrap_path))
+        os.chmod(bootstrap_path, 0o600)
+        available = False
+
+        wait_until(lambda: runtime.status().last_failure == "native_monitor_cleanup_failed")
+        assert runtime.status().phase == "degraded"
+        assert runtime._stop_event.is_set()
+        assert not runtime._mcp_locator_path().exists()
+        assert runtime._local_binding_socket_descriptor is None
+        with pytest.raises(OSError):
+            os.fstat(pinned_descriptor)
+    finally:
+        monkeypatch.undo()
+        runtime.stop()
+        bootstrap_socket.close()
+        bootstrap_path.unlink(missing_ok=True)
+
+
+def test_mcp_post_publication_start_failure_closes_pin_and_locator(
+    tmp_path: Path,
+    fake_harnesses,
+    monkeypatch,
+) -> None:
+    spec = build_launch_spec(
+        "codex",
+        harness_id="post-publication-failure-codex",
+        root=tmp_path / "runtime-post-publication-failure",
+        executable=fake_harnesses["codex"],
+        local_bindings=True,
+    )
+    bootstrap_path = Path("/tmp") / f"agentnet-post-publish-{os.getpid()}-{time.time_ns()}.sock"
+    bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bootstrap_socket.bind(str(bootstrap_path))
+    os.chmod(bootstrap_path, 0o600)
+    published_descriptors: list[int] = []
+
+    def issue(pid: int, session_id: str) -> dict[str, Any]:
+        del pid
+        return {
+            "schema": "agentnet.mcp.registered-launch.v1",
+            "session_id": session_id,
+            "harness_id": spec.harness_id,
+            "credential_id": "credential-current-epoch",
+            "credential_epoch": 1,
+            "expires_at": int(time.time()) + 300,
+            "bootstrap_socket_path": str(bootstrap_path),
+            "bootstrap_generation": "post-publication-bootstrap-generation-001",
+            "assurance": "server_derived_account_process_parent_module",
+        }
+
+    startup_error = RuntimeError("simulated failure after binding publication")
+
+    class PublishThenFailDriver(NativeHarnessDriver):
+        stopped = False
+
+        def start(
+            self,
+            command,
+            *,
+            environment,
+            recover,
+            timeout_seconds,
+            inherited_fds=(),
+            process_started=None,
+        ) -> None:
+            del command, environment, recover, timeout_seconds, inherited_fds
+            assert process_started is not None
+            process_started(os.getpid())
+            raise startup_error
+
+        def submit(self, prompt: str, *, timeout_seconds: float) -> NativeTurnResult:
+            raise AssertionError("failed startup never accepts a turn")
+
+        def healthcheck(self, *, timeout_seconds: float) -> dict[str, Any]:
+            raise AssertionError("failed startup never becomes healthy")
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        @property
+        def alive(self) -> bool:
+            return False
+
+        @property
+        def pid(self) -> int | None:
+            return os.getpid()
+
+    driver = PublishThenFailDriver(spec)
+    runtime = BackgroundAdapterRuntime(
+        spec,
+        request_timeout_seconds=1,
+        local_binding_issuer=issue,
+    )
+
+    def publish_binding(*_args: Any) -> None:
+        runtime._publish_mcp_locator(issue(os.getpid(), spec.session_id))
+        descriptor = runtime._local_binding_socket_descriptor
+        assert isinstance(descriptor, int)
+        published_descriptors.append(descriptor)
+
+    original_clear = runtime._clear_mcp_locator
+    clear_calls = 0
+
+    def fail_cleanup_after_publication() -> None:
+        nonlocal clear_calls
+        clear_calls += 1
+        if clear_calls > 1:
+            raise AuthenticationError("simulated locator cleanup authentication failure")
+        original_clear()
+
+    monkeypatch.setattr(runtime_module, "create_native_driver", lambda exact_spec: driver)
+    monkeypatch.setattr(runtime, "_activate_binding", publish_binding)
+    monkeypatch.setattr(runtime, "_clear_mcp_locator", fail_cleanup_after_publication)
+    try:
+        with pytest.raises(AdapterProcessError, match="startup failed") as raised:
+            runtime.start()
+        assert raised.value.__cause__ is startup_error
+        assert driver.stopped is True
+        assert runtime.status().phase == "offline"
+        assert runtime.status().last_failure == "native_start_cleanup_failed"
+        assert not runtime._mcp_locator_path().exists()
+        assert runtime._local_binding_socket_descriptor is None
+        assert len(published_descriptors) == 1
+        with pytest.raises(OSError):
+            os.fstat(published_descriptors[0])
     finally:
         runtime.stop()
         bootstrap_socket.close()

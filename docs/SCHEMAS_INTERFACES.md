@@ -46,8 +46,15 @@ supervisor root/session path.
 
 MCP bootstrap assurance is
 `server_derived_account_process_parent_module`. Linux/macOS use owner-only Unix
-sockets; Windows uses protected named pipes with remote-client rejection and
-server-derived client PID. Pi capability bytes never enter argv or environment:
+sockets; the runtime opens a non-inheritable stable path descriptor, validates
+the exact socket through that descriptor, and retains it until successful
+renewal, restart, or stop so unlink/rebind cannot hide behind inode reuse.
+Post-publication startup failure and terminal restart exhaustion remove the
+locator and close the pin; retryable renewal preserves it. Runtime status and
+its content-free state expose a fixed `last_failure` code, never raw exception
+text. Platforms without that primitive fail the MCP binding closed. Windows uses
+protected named pipes with remote-client rejection and server-derived client
+PID. Pi capability bytes never enter argv or environment:
 Linux uses sealed memfd, macOS a read-only inherited pipe, and Windows a one-time
 exact-process private pipe. Missing delivery acknowledgement fails local-binding
 activation.
