@@ -1559,6 +1559,28 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
         attempts=1,
     )
 
+    transient_attempts = 0
+    sleep_calls: list[int] = []
+
+    class TransientOpener:
+        def open(self, _url: str, *, timeout: int):
+            nonlocal transient_attempts
+            assert timeout == 2
+            transient_attempts += 1
+            if transient_attempts < 50:
+                raise setup.urllib.error.URLError("public route still converging")
+            return Response({"service": "agentnet-core", "status": "alive"})
+
+    monkeypatch.setattr(setup.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(setup.urllib.request, "build_opener", lambda *_args: TransientOpener())
+    setup._health(
+        "https://core.corp.example/healthz",
+        expected={"service": "agentnet-core", "status": "alive"},
+        attempts=setup._START_HEALTH_ATTEMPTS,
+    )
+    assert transient_attempts == 50
+    assert sleep_calls == [1] * 49
+
 
 def test_plan_rejects_database_reference_drift(
     tmp_path: Path,
@@ -3208,6 +3230,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
     systemctl_calls: list[list[str]] = []
     health_requests: list[tuple[str, dict[str, object]]] = []
+    health_attempts: list[tuple[str, object]] = []
     live_pids = {
         setup.APPROVAL_UNIT: 4321,
         setup.CORE_UNIT: 4322,
@@ -3306,6 +3329,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             fail_health_once = False
             raise ServerSetupError("service_health", "injected health interruption")
         health_requests.append((url, dict(_kwargs["expected"])))
+        health_attempts.append((url, _kwargs.get("attempts")))
 
     monkeypatch.setattr(setup, "_health", health_with_interruption)
     with pytest.raises(ServerSetupError, match="injected health interruption") as exc_info:
@@ -3367,6 +3391,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     systemctl_calls.clear()
     health_requests.clear()
+    health_attempts.clear()
     monkeypatch.setattr(setup, "_health", health_with_interruption)
     started = apply_server_setup(
         request,
@@ -3381,6 +3406,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     successful_systemctl_calls = list(systemctl_calls)
     successful_health_requests = list(health_requests)
+    successful_health_attempts = list(health_attempts)
 
     class BlockedBrokerClient(ReadyBrokerClient):
         def readiness(self):
@@ -3433,6 +3459,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert recovered_after_broker_failure["status"] == "operational"
     systemctl_calls[:] = successful_systemctl_calls
     health_requests[:] = successful_health_requests
+    health_attempts[:] = successful_health_attempts
     assert systemctl_calls == [
         ["/usr/bin/systemctl", "daemon-reload"],
         ["/usr/bin/systemctl", "disable", "--now", setup.CREDENTIAL_RENEW_TIMER],
@@ -3458,6 +3485,14 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "https://core.corp.example/healthz",
         "http://127.0.0.1:8080/readyz",
         "https://core.corp.example/readyz",
+    ]
+    assert health_attempts == [
+        ("http://127.0.0.1:8090/healthz", setup._START_HEALTH_ATTEMPTS),
+        ("http://127.0.0.1:8080/healthz", setup._START_HEALTH_ATTEMPTS),
+        ("https://approval.corp.example/healthz", setup._START_HEALTH_ATTEMPTS),
+        ("https://core.corp.example/healthz", setup._START_HEALTH_ATTEMPTS),
+        ("http://127.0.0.1:8080/readyz", None),
+        ("https://core.corp.example/readyz", setup._START_HEALTH_ATTEMPTS),
     ]
     core_expected = [
         expected

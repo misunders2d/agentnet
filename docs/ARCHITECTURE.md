@@ -644,7 +644,7 @@ OIDC/WebAuthn, guided key-possession enrollment, and offline activation remain
 explicit ceremonies. Remote Managers may provide immutable package guidance
 and inspect sanitized evidence only; target coding agents own host execution.
 
-Candidate `0.1.37` adds only the exact `0.1.33` five-unit corrective migration edge above.
+Published `0.1.37` adds only the exact `0.1.33` five-unit corrective migration edge above.
 Setup rejects duplicate/non-finite JSON members, strictly parses the managed
 identity actor with canonical `VerifiedActor`, checks current
 domain/harness/credential labels, and retains exact profile shape plus private
@@ -652,5 +652,11 @@ P-256 key custody/readability. It removes the impossible requirement for
 `actor.key_id`, which canonical actor serialization forbids and never emits.
 Database-backed credential-to-key proof remains owned by `server-agent
 activate`; setup does not replace it with a self-asserted profile field.
+
+Candidate `0.1.38` adds one exact `0.1.37` five-unit forward marker edge and
+changes only post-restart public probe timing. Public Approval/Core health and
+public Core readiness reuse the existing finite 90-attempt startup bound; the
+ordinary 30-attempt default remains for non-startup probes. Exact payload, TLS,
+redirect, authority, and auxiliary-unit ordering checks are unchanged.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

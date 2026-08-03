@@ -1,10 +1,9 @@
 # Public Package Status
 
-Snapshot: 2026-08-02
+Snapshot: 2026-08-03
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.35` setup-recovery release, immutable non-public `0.1.36` tag,
-and corrective `0.1.37` candidate. It does not replace requirements, gate ledgers, or
+published `0.1.37` release and corrective `0.1.38` candidate. It does not replace requirements, gate ledgers, or
 accountable-owner evidence.
 
 ## Current public package
@@ -12,8 +11,8 @@ accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.35`
-- published source commit: `2dfd8edea213ac65e8d4eec215879af4fc53f259`
+- latest published version: `0.1.37`
+- published source commit: `6649e13c6a641ebc09071b6029df66af61f77ff4`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -143,7 +142,7 @@ replaced it. Cleanup passed, setup authority stayed false, and npm staging never
 ran. The tag remains immutable and non-public; no test waiver or tag rewrite is
 permitted.
 
-Corrective candidate `0.1.37` changes only that protected release gate and exact
+Published `0.1.37` changed only that protected release gate and exact
 candidate migration edge. The upgrade E2E still performs one real released
 `0.1.31 --apply --start`; exact success evidence passes directly, while only
 exit 1 plus the exact `service_runtime` refusal and all three false safety flags
@@ -153,13 +152,22 @@ Approval/Core systemd-runtime and loopback/public-health validators. It never
 restarts or reruns setup; malformed evidence, any other blocker, stable wrong
 runtime, health mismatch, module-provenance mismatch, or timeout fails closed.
 All command stderr is separately retained and included in synthetic-secret leak
-scanning. The candidate admits only exact `0.1.33` five-unit marker migration to
+scanning. The release admits only exact `0.1.33` five-unit marker migration to
 `0.1.37`; `0.1.34`, `0.1.35`, `0.1.36`, and direct legacy sources are rejected.
-Local focused, source, recursive packed-package, direct-verifier, and
-byte-identical archive gates pass for this candidate. Exact same-commit CI, a
-new immutable tag, and trusted npm stage are still required. Hub recovery remains a separately approved action
-after exact public-package verification. No deployment, reset, database,
-enrollment, authority, C0, federation, production, or gate mutation is implied.
+Its focused, source, recursive packed-package, direct-verifier, byte-identical
+archive, same-commit CI, immutable tag, and trusted npm-stage gates passed. Exact
+public Hub setup then committed the five-unit marker with Core and Approval
+healthy but failed closed because the public route converged after the ordinary
+30-attempt probe window; authority remained false and auxiliary units disabled.
+
+Corrective candidate `0.1.38` changes only post-restart setup convergence. Public
+Approval/Core health and public Core readiness use the existing finite 90-attempt
+startup bound instead of the ordinary 30-attempt probe bound. Exact health/readiness
+identity, TLS, redirect, and fail-closed behavior are unchanged. It admits only
+exact released `0.1.37` five-unit marker migration; other release markers are
+rejected. Same-commit CI, immutable tag, trusted npm stage, and Hub recovery remain
+pending separately approved actions. No deployment, reset, database, enrollment,
+authority, C0, federation, production, or gate mutation is implied.
 
 ## Release and gate posture
 

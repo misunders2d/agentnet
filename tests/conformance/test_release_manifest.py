@@ -67,7 +67,7 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
         "evidence/local/2026-07-15-v0.1.7/manifest.json",
         "evidence/local/2026-07-20-v0.1.18/manifest.json",
         "evidence/local/2026-07-22-v0.1.19/manifest.json",
-        "evidence/local/2026-08-02-v0.1.37/manifest.json",
+        "evidence/local/2026-08-03-v0.1.38/manifest.json",
         "scripts/verify_release.py",
     ):
         target = root / relative_path
@@ -80,14 +80,14 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
         root / "evidence/local/2026-07-13-final/artifacts",
     )
     shutil.copytree(
-        ROOT / "evidence/local/2026-08-02-v0.1.37/artifacts",
-        root / "evidence/local/2026-08-02-v0.1.37/artifacts",
+        ROOT / "evidence/local/2026-08-03-v0.1.38/artifacts",
+        root / "evidence/local/2026-08-03-v0.1.38/artifacts",
     )
     return root
 
 
 def _refresh_artifact_hash(root: Path, artifact_path: Path) -> None:
-    evidence_path = root / "evidence/local/2026-08-02-v0.1.37/manifest.json"
+    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     relative = artifact_path.relative_to(root).as_posix()
     record = next(item for item in evidence["artifacts"] if item["path"] == relative)
@@ -147,7 +147,7 @@ def test_release_manifest_matches_current_reproducible_inputs() -> None:
 
 def test_candidate_package_evidence_cannot_remain_pending(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    evidence_path = root / "evidence/local/2026-08-02-v0.1.37/manifest.json"
+    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     evidence["verification_status"] = "PENDING"
     next(
@@ -158,13 +158,13 @@ def test_candidate_package_evidence_cannot_remain_pending(tmp_path: Path) -> Non
 
     failures = verify(root=root)
 
-    assert "0.1.37 package evidence must record completed PASS verification" in failures
-    assert "0.1.37 package evidence cannot retain pending command results" in failures
+    assert "0.1.38 package evidence must record completed PASS verification" in failures
+    assert "0.1.38 package evidence cannot retain pending command results" in failures
 
 
 def test_candidate_evidence_must_cover_every_0132_release_blocker_surface(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    evidence_path = root / "evidence/local/2026-08-02-v0.1.37/manifest.json"
+    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     focused = next(
         record
@@ -179,7 +179,7 @@ def test_candidate_evidence_must_cover_every_0132_release_blocker_surface(tmp_pa
 
     failures = verify(root=root)
 
-    assert "0.1.37 focused release-blocker evidence is incomplete" in failures
+    assert "0.1.38 focused release-blocker evidence is incomplete" in failures
 
 
 def test_attacker_consistent_stale_public_readme_is_rejected(tmp_path: Path) -> None:
@@ -187,7 +187,7 @@ def test_attacker_consistent_stale_public_readme_is_rejected(tmp_path: Path) -> 
     readme_path = root / "README.md"
     readme_path.write_text(
         readme_path.read_text(encoding="utf-8").replace(
-            "latest published package is\n`0.1.35`",
+            "latest published package is\n`0.1.37`",
             "latest published package is\n`0.1.29`",
             1,
         ),
@@ -216,7 +216,7 @@ def test_sdist_contract_does_not_require_installed_root_ignore_files(tmp_path: P
 def test_release_verifier_requires_candidate_artifact_ignore_policy(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
     (root / ".git").mkdir()
-    (root / "evidence/local/2026-08-02-v0.1.37/artifacts/.gitignore").unlink(
+    (root / "evidence/local/2026-08-03-v0.1.38/artifacts/.gitignore").unlink(
         missing_ok=True
     )
 
@@ -229,7 +229,7 @@ def test_release_verifier_accepts_npm_install_without_git_ignore_metadata(
     tmp_path: Path,
 ) -> None:
     root = _copy_release_inputs(tmp_path)
-    (root / "evidence/local/2026-08-02-v0.1.37/artifacts/.gitignore").unlink(
+    (root / "evidence/local/2026-08-03-v0.1.38/artifacts/.gitignore").unlink(
         missing_ok=True
     )
 
@@ -320,7 +320,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path) 
             "| G04 | `PARTIAL` | `REVIEWED_PARTIAL` |",
         )
         .replace(
-            "SHA-256 `0d20da004cd1573020f366fef9b7a89f0955367cfb16e1720f546e3f62648f55`",
+            "SHA-256 `1da8553bf14db4c461b3c0ae74c435498d1f3383ab49b4ae60894203ed38b94a`",
             "SHA-256 `" + "0" * 64 + "`",
             1,
         ),
@@ -340,7 +340,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path) 
     requirements_path = summary_root / "REQUIREMENTS_STATUS.md"
     requirements_path.write_text(
         requirements_path.read_text(encoding="utf-8")
-        .replace("Snapshot: 2026-08-02.", "Snapshot: 2026-07-25.", 1)
+        .replace("Snapshot: 2026-08-03.", "Snapshot: 2026-07-25.", 1)
         .replace(
             "Requirement totals: **33 local-tested, 42 partial-external, 10 owner-blocked,\n"
             "0 implementation-gap = 85 unique requirements**.",
@@ -353,7 +353,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path) 
     gate_path = summary_root / "docs/GATE_EVIDENCE.md"
     gate_path.write_text(
         gate_path.read_text(encoding="utf-8").replace(
-            "Current ledger update: 2026-08-02.",
+            "Current ledger update: 2026-08-03.",
             "Current ledger update: 2026-07-25.",
             1,
         ),
@@ -392,9 +392,9 @@ def test_build_backend_must_be_in_exact_locked_build_group(tmp_path: Path) -> No
 
 def test_artifact_self_hash_cannot_replace_archive_content_validation(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
     wheel.write_bytes(b"not a wheel")
-    evidence_path = root / "evidence/local/2026-08-02-v0.1.37/manifest.json"
+    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     for artifact in evidence["artifacts"]:
         if artifact["path"].endswith(".whl"):
@@ -470,7 +470,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
     mutation: str,
 ) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
 
     def mutate(payloads: dict[str, bytes]) -> None:
         if mutation == "extra":
@@ -490,7 +490,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
 
 def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
     root = _copy_release_inputs(tmp_path)
-    wheel = root / "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37-py3-none-any.whl"
+    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
     with pytest.warns(UserWarning, match="Duplicate name"):
         with zipfile.ZipFile(wheel, mode="a", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("agentnet/__init__.py", b"duplicate\n")
@@ -504,7 +504,7 @@ def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mutation", ["state", "nested_archive", "traversal", "symlink"])
 def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str) -> None:
     root = _copy_release_inputs(tmp_path)
-    sdist = root / "evidence/local/2026-08-02-v0.1.37/artifacts/agentnet-0.1.37.tar.gz"
+    sdist = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz"
 
     def mutate(entries: list[tuple[tarfile.TarInfo, bytes]]) -> None:
         if mutation == "symlink":
@@ -526,7 +526,7 @@ def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str)
             "nested_archive": "dist/nested.tar.gz",
             "traversal": "../outside",
         }[mutation]
-        member = tarfile.TarInfo(f"agentnet-0.1.37/{suffix}")
+        member = tarfile.TarInfo(f"agentnet-0.1.38/{suffix}")
         member.size = 2
         member.mode = 0o644
         member.uid = member.gid = 0

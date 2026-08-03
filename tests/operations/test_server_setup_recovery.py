@@ -426,6 +426,24 @@ def _realized_0132_deployment(
     return harness, digest
 
 
+def _realized_0137_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Harness, str]:
+    """One exact 0.1.37 five-unit marker and realized topology."""
+
+    harness, digest = _realized_0132_deployment(tmp_path, monkeypatch)
+    marker = harness.marker()
+    marker["package_version"] = "0.1.37"
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.marker_path.chmod(0o600)
+    assert harness.marker()["package_version"] == "0.1.37"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    return harness, digest
+
+
 def _realized_public_0131_communication_deployment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -752,6 +770,51 @@ def test_0137_upgrade_accepts_exact_released_0133_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_0138_upgrade_accepts_exact_released_0137_five_unit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.37",
+        artifact_mode=artifact_mode,
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode=artifact_mode,
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
+@pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])
+def test_0138_upgrade_rejects_other_release_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    package_version: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version=package_version,
+        artifact_mode="disabled",
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            payload,
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
 @pytest.mark.parametrize("package_version", ["0.1.34", "0.1.35", "0.1.36"])
 def test_0137_upgrade_rejects_unapproved_corrective_release_source(
     monkeypatch: pytest.MonkeyPatch,
@@ -1022,6 +1085,42 @@ def test_0132_upgrade_bootstrap_failure_is_forward_only_and_retries(
         harness.apply(upgrade_digest)
 
     assert harness.marker()["package_version"] == "0.1.33"
+    assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
+    assert harness.journal_path.exists()
+    assert not harness.active_units
+
+    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    recovered = harness.apply(upgrade_digest)
+    assert {
+        "id": "package_upgrade",
+        "status": "resumed_committed_forward_only_upgrade",
+    } in recovered["steps"]
+    assert not harness.journal_path.exists()
+
+
+def test_0137_upgrade_bootstrap_failure_is_forward_only_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _first_digest = _realized_0137_deployment(tmp_path, monkeypatch)
+    harness.active_units.update(setup.MANAGED_UNITS)
+    harness.loaded_units.update(setup.MANAGED_UNITS)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    upgrade_digest = harness.plan_digest()
+    original_bootstrap = setup._run_bootstrap_idempotently
+    monkeypatch.setattr(
+        setup,
+        "_run_bootstrap_idempotently",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ServerSetupError("injected_failure", "injected 0.1.37 bootstrap failure")
+        ),
+    )
+
+    with pytest.raises(ServerSetupError, match="injected 0.1.37 bootstrap failure"):
+        harness.apply(upgrade_digest)
+
+    assert harness.marker()["package_version"] == "0.1.38"
     assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
     assert harness.journal_path.exists()
     assert not harness.active_units

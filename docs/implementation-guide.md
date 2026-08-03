@@ -175,6 +175,16 @@ writes exact units, then commits the request-versioned marker through
 same-request, prior-byte compare-and-swap. Manual marker/config/unit surgery is
 unsupported.
 
+Released five-unit correction upgrades are a narrow forward-only exception:
+only an explicitly allowlisted exact predecessor marker is accepted, and the
+target marker is committed before service quiescence and bootstrap so an
+interruption resumes the committed target instead of rolling back or accepting
+manual repair. The `0.1.37→0.1.38` edge changes only post-restart convergence:
+public Approval/Core health and public Core readiness use the existing finite
+90-attempt startup bound, while ordinary probes retain 30 attempts. Exact JSON
+identity/readiness, TLS, redirect denial, authority, and auxiliary-unit ordering
+remain unchanged.
+
 ### Communication-only request-v2
 
 Use

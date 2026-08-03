@@ -1,0 +1,88 @@
+{
+  "run_id": "2026-08-03-v0.1.38",
+  "evaluated_at": "2026-08-03T14:05:00Z",
+  "scope": "v0_1_38_public_health_convergence_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "ba9bd57238c89185c3c100c347acb7f2f1eba3cca8d5d243e3584072552a5d66",
+  "prior_runtime_evidence": "evidence/local/2026-08-02-v0.1.37/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-02-v0.1.37/manifest.json",
+  "change_boundary": "Exact public 0.1.37 Hub setup committed its five-unit marker and proved loopback Core/Approval health, but the public route became exact only after about 49-61 seconds while three public post-restart probes used the ordinary 30-attempt bound. Version 0.1.38 gives only public Approval/Core health and public Core readiness the existing finite 90-attempt startup bound. Ordinary probes retain 30 attempts; exact JSON identity/readiness, TLS, redirect, authority, and auxiliary-unit ordering checks are unchanged. It admits only the exact released 0.1.37 five-unit marker needed to resume this setup and rejects every other release source. No reset, manual state repair, database, enrollment, authority, C0, federation, production, requirement, or gate mutation is authorized or claimed.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1640 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
+    "root_installed_external_host": "BOUNDED NON-GREEN: exact public 0.1.37 Hub setup committed the five-unit marker and proved loopback health, then public health exceeded the ordinary 30-attempt bound; authority remained false and auxiliary units disabled",
+    "callback_incident": "No prior callback, continuation, receipt, or C0 state is reused; exact public 0.1.38 verification and separate setup approval remain required"
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.37",
+    "candidate": "0.1.38",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "NOT RUN: exact public package, completed Hub setup, fresh enrollment, recipient commitment, completed C0 round trip, revocation, and refusal remain required"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/operations/test_released_setup_runtime_probe.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 644 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1613 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each 1640 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds were byte-identical and exactly match retained reviewed artifacts; source-tree digest ba9bd57238c89185c3c100c347acb7f2f1eba3cca8d5d243e3584072552a5d66; sdist 60543df2735f9a9068ba25a21ac1c281b2dfac674268cfe37653a43b3563f991; wheel c99648e50bc033a4062685c313aca516880d5e1686e96f1b6a8982c11b7fb40f"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.38 direct disposable-package verification completed with 1640 passed and 16 expected skips and no source-tree residue"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform, ordinary-server setup, and ordinary-server upgrade workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Public-health wait scout",
+      "model": "openai-codex/gpt-5.6-terra scout",
+      "result": "PASS: exact seam is three public post-restart probes; existing finite startup bound and setup/recovery tests are the minimum correction."
+    },
+    {
+      "review": "Public-health wait critic",
+      "model": "openai-codex/gpt-5.6-sol critic",
+      "result": "PASS: no blocking objections, improvements, or nits; verdict converge."
+    },
+    {
+      "review": "Constitution review",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "PASS: bounded fail-closed wait, smallest blast radius, strict payload/TLS/authority/auxiliary ordering unchanged."
+    },
+    {
+      "review": "Final Constitution review and resolution",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE, RESOLVED: reviewer required direct forward-only 0.1.37\u21920.1.38 recovery proof and reconciled shipping/OPS-007/implementation documentation. Focused injected-failure recovery regression now proves marker-first forward-only resume; other sources remain rejected; authoritative docs now bind current public 0.1.37, candidate 0.1.38, 90-attempt public probes, ordinary 30-attempt probes, forward-only ordering, and BLOCKED/nonproduction posture. Corrections were tests/docs only and did not change reviewed production, identity, authority, privacy, secret-handling, or runtime boundaries, so policy does not require another Constitution rerun."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz",
+      "sha256": "60543df2735f9a9068ba25a21ac1c281b2dfac674268cfe37653a43b3563f991"
+    },
+    {
+      "path": "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl",
+      "sha256": "c99648e50bc033a4062685c313aca516880d5e1686e96f1b6a8982c11b7fb40f"
+    }
+  ]
+}

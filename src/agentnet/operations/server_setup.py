@@ -160,6 +160,7 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.33", "0.1.34"): MANAGED_UNITS,
     ("0.1.33", "0.1.35"): MANAGED_UNITS,
     ("0.1.33", "0.1.37"): MANAGED_UNITS,
+    ("0.1.37", "0.1.38"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -168,6 +169,7 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.33", "0.1.34"),
         ("0.1.33", "0.1.35"),
         ("0.1.33", "0.1.37"),
+        ("0.1.37", "0.1.38"),
     }
 )
 # Blockers that mean "the response was lost", not "the operation was refused".
@@ -3380,11 +3382,10 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# A first managed start also materializes the service-private uv runtime, so the
-# bounded window that waits for a service to come up is longer than an ordinary
-# probe.  Only the two loopback startup probes use it; once a service answers
-# exactly, every downstream probe keeps the ordinary bound so a genuinely broken
-# deployment still fails in bounded time.
+# A first managed start also materializes the service-private uv runtime, and a
+# public route can converge after loopback health is exact.  Setup gives those
+# startup and public-route probes one longer bounded window; ordinary probes keep
+# the shorter default so a genuinely broken deployment still fails in bounded time.
 _START_HEALTH_ATTEMPTS = 90
 
 
@@ -5078,8 +5079,16 @@ def _apply_server_setup(
                 expected=core_health,
                 attempts=_START_HEALTH_ATTEMPTS,
             )
-            _health(f"{request.approval_public_origin}/healthz", expected=approval_health)
-            _health(f"{request.core_public_origin}/healthz", expected=core_health)
+            _health(
+                f"{request.approval_public_origin}/healthz",
+                expected=approval_health,
+                attempts=_START_HEALTH_ATTEMPTS,
+            )
+            _health(
+                f"{request.core_public_origin}/healthz",
+                expected=core_health,
+                attempts=_START_HEALTH_ATTEMPTS,
+            )
             if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
                 raise ServerSetupError("approval_broker_auth", "Approval broker configuration is unavailable")
             broker_client: ApprovalServiceClient | None = None
@@ -5130,7 +5139,11 @@ def _apply_server_setup(
                 }
                 _health(f"http://127.0.0.1:{CORE_PORT}/readyz", expected=readiness)
                 try:
-                    _health(f"{request.core_public_origin}/readyz", expected=readiness)
+                    _health(
+                        f"{request.core_public_origin}/readyz",
+                        expected=readiness,
+                        attempts=_START_HEALTH_ATTEMPTS,
+                    )
                 except ServerSetupError as exc:
                     raise ServerSetupError(
                         exc.blocker,

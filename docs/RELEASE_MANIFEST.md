@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-08-02
-Candidate: `agentnet 0.1.37`
-Latest published package: `agentnet 0.1.35`
-Evidence profile: strict identity-profile fresh-init candidate
+Snapshot: 2026-08-03
+Candidate: `agentnet 0.1.38`
+Latest published package: `agentnet 0.1.37`
+Evidence profile: public-health convergence candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `0d20da004cd1573020f366fef9b7a89f0955367cfb16e1720f546e3f62648f55` |
-| `pyproject.toml` | SHA-256 `1c2c2b42543aa22d2b41a461173cd0945098ca1b6bf66194f65f6fbf34e9e1f6` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `1da8553bf14db4c461b3c0ae74c435498d1f3383ab49b4ae60894203ed38b94a` |
+| `pyproject.toml` | SHA-256 `2d4b6e50812154ef8317d190a56188905e4455421553e8d18c765c2a2d073ab7` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -320,23 +320,27 @@ release. One exact Hub apply then committed the marker and PostgreSQL migration
 but failed on an impossible setup requirement for `actor.key_id`, a field that
 canonical strict `VerifiedActor` profiles forbid and never serialize.
 
-Candidate `0.1.37` rejects duplicate/non-finite JSON members, strictly parses
+Published `0.1.37` rejects duplicate/non-finite JSON members, strictly parses
 that canonical actor, verifies its current domain/harness/credential labels,
 retains exact profile shape and private P-256 key custody/readability checks,
 and removes only the impossible duplicate field test. `server-agent activate`
 remains the database-backed key-binding proof. It adds only the exact released
 `0.1.33` five-unit marker migration to `0.1.37`, with provenance-checked
 retained-journal recovery; `0.1.34`, `0.1.35`, and direct legacy sources remain
-rejected. Because the current Hub committed a `0.1.35` marker, selected Hub
-recovery remains package-owned AgentNet-only reset, followed only under a
-separate exact destructive approval by clean AgentNet database/role init because
-no prior AgentNet message/state must be preserved. That approval requires
-sanitized exact target inventory, an explicit backup/rollback decision, and
-redacted audit evidence; unrelated/shared/valuable database targets fail closed.
-No manual marker edit, database downgrade, identity substitution, deployment,
-authority, or gate promotion is authorized or claimed. Release requires
-external exact same-commit terminal-green cross-platform, clean-setup, and
-upgrade workflow evidence; post-push run IDs are not self-authored into source.
+rejected. Exact public `0.1.37` reached a committed five-unit Hub marker with
+Core and Approval healthy, then failed closed because the public route converged
+after the ordinary 30-attempt probe window. Authority remained false and
+responder/renewal stayed disabled. No manual marker edit, database downgrade,
+identity substitution, deployment, authority, or gate promotion is authorized
+or claimed.
+
+Candidate `0.1.38` changes only bounded post-restart setup convergence and the
+exact forward marker needed by the released predecessor. Public Approval/Core
+health and public Core readiness use the existing finite 90-attempt startup
+bound. Ordinary probes retain 30 attempts; exact payload, TLS, redirect,
+authority, and auxiliary-unit ordering checks remain unchanged. Only exact
+released `0.1.37` five-unit markers may advance to `0.1.38`; other release
+sources fail closed.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
