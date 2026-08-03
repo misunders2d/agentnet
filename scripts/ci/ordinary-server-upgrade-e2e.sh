@@ -253,15 +253,31 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-# Exact public 0.1.38 creates its real five-unit marker from clean state. Local
-# nginx accepts its historical default User-Agent, so setup must fully converge;
-# a health refusal would not prove the immediate predecessor marker boundary.
+# Exact public 0.1.38 creates its real five-unit marker from clean state. Its
+# historical health client can still terminate with the exact post-marker
+# service_health refusal. Accept only that bounded outcome (or full success),
+# then independently prove the committed marker, database, units, and absence
+# of identity/authority state before testing the fresh-only candidate.
 PLAN_0138="$WORK/plan-0.1.38.json"
 APPLY_0138="$WORK/apply-0.1.38.json"
 plan_setup "$PREFIX_0138" "$PLAN_0138"
 DIGEST_0138="$(jq -r '.request_digest' "$PLAN_0138")"
-apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
+APPLY_0138_EXIT=0
+apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138" || APPLY_0138_EXIT=$?
+if [[ "$APPLY_0138_EXIT" -eq 0 ]]; then
+  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
+else
+  [[ "$APPLY_0138_EXIT" -eq 1 ]]
+  jq -e '
+    .schema == "agentnet.server-setup.evidence.v1"
+    and .status == "blocked"
+    and .blocker == "service_health"
+    and .message == "AgentNet service did not return exact healthy identity evidence"
+    and .identity_enrolled == false
+    and .authority_granted == false
+    and .production_durability_proven == false
+  ' "$APPLY_0138" >/dev/null
+fi
 sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 SCHEMA_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")"
