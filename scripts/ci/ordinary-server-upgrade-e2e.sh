@@ -309,8 +309,14 @@ FILES_0138="$(sudo sha256sum \
   /etc/systemd/system/agentnet-c0-responder.service \
   /etc/systemd/system/agentnet-credential-renew.service \
   /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)"
+# PostgreSQL 18 randomizes the plain-dump psql restrict key by default.
+# Fix it only for this locally controlled, hash-only test dump so repeated
+# outputs compare database content rather than transport nonce material.
 DATABASE_0138="$(sudo -u agentnet pg_dump \
-  --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)"
+  --no-owner --no-privileges \
+  --restrict-key=AgentNetReleasedMarkerState0138 \
+  --dbname=agentnet | sha256sum | cut -d' ' -f1)"
+echo "released 0.1.38 marker baseline: captured"
 
 assert_rejection() {
   local output="$1"
@@ -337,7 +343,10 @@ assert_released_state_unchanged() {
   sudo test ! -e /var/lib/agentnet-c0/terminal.json
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
-  [[ "$(sudo -u agentnet pg_dump --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+  [[ "$(sudo -u agentnet pg_dump \
+    --no-owner --no-privileges \
+    --restrict-key=AgentNetReleasedMarkerState0138 \
+    --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
   [[ "$(sudo sha256sum \
     /var/lib/agentnet/agentnet.json \
     /var/lib/agentnet/oidc-enrollment.json \
@@ -370,12 +379,14 @@ assert_released_state_unchanged() {
 plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
 DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
 assert_released_state_unchanged
+echo "candidate plan: released state unchanged"
 
 APPLY_CANDIDATE_EXIT=0
 apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE" || APPLY_CANDIDATE_EXIT=$?
 [[ "$APPLY_CANDIDATE_EXIT" -eq 1 ]]
 assert_rejection "$APPLY_CANDIDATE"
 assert_released_state_unchanged
+echo "candidate apply refusal: released state unchanged"
 
 RETRY_CANDIDATE_EXIT=0
 apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE" || RETRY_CANDIDATE_EXIT=$?
@@ -383,6 +394,7 @@ apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE" || RETRY_
 assert_rejection "$RETRY_CANDIDATE"
 cmp --silent "$APPLY_CANDIDATE" "$RETRY_CANDIDATE"
 assert_released_state_unchanged
+echo "candidate retry refusal: released state unchanged"
 
 ! grep -Fq "$TOKEN" \
   "$PLAN_0138" "$PLAN_0138.stderr" "$APPLY_0138" "$APPLY_0138.stderr" \
