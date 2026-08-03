@@ -1,0 +1,25 @@
+HEAD: f1f312824d785ac06134f1d21d8b6edc6b7421ba
+ PUBLIC_RELEASE_STATUS.md                           | 34 ++++++++++++-----
+ README.md                                          | 31 ++++++++++------
+ RELEASE_MANIFEST.json                              | 22 +++++------
+ REQUIREMENTS_STATUS.md                             | 31 +++++++++++-----
+ docs/ARCHITECTURE.md                               | 20 +++++++---
+ docs/GATE_EVIDENCE.md                              |  3 +-
+ docs/RELEASE_MANIFEST.md                           | 32 ++++++++++------
+ docs/implementation-guide.md                       | 17 ++++++---
+ npm/scripts/check-package.mjs                      |  8 ++--
+ package-lock.json                                  |  4 +-
+ package.json                                       |  8 ++--
+ pyproject.toml                                     |  2 +-
+ scripts/verify_release.py                          | 43 +++++++++++-----------
+ skills/agentnet-operator/evals/evals.json          |  4 +-
+ .../references/ordinary-server-setup.md            | 18 ++++-----
+ .../agentnet-operator/references/safe-commands.md  |  4 +-
+ src/agentnet/__init__.py                           |  2 +-
+ src/agentnet/operations/server_setup.py            |  8 +++-
+ tests/conformance/test_npm_package.py              |  8 ++--
+ tests/conformance/test_release_manifest.py         | 38 +++++++++----------
+ tests/operations/test_server_setup.py              |  7 +++-
+ tests/operations/test_server_setup_recovery.py     | 20 ++++++++++
+ uv.lock                                            |  2 +-
+ 23 files changed, 231 insertions(+), 135 deletions(-)

@@ -3,7 +3,7 @@
 Snapshot: 2026-08-03
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.37` release and corrective `0.1.38` candidate. It does not replace requirements, gate ledgers, or
+published `0.1.38` release and corrective `0.1.39` candidate. It does not replace requirements, gate ledgers, or
 accountable-owner evidence.
 
 ## Current public package
@@ -11,8 +11,8 @@ accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.37`
-- published source commit: `6649e13c6a641ebc09071b6029df66af61f77ff4`
+- latest published version: `0.1.38`
+- published source commit: `f1f312824d785ac06134f1d21d8b6edc6b7421ba`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -160,14 +160,30 @@ public Hub setup then committed the five-unit marker with Core and Approval
 healthy but failed closed because the public route converged after the ordinary
 30-attempt probe window; authority remained false and auxiliary units disabled.
 
-Corrective candidate `0.1.38` changes only post-restart setup convergence. Public
+Published `0.1.38` changes only post-restart setup convergence. Public
 Approval/Core health and public Core readiness use the existing finite 90-attempt
 startup bound instead of the ordinary 30-attempt probe bound. Exact health/readiness
-identity, TLS, redirect, and fail-closed behavior are unchanged. It admits only
-exact released `0.1.37` five-unit marker migration; other release markers are
-rejected. Same-commit CI, immutable tag, trusted npm stage, and Hub recovery remain
-pending separately approved actions. No deployment, reset, database, enrollment,
-authority, C0, federation, production, or gate mutation is implied.
+identity, TLS, redirect, and fail-closed behavior are unchanged. Its same-commit CI,
+immutable tag, trusted npm stage, registry signature/provenance, and clean public
+installation checks passed. The remote Hub peer reported from a bounded read-only
+fresh-install preflight that the package's default `Python-urllib/*` request
+identity received HTTP 403 on all three public routes. No 0.1.38 Hub installation
+occurred.
+
+Corrective candidate `0.1.39` changes only public health request identity: it sends
+an explicit GET with `User-Agent: AgentNet/0.1.39` and
+`Accept: application/json`. The remote Hub peer reported from a bounded read-only
+comparison that the default urllib identity returned 403 on 3/3 routes while the
+explicit product identity passed edge classification and reached the expected
+offline-origin 502 class. This is peer-reported corroboration, not retained
+reproducible release proof.
+Proxy disabling, redirect rejection, system TLS and hostname verification, the
+two-second per-attempt timeout, response bound, exact JSON identity/readiness, and
+finite retry behavior remain unchanged. This candidate is for fresh clean-state
+setup only and adds no release-marker migration edge. Same-commit CI, immutable
+tag, trusted npm stage, public bytes, and fresh Hub setup remain pending separately
+approved actions. No deployment, reset, database, enrollment, authority, C0,
+federation, production, or gate mutation is implied.
 
 ## Release and gate posture
 

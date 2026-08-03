@@ -3387,6 +3387,7 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 # startup and public-route probes one longer bounded window; ordinary probes keep
 # the shorter default so a genuinely broken deployment still fails in bounded time.
 _START_HEALTH_ATTEMPTS = 90
+_HEALTH_USER_AGENT = f"AgentNet/{__version__}"
 
 
 def _health_value_matches(actual: object, expected: object) -> bool:
@@ -3405,9 +3406,14 @@ def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) -> 
         urllib.request.ProxyHandler({}),
         _RejectRedirects(),
     )
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": _HEALTH_USER_AGENT, "Accept": "application/json"},
+        method="GET",
+    )
     for _ in range(attempts):
         try:
-            with opener.open(url, timeout=2) as response:  # noqa: S310 - fixed validated setup URL
+            with opener.open(request, timeout=2) as response:  # noqa: S310 - fixed validated setup URL
                 payload = response.read(65_537)
                 if response.status != 200 or len(payload) > 65_536:
                     raise ValueError("invalid health response")

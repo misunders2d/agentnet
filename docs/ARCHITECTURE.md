@@ -653,10 +653,20 @@ P-256 key custody/readability. It removes the impossible requirement for
 Database-backed credential-to-key proof remains owned by `server-agent
 activate`; setup does not replace it with a self-asserted profile field.
 
-Candidate `0.1.38` adds one exact `0.1.37` five-unit forward marker edge and
-changes only post-restart public probe timing. Public Approval/Core health and
-public Core readiness reuse the existing finite 90-attempt startup bound; the
-ordinary 30-attempt default remains for non-startup probes. Exact payload, TLS,
-redirect, authority, and auxiliary-unit ordering checks are unchanged.
+Published `0.1.38` adds one exact `0.1.37` five-unit forward marker edge and
+changes post-restart public probe timing. Public Approval/Core health and public
+Core readiness reuse the existing finite 90-attempt startup bound; the ordinary
+30-attempt default remains for non-startup probes. The remote Hub peer reported
+from bounded read-only fresh-install preflight that its default
+`Python-urllib/*` request identity was rejected with HTTP 403 before origin
+routing. That report is corroboration only, not retained reproducible proof.
+
+Candidate `0.1.39` changes only the health request object: explicit GET,
+`User-Agent: AgentNet/0.1.39`, and `Accept: application/json`, sent through the
+same proxy-disabled, redirect-rejecting stdlib opener. System TLS and hostname
+verification, bounded attempts and timeout, response bounds, exact JSON
+identity/readiness, authority, and auxiliary-unit ordering remain unchanged.
+The candidate adds no migration edge: clean-state setup is allowed, while every
+existing release marker or journal fails closed.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

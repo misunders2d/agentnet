@@ -179,11 +179,18 @@ Released five-unit correction upgrades are a narrow forward-only exception:
 only an explicitly allowlisted exact predecessor marker is accepted, and the
 target marker is committed before service quiescence and bootstrap so an
 interruption resumes the committed target instead of rolling back or accepting
-manual repair. The `0.1.37→0.1.38` edge changes only post-restart convergence:
-public Approval/Core health and public Core readiness use the existing finite
-90-attempt startup bound, while ordinary probes retain 30 attempts. Exact JSON
-identity/readiness, TLS, redirect denial, authority, and auxiliary-unit ordering
-remain unchanged.
+manual repair. The historical `0.1.37→0.1.38` edge changes post-restart
+convergence: public Approval/Core health and public Core readiness use the
+existing finite 90-attempt startup bound, while ordinary probes retain 30
+attempts. Exact JSON identity/readiness, TLS, redirect denial, authority, and
+auxiliary-unit ordering remain unchanged.
+
+Candidate `0.1.39` is not another upgrade edge. It is clean-state setup only and
+rejects every earlier marker or journal. Its sole runtime correction is an
+explicit GET health request carrying `User-Agent: AgentNet/0.1.39` and
+`Accept: application/json` through the unchanged proxy-disabled,
+redirect-rejecting stdlib opener. System trust, hostname verification, timeout,
+finite retries, response bounds, and exact payload checks remain unchanged.
 
 ### Communication-only request-v2
 

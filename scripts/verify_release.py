@@ -304,7 +304,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
 
 
 def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
-    base = "evidence/local/2026-08-03-v0.1.38/artifacts"
+    base = "evidence/local/2026-08-03-v0.1.39/artifacts"
     ignore_path = root / base / ".gitignore"
     retention_path = root / base / "RETENTION.md"
     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
@@ -321,8 +321,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
     elif (root / ".git").exists():
         failures.append("final package artifact ignore policy does not retain its archives")
     expected_paths = {
-        f"{base}/agentnet-0.1.38.tar.gz",
-        f"{base}/agentnet-0.1.38-py3-none-any.whl",
+        f"{base}/agentnet-0.1.39.tar.gz",
+        f"{base}/agentnet-0.1.39-py3-none-any.whl",
     }
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         failures.append("final package evidence must contain exactly the sdist and wheel")
@@ -375,8 +375,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
             names = set(listed_names)
             if len(names) != len(listed_names):
                 failures.append("wheel contains duplicate archive member names")
-            dist_info = "agentnet-0.1.38.dist-info"
-            shared = "agentnet-0.1.38.data/data/share/agentnet"
+            dist_info = "agentnet-0.1.39.dist-info"
+            shared = "agentnet-0.1.39.data/data/share/agentnet"
             expected_payloads = dict(source_files)
             expected_payloads.update(
                 {
@@ -431,7 +431,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
                 wheel_metadata = archive.read(metadata_name)
                 if (
                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
-                    or b"\nVersion: 0.1.38\n" not in b"\n" + wheel_metadata
+                    or b"\nVersion: 0.1.39\n" not in b"\n" + wheel_metadata
                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
                 ):
                     failures.append("wheel core metadata differs from the release identity/runtime")
@@ -458,7 +458,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> 
         failures.append(f"final wheel is unreadable or malformed: {exc}")
 
     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
-    prefix = "agentnet-0.1.38/"
+    prefix = "agentnet-0.1.39/"
     try:
         with tarfile.open(sdist_path, mode="r:gz") as archive:
             all_members = archive.getmembers()
@@ -724,8 +724,8 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
         return
     normalized = re.sub(r"\s+", " ", readme_path.read_text(encoding="utf-8"))
     required_claims = (
-        "latest published package is `0.1.37`",
-        "Candidate `0.1.38`",
+        "latest published package is `0.1.38`",
+        "Candidate `0.1.39`",
         "two installed-harness pin failures remain non-green and are not waived",
         "provider error without token exchange",
         "fresh-laptop enrollment",
@@ -743,6 +743,7 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
         "latest published package is `0.1.31`",
         "latest published package is `0.1.32`",
         "latest published package is `0.1.35`",
+        "latest published package is `0.1.37`",
         "Current unversioned communication-only changes",
     ):
         if stale_claim in normalized:
@@ -988,14 +989,14 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
     ):
         failures.append("final clean-install status does not preserve the local blocked-release boundary")
     package_evidence = _load_json(
-        root / "evidence/local/2026-08-03-v0.1.38/manifest.json",
+        root / "evidence/local/2026-08-03-v0.1.39/manifest.json",
         failures,
-        "0.1.38 package evidence manifest",
+        "0.1.39 package evidence manifest",
     )
     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
-        failures.append("0.1.38 package evidence is not bound to the current source tree")
+        failures.append("0.1.39 package evidence is not bound to the current source tree")
     if package_evidence.get("verification_status") != "PASS":
-        failures.append("0.1.38 package evidence must record completed PASS verification")
+        failures.append("0.1.39 package evidence must record completed PASS verification")
     command_records = package_evidence.get("commands")
     if not isinstance(command_records, list) or any(
         not isinstance(record, dict)
@@ -1003,7 +1004,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         or not isinstance(record.get("result"), str)
         for record in command_records
     ):
-        failures.append("0.1.38 package evidence commands are malformed")
+        failures.append("0.1.39 package evidence commands are malformed")
     else:
         command_results = {
             record["command"]: record["result"]
@@ -1012,13 +1013,13 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         npm_result = command_results.get("npm run check", "")
         if (
             not npm_result.startswith("PASS:")
-            or "1640 passed and 16 expected" not in npm_result
+            or "1641 passed and 16 expected" not in npm_result
             or "generations 1 and 2" not in npm_result
             or "excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence" not in npm_result
             or "two installed-harness pin failures remain non-green" not in npm_result
             or "not rerun or waived" not in npm_result
         ):
-            failures.append("0.1.38 npm source and recursive packed evidence is incomplete")
+            failures.append("0.1.39 npm source and recursive packed evidence is incomplete")
         required_focused_paths = (
             "tests/approval",
             "tests/identity",
@@ -1040,18 +1041,18 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
                 "uv run pytest -q -p no:cacheprovider "
             )
             and all(path in command.split() for path in required_focused_paths)
-            and result == "PASS: 644 passed, 7 expected dedicated-PostgreSQL skips"
+            and result == "PASS: 645 passed, 7 expected dedicated-PostgreSQL skips"
             for command, result in command_results.items()
         ):
-            failures.append("0.1.38 focused release-blocker evidence is incomplete")
+            failures.append("0.1.39 focused release-blocker evidence is incomplete")
         if not any(
             command.startswith("SOURCE_DATE_EPOCH=1580601600 ")
             and result.startswith("PASS: two independent builds")
             for command, result in command_results.items()
         ):
-            failures.append("0.1.38 reproducible build evidence is incomplete")
+            failures.append("0.1.39 reproducible build evidence is incomplete")
         if any("PENDING" in result for result in command_results.values()):
-            failures.append("0.1.38 package evidence cannot retain pending command results")
+            failures.append("0.1.39 package evidence cannot retain pending command results")
     execution_context = package_evidence.get("execution_context")
     if not isinstance(execution_context, dict) or not all(
         isinstance(execution_context.get(key), str) and execution_context[key]
@@ -1062,7 +1063,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
             "root_installed_external_host",
         )
     ):
-        failures.append("0.1.38 package evidence execution context is incomplete")
+        failures.append("0.1.39 package evidence execution context is incomplete")
     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
 

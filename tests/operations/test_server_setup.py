@@ -1510,7 +1510,12 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
         def __init__(self, payload: object) -> None:
             self.payload = payload
 
-        def open(self, _url: str, *, timeout: int):
+        def open(self, request: object, *, timeout: int):
+            assert isinstance(request, setup.urllib.request.Request)
+            assert request.get_method() == "GET"
+            headers = {name.lower(): value for name, value in request.header_items()}
+            assert headers["user-agent"] == f"AgentNet/{setup.__version__}"
+            assert headers["accept"] == "application/json"
             assert timeout == 2
             return Response(self.payload)
 

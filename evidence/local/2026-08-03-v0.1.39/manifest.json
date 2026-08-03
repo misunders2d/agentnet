@@ -1,0 +1,102 @@
+{
+  "run_id": "2026-08-03-v0.1.39",
+  "evaluated_at": "2026-08-03T19:00:11Z",
+  "scope": "v0_1_39_public_health_request_identity_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39",
+  "prior_runtime_evidence": "evidence/local/2026-08-03-v0.1.38/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-03-v0.1.38/manifest.json",
+  "change_boundary": "Exact public 0.1.38 passed registry integrity, signature, provenance, clean-install, and release checks, but the remote Hub peer reported from bounded read-only fresh-install preflight that its public health requests retained urllib default Python-urllib/* User-Agent and received HTTP 403 on all three routes; this remains corroboration only, not retained reproducible proof. Version 0.1.39 changes only the request object to explicit GET with User-Agent AgentNet/0.1.39 and Accept application/json. Proxy disabling, redirect rejection, system TLS and hostname verification, two-second attempt timeout, response bounds, exact JSON identity/readiness, finite retry behavior, authority, and auxiliary-unit ordering are unchanged. The remote Hub peer reports from a bounded read-only comparison that default urllib returned 403 on 3/3 routes and the explicit product identity reached offline-origin 502 on 3/3 routes; this remains peer-reported corroboration only. This candidate is fresh clean-state setup only, adds no release-marker migration edge, and rejects an exact 0.1.38 marker. No install, migration, reset, manual reconstruction, database, enrollment, authority, C0, federation, production, requirement, or gate mutation is authorized or claimed.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1641 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
+    "root_installed_external_host": "PEER-REPORTED CORROBORATION ONLY: the remote Hub peer reported default urllib identity returned 403 on 3/3 public routes and explicit AgentNet product identity passed edge classification and reached offline-origin 502 on 3/3; no retained reproducible probe record, installation, or mutation is claimed",
+    "callback_incident": "No prior callback, continuation, receipt, setup marker, upgrade state, or C0 state is reused; exact public 0.1.39 verification and separately approved fresh clean-state setup remain required"
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.38",
+    "candidate": "0.1.39",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "NOT RUN: exact public package, completed fresh Hub setup, enrollment, recipient commitment, completed C0 round trip, revocation, and refusal remain required"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/operations/test_server_setup.py -k health",
+      "result": "PASS: 2 passed, 105 deselected"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/operations/test_released_setup_runtime_probe.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 645 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1614 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each 1641 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds were byte-identical and exactly match retained reviewed artifacts; source-tree digest 77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39; sdist 9ba503aff08ee500bfaa3b7e370b5e8c4cf159b5706554e7cae9e8bf42850a62; wheel 3585ebbffd377d4d1bab0db7b77c4259b2a06a78a1f9438147596c0d2d23c3ef"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.39 direct disposable-package verification completed with 1641 passed and 16 expected skips and no source-tree residue"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform and ordinary-server clean-setup workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Public-health request-identity scout",
+      "model": "openai-codex/gpt-5.6-luna scout",
+      "result": "PASS: exact seam is _health raw-URL opening; explicit urllib Request plus stable product User-Agent and JSON Accept is the minimum correction."
+    },
+    {
+      "review": "Public-health request-identity critic",
+      "model": "openai-codex/gpt-5.6-terra critic",
+      "result": "PASS: no blocking objections; preserve opener/TLS/redirect/proxy/timeout/payload semantics and assert request method plus case-insensitive headers."
+    },
+    {
+      "review": "Peer-reported bounded live request-identity comparison",
+      "model": "remote Hub peer report received through signed Pi Manager coordination",
+      "result": "CORROBORATION ONLY: peer reported default urllib identity returned 403 on 3/3 public routes and explicit AgentNet product identity reached offline-origin 502 on 3/3; no retained reproducible probe output, mutation, or credentials are claimed."
+    },
+    {
+      "review": "Final stabilized-diff critic",
+      "model": "openai-codex/gpt-5.6-terra critic",
+      "result": "PASS: no blocking objections; explicit GET request identity is minimal, reusing the bodyless Request across retries is safe, security boundaries remain intact, no 0.1.38\u21920.1.39 edge exists, and evidence stays BLOCKED pending external gates."
+    },
+    {
+      "review": "Initial Constitution gate",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "REVISE: runtime boundary compliant; required durable worktree review packet, exact focused-health command evidence, and consistent peer-reported-only Hub wording before bounded re-review."
+    },
+    {
+      "review": "Constitution re-review",
+      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+      "result": "PASS: prior evidence gaps resolved; bounded worktree packet is retained, exact focused health command records 2 passed/105 deselected, Hub comparison is consistently peer-reported corroboration only, runtime boundary remains minimal, fresh-only marker policy remains fail-closed, and external gates remain BLOCKED."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
+      "sha256": "9ba503aff08ee500bfaa3b7e370b5e8c4cf159b5706554e7cae9e8bf42850a62"
+    },
+    {
+      "path": "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
+      "sha256": "3585ebbffd377d4d1bab0db7b77c4259b2a06a78a1f9438147596c0d2d23c3ef"
+    }
+  ]
+}

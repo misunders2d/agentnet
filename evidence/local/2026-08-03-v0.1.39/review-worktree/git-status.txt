@@ -1,0 +1,38 @@
+HEAD: f1f312824d785ac06134f1d21d8b6edc6b7421ba
+Branch: main
+Upstream: origin/main
+Policy note: .pi/ is pre-existing local-only state; contents intentionally excluded.
+Status:
+ M PUBLIC_RELEASE_STATUS.md
+ M README.md
+ M RELEASE_MANIFEST.json
+ M REQUIREMENTS_STATUS.md
+ M docs/ARCHITECTURE.md
+ M docs/GATE_EVIDENCE.md
+ M docs/RELEASE_MANIFEST.md
+ M docs/implementation-guide.md
+ M npm/scripts/check-package.mjs
+ M package-lock.json
+ M package.json
+ M pyproject.toml
+ M scripts/verify_release.py
+ M skills/agentnet-operator/evals/evals.json
+ M skills/agentnet-operator/references/ordinary-server-setup.md
+ M skills/agentnet-operator/references/safe-commands.md
+ M src/agentnet/__init__.py
+ M src/agentnet/operations/server_setup.py
+ M tests/conformance/test_npm_package.py
+ M tests/conformance/test_release_manifest.py
+ M tests/operations/test_server_setup.py
+ M tests/operations/test_server_setup_recovery.py
+ M uv.lock
+?? evidence/local/2026-08-03-v0.1.39/artifacts/.gitignore
+?? evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md
+?? evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl
+?? evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz
+?? evidence/local/2026-08-03-v0.1.39/manifest.json
+?? evidence/local/2026-08-03-v0.1.39/review-worktree/git-diff-stat.txt
+?? evidence/local/2026-08-03-v0.1.39/review-worktree/git-diff.patch
+?? evidence/local/2026-08-03-v0.1.39/review-worktree/git-status.txt
+?? evidence/local/2026-08-03-v0.1.39/review-worktree/untracked-candidate-inventory.txt
+?? .pi/ (pre-existing local-only; contents excluded)

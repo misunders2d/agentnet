@@ -793,6 +793,26 @@ def test_0138_upgrade_accepts_exact_released_0137_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+def test_0139_fresh_setup_rejects_0138_release_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.39")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.38",
+        artifact_mode="disabled",
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            payload,
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
+
 @pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])
 def test_0138_upgrade_rejects_other_release_sources(
     monkeypatch: pytest.MonkeyPatch,
