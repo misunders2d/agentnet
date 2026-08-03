@@ -280,16 +280,22 @@ else
 fi
 echo "released 0.1.38 apply outcome: bounded"
 sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+echo "released 0.1.38 setup marker: verified"
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
+echo "released 0.1.38 upgrade journal: absent"
 SCHEMA_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")"
 MIGRATION_MAX_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')"
 [[ "$SCHEMA_0138" == "5" ]]
 [[ "$MIGRATION_MAX_0138" == "5" ]]
+echo "released 0.1.38 database schema: verified"
 sudo systemctl is-active --quiet agentnet-core.service
 sudo systemctl is-active --quiet agentnet-approval.service
+echo "released 0.1.38 managed units: active"
 MARKER_0138="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
 REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
+echo "released 0.1.38 marker fingerprint: captured"
 sudo test ! -e /var/lib/agentnet-setup/attempt.json
+echo "released 0.1.38 setup attempt journal: absent"
 sudo test -f /var/lib/agentnet-c0/config.json
 sudo test ! -e /var/lib/agentnet-c0/terminal.json
 echo "released 0.1.38 marker/schema/unit invariants: verified"
