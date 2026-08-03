@@ -321,12 +321,24 @@ MANAGED_FILES_0138=(
 FILES_0138="$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)"
 echo "released 0.1.38 managed-file fingerprint: captured"
 # PostgreSQL 18 randomizes the plain-dump psql restrict key by default.
-# Fix it only for this locally controlled, hash-only test dump so repeated
-# outputs compare database content rather than transport nonce material.
-DATABASE_0138="$(sudo -u agentnet pg_dump \
-  --no-owner --no-privileges \
-  --restrict-key=AgentNetReleasedMarkerState0138 \
-  --dbname=agentnet | sha256sum | cut -d' ' -f1)"
+# Fix it only for this locally controlled, hash-only test dump. Core also
+# refreshes runtime_leases.heartbeat_at/expires_at while it remains active, so
+# exclude only that table's volatile row data and hash its stable custody fields
+# separately. Schema plus every other row remain covered by the full dump.
+database_fingerprint() {
+  {
+    sudo -u agentnet pg_dump \
+      --no-owner --no-privileges \
+      --exclude-table-data=public.runtime_leases \
+      --restrict-key=AgentNetReleasedMarkerState0138 \
+      --dbname=agentnet
+    sudo -u agentnet psql -X -Atq --dbname=agentnet -c \
+      "COPY (SELECT lease_name,owner_id,fence,acquired_at FROM runtime_leases ORDER BY lease_name) TO STDOUT WITH (FORMAT csv, FORCE_QUOTE *)"
+  } | sha256sum | cut -d' ' -f1
+}
+LEASE_COUNT_0138="$(sudo -u agentnet psql -X -Atq --dbname=agentnet -c 'SELECT COUNT(*) FROM runtime_leases')"
+[[ "$LEASE_COUNT_0138" =~ ^[1-9][0-9]*$ ]]
+DATABASE_0138="$(database_fingerprint)"
 echo "released 0.1.38 marker baseline: captured"
 
 assert_rejection() {
@@ -357,10 +369,8 @@ assert_released_state_unchanged() {
   echo "$phase: marker and state files unchanged"
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
-  [[ "$(sudo -u agentnet pg_dump \
-    --no-owner --no-privileges \
-    --restrict-key=AgentNetReleasedMarkerState0138 \
-    --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+  [[ "$(sudo -u agentnet psql -X -Atq --dbname=agentnet -c 'SELECT COUNT(*) FROM runtime_leases')" == "$LEASE_COUNT_0138" ]]
+  [[ "$(database_fingerprint)" == "$DATABASE_0138" ]]
   echo "$phase: database unchanged"
   [[ "$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
   echo "$phase: managed files unchanged"
@@ -387,10 +397,7 @@ plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
 DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
 assert_released_state_unchanged "candidate plan"
 echo "candidate plan: released state unchanged"
-[[ "$(sudo -u agentnet pg_dump \
-  --no-owner --no-privileges \
-  --restrict-key=AgentNetReleasedMarkerState0138 \
-  --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+[[ "$(database_fingerprint)" == "$DATABASE_0138" ]]
 echo "candidate pre-apply: database unchanged"
 
 APPLY_CANDIDATE_EXIT=0
