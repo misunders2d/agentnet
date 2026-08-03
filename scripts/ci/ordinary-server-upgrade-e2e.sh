@@ -278,6 +278,7 @@ else
     and .production_durability_proven == false
   ' "$APPLY_0138" >/dev/null
 fi
+echo "released 0.1.38 apply outcome: bounded"
 sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 SCHEMA_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")"
@@ -291,6 +292,7 @@ REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 sudo test ! -e /var/lib/agentnet-setup/attempt.json
 sudo test -f /var/lib/agentnet-c0/config.json
 sudo test ! -e /var/lib/agentnet-c0/terminal.json
+echo "released 0.1.38 marker/schema/unit invariants: verified"
 
 # Current candidate is fresh-only. It must reject the exact released marker
 # before any setup attempt, journal, database, unit, identity, or authority write.
@@ -309,6 +311,7 @@ FILES_0138="$(sudo sha256sum \
   /etc/systemd/system/agentnet-c0-responder.service \
   /etc/systemd/system/agentnet-credential-renew.service \
   /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)"
+echo "released 0.1.38 managed-file fingerprint: captured"
 # PostgreSQL 18 randomizes the plain-dump psql restrict key by default.
 # Fix it only for this locally controlled, hash-only test dump so repeated
 # outputs compare database content rather than transport nonce material.
