@@ -343,6 +343,7 @@ assert_rejection() {
 }
 
 assert_released_state_unchanged() {
+  local phase="$1"
   sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
   [[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_0138" ]]
   [[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_0138" ]]
@@ -353,13 +354,16 @@ assert_released_state_unchanged() {
   sudo test ! -e /var/lib/agentnet/credential-renewal-state.json
   sudo test ! -e /var/lib/agentnet-c0/config.json
   sudo test ! -e /var/lib/agentnet-c0/terminal.json
+  echo "$phase: marker and state files unchanged"
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
   [[ "$(sudo -u agentnet pg_dump \
     --no-owner --no-privileges \
     --restrict-key=AgentNetReleasedMarkerState0138 \
     --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+  echo "$phase: database unchanged"
   [[ "$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
+  echo "$phase: managed files unchanged"
   sudo systemctl is-active --quiet agentnet-core.service
   sudo systemctl is-enabled --quiet agentnet-core.service
   sudo systemctl is-active --quiet agentnet-approval.service
@@ -371,15 +375,17 @@ assert_released_state_unchanged() {
   [[ "$(sudo systemctl show agentnet-credential-renew.service --property=UnitFileState --value)" == "static" ]]
   [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=ActiveState --value)" == "inactive" ]]
   [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=UnitFileState --value)" == "disabled" ]]
+  echo "$phase: unit state unchanged"
   env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
   env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
+  echo "$phase: service health unchanged"
 }
 
 # Capture every released-state fingerprint before even the no-managed-host-write
 # candidate plan. Planning and both rejected apply attempts must preserve it.
 plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
 DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
-assert_released_state_unchanged
+assert_released_state_unchanged "candidate plan"
 echo "candidate plan: released state unchanged"
 
 APPLY_CANDIDATE_EXIT=0
@@ -388,7 +394,7 @@ echo "candidate apply exit: $APPLY_CANDIDATE_EXIT"
 [[ "$APPLY_CANDIDATE_EXIT" -eq 1 ]]
 assert_rejection "$APPLY_CANDIDATE"
 echo "candidate apply refusal: exact"
-assert_released_state_unchanged
+assert_released_state_unchanged "candidate apply refusal"
 echo "candidate apply refusal: released state unchanged"
 
 RETRY_CANDIDATE_EXIT=0
@@ -396,7 +402,7 @@ apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE" || RETRY_
 [[ "$RETRY_CANDIDATE_EXIT" -eq 1 ]]
 assert_rejection "$RETRY_CANDIDATE"
 cmp --silent "$APPLY_CANDIDATE" "$RETRY_CANDIDATE"
-assert_released_state_unchanged
+assert_released_state_unchanged "candidate retry refusal"
 echo "candidate retry refusal: released state unchanged"
 
 ! grep -Fq "$TOKEN" \
