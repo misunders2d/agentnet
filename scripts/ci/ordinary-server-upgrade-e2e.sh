@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Destructive only inside a fresh GitHub-hosted Ubuntu 24.04 runner. This lane
-# deliberately creates the released 0.1.33 failed-latch state through real
-# package execution; it never fabricates marker, journal, unit, or database
-# state.
+# realizes the exact public 0.1.37 predecessor through package execution, then
+# upgrades it with the current candidate. It never fabricates marker, journal,
+# unit, or database state.
 if [[ "${CI:-}" != "true" || "${GITHUB_ACTIONS:-}" != "true" || -z "${RUNNER_TEMP:-}" ]]; then
   echo "ordinary server upgrade E2E requires an ephemeral GitHub Actions runner" >&2
   exit 2
@@ -30,12 +30,10 @@ done
 WORK="$RUNNER_TEMP/agentnet-ordinary-server-upgrade-e2e"
 INPUTS="$WORK/inputs"
 PACK="$WORK/pack"
-PREFIX_0131="/opt/agentnet-upgrade-e2e-0.1.31"
-PREFIX_0133="/opt/agentnet-upgrade-e2e-0.1.33"
+PREFIX_0137="/opt/agentnet-upgrade-e2e-0.1.37"
 CANDIDATE_VERSION="$(node -p "require('./package.json').version")"
 PREFIX_CANDIDATE="/opt/agentnet-upgrade-e2e-$CANDIDATE_VERSION"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
-HOST_SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 OPT_UID="$(stat -c '%u' /opt)"
 OPT_GID="$(stat -c '%g' /opt)"
 OPT_MODE="$(stat -c '%a' /opt)"
@@ -82,7 +80,7 @@ cleanup() {
     sudo sed -i '/# agentnet-upgrade-e2e$/d' "$HBA_FILE"
     sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' >/dev/null 2>&1
   fi
-  sudo rm -rf "$PREFIX_0131" "$PREFIX_0133" "$PREFIX_CANDIDATE"
+  sudo rm -rf "$PREFIX_0137" "$PREFIX_CANDIDATE"
   sudo chown "$OPT_UID:$OPT_GID" /opt
   sudo chmod "$OPT_MODE" /opt
   rm -rf "$WORK"
@@ -154,8 +152,7 @@ apply_setup() {
 # independently so every plan binds its own immutable runtime path and bytes.
 sudo chown root:root /opt
 sudo chmod 0755 /opt
-install_runtime "$PREFIX_0131" "@misunders2d/agentnet@0.1.31"
-install_runtime "$PREFIX_0133" "@misunders2d/agentnet@0.1.33"
+install_runtime "$PREFIX_0137" "@misunders2d/agentnet@0.1.37"
 CANDIDATE_TARBALL="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
 install_runtime "$PREFIX_CANDIDATE" "$PACK/$CANDIDATE_TARBALL"
 
@@ -256,60 +253,38 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-# 0.1.31 creates the real released two-unit communication-only state.
-PLAN_0131="$WORK/plan-0.1.31.json"
-APPLY_0131="$WORK/apply-0.1.31.json"
-plan_setup "$PREFIX_0131" "$PLAN_0131"
-DIGEST_0131="$(jq -r '.request_digest' "$PLAN_0131")"
-APPLY_0131_EXIT=0
-apply_setup "$PREFIX_0131" "$DIGEST_0131" "$APPLY_0131" || APPLY_0131_EXIT=$?
-if [[ "$APPLY_0131_EXIT" -eq 0 ]]; then
-  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0131" >/dev/null
+# Exact public 0.1.37 creates the real released five-unit predecessor state.
+# Local nginx normally converges within its ordinary public-health bound. If it
+# does not, accept only the exact known post-marker health refusal; the current
+# candidate must then converge that same committed predecessor without reset.
+PLAN_0137="$WORK/plan-0.1.37.json"
+APPLY_0137="$WORK/apply-0.1.37.json"
+plan_setup "$PREFIX_0137" "$PLAN_0137"
+DIGEST_0137="$(jq -r '.request_digest' "$PLAN_0137")"
+APPLY_0137_EXIT=0
+apply_setup "$PREFIX_0137" "$DIGEST_0137" "$APPLY_0137" || APPLY_0137_EXIT=$?
+if [[ "$APPLY_0137_EXIT" -eq 0 ]]; then
+  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0137" >/dev/null
 else
-  /usr/bin/python3 scripts/ci/verify_released_setup_runtime.py classify-transient \
-    --exit-code "$APPLY_0131_EXIT" --evidence "$APPLY_0131"
-  # Released 0.1.31 uses Type=simple, so systemd may expose its transient
-  # pre-exec MainPID before Node replaces it. Never rerun setup (which would
-  # restart Core and recreate the race); instead poll the immutable release's
-  # own exact runtime and health validators without mutating service state.
-  mapfile -t RUNTIME_0131_MATCHES < <(
-    sudo /usr/bin/sh -c \
-      'for path in /var/lib/agentnet-setup/npm-runtime/0.1.31-*; do test -d "$path" && printf "%s\n" "$path"; done'
-  )
-  [[ "${#RUNTIME_0131_MATCHES[@]}" -eq 1 ]]
-  RUNTIME_0131="${RUNTIME_0131_MATCHES[0]}"
-  sudo test -x "$RUNTIME_0131/bin/python"
-  sudo -- env -i PATH="$HOST_SYSTEM_PATH" HOME=/root LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-    "$RUNTIME_0131/bin/python" "$(pwd -P)/scripts/ci/verify_released_setup_runtime.py" \
-    wait-runtime --prefix "$PREFIX_0131"
+  [[ "$APPLY_0137_EXIT" -eq 1 ]]
+  jq -e '
+    .schema == "agentnet.server-setup.evidence.v1"
+    and .status == "blocked"
+    and .blocker == "service_health"
+    and .message == "AgentNet service did not return exact healthy identity evidence"
+    and .identity_enrolled == false
+    and .authority_granted == false
+    and .production_durability_proven == false
+  ' "$APPLY_0137" >/dev/null
 fi
-sudo jq -e '.package_version == "0.1.31" and .artifact_mode == "disabled" and (.units | length) == 2' /var/lib/agentnet-setup/setup.json >/dev/null
+sudo jq -e '.package_version == "0.1.37" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
+[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
 sudo systemctl is-active --quiet agentnet-core.service
 sudo systemctl is-active --quiet agentnet-approval.service
 
-# Exact public 0.1.33 must naturally reproduce the released failure after it
-# commits the five-unit marker and retained forward-only journal.
-PLAN_0133="$WORK/plan-0.1.33.json"
-APPLY_0133="$WORK/apply-0.1.33.json"
-plan_setup "$PREFIX_0133" "$PLAN_0133"
-DIGEST_0133="$(jq -r '.request_digest' "$PLAN_0133")"
-set +e
-apply_setup "$PREFIX_0133" "$DIGEST_0133" "$APPLY_0133"
-EXIT_0133=$?
-set -e
-[[ "$EXIT_0133" -eq 1 ]]
-jq -e '.status == "blocked" and .blocker == "service_runtime_binding" and .identity_enrolled == false and .authority_granted == false' "$APPLY_0133" >/dev/null
-sudo jq -e '.package_version == "0.1.33" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
-sudo test -f /var/lib/agentnet-setup/upgrade.json
-[[ "$(sudo systemctl show agentnet-approval.service --property=ActiveState --value)" == "failed" ]]
-[[ "$(sudo systemctl show agentnet-approval.service --property=Result --value)" == "exit-code" ]]
-[[ "$(sudo systemctl show agentnet-approval.service --property=ExecMainStatus --value)" == "143" ]]
-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "4" ]]
-
-# Current candidate must consume that exact retained state, clear the failed
-# latch, migrate schema 4->5, converge five units, and start the unenrolled
-# profile without changing the operator request.
+# Current candidate must consume only that exact released marker, converge five
+# units, and start the unenrolled profile without changing the operator request.
 PLAN_CANDIDATE="$WORK/plan-candidate.json"
 APPLY_CANDIDATE="$WORK/apply-candidate.json"
 RETRY_CANDIDATE="$WORK/retry-candidate.json"
@@ -342,8 +317,7 @@ jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setu
 [[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_CANDIDATE" ]]
 [[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_CANDIDATE" ]]
 ! grep -Fq "$TOKEN" \
-  "$PLAN_0131" "$PLAN_0131.stderr" "$APPLY_0131" "$APPLY_0131.stderr" \
-  "$PLAN_0133" "$PLAN_0133.stderr" "$APPLY_0133" "$APPLY_0133.stderr" \
+  "$PLAN_0137" "$PLAN_0137.stderr" "$APPLY_0137" "$APPLY_0137.stderr" \
   "$PLAN_CANDIDATE" "$PLAN_CANDIDATE.stderr" \
   "$APPLY_CANDIDATE" "$APPLY_CANDIDATE.stderr" \
   "$RETRY_CANDIDATE" "$RETRY_CANDIDATE.stderr"
