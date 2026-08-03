@@ -266,6 +266,7 @@ APPLY_0138_EXIT=0
 apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138" || APPLY_0138_EXIT=$?
 if [[ "$APPLY_0138_EXIT" -eq 0 ]]; then
   jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
+  C0_CONFIG_EXPECTATION="present"
 else
   [[ "$APPLY_0138_EXIT" -eq 1 ]]
   jq -e '
@@ -277,6 +278,7 @@ else
     and .authority_granted == false
     and .production_durability_proven == false
   ' "$APPLY_0138" >/dev/null
+  C0_CONFIG_EXPECTATION="absent"
 fi
 echo "released 0.1.38 apply outcome: bounded"
 sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
@@ -296,7 +298,13 @@ REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 echo "released 0.1.38 marker fingerprint: captured"
 sudo test ! -e /var/lib/agentnet-setup/attempt.json
 echo "released 0.1.38 setup attempt journal: absent"
-sudo test -f /var/lib/agentnet-c0/config.json
+# Full convergence writes the C0 configuration; the exact historical
+# service_health stop occurs before that later phase and must leave it absent.
+if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
+  sudo test -f /var/lib/agentnet-c0/config.json
+else
+  sudo test ! -e /var/lib/agentnet-c0/config.json
+fi
 sudo test ! -e /var/lib/agentnet-c0/terminal.json
 echo "released 0.1.38 marker/schema/unit invariants: verified"
 
@@ -305,18 +313,22 @@ echo "released 0.1.38 marker/schema/unit invariants: verified"
 PLAN_CANDIDATE="$WORK/plan-candidate.json"
 APPLY_CANDIDATE="$WORK/apply-candidate.json"
 RETRY_CANDIDATE="$WORK/retry-candidate.json"
-FILES_0138="$(sudo sha256sum \
-  /var/lib/agentnet/agentnet.json \
-  /var/lib/agentnet/oidc-enrollment.json \
-  /var/lib/agentnet-approval/config.json \
-  /var/lib/agentnet-c0/config.json \
-  /etc/agentnet-secrets/core.env \
-  /etc/agentnet-secrets/approval.env \
-  /etc/systemd/system/agentnet-core.service \
-  /etc/systemd/system/agentnet-approval.service \
-  /etc/systemd/system/agentnet-c0-responder.service \
-  /etc/systemd/system/agentnet-credential-renew.service \
-  /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)"
+MANAGED_FILES_0138=(
+  /var/lib/agentnet/agentnet.json
+  /var/lib/agentnet/oidc-enrollment.json
+  /var/lib/agentnet-approval/config.json
+  /etc/agentnet-secrets/core.env
+  /etc/agentnet-secrets/approval.env
+  /etc/systemd/system/agentnet-core.service
+  /etc/systemd/system/agentnet-approval.service
+  /etc/systemd/system/agentnet-c0-responder.service
+  /etc/systemd/system/agentnet-credential-renew.service
+  /etc/systemd/system/agentnet-credential-renew.timer
+)
+if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
+  MANAGED_FILES_0138+=(/var/lib/agentnet-c0/config.json)
+fi
+FILES_0138="$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)"
 echo "released 0.1.38 managed-file fingerprint: captured"
 # PostgreSQL 18 randomizes the plain-dump psql restrict key by default.
 # Fix it only for this locally controlled, hash-only test dump so repeated
@@ -349,6 +361,11 @@ assert_released_state_unchanged() {
   sudo test ! -e /var/lib/agentnet/server-agent-identity.json
   sudo test ! -e /var/lib/agentnet/guided-join.key.pem
   sudo test ! -e /var/lib/agentnet/credential-renewal-state.json
+  if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
+    sudo test -f /var/lib/agentnet-c0/config.json
+  else
+    sudo test ! -e /var/lib/agentnet-c0/config.json
+  fi
   sudo test ! -e /var/lib/agentnet-c0/terminal.json
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
@@ -356,18 +373,7 @@ assert_released_state_unchanged() {
     --no-owner --no-privileges \
     --restrict-key=AgentNetReleasedMarkerState0138 \
     --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
-  [[ "$(sudo sha256sum \
-    /var/lib/agentnet/agentnet.json \
-    /var/lib/agentnet/oidc-enrollment.json \
-    /var/lib/agentnet-approval/config.json \
-    /var/lib/agentnet-c0/config.json \
-    /etc/agentnet-secrets/core.env \
-    /etc/agentnet-secrets/approval.env \
-    /etc/systemd/system/agentnet-core.service \
-    /etc/systemd/system/agentnet-approval.service \
-    /etc/systemd/system/agentnet-c0-responder.service \
-    /etc/systemd/system/agentnet-credential-renew.service \
-    /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
+  [[ "$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
   sudo systemctl is-active --quiet agentnet-core.service
   sudo systemctl is-enabled --quiet agentnet-core.service
   sudo systemctl is-active --quiet agentnet-approval.service
