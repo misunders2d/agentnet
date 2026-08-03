@@ -387,6 +387,11 @@ plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
 DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
 assert_released_state_unchanged "candidate plan"
 echo "candidate plan: released state unchanged"
+[[ "$(sudo -u agentnet pg_dump \
+  --no-owner --no-privileges \
+  --restrict-key=AgentNetReleasedMarkerState0138 \
+  --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+echo "candidate pre-apply: database unchanged"
 
 APPLY_CANDIDATE_EXIT=0
 apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE" || APPLY_CANDIDATE_EXIT=$?
