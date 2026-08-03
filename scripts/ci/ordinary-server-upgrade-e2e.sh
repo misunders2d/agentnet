@@ -384,8 +384,10 @@ echo "candidate plan: released state unchanged"
 
 APPLY_CANDIDATE_EXIT=0
 apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE" || APPLY_CANDIDATE_EXIT=$?
+echo "candidate apply exit: $APPLY_CANDIDATE_EXIT"
 [[ "$APPLY_CANDIDATE_EXIT" -eq 1 ]]
 assert_rejection "$APPLY_CANDIDATE"
+echo "candidate apply refusal: exact"
 assert_released_state_unchanged
 echo "candidate apply refusal: released state unchanged"
 
