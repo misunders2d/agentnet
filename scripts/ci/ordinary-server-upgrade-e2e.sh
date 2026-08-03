@@ -300,6 +300,16 @@ sudo test ! -e /var/lib/agentnet-setup/attempt.json
 echo "released 0.1.38 setup attempt journal: absent"
 # Full convergence writes the C0 configuration; the exact historical
 # service_health stop occurs before that later phase and must leave it absent.
+if sudo test -f /var/lib/agentnet-c0/config.json; then
+  echo "released 0.1.38 observed C0 configuration: present"
+else
+  echo "released 0.1.38 observed C0 configuration: absent"
+fi
+if sudo test -e /var/lib/agentnet-c0/terminal.json; then
+  echo "released 0.1.38 observed C0 terminal: present"
+else
+  echo "released 0.1.38 observed C0 terminal: absent"
+fi
 if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
   sudo test -f /var/lib/agentnet-c0/config.json
 else
