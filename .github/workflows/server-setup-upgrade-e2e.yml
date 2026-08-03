@@ -1,4 +1,4 @@
-name: Ordinary server upgrade E2E
+name: Released marker rejection E2E
 
 on:
   workflow_call:
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   released-upgrade-chain:
-    name: Ubuntu 24.04 / PostgreSQL 18 / 0.1.37 -> candidate
+    name: Ubuntu 24.04 / PostgreSQL 18 / 0.1.38 marker rejected
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -81,7 +81,7 @@ jobs:
           sudo pg_createcluster 18 main --port 5432 --start
           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
 
-      - name: Run exact released-predecessor upgrade
+      - name: Prove exact released marker is rejected
         shell: bash
         run: scripts/ci/ordinary-server-upgrade-e2e.sh
 

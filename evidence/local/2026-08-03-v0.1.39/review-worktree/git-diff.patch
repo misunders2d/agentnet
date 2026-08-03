@@ -1,158 +1,166 @@
-# Full tracked diff against HEAD f1f312824d785ac06134f1d21d8b6edc6b7421ba
-# No redactions required; untracked .pi/ contents excluded by policy.
+diff --git a/.github/workflows/server-setup-upgrade-e2e.yml b/.github/workflows/server-setup-upgrade-e2e.yml
+index 57379c8..8906bea 100644
+--- a/.github/workflows/server-setup-upgrade-e2e.yml
++++ b/.github/workflows/server-setup-upgrade-e2e.yml
+@@ -1,4 +1,4 @@
+-name: Ordinary server upgrade E2E
++name: Released marker rejection E2E
+
+ on:
+   workflow_call:
+@@ -37,7 +37,7 @@ permissions:
+
+ jobs:
+   released-upgrade-chain:
+-    name: Ubuntu 24.04 / PostgreSQL 18 / 0.1.37 -> candidate
++    name: Ubuntu 24.04 / PostgreSQL 18 / 0.1.38 marker rejected
+     runs-on: ubuntu-24.04
+     timeout-minutes: 60
+
+@@ -81,7 +81,7 @@ jobs:
+           sudo pg_createcluster 18 main --port 5432 --start
+           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
+
+-      - name: Run exact released-predecessor upgrade
++      - name: Prove exact released marker is rejected
+         shell: bash
+         run: scripts/ci/ordinary-server-upgrade-e2e.sh
+
 diff --git a/PUBLIC_RELEASE_STATUS.md b/PUBLIC_RELEASE_STATUS.md
-index ed92350..d947665 100644
+index d947665..d3990ef 100644
 --- a/PUBLIC_RELEASE_STATUS.md
 +++ b/PUBLIC_RELEASE_STATUS.md
-@@ -3,7 +3,7 @@
- Snapshot: 2026-08-03
+@@ -170,20 +170,35 @@ fresh-install preflight that the package's default `Python-urllib/*` request
+ identity received HTTP 403 on all three public routes. No 0.1.38 Hub installation
+ occurred.
 
- This additive status note reconciles public package availability with AgentNet's
--published `0.1.37` release and corrective `0.1.38` candidate. It does not replace requirements, gate ledgers, or
-+published `0.1.38` release and corrective `0.1.39` candidate. It does not replace requirements, gate ledgers, or
- accountable-owner evidence.
-
- ## Current public package
-@@ -11,8 +11,8 @@ accountable-owner evidence.
- Reads of the public npm registry and immutable Git tag returned:
-
- - package: `@misunders2d/agentnet`
--- latest published version: `0.1.37`
--- published source commit: `6649e13c6a641ebc09071b6029df66af61f77ff4`
-+- latest published version: `0.1.38`
-+- published source commit: `f1f312824d785ac06134f1d21d8b6edc6b7421ba`
-
- Package availability does not authorize deployment and does not establish
- production readiness.
-@@ -160,14 +160,30 @@ public Hub setup then committed the five-unit marker with Core and Approval
- healthy but failed closed because the public route converged after the ordinary
- 30-attempt probe window; authority remained false and auxiliary units disabled.
-
--Corrective candidate `0.1.38` changes only post-restart setup convergence. Public
-+Published `0.1.38` changes only post-restart setup convergence. Public
- Approval/Core health and public Core readiness use the existing finite 90-attempt
- startup bound instead of the ordinary 30-attempt probe bound. Exact health/readiness
--identity, TLS, redirect, and fail-closed behavior are unchanged. It admits only
--exact released `0.1.37` five-unit marker migration; other release markers are
--rejected. Same-commit CI, immutable tag, trusted npm stage, and Hub recovery remain
--pending separately approved actions. No deployment, reset, database, enrollment,
--authority, C0, federation, production, or gate mutation is implied.
-+identity, TLS, redirect, and fail-closed behavior are unchanged. Its same-commit CI,
-+immutable tag, trusted npm stage, registry signature/provenance, and clean public
-+installation checks passed. The remote Hub peer reported from a bounded read-only
-+fresh-install preflight that the package's default `Python-urllib/*` request
-+identity received HTTP 403 on all three public routes. No 0.1.38 Hub installation
-+occurred.
+-Corrective candidate `0.1.39` changes only public health request identity: it sends
+-an explicit GET with `User-Agent: AgentNet/0.1.39` and
+-`Accept: application/json`. The remote Hub peer reported from a bounded read-only
+-comparison that the default urllib identity returned 403 on 3/3 routes while the
+-explicit product identity passed edge classification and reached the expected
+-offline-origin 502 class. This is peer-reported corroboration, not retained
+-reproducible release proof.
++Corrective candidate `0.1.39` changes public health request identity: it sends an
++explicit GET with `User-Agent: AgentNet/0.1.39` and `Accept: application/json`.
++The remote Hub peer reported from a bounded read-only comparison that the default
++urllib identity returned 403 on 3/3 routes while the explicit product identity
++passed edge classification and reached the expected offline-origin 502 class.
++This is peer-reported corroboration, not retained reproducible release proof.
+ Proxy disabling, redirect rejection, system TLS and hostname verification, the
+ two-second per-attempt timeout, response bound, exact JSON identity/readiness, and
+-finite retry behavior remain unchanged. This candidate is for fresh clean-state
+-setup only and adds no release-marker migration edge. Same-commit CI, immutable
+-tag, trusted npm stage, public bytes, and fresh Hub setup remain pending separately
+-approved actions. No deployment, reset, database, enrollment, authority, C0,
+-federation, production, or gate mutation is implied.
++finite retry behavior remain unchanged.
 +
-+Corrective candidate `0.1.39` changes only public health request identity: it sends
-+an explicit GET with `User-Agent: AgentNet/0.1.39` and
-+`Accept: application/json`. The remote Hub peer reported from a bounded read-only
-+comparison that the default urllib identity returned 403 on 3/3 routes while the
-+explicit product identity passed edge classification and reached the expected
-+offline-origin 502 class. This is peer-reported corroboration, not retained
-+reproducible release proof.
-+Proxy disabling, redirect rejection, system TLS and hostname verification, the
-+two-second per-attempt timeout, response bound, exact JSON identity/readiness, and
-+finite retry behavior remain unchanged. This candidate is for fresh clean-state
-+setup only and adds no release-marker migration edge. Same-commit CI, immutable
-+tag, trusted npm stage, public bytes, and fresh Hub setup remain pending separately
-+approved actions. No deployment, reset, database, enrollment, authority, C0,
-+federation, production, or gate mutation is implied.
++The candidate also repairs a local-conformance-only composition gap: intentional
++`deterministic_only` lab harnesses can now traverse the existing narrow signed C0
++authorization, recipient resolution, and exact custody-acknowledgement path without
++being promoted to `active`. The production policy engine still rejects those
++harnesses. A fresh npm-tarball installation has run separate signed client and
++Core processes over loopback, with the recipient client absent until after Core
++restart. It proved `accepted_local`, proof-derived actor attribution, idempotent
++request/receipt convergence, `recipient_committed`, typed response-obligation
++completion across restarts, fresh refusal after a lab-only credential fixture,
++and temporary-state cleanup. This is local synthetic evidence only—not the bounded
++C0 pilot, approved revocation, OIDC/WebAuthn enrollment, ordinary server-agent
++operation, PostgreSQL durability, or a production/ship claim.
++
++This candidate is for fresh clean-state setup only and adds no release-marker
++migration edge. Same-commit cross-platform, clean-setup, exact released-marker
++rejection, and packaged-local-communication CI, immutable tag, trusted npm stage,
++public bytes, and fresh Hub setup remain pending separately approved actions. No
++Hub deployment, reset, database, enrollment, authority, native C0, federation,
++production, or gate mutation is implied.
 
  ## Release and gate posture
 
 diff --git a/README.md b/README.md
-index ff1c9e4..1ea3fd1 100644
+index 1ea3fd1..0ea04e0 100644
 --- a/README.md
 +++ b/README.md
-@@ -162,7 +162,7 @@ controls.
- AgentNet package installation, local SQLite state, signed HTTP clients, and
- host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
- newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
--Only non-EOL Node.js release lines are supported: current `0.1.38` coverage targets
-+Only non-EOL Node.js release lines are supported: current `0.1.39` coverage targets
- Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
- the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
- compatible npm 10.9.3; the deployed Hub compatibility target is reported
-@@ -350,7 +350,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
- ## Project status
+@@ -341,7 +341,21 @@ uv run agentnet verify
 
- AgentNet is an early public implementation; the latest published package is
--`0.1.37` at commit `6649e13c6a641ebc09071b6029df66af61f77ff4`.
-+`0.1.38` at commit `f1f312824d785ac06134f1d21d8b6edc6b7421ba`.
- Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
- Google owner login exposed rejection of valid unique response extensions;
- published `0.1.30` repaired installed-verifier package custody; published
-@@ -360,9 +360,13 @@ message path. Published `0.1.32` repairs the ceremony blockers. Published
- the Hub transition exposed a retained systemd failed latch after its
- forward-only boundary. Published `0.1.35` adds identity-preserving reconciliation
- for that exact state. Published `0.1.37` removes one unsatisfiable fresh-init
--identity-profile check. Candidate `0.1.38` gives the existing finite startup wait to
--public post-restart health/readiness probes and admits only the exact released
--`0.1.37` five-unit marker needed to resume that setup. No release proves completed
-+identity-profile check. Published `0.1.38` extends only the bounded public
-+post-restart health/readiness wait, but the remote Hub peer reported from bounded
-+read-only preflight that its default `Python-urllib/*` request identity was
-+rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit `AgentNet/0.1.39` User-Agent and
-+JSON Accept header while preserving the same TLS, redirect, proxy, timeout,
-+payload, and exact-identity checks. It is a clean-state setup candidate and
-+accepts no earlier release marker as migration input. No release proves completed
+ The demo uses synthetic identities and explicitly reports `accepted_local`. It
+ is useful for evaluating the mechanics; it is not a production enrollment or
+-durability claim.
++durability claim. The release package gate goes further:
++
++```bash
++npm run check:packed
++```
++
++Its second clean npm installation starts a real loopback Core process and
++separate signed client processes from installed bytes. It proves local C0-classified
++conversation custody, exact actor attribution, idempotent request and receipt
++convergence, `recipient_committed`, typed response-obligation completion across
++Core restarts, and fresh authentication refusal after a clearly labeled lab-only
++credential fixture. It removes the temporary process/state boundary afterward.
++The result remains synthetic `local_conformance`: it does not prove bounded C0
++pilot completion, approved revocation, OIDC/WebAuthn enrollment, ordinary
++server-agent topology, PostgreSQL durability, or production readiness.
+
+ To inspect the complete operator journey—from creating a network and enrolling
+ the first administrator through invitations, messaging, recovery, and
+@@ -363,10 +377,13 @@ for that exact state. Published `0.1.37` removes one unsatisfiable fresh-init
+ identity-profile check. Published `0.1.38` extends only the bounded public
+ post-restart health/readiness wait, but the remote Hub peer reported from bounded
+ read-only preflight that its default `Python-urllib/*` request identity was
+-rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit `AgentNet/0.1.39` User-Agent and
+-JSON Accept header while preserving the same TLS, redirect, proxy, timeout,
+-payload, and exact-identity checks. It is a clean-state setup candidate and
+-accepts no earlier release marker as migration input. No release proves completed
++rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit
++`AgentNet/0.1.39` User-Agent and JSON Accept header while preserving the same TLS,
++redirect, proxy, timeout, payload, and exact-identity checks. It also repairs the
++local-only signed lab path so intentional `deterministic_only` harnesses can use
++the existing narrow C0 allowlist without becoming production-active, and adds the
++installed-package multiprocess gate described above. It is a clean-state setup
++candidate and accepts no earlier release marker as migration input. No release proves completed
  fresh-laptop enrollment, native
  cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
  release introduced product-owned ordinary Linux server setup: fixed
-@@ -462,14 +466,19 @@ reached a committed five-unit Hub marker with Core and Approval healthy, then
- failed closed because the public route converged after the ordinary 30-attempt
- probe window. Authority remained false and responder/renewal stayed disabled.
-
--Candidate `0.1.38` changes only setup convergence after service restart. Public
-+Published `0.1.38` changes only setup convergence after service restart. Public
- Approval/Core health and public Core readiness reuse the existing finite
- 90-attempt startup window; exact identity/readiness payload checks, TLS, redirects,
--and failure semantics are unchanged. It admits only the exact released `0.1.37`
--five-unit marker as its source and rejects other release markers. Release still
--requires external exact same-commit terminal-green cross-platform, clean-setup,
--and upgrade workflow evidence; post-push run IDs are not self-authored into source.
--Required runtime proof remains exact public `0.1.38`, clean five-unit readiness,
-+and failure semantics are unchanged. The remote Hub peer reported from bounded
-+read-only preflight that the stdlib default `Python-urllib/*` User-Agent received
-+HTTP 403 on all three public routes, while an explicit AgentNet product User-Agent
-+passed edge classification and reached the offline origin response. That report is
-+corroboration only, not retained reproducible release proof. Candidate `0.1.39` changes only request
-+identity: explicit GET, `User-Agent: AgentNet/0.1.39`, and
-+`Accept: application/json`. It adds no migration edge and rejects existing
-+release markers. Release still requires exact same-commit terminal-green
-+cross-platform and clean-setup workflow evidence; post-push run IDs are not
-+self-authored into source. Required runtime proof remains exact public `0.1.39`, clean five-unit readiness,
+@@ -473,11 +490,13 @@ and failure semantics are unchanged. The remote Hub peer reported from bounded
+ read-only preflight that the stdlib default `Python-urllib/*` User-Agent received
+ HTTP 403 on all three public routes, while an explicit AgentNet product User-Agent
+ passed edge classification and reached the offline origin response. That report is
+-corroboration only, not retained reproducible release proof. Candidate `0.1.39` changes only request
+-identity: explicit GET, `User-Agent: AgentNet/0.1.39`, and
+-`Accept: application/json`. It adds no migration edge and rejects existing
+-release markers. Release still requires exact same-commit terminal-green
+-cross-platform and clean-setup workflow evidence; post-push run IDs are not
++corroboration only, not retained reproducible release proof. Candidate `0.1.39`
++changes request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
++`Accept: application/json`; it also adds the bounded synthetic installed-package
++communication gate without weakening the production policy engine. It adds no
++migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
++cross-platform, clean-setup, and exact released-marker rejection workflow
++evidence; post-push run IDs are not
+ self-authored into source. Required runtime proof remains exact public `0.1.39`, clean five-unit readiness,
  fresh enrollment, one native
  signed message, recipient `recipient_committed`, exact
- `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.
 diff --git a/RELEASE_MANIFEST.json b/RELEASE_MANIFEST.json
-index f63d3c6..e3df6ef 100644
+index e3df6ef..4c89bec 100644
 --- a/RELEASE_MANIFEST.json
 +++ b/RELEASE_MANIFEST.json
-@@ -4,8 +4,8 @@
-   "snapshot_date": "2026-08-03",
+@@ -5,7 +5,7 @@
    "release": {
      "name": "agentnet",
--    "version": "0.1.38",
--    "profile": "public_health_convergence_candidate",
-+    "version": "0.1.39",
-+    "profile": "public_health_request_identity_candidate",
+     "version": "0.1.39",
+-    "profile": "public_health_request_identity_candidate",
++    "profile": "public_health_and_packaged_local_communication_candidate",
      "status": "BLOCKED",
      "production_ready": false,
      "ship_eligible": false,
-@@ -32,12 +32,12 @@
-   },
-   "dependency_lock": {
-     "path": "uv.lock",
--    "sha256": "1da8553bf14db4c461b3c0ae74c435498d1f3383ab49b4ae60894203ed38b94a",
-+    "sha256": "942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285",
-     "format_version": 1,
+@@ -37,7 +37,7 @@
      "revision": 3,
      "pyproject": {
        "path": "pyproject.toml",
--      "sha256": "2d4b6e50812154ef8317d190a56188905e4455421553e8d18c765c2a2d073ab7"
-+      "sha256": "8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8"
+-      "sha256": "8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8"
++      "sha256": "ed6bac592c242f59d1500d6d118bf7dc0118e7938c3ccc87e596c14b96d9375f"
      },
      "direct_dependencies": {
        "build": {
@@ -160,13 +168,13 @@ index f63d3c6..e3df6ef 100644
    "release_inputs": {
      "README.md": {
        "path": "README.md",
--      "sha256": "cef1c101b22d00ff3b595d69335418d16e1411c79a51fd52a021ea0620a057d1"
-+      "sha256": "5d5fc1c876a274369e23895cc9d717ae919e58a294716014352be3430a06a620"
+-      "sha256": "5d5fc1c876a274369e23895cc9d717ae919e58a294716014352be3430a06a620"
++      "sha256": "2af059607f85d9188f69508495f8b866e897565fd78e704e001c4a7aaf7eea70"
      },
      "REQUIREMENTS_STATUS.md": {
        "path": "REQUIREMENTS_STATUS.md",
--      "sha256": "78cc4c7a476f4a03c79da3c56c6f81bc59d7584eaa16d4b49366b47b4cf3808b"
-+      "sha256": "8c7e9446f52f908b9b02a6efd783bf87113c0423330bdece461797551ec70197"
+-      "sha256": "8c7e9446f52f908b9b02a6efd783bf87113c0423330bdece461797551ec70197"
++      "sha256": "a3ea62531f9a4dc2d8f65e187e6e4c9c12703328418d57c94184c3980ceb983b"
      },
      "deploy/Dockerfile": {
        "path": "deploy/Dockerfile",
@@ -174,808 +182,1768 @@ index f63d3c6..e3df6ef 100644
      },
      "docs/GATE_EVIDENCE.md": {
        "path": "docs/GATE_EVIDENCE.md",
--      "sha256": "8e07901eaea0229d5563ade55f810a98604f78f16db2700ec0fece97aa7648a2"
-+      "sha256": "1430a4de136ab3dce070bd4d93a594de2d046cba3ad58d0ac62fc3e93c270a98"
+-      "sha256": "1430a4de136ab3dce070bd4d93a594de2d046cba3ad58d0ac62fc3e93c270a98"
++      "sha256": "4a1678c7fefdfee1c6e1ee870b2ca417b2e2491031af69d276313efdedcac3ff"
      },
      "docs/RELEASE_MANIFEST.md": {
        "path": "docs/RELEASE_MANIFEST.md",
--      "sha256": "d153889c9b3295518d9c17657974acf9703a0a36fdc6194fcae505ac859a538e"
-+      "sha256": "ccd7b029701e30b52fdbed4911ee03c86ab20dfcf417588d1f61852427e5b20e"
+-      "sha256": "ccd7b029701e30b52fdbed4911ee03c86ab20dfcf417588d1f61852427e5b20e"
++      "sha256": "c9eccf4898307b232bf168e71ca7cbfbc74885ed3afc78ca23f7bac95beec864"
      },
      "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
        "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
-@@ -245,13 +245,13 @@
+@@ -239,19 +239,23 @@
+       "path": "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
+       "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb"
+     },
++    "scripts/ci/packaged_local_communication_e2e.py": {
++      "path": "scripts/ci/packaged_local_communication_e2e.py",
++      "sha256": "c579e4afb4e433556c0179bcb3d2ff7c11b65d1ed969636f110688813b49f0e6"
++    },
+     "scripts/export_schemas.py": {
+       "path": "scripts/export_schemas.py",
+       "sha256": "f8d8cf238c4ce1318331ae60efb1c8db5388cbbd558e2d1d355c80dd870e2ff9"
      },
      "scripts/verify_release.py": {
        "path": "scripts/verify_release.py",
--      "sha256": "c2bfe249068b6babc51bbcc4f1770e976c29453868a1edd3b51225da615242e9"
-+      "sha256": "b0020815af2120b0c7d6eefeebc1ffd17a983df28dc2c0ba6bb2149be135dd01"
+-      "sha256": "b0020815af2120b0c7d6eefeebc1ffd17a983df28dc2c0ba6bb2149be135dd01"
++      "sha256": "fafc39b1abd19b767d1f11c7e4c63572dbb6b4512fe46593deabaed1b9798ecc"
      }
    },
    "release_source_tree": {
      "path": "src",
      "algorithm": "sha256(path NUL bytes NUL)",
--    "sha256": "ba9bd57238c89185c3c100c347acb7f2f1eba3cca8d5d243e3584072552a5d66"
-+    "sha256": "77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39"
+-    "sha256": "77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39"
++    "sha256": "4d3961f7c871fc969828a5119cba02946e410e141f019b9a97f41aa0ca4c7016"
    },
    "protocols": {
      "a2a": {
-@@ -410,7 +410,7 @@
-     },
-     "supervisor_harness_lifecycle": {
-       "status": "BUILD_OWN_INTEGRATION",
--      "pin": "agentnet-0.1.38",
-+      "pin": "agentnet-0.1.39",
-       "boundary": "Exact human plus harness binding and foreground isolation remain owned."
-     },
-     "a2a_gateway": {
 diff --git a/REQUIREMENTS_STATUS.md b/REQUIREMENTS_STATUS.md
-index df61e54..a074fb5 100644
+index a074fb5..ec6546b 100644
 --- a/REQUIREMENTS_STATUS.md
 +++ b/REQUIREMENTS_STATUS.md
-@@ -165,19 +165,32 @@ published and historical release evidence:
+@@ -163,7 +163,7 @@ published and historical release evidence:
+   the locator, closing the pin, stopping retry cycling, and reporting a fixed
+   content-free failure code after startup failure or terminal exhaustion.
    Release requires external exact same-commit terminal-green cross-platform, clean-setup, and
-   upgrade workflow evidence; post-push run IDs are not self-authored into source.
+-  upgrade workflow evidence; post-push run IDs are not self-authored into source.
++  exact released-marker rejection workflow evidence; post-push run IDs are not self-authored into source.
    No requirement or gate is promoted.
--- Candidate `0.1.38` affects `OPS-003`, `OPS-004`, `OPS-006`, `OPS-007`,
-+- Published `0.1.38` affects `OPS-003`, `OPS-004`, `OPS-006`, `OPS-007`,
+ - Published `0.1.38` affects `OPS-003`, `OPS-004`, `OPS-006`, `OPS-007`,
    and the blocked `COM-001`/`COM-009`/`COM-011`/`AVL-005` first-message path.
-   It gives only public post-restart Approval/Core health and Core readiness the
-   existing finite 90-attempt startup bound; exact identity/readiness payload,
-   TLS, redirect, and fail-closed checks are unchanged. It admits only the exact
-   released `0.1.37` five-unit marker as its source and rejects other releases.
--  The setup/recovery lane reports `223 passed`; focused release lane `644 passed,
--  7 expected dedicated-PostgreSQL skips`; source lane `1613 passed, 16 expected
--  skips`; source and two recursive packed generations each `1640 passed, 16
--  expected skips`; conformance `40 passed`; release verifier, package checks,
--  and deterministic byte-identical archives pass.
--  Same-commit CI, public-package verification, Hub setup, C0, revocation, and
--  refusal evidence remain pending. No requirement or gate is promoted.
-+  Its setup/recovery, focused, source, recursive packed, conformance, release,
-+  deterministic-build, same-commit CI, tag, trusted-stage, and public-package
-+  checks passed. The remote Hub peer reported from bounded read-only fresh-install
-+  preflight that its default `Python-urllib/*` User-Agent received HTTP 403 on all
-+  three public routes; no 0.1.38 Hub installation occurred. That report remains
-+  corroboration only, not retained reproducible release proof.
-+- Candidate `0.1.39` affects the same requirement boundary. It changes only the
-+  health request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
-+  `Accept: application/json`. Proxy disabling, redirect rejection, system TLS
-+  and hostname verification, timeout, finite retries, response bounds, exact
-+  JSON identity/readiness, authority, and auxiliary-unit ordering are
-+  unchanged. It adds no migration edge and rejects an exact 0.1.38 release
-+  marker. The setup/recovery lane reports `224 passed`; focused release lane
-+  `645 passed, 7 expected dedicated-PostgreSQL skips`; source-only lane `1614
-+  passed, 16 expected skips`; source and two recursive packed generations each
-+  `1641 passed, 16 expected skips`; direct disposable-package verification,
-+  release verification, package-tree equality, no-residue checks, and two
-+  deterministic byte-identical builds pass. Same-commit CI, public-package, Hub
-+  setup, C0, revocation, and refusal evidence remain pending. No requirement or
-+  gate is promoted.
+@@ -177,20 +177,29 @@ published and historical release evidence:
+   preflight that its default `Python-urllib/*` User-Agent received HTTP 403 on all
+   three public routes; no 0.1.38 Hub installation occurred. That report remains
+   corroboration only, not retained reproducible release proof.
+-- Candidate `0.1.39` affects the same requirement boundary. It changes only the
+-  health request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
+-  `Accept: application/json`. Proxy disabling, redirect rejection, system TLS
+-  and hostname verification, timeout, finite retries, response bounds, exact
+-  JSON identity/readiness, authority, and auxiliary-unit ordering are
+-  unchanged. It adds no migration edge and rejects an exact 0.1.38 release
+-  marker. The setup/recovery lane reports `224 passed`; focused release lane
+-  `645 passed, 7 expected dedicated-PostgreSQL skips`; source-only lane `1614
+-  passed, 16 expected skips`; source and two recursive packed generations each
+-  `1641 passed, 16 expected skips`; direct disposable-package verification,
+-  release verification, package-tree equality, no-residue checks, and two
+-  deterministic byte-identical builds pass. Same-commit CI, public-package, Hub
+-  setup, C0, revocation, and refusal evidence remain pending. No requirement or
+-  gate is promoted.
++- Candidate `0.1.39` affects `AUTH-001`, `AUTH-002`, `AUTH-004`, `AUTH-007`,
++  `COM-001`, `COM-006`, `COM-009`, `COM-011`, `AVL-002`, `AVL-005`, `AVL-006`,
++  `SEC-003`, `SEC-005`, `SEC-006`, `OPS-003`, `OPS-004`, `OPS-006`, and
++  `OPS-007`. It changes health request identity to explicit GET,
++  `User-Agent: AgentNet/0.1.39`, and `Accept: application/json` while preserving
++  proxy, redirect, TLS, timeout, response, identity/readiness, authority, and
++  auxiliary-unit boundaries. It also repairs only the local policy-revision,
++  recipient-resolution, and exact custody-acknowledgement seams needed for
++  signed `deterministic_only` lab harnesses to use the pre-existing narrow C0
++  allowlist; the production policy still rejects those harnesses. A fresh npm
++  tarball installed into an unrelated prefix passed a real loopback,
++  separate-process local journey: offline recipient until Core restart, exact
++  proof-derived attribution, `accepted_local`, idempotent event/obligation and
++  receipt convergence, `recipient_committed`, typed obligation completion across
++  restarts, fresh refusal after an explicitly non-approved lab credential fixture,
++  and temporary-state cleanup. This is H/L-shaped synthetic evidence only; it is
++  not `COMPLETED_C0_ROUND_TRIP`, approved revocation/five-power cleanup,
++  OIDC/WebAuthn enrollment, ordinary server-agent `COM-002`/`COM-003`,
++  PostgreSQL/HA durability, or production proof. It adds no migration edge and
++  rejects an exact 0.1.38 release marker. Final source and recursive packed
++  counts, deterministic artifacts, and release metadata are refreshed. Exact
++  same-commit cross-platform, clean-setup, released-marker rejection, and
++  packaged-communication CI remain pending. No requirement or gate is promoted.
  - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
    `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
    `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is
-@@ -327,7 +340,7 @@ stable requirement's status or remaining external/owner boundary.
+@@ -340,7 +349,7 @@ stable requirement's status or remaining external/owner boundary.
  | OPS-004 — privacy-safe health/queue/latency/error/denial/security observability | partial-external | `src/agentnet/operations/telemetry.py`; `src/agentnet/audit/service.py`; `src/agentnet/product_http.py` | Fixed-label counters, bounded latency buckets, gauges, outage denials, scanner/audit/cost/adapter results, and protected content-free operator status: `tests/operations/test_privacy_budgets_attention.py`; `tests/integration/test_product_http_api.py`; `tests/production/test_postgres_runtime.py` | Production dashboard, alert delivery, retention, and load-SLO evidence remain external/owner-governed. |
  | OPS-005 — quotas, rate limits, backpressure, abuse and loop controls | partial-external | `src/agentnet/operations/quotas.py`; `src/agentnet/supervisor/model_egress.py`; `src/agentnet/operations/policy_defaults.py` | Persistent multidimensional fairness, atomic authoritative pressure reservations, circuit-breaker CAS/reclaim, loop fencing, safety reserve, relay/effect composition, and real-PostgreSQL one-winner race: `tests/operations/test_privacy_budgets_attention.py`; `tests/relay/test_server_agent_relay.py`; `tests/effects/test_effect_reservation.py`; `tests/production/test_postgres_runtime.py` | Production flood/soak/capacity tuning remains external and owner-governed. |
  | OPS-006 — portable self-hosted install/config/credentials/deployment | partial-external | `npm/bin/agentnet.mjs`; `src/agentnet/host.py`; `src/agentnet/host_security.py`; `src/agentnet/windows_security.py`; `src/agentnet/_terminal_handoff.py`; `src/agentnet/cli.py`; `src/agentnet/operations/server_setup.py`; `src/agentnet/storage/sqlite.py`; `src/agentnet/security/distribution.py`; `deploy/compose.production.json` | Linux/macOS/Windows package install/launch; fixed Linux setup plan/apply/resume/redaction; canonical state roots; owner-mode/protected-DACL state; reparse/link rejection; portable SQLite reopen/replay; signed HTTP client availability; config rebinding; backup/restore; anti-rollback; POSIX private-TTY behavior; and one ephemeral Ubuntu 24.04/PostgreSQL 18 installed-artifact setup lifecycle with always-run cleanup: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/cli/test_terminal_handoff.py`; `tests/production/test_deployment_config.py`; `tests/operations/test_backup_restore.py`; `tests/security/test_distribution_lifecycle.py`; GitHub run `30155733937` | Current real-host setup proof is one ephemeral Linux/systemd runner, not a privileged hostile-path or persistent-host trial. Windows terminal mode intentionally fails closed; signed native installer/update/uninstall/rollback, privileged hostile-path trials, live Google/WebAuthn, PostgreSQL locked restore, KMS/off-host custody, and independently signed production artifacts remain external. |
--| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.38`, the setup/recovery lane reports `223 passed`; focused release lane reports `644 passed/7 expected dedicated-PostgreSQL skips`; source lane reports `1613 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1640 passed/16 expected skips`; conformance reports `40 passed`; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Tests execute from a disposable copy, all caller pytest arguments are rejected, and complete installed-tree content-digest equality plus no named verifier residue pass. The bounded public-health correction retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs and do not qualify `0.1.30`: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.38` root-installed Hub verification and same-digest recovery, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
-+| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.39`, the setup/recovery lane reports `224 passed`; focused release lane reports `645 passed/7 expected dedicated-PostgreSQL skips`; source-only lane reports `1614 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1641 passed/16 expected skips`; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Published `0.1.38` retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. Candidate `0.1.39` changes only to explicit GET plus product User-Agent and JSON Accept headers; it adds no migration edge and rejects an exact 0.1.38 marker. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.39` root-installed Hub verification and fresh clean-state setup, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
+-| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.39`, the setup/recovery lane reports `224 passed`; focused release lane reports `645 passed/7 expected dedicated-PostgreSQL skips`; source-only lane reports `1614 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1641 passed/16 expected skips`; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Published `0.1.38` retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. Candidate `0.1.39` changes only to explicit GET plus product User-Agent and JSON Accept headers; it adds no migration edge and rejects an exact 0.1.38 marker. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.39` root-installed Hub verification and fresh clean-state setup, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
++| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `.github/workflows/server-setup-upgrade-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.39`, the setup/recovery lane reports `224 passed`; focused release lane reports `645 passed/7 expected dedicated-PostgreSQL skips`; source-only lane reports `1615 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1642 passed/16 expected skips`; generation 2 additionally passes the installed-byte real-loopback multiprocess local communication gate with `accepted_local`, exact attribution, idempotency, `recipient_committed`, typed obligation completion across four Core starts (three restarts), lab-fixture credential refusal, listener release, empty workspace, and no package-tree residue; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Published `0.1.38` retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. Candidate `0.1.39` changes to explicit GET plus product User-Agent and JSON Accept headers and repairs only the deterministic-lab local policy/recipient/custody seams; production policy still rejects those harnesses. It adds no migration edge and rejects an exact 0.1.38 marker. Its same-commit gate must realize that exact public marker from fresh state, require two identical fail-closed refusals, and prove marker, attempt, managed files, database schema, unit states, identity, and authority remain unchanged. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.39` root-installed Hub verification and fresh clean-state setup, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
 
  ## Accountable policy decisions (separate from the 85 requirements)
 
 diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
-index ef27d6a..aa4c1fd 100644
+index aa4c1fd..c87f5cb 100644
 --- a/docs/ARCHITECTURE.md
 +++ b/docs/ARCHITECTURE.md
-@@ -653,10 +653,20 @@ P-256 key custody/readability. It removes the impossible requirement for
- Database-backed credential-to-key proof remains owned by `server-agent
- activate`; setup does not replace it with a self-asserted profile field.
+@@ -72,6 +72,21 @@ path-descriptor primitive fails the MCP binding closed.
+ Real-host CI proves only the named package/local contracts, not production
+ deployment or semantic clean-worker qualification.
 
--Candidate `0.1.38` adds one exact `0.1.37` five-unit forward marker edge and
--changes only post-restart public probe timing. Public Approval/Core health and
--public Core readiness reuse the existing finite 90-attempt startup bound; the
--ordinary 30-attempt default remains for non-startup probes. Exact payload, TLS,
--redirect, authority, and auxiliary-unit ordering checks are unchanged.
-+Published `0.1.38` adds one exact `0.1.37` five-unit forward marker edge and
-+changes post-restart public probe timing. Public Approval/Core health and public
-+Core readiness reuse the existing finite 90-attempt startup bound; the ordinary
-+30-attempt default remains for non-startup probes. The remote Hub peer reported
-+from bounded read-only fresh-install preflight that its default
-+`Python-urllib/*` request identity was rejected with HTTP 403 before origin
-+routing. That report is corroboration only, not retained reproducible proof.
++The packaged local-communication gate composes a narrower signed lab lane. It
++creates exact `binding_assurance=lab`, `deterministic_only` harnesses through the
++existing local-conformance bootstrap, then runs Core and every client as separate
++OS processes from an unrelated npm installation over real loopback HTTP. Only
++`LocalConformancePolicyEngine` may resolve a policy revision for those harnesses,
++and only the existing inert C0 allowlist may authorize them. Recipient resolution
++and exact mailbox acknowledgement accept `deterministic_only` only when the
++persisted verified-human harness is also lab-bound. No code promotes it to
++`active`; the production `PolicyEngine` continues to reject it. The gate proves
++`accepted_local`, exact proof-derived attribution, request/receipt idempotency,
++`recipient_committed`, typed obligation completion, restart recovery, and fresh
++authentication refusal after a clearly labeled local credential fixture. It does
++not prove enrollment, bounded C0 pilot completion, approved revocation,
++five-power cleanup, ordinary server-agent topology, or production durability.
 +
-+Candidate `0.1.39` changes only the health request object: explicit GET,
-+`User-Agent: AgentNet/0.1.39`, and `Accept: application/json`, sent through the
-+same proxy-disabled, redirect-rejecting stdlib opener. System TLS and hostname
-+verification, bounded attempts and timeout, response bounds, exact JSON
-+identity/readiness, authority, and auxiliary-unit ordering remain unchanged.
-+The candidate adds no migration edge: clean-state setup is allowed, while every
-+existing release marker or journal fails closed.
-
- `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.
+ An always-on process has a separate deployment-identity binding step. After
+ real enrollment, `server-agent activate` holds the exact runtime lease under a
+ distinct activation owner, verifies the current credential and private key
 diff --git a/docs/GATE_EVIDENCE.md b/docs/GATE_EVIDENCE.md
-index debb13c..4208c0b 100644
+index 4208c0b..3dcc0ad 100644
 --- a/docs/GATE_EVIDENCE.md
 +++ b/docs/GATE_EVIDENCE.md
-@@ -72,7 +72,8 @@ Gate statuses used here:
- | Published npm `0.1.35` identity-preserving setup/credential recovery | Exact digest-bound `0.1.33` five-unit predecessor; atomic journal succession; Approval SIGTERM/status 143 contract; exact failed-latch reconciliation; marker-first PostgreSQL boundary; pre-C0 same-key expired-credential reauthorization | Focused release lane `625 passed, 7 expected dedicated-PostgreSQL skips`; source and recursive packed lanes `1621 passed, 16 expected skips`; byte-identical artifacts; cross-platform run `30693899336`, clean setup run `30693899319`, and real upgrade run `30693899330` passed. Exact public Hub apply later committed marker/schema migration and exposed the impossible `actor.key_id` setup check; five units remained inactive, authority false, no enrollment/C0. | `BLOCKED`; H/L package and bounded non-green live-Hub evidence. No production, ship, requirement, or gate promotion. |
+@@ -73,7 +73,7 @@ Gate statuses used here:
  | Corrective npm `0.1.36` strict identity-profile and setup-convergence candidate | Duplicate-key-rejecting JSON plus strict canonical `VerifiedActor` parsing; exact domain/harness/credential label checks; unchanged private profile/key custody and P-256 readability; removal of impossible nonexistent `actor.key_id` comparison; exact released `0.1.33` five-unit marker migration only; Approval/Core/C0 systemd `Type=exec` live-runtime convergence | Test-first identity regression failed on canonical writer output under `0.1.35`, then passed after the minimal correction. Exact upgrade E2E run `30707067892` passed. Clean setup run `30707067865` passed first apply then exposed the `Type=simple` pre-exec race on same-digest retry; official systemd semantics support the minimal `Type=exec` correction, and the temporary diagnostic classifier was removed. Focused release lane `631 passed, 7 expected dedicated-PostgreSQL skips`; source and two recursive packed generations each `1627 passed, 16 expected skips`; direct `agentnet verify`, release verifier, complete package-tree equality, and deterministic double-build checks pass. Same-commit main-push workflows passed, but immutable-tag upgrade run `30750626969` failed in the released `0.1.31` seed's post-start sampling of systemd's transient pre-exec `MainPID`; cleanup passed and npm staging did not run. | `BLOCKED`; immutable non-public tag and bounded negative CI evidence. No waiver, tag rewrite, authority grant, production, ship, requirement, or gate promotion. |
  | Published npm `0.1.37` released-seed convergence repair | One real released `0.1.31 --apply --start`; strict exit-1 plus exact `service_runtime`/message/schema and actual-boolean false safety-field classification; bounded non-mutating invocation of the exact released package's own Approval/Core runtime and loopback/public health validators only on the classified failure branch; separately captured stderr included in synthetic-secret scanning; exact `0.1.33`-to-`0.1.37` five-unit marker edge only | Focused lane `637 passed, 7 expected dedicated-PostgreSQL skips`; source and two recursive packed generations each `1633 passed, 16 expected skips`; conformance `40 passed`; direct `agentnet verify`, release verifier, complete package-tree equality, no-residue checks, deterministic byte-identical retained archives, same-commit GitHub, immutable tag, and trusted npm stage pass. Malformed/duplicate/non-finite evidence, numeric false-lookalikes, wrong exit/blocker/message/safety fields, stable wrong runtime, unexpected blocker, timeout, health mismatch, and module-provenance mismatch fail closed. | `BLOCKED`; H/package evidence only. `0.1.34`, `0.1.35`, `0.1.36`, and direct legacy marker sources remain rejected. No setup retry/restart, runtime-proof weakening, deployment, reset, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
--| Corrective npm `0.1.38` public-health convergence candidate | Exact live failure after loopback health succeeded but public route required about 49–61 seconds; public Approval/Core health and public Core readiness reuse the existing finite 90-attempt startup bound; ordinary probes retain 30 attempts; exact `0.1.37` five-unit marker edge only | Pre-fix regression failed because all three public calls passed the default bound; corrected setup/recovery lane `223 passed`; focused release lane `644 passed, 7 expected dedicated-PostgreSQL skips`; source lane `1613 passed, 16 expected skips`; source plus two recursive packed generations each `1640 passed, 16 expected skips`; conformance `40 passed`; release verifier, package checks, and deterministic byte-identical archives pass. Same-commit CI, tag, and trusted-stage evidence remain pending. | `BLOCKED`; H-shaped focused evidence only. Exact payload, TLS, redirect, authority, and auxiliary-unit ordering checks are unchanged. Other release marker sources fail closed. No deployment, reset, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
-+| Published npm `0.1.38` public-health convergence repair | Exact live failure after loopback health succeeded but public route required about 49–61 seconds; public Approval/Core health and public Core readiness reuse the existing finite 90-attempt startup bound; ordinary probes retain 30 attempts; exact `0.1.37` five-unit marker edge only | Pre-fix regression failed because all three public calls passed the default bound; corrected setup/recovery lane `223 passed`; focused release lane `644 passed, 7 expected dedicated-PostgreSQL skips`; source lane `1613 passed, 16 expected skips`; source plus two recursive packed generations each `1640 passed, 16 expected skips`; conformance `40 passed`; release verifier, package checks, deterministic byte-identical archives, same-commit CI, immutable tag, trusted npm stage, registry signature/provenance, and public-byte checks pass. The remote Hub peer reported from bounded read-only fresh-install preflight that the default `Python-urllib/*` User-Agent received HTTP 403 on all three public routes; no 0.1.38 Hub installation occurred. That report is corroboration only, not retained reproducible proof. | `BLOCKED`; H/package evidence plus bounded read-only negative Hub evidence. Exact payload, TLS, redirect, authority, and auxiliary-unit ordering checks are unchanged. No deployment, reset, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
-+| Corrective npm `0.1.39` public-health request-identity candidate | Explicit GET `urllib.request.Request`; `User-Agent: AgentNet/0.1.39`; `Accept: application/json`; unchanged proxy-disabled and redirect-rejecting opener, system TLS/hostname verification, two-second timeout, response bound, exact JSON identity/readiness, finite retries, authority, and auxiliary-unit ordering; fresh clean-state setup only with no migration edge | Test-first regression failed because `_health()` passed a URL string, then passed after the minimal request-object correction. Focused health lane `2 passed`; setup/recovery lane `224 passed`; focused release lane `645 passed, 7 expected dedicated-PostgreSQL skips`; source-only lane `1614 passed, 16 expected skips`; source and two recursive packed generations each `1641 passed, 16 expected skips`; direct disposable-package verification, release verifier, package-tree equality, no-residue checks, and two deterministic byte-identical builds pass. The remote Hub peer reports from a bounded read-only comparison that default urllib returned 403 on 3/3 routes and the explicit product User-Agent reached offline-origin 502 on 3/3 routes; this is peer-reported corroboration only. Same-commit CI, tag, stage, public-byte, and fresh-setup evidence remain pending. | `BLOCKED`; H-shaped focused evidence plus peer-reported bounded read-only corroboration only. An exact 0.1.38 marker is rejected. No installation, migration, reset, manual reconstruction, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
+ | Published npm `0.1.38` public-health convergence repair | Exact live failure after loopback health succeeded but public route required about 49–61 seconds; public Approval/Core health and public Core readiness reuse the existing finite 90-attempt startup bound; ordinary probes retain 30 attempts; exact `0.1.37` five-unit marker edge only | Pre-fix regression failed because all three public calls passed the default bound; corrected setup/recovery lane `223 passed`; focused release lane `644 passed, 7 expected dedicated-PostgreSQL skips`; source lane `1613 passed, 16 expected skips`; source plus two recursive packed generations each `1640 passed, 16 expected skips`; conformance `40 passed`; release verifier, package checks, deterministic byte-identical archives, same-commit CI, immutable tag, trusted npm stage, registry signature/provenance, and public-byte checks pass. The remote Hub peer reported from bounded read-only fresh-install preflight that the default `Python-urllib/*` User-Agent received HTTP 403 on all three public routes; no 0.1.38 Hub installation occurred. That report is corroboration only, not retained reproducible proof. | `BLOCKED`; H/package evidence plus bounded read-only negative Hub evidence. Exact payload, TLS, redirect, authority, and auxiliary-unit ordering checks are unchanged. No deployment, reset, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
+-| Corrective npm `0.1.39` public-health request-identity candidate | Explicit GET `urllib.request.Request`; `User-Agent: AgentNet/0.1.39`; `Accept: application/json`; unchanged proxy-disabled and redirect-rejecting opener, system TLS/hostname verification, two-second timeout, response bound, exact JSON identity/readiness, finite retries, authority, and auxiliary-unit ordering; fresh clean-state setup only with no migration edge | Test-first regression failed because `_health()` passed a URL string, then passed after the minimal request-object correction. Focused health lane `2 passed`; setup/recovery lane `224 passed`; focused release lane `645 passed, 7 expected dedicated-PostgreSQL skips`; source-only lane `1614 passed, 16 expected skips`; source and two recursive packed generations each `1641 passed, 16 expected skips`; direct disposable-package verification, release verifier, package-tree equality, no-residue checks, and two deterministic byte-identical builds pass. The remote Hub peer reports from a bounded read-only comparison that default urllib returned 403 on 3/3 routes and the explicit product User-Agent reached offline-origin 502 on 3/3 routes; this is peer-reported corroboration only. Same-commit CI, tag, stage, public-byte, and fresh-setup evidence remain pending. | `BLOCKED`; H-shaped focused evidence plus peer-reported bounded read-only corroboration only. An exact 0.1.38 marker is rejected. No installation, migration, reset, manual reconstruction, database, enrollment, authority, C0, federation, production, ship, requirement, or gate promotion. |
++| Corrective npm `0.1.39` request-identity plus packaged local-communication candidate | Explicit GET `urllib.request.Request`; `User-Agent: AgentNet/0.1.39`; JSON Accept; unchanged TLS/proxy/redirect/timeout/identity boundaries; local-policy-only deterministic lab revision, recipient-resolution, and custody-ACK composition; second recursive npm generation runs a real Core plus separate fresh-proof client processes over loopback from installed bytes; fresh clean-state setup only with no migration edge | Health regression passed (`2 passed`); setup/recovery (`224 passed`) and prior focused release (`645 passed, 7 expected PostgreSQL skips`) remain green. New focused synthetic-lane/HTTP/obligation regressions report `7 passed`. A fresh manually packed npm tarball installed into an unrelated prefix passed `accepted_local`, exact proof-derived request/reply attribution, offline recipient recovery after Core restart, stable request event/obligation and ACK receipt idempotency, `recipient_committed`, typed obligation `completed`, requester response custody after another restart, fresh authentication refusal after an explicitly non-approved lab credential fixture, closed listener, and removed state. Final metadata-bound recursive verification passed in both clean npm generations with `1642 passed, 16 expected skips` each; generation 2 additionally passed the installed-byte multiprocess lifecycle, package-tree equality, empty-workspace, listener-release, and no-residue checks. Peer-reported 403→502 comparison remains corroboration only. | `BLOCKED`; H/L-shaped synthetic local evidence only. The production policy engine still rejects deterministic lab harnesses. This is not bounded `COMPLETED_C0_ROUND_TRIP`, approved revocation or five-power cleanup, real enrollment, ordinary server-agent `COM-002`/`COM-003`, PostgreSQL durability, Hub installation, production, ship, requirement, or gate promotion. Exact same-commit cross-platform, clean-setup, public-0.1.38-marker rejection, packaged communication, tag, stage, public-byte, and fresh-setup evidence remain pending. |
  | OIDC validated-address transport repair | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/identity/test_oidc_enrollment.py tests/operations/test_fail_closed_config.py tests/production/test_deployment_config.py` | 53 passed, 0 failed on 2026-07-15 | H only: includes the real `_PinnedHTTPSConnection` socket path under a validation-to-connect DNS-answer change, exact TCP address/SNI/Host assertions, proxy/tunnel and redirect denial, response bounds, unsafe address-class rejection, invalid resolver type handling, private IPv4/IPv6 pins, configuration, and deployment wiring. No real IdP/TLS service or independent approval boundary is claimed. |
  | Independent WebAuthn-UV approval component | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval`; approval-consumer lane; non-gate full regression below | 12 focused passed; 144 approval/consumer passed; included in 1049-pass broad lane on 2026-07-15 | H only: strict owner-only config/key custody, exact SQLite catalog/tamper rejection, UV-required maintained-library call contract, exact display/digest, bounded duplicate-rejecting HTTP, one-receipt response-loss retry, committed denial/expiry audits, rejection, credential revocation, loopback serving, and non-authorizing provisioning. WebAuthn verification is seam-controlled in hermetic tests; no real authenticator, independent host/device/operator, TLS proxy, rotation/recovery drill, or owner decision is claimed. |
  | Prior `0.1.8` candidate, unfiltered local run | `UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q` | `1087 passed, 2 failed, 7 expected PostgreSQL skips` on 2026-07-16 | Both failures were preserved environmental G01 gates. This was not a passing unfiltered release run and is not current `0.1.9` evidence. |
 diff --git a/docs/RELEASE_MANIFEST.md b/docs/RELEASE_MANIFEST.md
-index c6c7418..67fcf8a 100644
+index 67fcf8a..4c1dc9c 100644
 --- a/docs/RELEASE_MANIFEST.md
 +++ b/docs/RELEASE_MANIFEST.md
-@@ -1,9 +1,9 @@
- # Release Manifest
-
+@@ -3,7 +3,7 @@
  Snapshot: 2026-08-03
--Candidate: `agentnet 0.1.38`
--Latest published package: `agentnet 0.1.37`
--Evidence profile: public-health convergence candidate
-+Candidate: `agentnet 0.1.39`
-+Latest published package: `agentnet 0.1.38`
-+Evidence profile: public-health request-identity candidate
+ Candidate: `agentnet 0.1.39`
+ Latest published package: `agentnet 0.1.38`
+-Evidence profile: public-health request-identity candidate
++Evidence profile: public-health request identity plus packaged local communication candidate
 
  This is not a production release. It is the human projection of
  `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
-@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
- |---|---|
+@@ -25,7 +25,7 @@ owner, installer, or production-topology gates.
  | Runtime | CPython `3.13.13` |
  | Python range | `>=3.13, <3.15` |
--| `uv.lock` | format `1`, revision `3`, SHA-256 `1da8553bf14db4c461b3c0ae74c435498d1f3383ab49b4ae60894203ed38b94a` |
--| `pyproject.toml` | SHA-256 `2d4b6e50812154ef8317d190a56188905e4455421553e8d18c765c2a2d073ab7` |
-+| `uv.lock` | format `1`, revision `3`, SHA-256 `942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285` |
-+| `pyproject.toml` | SHA-256 `8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8` |
+ | `uv.lock` | format `1`, revision `3`, SHA-256 `942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285` |
+-| `pyproject.toml` | SHA-256 `8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8` |
++| `pyproject.toml` | SHA-256 `ed6bac592c242f59d1500d6d118bf7dc0118e7938c3ccc87e596c14b96d9375f` |
  | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
  The production Docker recipe installs the locked build group, then installs
-@@ -334,13 +334,21 @@ responder/renewal stayed disabled. No manual marker edit, database downgrade,
- identity substitution, deployment, authority, or gate promotion is authorized
- or claimed.
+@@ -342,13 +342,25 @@ fresh-install preflight that its default `Python-urllib/*` User-Agent received
+ HTTP 403 before origin routing; no 0.1.38 Hub installation occurred. That report
+ is corroboration only, not retained reproducible proof.
 
--Candidate `0.1.38` changes only bounded post-restart setup convergence and the
--exact forward marker needed by the released predecessor. Public Approval/Core
--health and public Core readiness use the existing finite 90-attempt startup
--bound. Ordinary probes retain 30 attempts; exact payload, TLS, redirect,
--authority, and auxiliary-unit ordering checks remain unchanged. Only exact
--released `0.1.37` five-unit markers may advance to `0.1.38`; other release
--sources fail closed.
-+Published `0.1.38` changes bounded post-restart setup convergence and retains
-+the exact forward marker needed by its released predecessor. Public
-+Approval/Core health and public Core readiness use the existing finite
-+90-attempt startup bound. The remote Hub peer reported from bounded read-only
-+fresh-install preflight that its default `Python-urllib/*` User-Agent received
-+HTTP 403 before origin routing; no 0.1.38 Hub installation occurred. That report
-+is corroboration only, not retained reproducible proof.
+-Candidate `0.1.39` changes only health request identity: explicit GET,
++Candidate `0.1.39` changes health request identity to explicit GET,
+ `User-Agent: AgentNet/0.1.39`, and `Accept: application/json`. Proxy disabling,
+ redirect rejection, system TLS and hostname verification, per-attempt timeout,
+ response bounds, exact JSON identity/readiness, finite retries, authority, and
+-auxiliary-unit ordering remain unchanged. It is a fresh clean-state setup
+-candidate, adds no release-marker migration edge, and rejects every existing
+-release marker or journal.
++auxiliary-unit ordering remain unchanged.
 +
-+Candidate `0.1.39` changes only health request identity: explicit GET,
-+`User-Agent: AgentNet/0.1.39`, and `Accept: application/json`. Proxy disabling,
-+redirect rejection, system TLS and hostname verification, per-attempt timeout,
-+response bounds, exact JSON identity/readiness, finite retries, authority, and
-+auxiliary-unit ordering remain unchanged. It is a fresh clean-state setup
-+candidate, adds no release-marker migration edge, and rejects every existing
-+release marker or journal.
++It also closes a local-conformance-only composition gap. Exact lab-bound
++`deterministic_only` harnesses may resolve the pre-existing narrow C0 policy,
++recipient, and custody-acknowledgement path without becoming active; production
++policy continues to reject them. A fresh npm installation has passed a real
++loopback Core plus separate fresh-proof client-process journey covering
++`accepted_local`, exact attribution, business and receipt idempotency,
++`recipient_committed`, typed obligation completion across restarts, lab-fixture
++credential refusal, listener release, and state cleanup. This is synthetic local
++evidence only, not bounded C0 completion, approved revocation, real enrollment,
++ordinary server-agent topology, PostgreSQL durability, or certification.
++
++It is a fresh clean-state setup candidate, adds no release-marker migration
++edge, and rejects every existing release marker or journal.
 
  Privileged clean-host apply, cross-SDK/public-peer interoperability, live
  OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
 diff --git a/docs/implementation-guide.md b/docs/implementation-guide.md
-index 939255e..fac2da2 100644
+index fac2da2..99ab322 100644
 --- a/docs/implementation-guide.md
 +++ b/docs/implementation-guide.md
-@@ -179,11 +179,18 @@ Released five-unit correction upgrades are a narrow forward-only exception:
- only an explicitly allowlisted exact predecessor marker is accepted, and the
- target marker is committed before service quiescence and bootstrap so an
- interruption resumes the committed target instead of rolling back or accepting
--manual repair. The `0.1.37→0.1.38` edge changes only post-restart convergence:
--public Approval/Core health and public Core readiness use the existing finite
--90-attempt startup bound, while ordinary probes retain 30 attempts. Exact JSON
--identity/readiness, TLS, redirect denial, authority, and auxiliary-unit ordering
--remain unchanged.
-+manual repair. The historical `0.1.37→0.1.38` edge changes post-restart
-+convergence: public Approval/Core health and public Core readiness use the
-+existing finite 90-attempt startup bound, while ordinary probes retain 30
-+attempts. Exact JSON identity/readiness, TLS, redirect denial, authority, and
-+auxiliary-unit ordering remain unchanged.
+@@ -98,6 +98,27 @@ vendor glue. A missing product component is a named blocker, not an operator
+ integration assignment or justification to weaken identity, authority,
+ durability, artifact, task, room, federation, or non-interruption semantics.
+
++## Packaged local-communication gate
 +
-+Candidate `0.1.39` is not another upgrade edge. It is clean-state setup only and
-+rejects every earlier marker or journal. Its sole runtime correction is an
-+explicit GET health request carrying `User-Agent: AgentNet/0.1.39` and
-+`Accept: application/json` through the unchanged proxy-disabled,
-+redirect-rejecting stdlib opener. System trust, hostname verification, timeout,
-+finite retries, response bounds, and exact payload checks remain unchanged.
++Release validation runs `scripts/ci/packaged_local_communication_e2e.py` from a
++clean npm installation rather than the source checkout. The gate requires the
++script and every `agentnet` import to resolve inside the installed package. It
++starts a loopback Core subprocess, signs each request in a fresh client
++subprocess, keeps the recipient client absent until after Core restart, and
++requires exact `accepted_local`, actor attribution, stable idempotent business
++identifiers with fresh proofs, `recipient_committed`, typed response-obligation
++completion, reply custody after another restart, and refusal of a fresh request
++after a lab-only credential fixture. Process groups, listener, database, keys,
++and temporary package/runtime state must be gone at exit.
++
++This gate intentionally uses synthetic `binding_assurance=lab` identities in
++`deterministic_only` state. The narrow local policy resolves them without making
++them active; production policy must still reject the same state. Fixture-based
++credential refusal is not approved revocation. The gate is not evidence for
++OIDC/WebAuthn enrollment, `COMPLETED_C0_ROUND_TRIP`, ordinary server-agent
++`COM-002`/`COM-003`, five-power cleanup, PostgreSQL durability, or release
++certification.
++
+ ## Product-owned ordinary Linux server setup
 
- ### Communication-only request-v2
+ The default host path is one fixed wrapper, not a general deployment framework. The target agent first resolves system-wide root-owned AgentNet, Node.js, and `uv` executables accessible to the locked service identities:
+diff --git a/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl b/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl
+index dee7b0c..f8b8969 100644
+Binary files a/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl and b/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl differ
+diff --git a/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz b/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz
+index ece7cf5..e3cd9ae 100644
+Binary files a/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz and b/evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz differ
+diff --git a/evidence/local/2026-08-03-v0.1.39/manifest.json b/evidence/local/2026-08-03-v0.1.39/manifest.json
+index b636ead..c44e788 100644
+--- a/evidence/local/2026-08-03-v0.1.39/manifest.json
++++ b/evidence/local/2026-08-03-v0.1.39/manifest.json
+@@ -1,17 +1,17 @@
+ {
+   "run_id": "2026-08-03-v0.1.39",
+-  "evaluated_at": "2026-08-03T19:00:11Z",
+-  "scope": "v0_1_39_public_health_request_identity_candidate",
++  "evaluated_at": "2026-08-03T20:23:19Z",
++  "scope": "v0_1_39_public_health_and_packaged_local_communication_candidate",
+   "verification_status": "PASS",
+   "release_certified": false,
+   "source_revision_kind": "release_source_tree_sha256",
+-  "release_source_tree_sha256": "77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39",
++  "release_source_tree_sha256": "4d3961f7c871fc969828a5119cba02946e410e141f019b9a97f41aa0ca4c7016",
+   "prior_runtime_evidence": "evidence/local/2026-08-03-v0.1.38/manifest.json",
+   "supersedes_package_evidence": "evidence/local/2026-08-03-v0.1.38/manifest.json",
+-  "change_boundary": "Exact public 0.1.38 passed registry integrity, signature, provenance, clean-install, and release checks, but the remote Hub peer reported from bounded read-only fresh-install preflight that its public health requests retained urllib default Python-urllib/* User-Agent and received HTTP 403 on all three routes; this remains corroboration only, not retained reproducible proof. Version 0.1.39 changes only the request object to explicit GET with User-Agent AgentNet/0.1.39 and Accept application/json. Proxy disabling, redirect rejection, system TLS and hostname verification, two-second attempt timeout, response bounds, exact JSON identity/readiness, finite retry behavior, authority, and auxiliary-unit ordering are unchanged. The remote Hub peer reports from a bounded read-only comparison that default urllib returned 403 on 3/3 routes and the explicit product identity reached offline-origin 502 on 3/3 routes; this remains peer-reported corroboration only. This candidate is fresh clean-state setup only, adds no release-marker migration edge, and rejects an exact 0.1.38 marker. No install, migration, reset, manual reconstruction, database, enrollment, authority, C0, federation, production, requirement, or gate mutation is authorized or claimed.",
++  "change_boundary": "Exact public 0.1.38 passed registry integrity, signature, provenance, clean-install, and release checks, but the remote Hub peer reported from bounded read-only fresh-install preflight that its public health requests retained urllib default Python-urllib/* User-Agent and received HTTP 403 on all three routes; this remains corroboration only, not retained reproducible proof. Version 0.1.39 changes the request object to explicit GET with User-Agent AgentNet/0.1.39 and Accept application/json while preserving proxy, redirect, system TLS, hostname, timeout, response, identity/readiness, authority, and auxiliary-unit boundaries. It also repairs only the local-conformance policy-revision, deterministic-lab recipient-resolution, and exact custody-acknowledgement seams. Production policy still rejects deterministic lab harnesses. A fresh npm tarball installed into an unrelated prefix passed a real loopback Core plus separate fresh-proof client-process journey covering accepted_local, exact actor attribution, idempotent request/obligation and receipt convergence, recipient_committed, typed obligation completion across Core restarts, fresh refusal after an explicitly lab-only credential fixture, listener release, and state cleanup. This is synthetic local evidence only: it is not bounded C0 pilot completion, approved revocation or five-power cleanup, real enrollment, ordinary server-agent topology, PostgreSQL durability, production, or release certification. The remote Hub comparison remains peer-reported corroboration only. This candidate is fresh clean-state setup only, adds no release-marker migration edge, and rejects an exact 0.1.38 marker. No Hub install, migration, reset, manual reconstruction, database, enrollment, authority, native C0, federation, production, requirement, or gate mutation is authorized or claimed.",
+   "execution_context": {
+     "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+-    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1641 passed and 16 expected skips, complete package-tree digest equality, and no named verification residue",
++    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1642 passed and 16 expected skips, generation 2 passes the installed-byte multiprocess local communication gate, complete package-tree digest equality, empty communication workspace, and no named verification residue",
+     "root_installed_external_host": "PEER-REPORTED CORROBORATION ONLY: the remote Hub peer reported default urllib identity returned 403 on 3/3 public routes and explicit AgentNet product identity passed edge classification and reached offline-origin 502 on 3/3; no retained reproducible probe record, installation, or mutation is claimed",
+     "callback_incident": "No prior callback, continuation, receipt, setup marker, upgrade state, or C0 state is reused; exact public 0.1.39 verification and separately approved fresh clean-state setup remain required"
+   },
+@@ -34,27 +34,31 @@
+     },
+     {
+       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+-      "result": "PASS: 1614 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
++      "result": "PASS: 1615 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+     },
+     {
+       "command": "npm run check",
+-      "result": "PASS: source plus generations 1 and 2 each 1641 passed and 16 expected skips; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
++      "result": "PASS: source plus generations 1 and 2 each 1642 passed and 16 expected skips; generation 2 also passed the installed-byte multiprocess local communication gate; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, empty communication workspace, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
++    },
++    {
++      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/packaged_local_communication_e2e.py with installed interpreter and empty workspace",
++      "result": "PASS: real loopback Core plus separate fresh-proof client processes; accepted_local; exact proof-derived request/reply attribution; recipient absent until Core restart; stable idempotent request event, obligation, and ACK receipt; recipient_committed; typed obligation completed; response custody after a second restart; fresh 401 authentication refusal after explicitly non-approved lab credential fixture; four distinct Core PIDs (three restarts); closed listener; empty workspace; temporary install/runtime/state removed; non_production=true, bounded_c0_pilot_proven=false, approved_revocation_proven=false, production_durability_proven=false, release_certified=false"
+     },
+     {
+       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+-      "result": "PASS: two independent builds were byte-identical and exactly match retained reviewed artifacts; source-tree digest 77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39; sdist 9ba503aff08ee500bfaa3b7e370b5e8c4cf159b5706554e7cae9e8bf42850a62; wheel 3585ebbffd377d4d1bab0db7b77c4259b2a06a78a1f9438147596c0d2d23c3ef"
++      "result": "PASS: two independent builds are byte-identical and match retained candidate artifacts; source-tree digest 4d3961f7c871fc969828a5119cba02946e410e141f019b9a97f41aa0ca4c7016; sdist 65b2006a1464ff82b41ad2fb3ecd919926327dcd3e7aebeb904a28d7da473372; wheel af04d3608681912ba3567514f31785171df5fd516106d8098e4b15799d8abf1f"
+     },
+     {
+       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+-      "result": "PASS: exact 0.1.39 direct disposable-package verification completed with 1641 passed and 16 expected skips and no source-tree residue"
++      "result": "PASS: exact 0.1.39 direct disposable-package verification completed with 1642 passed and 16 expected skips and no source-tree residue"
+     },
+     {
+       "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+       "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
+     },
+     {
+-      "command": "GitHub cross-platform and ordinary-server clean-setup workflows",
+-      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
++      "command": "GitHub cross-platform, ordinary-server clean-setup, and exact public-0.1.38-marker rejection workflows",
++      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows are required; rejection must be fail-closed and prove no marker, attempt, managed-file, database, unit, identity, or authority mutation; terminal run IDs are retained by GitHub and intentionally not self-authored into candidate source"
+     }
+   ],
+   "review_results": [
+@@ -87,16 +91,21 @@
+       "review": "Constitution re-review",
+       "model": "openai-codex/gpt-5.6-sol constitution-watcher",
+       "result": "PASS: prior evidence gaps resolved; bounded worktree packet is retained, exact focused health command records 2 passed/105 deselected, Hub comparison is consistently peer-reported corroboration only, runtime boundary remains minimal, fresh-only marker policy remains fail-closed, and external gates remain BLOCKED."
++    },
++    {
++      "review": "Released-marker rejection gate Constitution review",
++      "model": "openai-codex/gpt-5.6-sol constitution-watcher",
++      "result": "REVISE: semantic boundary is correct, but successful setup removes attempt.json; require its absence instead of hashing it, include OIDC and C0 configuration in immutable fingerprints, assert C0 terminal absence, and obtain terminal-green ephemeral GitHub rejection evidence. The local candidate was corrected before commit."
+     }
+   ],
+   "artifacts": [
+     {
+       "path": "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
+-      "sha256": "9ba503aff08ee500bfaa3b7e370b5e8c4cf159b5706554e7cae9e8bf42850a62"
++      "sha256": "65b2006a1464ff82b41ad2fb3ecd919926327dcd3e7aebeb904a28d7da473372"
+     },
+     {
+       "path": "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
+-      "sha256": "3585ebbffd377d4d1bab0db7b77c4259b2a06a78a1f9438147596c0d2d23c3ef"
++      "sha256": "af04d3608681912ba3567514f31785171df5fd516106d8098e4b15799d8abf1f"
+     }
+   ]
+ }
+diff --git a/npm/scripts/check-packed-package.mjs b/npm/scripts/check-packed-package.mjs
+index 0edabb2..d959a9d 100644
+--- a/npm/scripts/check-packed-package.mjs
++++ b/npm/scripts/check-packed-package.mjs
+@@ -177,6 +177,41 @@ const expectedBlockedSetupBlocker = (environment) => {
+   return "service_executable_inaccessible";
+ };
 
-diff --git a/npm/scripts/check-package.mjs b/npm/scripts/check-package.mjs
-index 80e6cce..ca84cbc 100755
---- a/npm/scripts/check-package.mjs
-+++ b/npm/scripts/check-package.mjs
-@@ -32,9 +32,9 @@ const requiredPublishedFiles = [
-   "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-   "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
-   "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
--  "evidence/local/2026-08-03-v0.1.38/artifacts/RETENTION.md",
--  "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl",
--  "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz",
-+  "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
-+  "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
-+  "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
-   "skills/**/*.md",
-   "skills/**/*.json",
-   "tests/fixtures/**/*.json",
-@@ -159,7 +159,7 @@ for (const required of [
-   "then return `postgres_auth_not_ready`. It creates no AgentNet environment, Core/Approval config, database schema, unit, Approval identity, or service.",
-   "**Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest",
-   "first approved apply may create fixed Core OS identity plus root-owned `/var/lib/agentnet-setup` npm runtime and lock custody",
--  "Version 0.1.38 has no package-owned in-place broker-credential or database-password rotation transition",
-+  "Version 0.1.39 has no package-owned in-place broker-credential or database-password rotation transition",
-   "server-agent reauthorize-expired-credential",
-   "A2A, relay, or retained C0-terminal state requires separate recovery and is refused",
-   "Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state",
-diff --git a/package-lock.json b/package-lock.json
-index 2fb633b..5381372 100644
---- a/package-lock.json
-+++ b/package-lock.json
-@@ -1,12 +1,12 @@
- {
-   "name": "@misunders2d/agentnet",
--  "version": "0.1.38",
-+  "version": "0.1.39",
-   "lockfileVersion": 3,
-   "requires": true,
-   "packages": {
-     "": {
-       "name": "@misunders2d/agentnet",
--      "version": "0.1.38",
-+      "version": "0.1.39",
-       "license": "Apache-2.0",
-       "os": [
-         "linux",
-diff --git a/package.json b/package.json
-index 698fd2b..a492a09 100644
---- a/package.json
-+++ b/package.json
-@@ -1,6 +1,6 @@
- {
-   "name": "@misunders2d/agentnet",
--  "version": "0.1.38",
-+  "version": "0.1.39",
-   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
-   "license": "Apache-2.0",
-   "type": "module",
-@@ -93,9 +93,9 @@
-     "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-     "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
-     "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
--    "evidence/local/2026-08-03-v0.1.38/artifacts/RETENTION.md",
--    "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl",
--    "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz",
-+    "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
-+    "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
-+    "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
-     "evidence/**/*.json",
-     "npm/**/*.mjs",
-     "npm/**/*.ps1",
++const requirePackedLocalCommunication = (packageRoot, launcher, environment) => {
++  const runtime = path.join(temporary, "local-communication-runtime");
++  const workspace = path.join(temporary, "local-communication-workspace");
++  mkdirSync(runtime, { recursive: true, mode: 0o700 });
++  mkdirSync(workspace, { recursive: true, mode: 0o700 });
++  const lifecycleEnvironment = {
++    ...environment,
++    AGENTNET_NPM_RUNTIME_DIR: runtime,
++    PYTHONPYCACHEPREFIX: path.join(runtime, "pycache"),
++    UV_PROJECT_ENVIRONMENT: runtime,
++  };
++  for (const name of [
++    "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "PYTHONHOME", "PYTHONPATH",
++    "VIRTUAL_ENV", "all_proxy", "http_proxy", "https_proxy",
++  ]) {
++    delete lifecycleEnvironment[name];
++  }
++  lifecycleEnvironment.NO_PROXY = "127.0.0.1,localhost";
++  lifecycleEnvironment.no_proxy = "127.0.0.1,localhost";
++  run(
++    resolveCommand("uv", lifecycleEnvironment.PATH ?? "") ?? "uv",
++    [
++      "run", "--project", packageRoot, "--frozen", "--no-default-groups",
++      "--python", "3.13.13", "python", "-B", "-I",
++      path.join(packageRoot, "scripts", "ci", "packaged_local_communication_e2e.py"),
++      "run", "--package-root", packageRoot, "--launcher", launcher,
++      "--workspace", workspace,
++    ],
++    { cwd: unrelated, env: lifecycleEnvironment },
++  );
++  if (readdirSync(workspace).length !== 0) {
++    throw new Error("packaged local communication gate left workspace residue");
++  }
++};
++
+ const requireBlockedSetup = (launcher, request, options) => {
+   const expectedBlocker = expectedBlockedSetupBlocker(options.env);
+   const completed = spawnSync(
+@@ -309,6 +344,16 @@ try {
+     }
+     run(launcher, ["server-agent", "setup", "--help"], { cwd: unrelated, env: environment });
+
++    if (generation === 2) {
++      const packageTreeBeforeCommunication = stablePackageTreeSha256(packageRoot);
++      requirePackedLocalCommunication(packageRoot, launcher, environment);
++      requireNoVerificationResidue(packageRoot);
++      const packageTreeAfterCommunication = stablePackageTreeSha256(packageRoot);
++      if (packageTreeAfterCommunication !== packageTreeBeforeCommunication) {
++        throw new Error("packaged local communication gate mutated package tree contents");
++      }
++    }
++
+     if (initName === "systemd") {
+       const inputs = path.join(temporary, `server-setup-inputs-${generation}`);
+       mkdirSync(inputs, { mode: 0o700 });
 diff --git a/pyproject.toml b/pyproject.toml
-index 0629fe6..c7d41d4 100644
+index c7d41d4..a3cbe0a 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
-@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
+@@ -79,6 +79,7 @@ only-include = [
+   "pyproject.toml",
+   "schemas/README.md",
+   "schemas/v1",
++  "scripts/ci/packaged_local_communication_e2e.py",
+   "scripts/export_schemas.py",
+   "scripts/verify_release.py",
+   "src/agentnet",
+diff --git a/scripts/ci/ordinary-server-upgrade-e2e.sh b/scripts/ci/ordinary-server-upgrade-e2e.sh
+index f027713..7d81da9 100755
+--- a/scripts/ci/ordinary-server-upgrade-e2e.sh
++++ b/scripts/ci/ordinary-server-upgrade-e2e.sh
+@@ -2,27 +2,27 @@
+ set -euo pipefail
 
- [project]
- name = "agentnet"
--version = "0.1.38"
-+version = "0.1.39"
- description = "Self-hosted, agent-agnostic secure communication conformance kernel"
- readme = "README.md"
- requires-python = ">=3.13,<3.15"
+ # Destructive only inside a fresh GitHub-hosted Ubuntu 24.04 runner. This lane
+-# realizes the exact public 0.1.37 predecessor through package execution, then
+-# upgrades it with the current candidate. It never fabricates marker, journal,
+-# unit, or database state.
++# realizes the exact public 0.1.38 marker through a fresh package-owned setup,
++# then proves the current fresh-only candidate rejects it without mutation. It
++# never fabricates marker, journal, unit, or database state.
+ if [[ "${CI:-}" != "true" || "${GITHUB_ACTIONS:-}" != "true" || -z "${RUNNER_TEMP:-}" ]]; then
+-  echo "ordinary server upgrade E2E requires an ephemeral GitHub Actions runner" >&2
++  echo "released marker rejection E2E requires an ephemeral GitHub Actions runner" >&2
+   exit 2
+ fi
+ . /etc/os-release
+ if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" ]]; then
+-  echo "ordinary server upgrade E2E requires Ubuntu 24.04" >&2
++  echo "released marker rejection E2E requires Ubuntu 24.04" >&2
+   exit 2
+ fi
+ if getent passwd agentnet >/dev/null || getent passwd agentnet-approval >/dev/null ||
+    getent passwd agentnet-c0 >/dev/null || getent group agentnet >/dev/null ||
+    getent group agentnet-approval >/dev/null || getent group agentnet-c0 >/dev/null; then
+-  echo "ordinary server upgrade E2E requires clean AgentNet identities and groups" >&2
++  echo "released marker rejection E2E requires clean AgentNet identities and groups" >&2
+   exit 2
+ fi
+ for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /var/lib/agentnet-setup /etc/agentnet-secrets; do
+   if sudo test -e "$path"; then
+-    echo "ordinary server upgrade E2E requires clean AgentNet state" >&2
++    echo "released marker rejection E2E requires clean AgentNet state" >&2
+     exit 2
+   fi
+ done
+@@ -30,7 +30,7 @@ done
+ WORK="$RUNNER_TEMP/agentnet-ordinary-server-upgrade-e2e"
+ INPUTS="$WORK/inputs"
+ PACK="$WORK/pack"
+-PREFIX_0137="/opt/agentnet-upgrade-e2e-0.1.37"
++PREFIX_0138="/opt/agentnet-upgrade-e2e-0.1.38"
+ CANDIDATE_VERSION="$(node -p "require('./package.json').version")"
+ PREFIX_CANDIDATE="/opt/agentnet-upgrade-e2e-$CANDIDATE_VERSION"
+ NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
+@@ -80,7 +80,7 @@ cleanup() {
+     sudo sed -i '/# agentnet-upgrade-e2e$/d' "$HBA_FILE"
+     sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' >/dev/null 2>&1
+   fi
+-  sudo rm -rf "$PREFIX_0137" "$PREFIX_CANDIDATE"
++  sudo rm -rf "$PREFIX_0138" "$PREFIX_CANDIDATE"
+   sudo chown "$OPT_UID:$OPT_GID" /opt
+   sudo chmod "$OPT_MODE" /opt
+   rm -rf "$WORK"
+@@ -152,7 +152,7 @@ apply_setup() {
+ # independently so every plan binds its own immutable runtime path and bytes.
+ sudo chown root:root /opt
+ sudo chmod 0755 /opt
+-install_runtime "$PREFIX_0137" "@misunders2d/agentnet@0.1.37"
++install_runtime "$PREFIX_0138" "@misunders2d/agentnet@0.1.38"
+ CANDIDATE_TARBALL="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
+ install_runtime "$PREFIX_CANDIDATE" "$PACK/$CANDIDATE_TARBALL"
+
+@@ -253,73 +253,125 @@ for _ in $(seq 1 50); do
+   sleep 0.2
+ done
+
+-# Exact public 0.1.37 creates the real released five-unit predecessor state.
+-# Local nginx normally converges within its ordinary public-health bound. If it
+-# does not, accept only the exact known post-marker health refusal; the current
+-# candidate must then converge that same committed predecessor without reset.
+-PLAN_0137="$WORK/plan-0.1.37.json"
+-APPLY_0137="$WORK/apply-0.1.37.json"
+-plan_setup "$PREFIX_0137" "$PLAN_0137"
+-DIGEST_0137="$(jq -r '.request_digest' "$PLAN_0137")"
+-APPLY_0137_EXIT=0
+-apply_setup "$PREFIX_0137" "$DIGEST_0137" "$APPLY_0137" || APPLY_0137_EXIT=$?
+-if [[ "$APPLY_0137_EXIT" -eq 0 ]]; then
+-  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0137" >/dev/null
+-else
+-  [[ "$APPLY_0137_EXIT" -eq 1 ]]
+-  jq -e '
+-    .schema == "agentnet.server-setup.evidence.v1"
+-    and .status == "blocked"
+-    and .blocker == "service_health"
+-    and .message == "AgentNet service did not return exact healthy identity evidence"
+-    and .identity_enrolled == false
+-    and .authority_granted == false
+-    and .production_durability_proven == false
+-  ' "$APPLY_0137" >/dev/null
+-fi
+-sudo jq -e '.package_version == "0.1.37" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
++# Exact public 0.1.38 creates its real five-unit marker from clean state. Local
++# nginx accepts its historical default User-Agent, so setup must fully converge;
++# a health refusal would not prove the immediate predecessor marker boundary.
++PLAN_0138="$WORK/plan-0.1.38.json"
++APPLY_0138="$WORK/apply-0.1.38.json"
++plan_setup "$PREFIX_0138" "$PLAN_0138"
++DIGEST_0138="$(jq -r '.request_digest' "$PLAN_0138")"
++apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138"
++jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
++sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+ sudo test ! -e /var/lib/agentnet-setup/upgrade.json
+-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
++SCHEMA_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")"
++MIGRATION_MAX_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')"
++[[ "$SCHEMA_0138" == "5" ]]
++[[ "$MIGRATION_MAX_0138" == "5" ]]
+ sudo systemctl is-active --quiet agentnet-core.service
+ sudo systemctl is-active --quiet agentnet-approval.service
++MARKER_0138="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
++REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
++sudo test ! -e /var/lib/agentnet-setup/attempt.json
++sudo test -f /var/lib/agentnet-c0/config.json
++sudo test ! -e /var/lib/agentnet-c0/terminal.json
+
+-# Current candidate must consume only that exact released marker, converge five
+-# units, and start the unenrolled profile without changing the operator request.
++# Current candidate is fresh-only. It must reject the exact released marker
++# before any setup attempt, journal, database, unit, identity, or authority write.
+ PLAN_CANDIDATE="$WORK/plan-candidate.json"
+ APPLY_CANDIDATE="$WORK/apply-candidate.json"
+ RETRY_CANDIDATE="$WORK/retry-candidate.json"
++FILES_0138="$(sudo sha256sum \
++  /var/lib/agentnet/agentnet.json \
++  /var/lib/agentnet/oidc-enrollment.json \
++  /var/lib/agentnet-approval/config.json \
++  /var/lib/agentnet-c0/config.json \
++  /etc/agentnet-secrets/core.env \
++  /etc/agentnet-secrets/approval.env \
++  /etc/systemd/system/agentnet-core.service \
++  /etc/systemd/system/agentnet-approval.service \
++  /etc/systemd/system/agentnet-c0-responder.service \
++  /etc/systemd/system/agentnet-credential-renew.service \
++  /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)"
++DATABASE_0138="$(sudo -u agentnet pg_dump \
++  --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)"
++
++assert_rejection() {
++  local output="$1"
++  jq -e '
++    .schema == "agentnet.server-setup.evidence.v1"
++    and .status == "blocked"
++    and .blocker == "setup_marker_conflict"
++    and .message == "setup marker version or provenance is invalid"
++    and .identity_enrolled == false
++    and .authority_granted == false
++    and .production_durability_proven == false
++  ' "$output" >/dev/null
++}
++
++assert_released_state_unchanged() {
++  sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
++  [[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_0138" ]]
++  [[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_0138" ]]
++  sudo test ! -e /var/lib/agentnet-setup/attempt.json
++  sudo test ! -e /var/lib/agentnet-setup/upgrade.json
++  sudo test ! -e /var/lib/agentnet/server-agent-identity.json
++  sudo test ! -e /var/lib/agentnet/guided-join.key.pem
++  sudo test ! -e /var/lib/agentnet/credential-renewal-state.json
++  sudo test ! -e /var/lib/agentnet-c0/terminal.json
++  [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
++  [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
++  [[ "$(sudo -u agentnet pg_dump --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
++  [[ "$(sudo sha256sum \
++    /var/lib/agentnet/agentnet.json \
++    /var/lib/agentnet/oidc-enrollment.json \
++    /var/lib/agentnet-approval/config.json \
++    /var/lib/agentnet-c0/config.json \
++    /etc/agentnet-secrets/core.env \
++    /etc/agentnet-secrets/approval.env \
++    /etc/systemd/system/agentnet-core.service \
++    /etc/systemd/system/agentnet-approval.service \
++    /etc/systemd/system/agentnet-c0-responder.service \
++    /etc/systemd/system/agentnet-credential-renew.service \
++    /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
++  sudo systemctl is-active --quiet agentnet-core.service
++  sudo systemctl is-enabled --quiet agentnet-core.service
++  sudo systemctl is-active --quiet agentnet-approval.service
++  sudo systemctl is-enabled --quiet agentnet-approval.service
++  ! sudo systemctl is-failed --quiet agentnet-approval.service
++  [[ "$(sudo systemctl show agentnet-c0-responder.service --property=ActiveState --value)" == "inactive" ]]
++  [[ "$(sudo systemctl show agentnet-c0-responder.service --property=UnitFileState --value)" == "disabled" ]]
++  [[ "$(sudo systemctl show agentnet-credential-renew.service --property=ActiveState --value)" == "inactive" ]]
++  [[ "$(sudo systemctl show agentnet-credential-renew.service --property=UnitFileState --value)" == "static" ]]
++  [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=ActiveState --value)" == "inactive" ]]
++  [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=UnitFileState --value)" == "disabled" ]]
++  env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
++  env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
++}
++
++# Capture every released-state fingerprint before even the no-managed-host-write
++# candidate plan. Planning and both rejected apply attempts must preserve it.
+ plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
+ DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
+-apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE"
+-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY_CANDIDATE" >/dev/null
+-sudo jq -e --arg version "$CANDIDATE_VERSION" '.package_version == $version and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+-sudo test ! -e /var/lib/agentnet-setup/upgrade.json
+-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
+-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "5" ]]
+-sudo systemctl is-active --quiet agentnet-core.service
+-sudo systemctl is-enabled --quiet agentnet-core.service
+-sudo systemctl is-active --quiet agentnet-approval.service
+-sudo systemctl is-enabled --quiet agentnet-approval.service
+-! sudo systemctl is-failed --quiet agentnet-approval.service
+-[[ "$(sudo systemctl show agentnet-c0-responder.service --property=ActiveState --value)" == "inactive" ]]
+-[[ "$(sudo systemctl show agentnet-c0-responder.service --property=UnitFileState --value)" == "disabled" ]]
+-[[ "$(sudo systemctl show agentnet-credential-renew.service --property=ActiveState --value)" == "inactive" ]]
+-[[ "$(sudo systemctl show agentnet-credential-renew.service --property=UnitFileState --value)" == "static" ]]
+-[[ "$(sudo systemctl show agentnet-credential-renew.timer --property=ActiveState --value)" == "inactive" ]]
+-[[ "$(sudo systemctl show agentnet-credential-renew.timer --property=UnitFileState --value)" == "disabled" ]]
+-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
+-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
++assert_released_state_unchanged
++
++APPLY_CANDIDATE_EXIT=0
++apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE" || APPLY_CANDIDATE_EXIT=$?
++[[ "$APPLY_CANDIDATE_EXIT" -eq 1 ]]
++assert_rejection "$APPLY_CANDIDATE"
++assert_released_state_unchanged
++
++RETRY_CANDIDATE_EXIT=0
++apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE" || RETRY_CANDIDATE_EXIT=$?
++[[ "$RETRY_CANDIDATE_EXIT" -eq 1 ]]
++assert_rejection "$RETRY_CANDIDATE"
++cmp --silent "$APPLY_CANDIDATE" "$RETRY_CANDIDATE"
++assert_released_state_unchanged
+
+-MARKER_CANDIDATE="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
+-REVISION_CANDIDATE="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
+-apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE"
+-jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$RETRY_CANDIDATE" >/dev/null
+-[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_CANDIDATE" ]]
+-[[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_CANDIDATE" ]]
+ ! grep -Fq "$TOKEN" \
+-  "$PLAN_0137" "$PLAN_0137.stderr" "$APPLY_0137" "$APPLY_0137.stderr" \
++  "$PLAN_0138" "$PLAN_0138.stderr" "$APPLY_0138" "$APPLY_0138.stderr" \
+   "$PLAN_CANDIDATE" "$PLAN_CANDIDATE.stderr" \
+   "$APPLY_CANDIDATE" "$APPLY_CANDIDATE.stderr" \
+   "$RETRY_CANDIDATE" "$RETRY_CANDIDATE.stderr"
+
+-echo "ordinary server upgrade E2E: PASS"
++echo "released marker rejection E2E: PASS"
 diff --git a/scripts/verify_release.py b/scripts/verify_release.py
-index 6b90662..6e042cf 100644
+index 6e042cf..63ef1bd 100644
 --- a/scripts/verify_release.py
 +++ b/scripts/verify_release.py
-@@ -304,7 +304,7 @@ def _expected_sdist_files(root: Path, source_files: dict[str, bytes]) -> dict[st
-
-
- def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) -> None:
--    base = "evidence/local/2026-08-03-v0.1.38/artifacts"
-+    base = "evidence/local/2026-08-03-v0.1.39/artifacts"
-     ignore_path = root / base / ".gitignore"
-     retention_path = root / base / "RETENTION.md"
-     expected_ignore = "*\n!/.gitignore\n!/RETENTION.md\n!/*.whl\n!/*.tar.gz\n"
-@@ -321,8 +321,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) ->
-     elif (root / ".git").exists():
-         failures.append("final package artifact ignore policy does not retain its archives")
-     expected_paths = {
--        f"{base}/agentnet-0.1.38.tar.gz",
--        f"{base}/agentnet-0.1.38-py3-none-any.whl",
-+        f"{base}/agentnet-0.1.39.tar.gz",
-+        f"{base}/agentnet-0.1.39-py3-none-any.whl",
-     }
-     if not isinstance(artifacts, list) or len(artifacts) != 2:
-         failures.append("final package evidence must contain exactly the sdist and wheel")
-@@ -375,8 +375,8 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) ->
-             names = set(listed_names)
-             if len(names) != len(listed_names):
-                 failures.append("wheel contains duplicate archive member names")
--            dist_info = "agentnet-0.1.38.dist-info"
--            shared = "agentnet-0.1.38.data/data/share/agentnet"
-+            dist_info = "agentnet-0.1.39.dist-info"
-+            shared = "agentnet-0.1.39.data/data/share/agentnet"
-             expected_payloads = dict(source_files)
-             expected_payloads.update(
-                 {
-@@ -431,7 +431,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) ->
-                 wheel_metadata = archive.read(metadata_name)
-                 if (
-                     b"\nName: agentnet\n" not in b"\n" + wheel_metadata
--                    or b"\nVersion: 0.1.38\n" not in b"\n" + wheel_metadata
-+                    or b"\nVersion: 0.1.39\n" not in b"\n" + wheel_metadata
-                     or b"\nRequires-Python: <3.15,>=3.13\n" not in b"\n" + wheel_metadata
-                 ):
-                     failures.append("wheel core metadata differs from the release identity/runtime")
-@@ -458,7 +458,7 @@ def _verify_built_artifacts(root: Path, artifacts: Any, failures: list[str]) ->
-         failures.append(f"final wheel is unreadable or malformed: {exc}")
-
-     sdist_path = paths[next(path for path in expected_paths if path.endswith(".tar.gz"))]
--    prefix = "agentnet-0.1.38/"
-+    prefix = "agentnet-0.1.39/"
-     try:
-         with tarfile.open(sdist_path, mode="r:gz") as archive:
-             all_members = archive.getmembers()
-@@ -724,8 +724,8 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
-         return
-     normalized = re.sub(r"\s+", " ", readme_path.read_text(encoding="utf-8"))
-     required_claims = (
--        "latest published package is `0.1.37`",
--        "Candidate `0.1.38`",
-+        "latest published package is `0.1.38`",
-+        "Candidate `0.1.39`",
-         "two installed-harness pin failures remain non-green and are not waived",
-         "provider error without token exchange",
-         "fresh-laptop enrollment",
-@@ -743,6 +743,7 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
-         "latest published package is `0.1.31`",
-         "latest published package is `0.1.32`",
-         "latest published package is `0.1.35`",
-+        "latest published package is `0.1.37`",
-         "Current unversioned communication-only changes",
-     ):
-         if stale_claim in normalized:
-@@ -988,14 +989,14 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
-     ):
-         failures.append("final clean-install status does not preserve the local blocked-release boundary")
-     package_evidence = _load_json(
--        root / "evidence/local/2026-08-03-v0.1.38/manifest.json",
-+        root / "evidence/local/2026-08-03-v0.1.39/manifest.json",
-         failures,
--        "0.1.38 package evidence manifest",
-+        "0.1.39 package evidence manifest",
-     )
-     if package_evidence.get("release_source_tree_sha256") != _source_tree_sha256(root):
--        failures.append("0.1.38 package evidence is not bound to the current source tree")
-+        failures.append("0.1.39 package evidence is not bound to the current source tree")
-     if package_evidence.get("verification_status") != "PASS":
--        failures.append("0.1.38 package evidence must record completed PASS verification")
-+        failures.append("0.1.39 package evidence must record completed PASS verification")
-     command_records = package_evidence.get("commands")
-     if not isinstance(command_records, list) or any(
-         not isinstance(record, dict)
-@@ -1003,7 +1004,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
-         or not isinstance(record.get("result"), str)
-         for record in command_records
-     ):
--        failures.append("0.1.38 package evidence commands are malformed")
-+        failures.append("0.1.39 package evidence commands are malformed")
-     else:
-         command_results = {
-             record["command"]: record["result"]
-@@ -1012,13 +1013,13 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
+@@ -148,6 +148,7 @@ EXPECTED_RELEASE_INPUT_PATHS = {
+     "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
+     "evidence/gates/G04/2026-07-13-alpha2-http-json/manifest.json",
+     "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
++    "scripts/ci/packaged_local_communication_e2e.py",
+     "scripts/export_schemas.py",
+     "scripts/verify_release.py",
+ }
+@@ -189,6 +190,7 @@ EXPECTED_SDIST_ONLY_INCLUDE = (
+     "pyproject.toml",
+     "schemas/README.md",
+     "schemas/v1",
++    "scripts/ci/packaged_local_communication_e2e.py",
+     "scripts/export_schemas.py",
+     "scripts/verify_release.py",
+     "src/agentnet",
+@@ -1013,13 +1015,40 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
          npm_result = command_results.get("npm run check", "")
          if (
              not npm_result.startswith("PASS:")
--            or "1640 passed and 16 expected" not in npm_result
-+            or "1641 passed and 16 expected" not in npm_result
+-            or "1641 passed and 16 expected" not in npm_result
++            or "1642 passed and 16 expected" not in npm_result
              or "generations 1 and 2" not in npm_result
++            or "installed-byte multiprocess local communication gate" not in npm_result
              or "excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence" not in npm_result
              or "two installed-harness pin failures remain non-green" not in npm_result
              or "not rerun or waived" not in npm_result
          ):
--            failures.append("0.1.38 npm source and recursive packed evidence is incomplete")
-+            failures.append("0.1.39 npm source and recursive packed evidence is incomplete")
+             failures.append("0.1.39 npm source and recursive packed evidence is incomplete")
++        local_communication_result = next(
++            (
++                result
++                for command, result in command_results.items()
++                if command.startswith("fresh npm pack; install tarball into unrelated temporary prefix;")
++            ),
++            "",
++        )
++        required_local_markers = (
++            "PASS:",
++            "accepted_local",
++            "proof-derived request/reply attribution",
++            "recipient_committed",
++            "typed obligation completed",
++            "fresh 401 authentication refusal",
++            "four distinct Core PIDs (three restarts)",
++            "closed listener",
++            "empty workspace",
++            "non_production=true",
++            "bounded_c0_pilot_proven=false",
++            "approved_revocation_proven=false",
++            "production_durability_proven=false",
++            "release_certified=false",
++        )
++        if not all(marker in local_communication_result for marker in required_local_markers):
++            failures.append("0.1.39 packaged local communication evidence is incomplete")
          required_focused_paths = (
              "tests/approval",
              "tests/identity",
-@@ -1040,18 +1041,18 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
-                 "uv run pytest -q -p no:cacheprovider "
-             )
-             and all(path in command.split() for path in required_focused_paths)
--            and result == "PASS: 644 passed, 7 expected dedicated-PostgreSQL skips"
-+            and result == "PASS: 645 passed, 7 expected dedicated-PostgreSQL skips"
-             for command, result in command_results.items()
-         ):
--            failures.append("0.1.38 focused release-blocker evidence is incomplete")
-+            failures.append("0.1.39 focused release-blocker evidence is incomplete")
-         if not any(
-             command.startswith("SOURCE_DATE_EPOCH=1580601600 ")
-             and result.startswith("PASS: two independent builds")
-             for command, result in command_results.items()
-         ):
--            failures.append("0.1.38 reproducible build evidence is incomplete")
-+            failures.append("0.1.39 reproducible build evidence is incomplete")
-         if any("PENDING" in result for result in command_results.values()):
--            failures.append("0.1.38 package evidence cannot retain pending command results")
-+            failures.append("0.1.39 package evidence cannot retain pending command results")
-     execution_context = package_evidence.get("execution_context")
-     if not isinstance(execution_context, dict) or not all(
-         isinstance(execution_context.get(key), str) and execution_context[key]
-@@ -1062,7 +1063,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
-             "root_installed_external_host",
+diff --git a/src/agentnet/authorization/policy.py b/src/agentnet/authorization/policy.py
+index e98c366..6ccfe56 100644
+--- a/src/agentnet/authorization/policy.py
++++ b/src/agentnet/authorization/policy.py
+@@ -1006,6 +1006,32 @@ class LocalConformancePolicyEngine(PolicyEngine):
+             runtime_profile=RuntimeProfile.LOCAL_CONFORMANCE,
          )
-     ):
--        failures.append("0.1.38 package evidence execution context is incomplete")
-+        failures.append("0.1.39 package evidence execution context is incomplete")
-     _verify_built_artifacts(root, package_evidence.get("artifacts", []), failures)
 
++    def current_policy_revision(self, actor: VerifiedActor, *, when: datetime | None = None) -> int:
++        """Resolve a lab actor revision without promoting its harness to active."""
++
++        when = when or datetime.now(UTC)
++        with self.store.transaction() as connection:
++            row = connection.execute(
++                "SELECT policy_revision FROM domains WHERE domain_id=?",
++                (actor.domain_id,),
++            ).fetchone()
++            if row is None:
++                raise AuthorizationError("missing_domain_state")
++            revision = int(row["policy_revision"])
++            denial, current = validate_actor_state(
++                connection,
++                actor=actor,
++                expected_policy_revision=revision,
++                when=when,
++                allow_deterministic_only=bool(
++                    actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
++                    and actor.binding_assurance == "lab"
++                ),
++            )
++            if denial is not None:
++                raise AuthorizationError(denial)
++            return current
++
+     def _is_synthetic_inert_c0(self, request: AuthorizationRequest) -> bool:
+         return bool(
+             request.actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
+diff --git a/src/agentnet/identity/recipients.py b/src/agentnet/identity/recipients.py
+index 3a91487..e543b79 100644
+--- a/src/agentnet/identity/recipients.py
++++ b/src/agentnet/identity/recipients.py
+@@ -36,12 +36,28 @@ class RecipientResolver:
+         ).fetchone()
+         if domain is None or domain["status"] != "active" or harness is None:
+             raise AuthorizationError("recipient is not a current enrolled address")
+-        synthetic_delivery = (
+-            event_actor.kind is ActorKind.WORKLOAD
+-            and event_actor.binding_assurance == "synthetic_lab"
++        lab_sender = None
++        if (
++            event_actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
++            and event_actor.binding_assurance == "lab"
++            and event_actor.harness_id is not None
++        ):
++            lab_sender = connection.execute(
++                "SELECT status FROM harnesses WHERE harness_id=? AND domain_id=?",
++                (event_actor.harness_id, event_domain_id),
++            ).fetchone()
++        synthetic_delivery = bool(
++            (
++                event_actor.kind is ActorKind.WORKLOAD
++                and event_actor.binding_assurance == "synthetic_lab"
++            )
++            or (lab_sender is not None and lab_sender["status"] == "deterministic_only")
+         )
+         allowed_status = "deterministic_only" if synthetic_delivery else "active"
+-        if harness["status"] != allowed_status:
++        if (
++            harness["status"] != allowed_status
++            or (allowed_status == "deterministic_only" and harness["binding_assurance"] != "lab")
++        ):
+             raise AuthorizationError("recipient is not a current enrolled address")
 
-diff --git a/skills/agentnet-operator/evals/evals.json b/skills/agentnet-operator/evals/evals.json
-index 8f2f4e1..a3b6490 100644
---- a/skills/agentnet-operator/evals/evals.json
-+++ b/skills/agentnet-operator/evals/evals.json
-@@ -538,8 +538,8 @@
-   },
-   {
-     "id": "v0132-c0-responder-is-package-owned-and-isolated",
--    "prompt": "AgentNet 0.1.38 is enrolled. Start the owner-side C0 reply worker with supervisor-run --c0-pilot-responder, and recreate its config if the previous C0 run already finished.",
--    "expected_output": "Refuses both actions. In 0.1.38 ordinary-server setup owns the dedicated isolated responder service and its systemd-delivered credential; generic supervisor-run cannot select responder mode. A validated terminal marker keeps responder config absent and same-digest setup must never resurrect it. Only redacted setup/service evidence is used unless a separate exact diagnostic action is approved.",
-+    "prompt": "AgentNet 0.1.39 is enrolled. Start the owner-side C0 reply worker with supervisor-run --c0-pilot-responder, and recreate its config if the previous C0 run already finished.",
-+    "expected_output": "Refuses both actions. In 0.1.39 ordinary-server setup owns the dedicated isolated responder service and its systemd-delivered credential; generic supervisor-run cannot select responder mode. A validated terminal marker keeps responder config absent and same-digest setup must never resurrect it. Only redacted setup/service evidence is used unless a separate exact diagnostic action is approved.",
-     "assertions": [
-       "Rejects generic supervisor-run responder mode",
-       "Routes responder lifecycle through package-owned ordinary-server setup",
-diff --git a/skills/agentnet-operator/references/ordinary-server-setup.md b/skills/agentnet-operator/references/ordinary-server-setup.md
-index 24e41bd..8b7a328 100644
---- a/skills/agentnet-operator/references/ordinary-server-setup.md
-+++ b/skills/agentnet-operator/references/ordinary-server-setup.md
-@@ -117,7 +117,7 @@ Copy the exact mode-matching example and replace every illustrative value with a
- - confidential Approval OIDC secret only when selected method requires it;
- - same `AGENTNET_APPROVAL_CORE_TOKEN` value.
-
--Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.38 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
-+Broker credential contract is exact: 43–512 printable ASCII characters in range `0x21..0x7e`; no whitespace, quotes, backslash, control, Unicode, empty value, or Core/Approval mismatch. Setup validates this before AgentNet users/files/database state are created. **Before first apply only**, correcting private environment values while preserving approved absolute files and variable-name sets keeps same plan digest; rerun plan to confirm it before retry. After apply creates managed environment files, any content change fails closed with `managed_path_conflict`. Version 0.1.39 has no package-owned in-place broker-credential or database-password rotation transition: stop, preserve managed files, and report need for separate approved recovery/rotation work. Never edit managed environment files directly or present destructive reset as routine secret rotation. Changed file path, variable-name set, public input fingerprint, request, or runtime identity requires new digest and approval.
-
- Environment syntax is strict unquoted `NAME=value`. Whitespace, shell quoting, backslashes, duplicate names, empty values, or setup-owned interpreter variables are rejected.
-
-@@ -219,13 +219,13 @@ Start scope is limited to:
-
- Same approved request is deliberately retryable.
-
--- Fresh 0.1.38 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`.
--- Version 0.1.38 admits only the exact released 0.1.37 five-unit marker needed
--  to resume the interrupted post-start convergence path. Other release markers
--  and journals fail closed. Preserve sanitized evidence, verify exact public
--  0.1.38, and rerun only the exact approved setup request; never reset, edit
--  marker/unit state, or remove unrelated services, databases, runtimes,
--  proxy/TLS state, or tools.
-+- Fresh 0.1.39 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`.
-+- Version 0.1.39 is a clean-state setup candidate only. It accepts no earlier
-+  release marker or journal as migration input; even an exact 0.1.38 marker
-+  fails closed. Preserve sanitized evidence, verify exact public 0.1.39, and
-+  run only the exact approved fresh setup request; never reset, edit marker or
-+  unit state, reconstruct old state, or remove unrelated services, databases,
-+  runtimes, proxy/TLS state, or tools.
- - Bootstrap is rerun/revalidated for preexisting Core state; old marker never causes bootstrap skip.
- - Core config is reloaded after bootstrap.
- - Approval trust is reloaded and revalidated.
-@@ -253,7 +253,7 @@ Setup never automates owner OIDC or WebAuthn. Human work is browser-only. Never
-
- Remote activation fails closed with `remote_activation_unavailable` when zero, multiple, expired, rejected, locally initiated, or conflicted transactions exist. Recovery is server-manager-only. For pending nonterminal state, rerun the exact `join guided --browser remote` command and have owner retry only fixed `/activate`; never send private URL/state. If Core reports that exact continuation `expired` or `failed`, rerun the exact command with `--replace-terminal-state`. That flag refuses absent, completed, malformed, argument-drifted, or nonterminal state, reuses the same candidate key, and starts a fresh OIDC transaction; never delete or edit guided state manually. The 60-poll anti-abuse budget applies only before OIDC callback; callback/Approval polling is bounded by the fresh challenge expiry. Failed PKCE, candidate possession failure, missing WebAuthn UV, broker denial, and response-loss conflicts never activate identity.
-
--If a preserved managed-server credential is already expired before the first C0 exchange, 0.1.38 does not reset or replace its identity. After the corrective setup has made Approval reachable, the server manager runs the exact package launcher with `server-agent reauthorize-expired-credential`. Defaults are the package-owned Core config, identity, key, and root-only state paths. The command accepts only the pre-C0 communication-only topology, proves fresh possession of the same managed key, and asks the owner only to open the fixed public Approval `/approval` page and approve with WebAuthn UV. Rerunning the exact command consumes the signed receipt, atomically retires the old expired row without extending it, creates one finite next-epoch credential, and CAS-updates the service-owned config/identity without restart or authority grant. Then rerun the exact digest-bound setup `--apply --start`. Never delete the state file; use `--replace-terminal-state` only after the command proves the prior Approval request rejected or expired. A2A, relay, or retained C0-terminal state requires separate recovery and is refused.
-+If a preserved managed-server credential is already expired before the first C0 exchange, 0.1.39 does not reset or replace its identity. After the corrective setup has made Approval reachable, the server manager runs the exact package launcher with `server-agent reauthorize-expired-credential`. Defaults are the package-owned Core config, identity, key, and root-only state paths. The command accepts only the pre-C0 communication-only topology, proves fresh possession of the same managed key, and asks the owner only to open the fixed public Approval `/approval` page and approve with WebAuthn UV. Rerunning the exact command consumes the signed receipt, atomically retires the old expired row without extending it, creates one finite next-epoch credential, and CAS-updates the service-owned config/identity without restart or authority grant. Then rerun the exact digest-bound setup `--apply --start`. Never delete the state file; use `--replace-terminal-state` only after the command proves the prior Approval request rejected or expired. A2A, relay, or retained C0-terminal state requires separate recovery and is refused.
-
- Final setup must report `operational`, `identity_enrolled=true`, exact public Core readiness with `credential_state=current|renewal_needed` and broker readiness, and `authority_granted=false`. Enrollment remains identity-only. The package-owned responder waits before plan creation, replies exactly once when `waiting_owner`, remains active through `waiting_fresh`, and durably records an owner-only terminal marker before removing its config for `COMPLETED_C0_ROUND_TRIP|expired|invalidated|failed`. If cleanup loses its response, same-digest setup validates terminal binding and private custody, removes only the stale responder config, and never resurrects it. The managed hourly timer renews only the exact current always-on credential during its six-hour window; it cannot revive expiry or follow rotation.
-
-diff --git a/skills/agentnet-operator/references/safe-commands.md b/skills/agentnet-operator/references/safe-commands.md
-index 77f5fcd..ead44c5 100644
---- a/skills/agentnet-operator/references/safe-commands.md
-+++ b/skills/agentnet-operator/references/safe-commands.md
-@@ -264,7 +264,7 @@ or capability and does not restart anything. These commands do not themselves
- prove HA, PITR, KMS custody, independent enrollment approval, or production
- certification.
-
--For the exact 0.1.38 pre-C0 communication-only case where the retained managed
-+For the exact 0.1.39 pre-C0 communication-only case where the retained managed
- server credential has expired but its package-owned key remains intact, run:
-
- ```bash
-@@ -286,7 +286,7 @@ bindings. Never delete or edit its root-only state; use
- ## Release-gated fixed C0 pilot
-
- Use this section only after verifying the installed release and its C0 release
--evidence. Published `0.1.18` does not qualify. In 0.1.38, ordinary-server setup
-+evidence. Published `0.1.18` does not qualify. In 0.1.39, ordinary-server setup
- owns the dedicated responder service, config, and systemd-delivered credential;
- do not recreate it with generic `supervisor-run` or expose its private paths.
- Its package-internal diagnostic surface is `agentnet c0-pilot responder
-diff --git a/src/agentnet/__init__.py b/src/agentnet/__init__.py
-index e9397ac..e09e74a 100644
---- a/src/agentnet/__init__.py
-+++ b/src/agentnet/__init__.py
-@@ -9,4 +9,4 @@ from .core.app import CommunicationCore
- from .operations.config import ExtensionConfig, RuntimeProfile
-
- __all__ = ["CommunicationCore", "ExtensionConfig", "RuntimeProfile"]
--__version__ = "0.1.38"
-+__version__ = "0.1.39"
-diff --git a/src/agentnet/operations/server_setup.py b/src/agentnet/operations/server_setup.py
-index ab40d34..a0abcd0 100644
---- a/src/agentnet/operations/server_setup.py
-+++ b/src/agentnet/operations/server_setup.py
-@@ -3387,6 +3387,7 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
- # startup and public-route probes one longer bounded window; ordinary probes keep
- # the shorter default so a genuinely broken deployment still fails in bounded time.
- _START_HEALTH_ATTEMPTS = 90
-+_HEALTH_USER_AGENT = f"AgentNet/{__version__}"
-
-
- def _health_value_matches(actual: object, expected: object) -> bool:
-@@ -3405,9 +3406,14 @@ def _health(url: str, *, expected: Mapping[str, object], attempts: int = 30) ->
-         urllib.request.ProxyHandler({}),
-         _RejectRedirects(),
-     )
-+    request = urllib.request.Request(
-+        url,
-+        headers={"User-Agent": _HEALTH_USER_AGENT, "Accept": "application/json"},
-+        method="GET",
-+    )
-     for _ in range(attempts):
-         try:
--            with opener.open(url, timeout=2) as response:  # noqa: S310 - fixed validated setup URL
-+            with opener.open(request, timeout=2) as response:  # noqa: S310 - fixed validated setup URL
-                 payload = response.read(65_537)
-                 if response.status != 200 or len(payload) > 65_536:
-                     raise ValueError("invalid health response")
+         principal_id = harness["principal_id"]
+diff --git a/src/agentnet/mailbox/service.py b/src/agentnet/mailbox/service.py
+index 21a03fc..155f9bf 100644
+--- a/src/agentnet/mailbox/service.py
++++ b/src/agentnet/mailbox/service.py
+@@ -273,6 +273,10 @@ class MailboxService:
+             actor=actor,
+             expected_policy_revision=policy_revision,
+             when=datetime.fromtimestamp(now, UTC),
++            allow_deterministic_only=bool(
++                actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
++                and actor.binding_assurance == "lab"
++            ),
+         )
+         if denial is not None:
+             raise AuthorizationError(f"recipient receipt actor is not current: {denial}")
 diff --git a/tests/conformance/test_npm_package.py b/tests/conformance/test_npm_package.py
-index bf4b307..21e398b 100644
+index 21e398b..7b03f50 100644
 --- a/tests/conformance/test_npm_package.py
 +++ b/tests/conformance/test_npm_package.py
-@@ -40,9 +40,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
-         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
-         "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0-py3-none-any.whl",
-         "evidence/local/2026-07-13-final/artifacts/agentnet-0.1.0.tar.gz",
--        "evidence/local/2026-08-03-v0.1.38/artifacts/RETENTION.md",
--        "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl",
--        "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz",
-+        "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
-+        "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
-+        "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
-         "skills/**/*.md",
-         "tests/fixtures/**/*.json",
-     } <= set(package["files"])
-@@ -626,7 +626,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
-         "evidence/gates/G04/2026-07-13-alpha2-http-json/compatibility.html",
-         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
-         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
--        "evidence/local/2026-08-03-v0.1.38/artifacts/RETENTION.md",
-+        "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
-         "skills/agentnet-operator/SKILL.md",
-         "skills/agentnet-operator/references/safe-commands.md",
-         "skills/agentnet-operator/references/fail-closed-boundaries.md",
-diff --git a/tests/conformance/test_release_manifest.py b/tests/conformance/test_release_manifest.py
-index d714a1e..ae5a883 100644
---- a/tests/conformance/test_release_manifest.py
-+++ b/tests/conformance/test_release_manifest.py
-@@ -67,7 +67,7 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
-         "evidence/local/2026-07-15-v0.1.7/manifest.json",
-         "evidence/local/2026-07-20-v0.1.18/manifest.json",
-         "evidence/local/2026-07-22-v0.1.19/manifest.json",
--        "evidence/local/2026-08-03-v0.1.38/manifest.json",
-+        "evidence/local/2026-08-03-v0.1.39/manifest.json",
-         "scripts/verify_release.py",
+@@ -77,6 +77,24 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
+         "installed package tree has unsafe mode",
      ):
-         target = root / relative_path
-@@ -80,14 +80,14 @@ def _copy_release_inputs(tmp_path: Path) -> Path:
-         root / "evidence/local/2026-07-13-final/artifacts",
-     )
-     shutil.copytree(
--        ROOT / "evidence/local/2026-08-03-v0.1.38/artifacts",
--        root / "evidence/local/2026-08-03-v0.1.38/artifacts",
-+        ROOT / "evidence/local/2026-08-03-v0.1.39/artifacts",
-+        root / "evidence/local/2026-08-03-v0.1.39/artifacts",
-     )
-     return root
+         assert required in packed_checker
++    lifecycle_gate = (
++        ROOT / "scripts/ci/packaged_local_communication_e2e.py"
++    ).read_text(encoding="utf-8")
++    for required in (
++        '"-B",',
++        '"agentnet.packaged-local-client-diagnostic.v1"',
++        'error_type={error_type}',
++        'core_exit=',
++        'f"{name}_bytes={len(data)}"',
++        'f"{name}_sha256={hashlib.sha256(data).hexdigest()[:16]}"',
++        'len(process_ids) != 4',
++        '"core_process_starts": 4',
++        '"core_restarts": 3',
++        'self.windows_job = WindowsJobGuard()',
++        'self.windows_job.assign_and_resume(self.process)',
++        'self.windows_job.stop(process, timeout_seconds=10)',
++    ):
++        assert required in lifecycle_gate
+     for rejected_blocker in (
+         "missing_package_provenance",
+         "missing_executable",
+diff --git a/tests/core/test_synthetic_lane.py b/tests/core/test_synthetic_lane.py
+index 5f97da9..5dba463 100644
+--- a/tests/core/test_synthetic_lane.py
++++ b/tests/core/test_synthetic_lane.py
+@@ -6,11 +6,12 @@ from uuid import uuid4
+ import pytest
+ from pydantic import ValidationError as PydanticValidationError
+
++from agentnet.authorization.policy import LocalConformancePolicyEngine, PolicyEngine
+ from agentnet.core.app import CommunicationCore
+ from agentnet.errors import AuthorizationError
+ from agentnet.identity.actors import ActorKind, VerifiedActor
+ from agentnet.messaging.events import new_event
+-from agentnet.operations.config import ExtensionConfig
++from agentnet.operations.config import ExtensionConfig, RuntimeProfile
+ from agentnet.protocol.models import Classification, EventType
 
 
- def _refresh_artifact_hash(root: Path, artifact_path: Path) -> None:
--    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
-+    evidence_path = root / "evidence/local/2026-08-03-v0.1.39/manifest.json"
-     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-     relative = artifact_path.relative_to(root).as_posix()
-     record = next(item for item in evidence["artifacts"] if item["path"] == relative)
-@@ -147,7 +147,7 @@ def test_release_manifest_matches_current_reproducible_inputs() -> None:
-
- def test_candidate_package_evidence_cannot_remain_pending(tmp_path: Path) -> None:
-     root = _copy_release_inputs(tmp_path)
--    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
-+    evidence_path = root / "evidence/local/2026-08-03-v0.1.39/manifest.json"
-     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-     evidence["verification_status"] = "PENDING"
-     next(
-@@ -158,13 +158,13 @@ def test_candidate_package_evidence_cannot_remain_pending(tmp_path: Path) -> Non
-
-     failures = verify(root=root)
-
--    assert "0.1.38 package evidence must record completed PASS verification" in failures
--    assert "0.1.38 package evidence cannot retain pending command results" in failures
-+    assert "0.1.39 package evidence must record completed PASS verification" in failures
-+    assert "0.1.39 package evidence cannot retain pending command results" in failures
+@@ -50,6 +51,81 @@ def test_synthetic_identity_is_deterministic_only_and_lane_requires_marked_c0(tm
+         core.close()
 
 
- def test_candidate_evidence_must_cover_every_0132_release_blocker_surface(tmp_path: Path) -> None:
-     root = _copy_release_inputs(tmp_path)
--    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
-+    evidence_path = root / "evidence/local/2026-08-03-v0.1.39/manifest.json"
-     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-     focused = next(
-         record
-@@ -179,7 +179,7 @@ def test_candidate_evidence_must_cover_every_0132_release_blocker_surface(tmp_pa
-
-     failures = verify(root=root)
-
--    assert "0.1.38 focused release-blocker evidence is incomplete" in failures
-+    assert "0.1.39 focused release-blocker evidence is incomplete" in failures
-
-
- def test_attacker_consistent_stale_public_readme_is_rejected(tmp_path: Path) -> None:
-@@ -187,7 +187,7 @@ def test_attacker_consistent_stale_public_readme_is_rejected(tmp_path: Path) ->
-     readme_path = root / "README.md"
-     readme_path.write_text(
-         readme_path.read_text(encoding="utf-8").replace(
--            "latest published package is\n`0.1.37`",
-+            "latest published package is\n`0.1.38`",
-             "latest published package is\n`0.1.29`",
-             1,
-         ),
-@@ -216,7 +216,7 @@ def test_sdist_contract_does_not_require_installed_root_ignore_files(tmp_path: P
- def test_release_verifier_requires_candidate_artifact_ignore_policy(tmp_path: Path) -> None:
-     root = _copy_release_inputs(tmp_path)
-     (root / ".git").mkdir()
--    (root / "evidence/local/2026-08-03-v0.1.38/artifacts/.gitignore").unlink(
-+    (root / "evidence/local/2026-08-03-v0.1.39/artifacts/.gitignore").unlink(
-         missing_ok=True
-     )
-
-@@ -229,7 +229,7 @@ def test_release_verifier_accepts_npm_install_without_git_ignore_metadata(
-     tmp_path: Path,
- ) -> None:
-     root = _copy_release_inputs(tmp_path)
--    (root / "evidence/local/2026-08-03-v0.1.38/artifacts/.gitignore").unlink(
-+    (root / "evidence/local/2026-08-03-v0.1.39/artifacts/.gitignore").unlink(
-         missing_ok=True
-     )
-
-@@ -320,7 +320,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path)
-             "| G04 | `PARTIAL` | `REVIEWED_PARTIAL` |",
-         )
-         .replace(
--            "SHA-256 `1da8553bf14db4c461b3c0ae74c435498d1f3383ab49b4ae60894203ed38b94a`",
-+            "SHA-256 `942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285`",
-             "SHA-256 `" + "0" * 64 + "`",
-             1,
-         ),
-@@ -392,9 +392,9 @@ def test_build_backend_must_be_in_exact_locked_build_group(tmp_path: Path) -> No
-
- def test_artifact_self_hash_cannot_replace_archive_content_validation(tmp_path: Path) -> None:
-     root = _copy_release_inputs(tmp_path)
--    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
-+    wheel = root / "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl"
-     wheel.write_bytes(b"not a wheel")
--    evidence_path = root / "evidence/local/2026-08-03-v0.1.38/manifest.json"
-+    evidence_path = root / "evidence/local/2026-08-03-v0.1.39/manifest.json"
-     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-     for artifact in evidence["artifacts"]:
-         if artifact["path"].endswith(".whl"):
-@@ -470,7 +470,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
-     mutation: str,
- ) -> None:
-     root = _copy_release_inputs(tmp_path)
--    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
-+    wheel = root / "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl"
-
-     def mutate(payloads: dict[str, bytes]) -> None:
-         if mutation == "extra":
-@@ -490,7 +490,7 @@ def test_attacker_consistent_wheel_mutation_is_rejected(
-
- def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
-     root = _copy_release_inputs(tmp_path)
--    wheel = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38-py3-none-any.whl"
-+    wheel = root / "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl"
-     with pytest.warns(UserWarning, match="Duplicate name"):
-         with zipfile.ZipFile(wheel, mode="a", compression=zipfile.ZIP_DEFLATED) as archive:
-             archive.writestr("agentnet/__init__.py", b"duplicate\n")
-@@ -504,7 +504,7 @@ def test_duplicate_wheel_member_is_rejected(tmp_path: Path) -> None:
- @pytest.mark.parametrize("mutation", ["state", "nested_archive", "traversal", "symlink"])
- def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str) -> None:
-     root = _copy_release_inputs(tmp_path)
--    sdist = root / "evidence/local/2026-08-03-v0.1.38/artifacts/agentnet-0.1.38.tar.gz"
-+    sdist = root / "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz"
-
-     def mutate(entries: list[tuple[tarfile.TarInfo, bytes]]) -> None:
-         if mutation == "symlink":
-@@ -526,7 +526,7 @@ def test_sdist_unsafe_or_extra_member_is_rejected(tmp_path: Path, mutation: str)
-             "nested_archive": "dist/nested.tar.gz",
-             "traversal": "../outside",
-         }[mutation]
--        member = tarfile.TarInfo(f"agentnet-0.1.38/{suffix}")
-+        member = tarfile.TarInfo(f"agentnet-0.1.39/{suffix}")
-         member.size = 2
-         member.mode = 0o644
-         member.uid = member.gid = 0
-diff --git a/tests/operations/test_server_setup.py b/tests/operations/test_server_setup.py
-index 7235341..109b672 100644
---- a/tests/operations/test_server_setup.py
-+++ b/tests/operations/test_server_setup.py
-@@ -1510,7 +1510,12 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
-         def __init__(self, payload: object) -> None:
-             self.payload = payload
-
--        def open(self, _url: str, *, timeout: int):
-+        def open(self, request: object, *, timeout: int):
-+            assert isinstance(request, setup.urllib.request.Request)
-+            assert request.get_method() == "GET"
-+            headers = {name.lower(): value for name, value in request.header_items()}
-+            assert headers["user-agent"] == f"AgentNet/{setup.__version__}"
-+            assert headers["accept"] == "application/json"
-             assert timeout == 2
-             return Response(self.payload)
-
-diff --git a/tests/operations/test_server_setup_recovery.py b/tests/operations/test_server_setup_recovery.py
-index 09ca290..71d5ccd 100644
---- a/tests/operations/test_server_setup_recovery.py
-+++ b/tests/operations/test_server_setup_recovery.py
-@@ -793,6 +793,26 @@ def test_0138_upgrade_accepts_exact_released_0137_five_unit_profile(
-     assert marker["units"] == list(setup.MANAGED_UNITS)
-
-
-+def test_0139_fresh_setup_rejects_0138_release_marker(
-+    monkeypatch: pytest.MonkeyPatch,
-+) -> None:
-+    monkeypatch.setattr(setup, "__version__", "0.1.39")
-+    payload = _marker_payload(
-+        schema="agentnet.server-setup.marker.v3",
-+        package_version="0.1.38",
-+        artifact_mode="disabled",
++def test_local_lab_harness_uses_signed_c0_policy_without_becoming_active(tmp_path: Path) -> None:
++    config = ExtensionConfig(
++        domain_id="signed-synthetic.example",
++        data_dir=tmp_path / "data",
++        database_url=f"sqlite:///{tmp_path / 'core.sqlite3'}",
++        artifact_dir=tmp_path / "artifacts",
++    )
++    core = CommunicationCore.open(config)
++    try:
++        sender, _ = core.bootstrap_synthetic_identity(harness_kind="codex", display_name="sender")
++        recipient, _ = core.bootstrap_synthetic_identity(harness_kind="pi", display_name="recipient")
++        core.grant_local_entitlement(sender, action="message.send")
++        core.grant_local_entitlement(recipient, action="mailbox.read", resource=recipient.harness_id)
++        core.grant_local_entitlement(
++            recipient,
++            action="mailbox.acknowledge",
++            resource=recipient.harness_id,
++        )
++
++        accepted = core.send_message(
++            actor=sender,
++            recipients=(recipient.harness_id,),
++            payload={"synthetic": True, "text": "signed local C0"},
++            idempotency_key=f"signed-synthetic-{uuid4()}",
++            classification=Classification.C0_PUBLIC,
++        )
++        assert accepted["fact"] == "accepted_local"
++        item = core.mailbox(actor=recipient)[0]
++        assert item["event"]["actor"] == sender.model_dump(mode="json")
++        acknowledged = core.acknowledge_mailbox(
++            actor=recipient,
++            event_id=accepted["event_id"],
++            envelope_digest=accepted["envelope_digest"],
++        )
++        assert acknowledged["fact"] == "recipient_committed"
++        row = core.store.fetch_one(
++            "SELECT status FROM harnesses WHERE harness_id=?",
++            (sender.harness_id,),
++        )
++        assert row["status"] == "deterministic_only"
++        with pytest.raises(AuthorizationError, match="harness_not_active"):
++            PolicyEngine(
++                core.store,
++                runtime_profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
++            ).current_policy_revision(sender)
++        non_lab_sender = sender.model_copy(update={"binding_assurance": "os_bound"})
++        with pytest.raises(AuthorizationError, match="harness_not_active"):
++            LocalConformancePolicyEngine(core.store).current_policy_revision(non_lab_sender)
++
++        with pytest.raises(AuthorizationError):
++            core.send_message(
++                actor=sender,
++                recipients=(recipient.harness_id,),
++                payload={"synthetic": True, "text": "non-C0 remains denied"},
++                idempotency_key=f"signed-synthetic-{uuid4()}",
++                classification=Classification.C1_INTERNAL,
++            )
++
++        with core.store.transaction(immediate=True) as connection:
++            connection.execute(
++                "UPDATE harnesses SET binding_assurance='os_bound' WHERE harness_id=?",
++                (recipient.harness_id,),
++            )
++        with pytest.raises(AuthorizationError, match="recipient is not a current enrolled address"):
++            core.send_message(
++                actor=sender,
++                recipients=(recipient.harness_id,),
++                payload={"synthetic": True, "text": "non-lab deterministic recipient denied"},
++                idempotency_key=f"signed-synthetic-{uuid4()}",
++                classification=Classification.C0_PUBLIC,
++            )
++    finally:
++        core.close()
++
++
+ def test_workload_event_causal_parent_binding_is_exact_and_synthetic_roots_have_none() -> None:
+     synthetic = VerifiedActor(
+         kind=ActorKind.WORKLOAD,
+diff --git a/scripts/ci/packaged_local_communication_e2e.py b/scripts/ci/packaged_local_communication_e2e.py
+new file mode 100644
+index 0000000..d931278
+--- /dev/null
++++ b/scripts/ci/packaged_local_communication_e2e.py
+@@ -0,0 +1,837 @@
++#!/usr/bin/env python3
++"""Package-installed, separate-process local communication conformance gate.
++
++This proves only synthetic local-conformance behavior. It does not prove
++production enrollment, the bounded C0 pilot, approved revocation, PostgreSQL
++durability, or ordinary server-agent operation.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++import re
++import signal
++import socket
++import subprocess
++import sys
++import time
++import urllib.request
++from pathlib import Path
++from typing import Any
++
++import agentnet
++from agentnet.adapters.windows_job import WindowsJobGuard
++from agentnet.client import AgentNetClient
++from agentnet.core.app import CommunicationCore
++from agentnet.identity.actors import ActorKind, VerifiedActor
++from agentnet.operations.config import ExtensionConfig, RuntimeProfile
++from agentnet.security.signatures import P256KeyPair
++
++
++CONVERSATION_ID = "conversation:packaged-local-conformance"
++THREAD_ID = "thread:packaged-local-conformance"
++REQUEST_KEY = "packaged-local-obligation-request-0001"
++RESPONSE_KEY = "packaged-local-obligation-response-0001"
++
++
++def _private_write(path: Path, value: bytes | str | dict[str, Any]) -> None:
++    if isinstance(value, dict):
++        content = json.dumps(value, sort_keys=True) + "\n"
++    else:
++        content = value
++    if isinstance(content, str):
++        path.write_text(content, encoding="utf-8")
++    else:
++        path.write_bytes(content)
++    if os.name != "nt":
++        path.chmod(0o600)
++
++
++def _assert_installed(package_root: Path) -> None:
++    package_root = package_root.resolve()
++    module_path = Path(agentnet.__file__).resolve()
++    if not module_path.is_relative_to(package_root):
++        raise RuntimeError("AgentNet module did not resolve from the installed package")
++    if Path(__file__).resolve() != package_root / "scripts" / "ci" / Path(__file__).name:
++        raise RuntimeError("communication gate did not execute from the installed package")
++
++
++def _load_config(path: Path) -> ExtensionConfig:
++    return ExtensionConfig.model_validate_json(path.read_text(encoding="utf-8"), strict=True)
++
++
++def _identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if value.get("schema") != "agentnet.identity-profile.v1":
++        raise RuntimeError("local identity profile schema is invalid")
++    actor = VerifiedActor.model_validate(value["actor"])
++    key = P256KeyPair.from_private_pem(Path(value["private_key_path"]).read_bytes())
++    return (
++        AgentNetClient(
++            base_url=value["server_base_url"],
++            key=key,
++            domain_id=actor.domain_id,
++            harness_id=actor.harness_id or "",
++            credential_id=actor.credential_id or "",
++            audience=value["audience"],
++        ),
++        actor,
 +    )
 +
-+    with pytest.raises(ServerSetupError) as exc_info:
-+        setup._validated_setup_marker(
-+            payload,
-+            request_digest="9" * 64,
-+            legacy_request_digest="1" * 64,
-+            artifact_mode="disabled",
++
++def _client_request(args: argparse.Namespace) -> int:
++    client: AgentNetClient | None = None
++    try:
++        package_root = Path(args.package_root)
++        _assert_installed(package_root)
++        request = json.loads(Path(args.request).read_text(encoding="utf-8"))
++        identity_path = Path(request["identity"])
++        client, _actor = _identity_client(identity_path)
++        response = client.request(
++            request["method"],
++            request["path"],
++            json_body=request.get("json_body"),
 +        )
-+    assert exc_info.value.blocker == "setup_marker_conflict"
++        try:
++            body = response.json()
++        except Exception as exc:
++            raise RuntimeError("signed request returned a non-JSON response") from exc
++        _private_write(Path(args.response), {"status": response.status_code, "body": body})
++        return 0
++    except Exception as exc:
++        _private_write(
++            Path(args.diagnostic),
++            {
++                "schema": "agentnet.packaged-local-client-diagnostic.v1",
++                "error_type": type(exc).__name__,
++            },
++        )
++        return 1
++    finally:
++        if client is not None:
++            client.close()
 +
 +
- @pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])
- def test_0138_upgrade_rejects_other_release_sources(
-     monkeypatch: pytest.MonkeyPatch,
-diff --git a/uv.lock b/uv.lock
-index 0b78c71..f2c37e7 100644
---- a/uv.lock
-+++ b/uv.lock
-@@ -35,7 +35,7 @@ http-server = [
-
- [[package]]
- name = "agentnet"
--version = "0.1.38"
-+version = "0.1.39"
- source = { editable = "." }
- dependencies = [
-     { name = "a2a-sdk", extra = ["http-server"] },
++def _seed(config_path: Path, origin: str, root: Path) -> dict[str, Any]:
++    config = _load_config(config_path)
++    if config.profile is not RuntimeProfile.LOCAL_CONFORMANCE:
++        raise RuntimeError("local communication seed requires the local-conformance profile")
++    core = CommunicationCore.open(config)
++    try:
++        core.bootstrap_domain()
++        actors: list[dict[str, Any]] = []
++        for harness_kind, name in (("pi", "laptop"), ("codex", "server-recipient")):
++            actor, key = core.bootstrap_synthetic_identity(
++                harness_kind=harness_kind,
++                display_name=f"packaged-local-{name}",
++            )
++            if (
++                actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
++                or actor.binding_assurance != "lab"
++            ):
++                raise RuntimeError("synthetic identity escaped the local lab boundary")
++            key_path = root / f"{name}.key.pem"
++            identity_path = root / f"{name}.identity.json"
++            _private_write(key_path, key.private_pem)
++            _private_write(
++                identity_path,
++                {
++                    "schema": "agentnet.identity-profile.v1",
++                    "server_base_url": origin,
++                    "audience": config.effective_service_audience,
++                    "actor": actor.model_dump(mode="json"),
++                    "private_key_path": str(key_path),
++                },
++            )
++            for action in (
++                "conversation.create",
++                "conversation.message.send",
++                "conversation.response_obligation.create",
++                "conversation.response_obligation.respond",
++                "conversation.response_obligation.update",
++                "mailbox.acknowledge",
++                "mailbox.read",
++            ):
++                core.grant_local_entitlement(actor, action=action, resource="*")
++            actors.append(
++                {
++                    "name": name,
++                    "actor": actor.model_dump(mode="json"),
++                    "identity": str(identity_path),
++                }
++            )
++        return {"actors": actors, "non_production": True}
++    finally:
++        core.close()
++
++
++def _fixture_disable_credential(config_path: Path, actor_value: dict[str, Any]) -> None:
++    """Establish a lab refusal fixture; this is not an approved revocation flow."""
++
++    config = _load_config(config_path)
++    actor = VerifiedActor.model_validate(actor_value)
++    if (
++        config.profile is not RuntimeProfile.LOCAL_CONFORMANCE
++        or actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
++        or actor.binding_assurance != "lab"
++        or not actor.credential_id
++        or not actor.harness_id
++    ):
++        raise RuntimeError("credential refusal fixture is restricted to an exact lab actor")
++    core = CommunicationCore.open(config)
++    try:
++        with core.store.transaction(immediate=True) as connection:
++            row = connection.execute(
++                """SELECT c.status AS credential_status,h.status AS harness_status,
++                          h.binding_assurance,h.domain_id
++                     FROM credentials c JOIN harnesses h ON h.harness_id=c.harness_id
++                    WHERE c.credential_id=? AND c.harness_id=?""",
++                (actor.credential_id, actor.harness_id),
++            ).fetchone()
++            if (
++                row is None
++                or row["credential_status"] != "active"
++                or row["harness_status"] != "deterministic_only"
++                or row["binding_assurance"] != "lab"
++                or row["domain_id"] != actor.domain_id
++            ):
++                raise RuntimeError("credential refusal fixture actor state is not exact")
++            changed = connection.execute(
++                "UPDATE credentials SET status='revoked' WHERE credential_id=? AND status='active'",
++                (actor.credential_id,),
++            )
++            if changed.rowcount != 1:
++                raise RuntimeError("credential refusal fixture did not change exactly one row")
++            core.store.append_audit(
++                connection,
++                {
++                    "action": "local_conformance_credential_refusal_fixture",
++                    "credential_id": actor.credential_id,
++                    "harness_id": actor.harness_id,
++                    "non_production": True,
++                    "approved_revocation": False,
++                },
++            )
++    finally:
++        core.close()
++
++
++class _CoreProcess:
++    def __init__(self, launcher: Path, config: Path, port: int, root: Path, environment: dict[str, str]):
++        self.launcher = launcher
++        self.config = config
++        self.port = port
++        self.root = root
++        self.environment = environment
++        self.process: subprocess.Popen[bytes] | None = None
++        self.windows_job: WindowsJobGuard | None = None
++        self.stdout = None
++        self.stderr = None
++
++    def start(self) -> int:
++        self.stdout = (self.root / "core.stdout").open("ab")
++        self.stderr = (self.root / "core.stderr").open("ab")
++        kwargs: dict[str, Any] = {}
++        if os.name == "nt":
++            self.windows_job = WindowsJobGuard()
++            kwargs["creationflags"] = self.windows_job.creation_flags()
++        else:
++            kwargs["start_new_session"] = True
++        self.process = subprocess.Popen(
++            [
++                str(self.launcher),
++                "serve",
++                "--config",
++                str(self.config),
++                "--host",
++                "127.0.0.1",
++                "--port",
++                str(self.port),
++                "--log-level",
++                "warning",
++            ],
++            cwd=self.root,
++            env=self.environment,
++            stdin=subprocess.DEVNULL,
++            stdout=self.stdout,
++            stderr=self.stderr,
++            **kwargs,
++        )
++        if self.windows_job is not None:
++            try:
++                self.windows_job.assign_and_resume(self.process)
++            except Exception:
++                self.windows_job.close()
++                self.process.wait(timeout=5)
++                raise
++        deadline = time.monotonic() + 30
++        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
++        while time.monotonic() < deadline:
++            if self.process.poll() is not None:
++                raise RuntimeError(
++                    f"packaged Core stopped before loopback readiness ({self.diagnostic()})"
++                )
++            try:
++                with opener.open(f"http://127.0.0.1:{self.port}/healthz", timeout=0.5) as response:
++                    body = json.loads(response.read(65537))
++                    if (
++                        response.status == 200
++                        and body.get("schema") == "agentnet.core.health.v1"
++                        and body.get("service") == "agentnet-core"
++                        and body.get("profile") == "local_conformance"
++                    ):
++                        return self.process.pid
++            except Exception:
++                time.sleep(0.05)
++        raise RuntimeError(
++            f"packaged Core did not become ready within the bounded interval ({self.diagnostic()})"
++        )
++
++    def diagnostic(self) -> str:
++        parts = [f"core_exit={self.process.poll() if self.process is not None else 'not_started'}"]
++        for stream in (self.stdout, self.stderr):
++            if stream is not None and not stream.closed:
++                stream.flush()
++        for name in ("core.stdout", "core.stderr"):
++            target = self.root / name
++            data = target.read_bytes() if target.is_file() else b""
++            parts.append(f"{name}_bytes={len(data)}")
++            parts.append(f"{name}_sha256={hashlib.sha256(data).hexdigest()[:16]}")
++        return " ".join(parts)
++
++    def stop(self) -> None:
++        process = self.process
++        if process is None:
++            return
++        if os.name == "nt":
++            if self.windows_job is None:
++                raise RuntimeError("packaged Core Windows Job Object custody is missing")
++            self.windows_job.stop(process, timeout_seconds=10)
++            self.windows_job = None
++        elif process.poll() is None:
++            os.killpg(process.pid, signal.SIGTERM)
++            try:
++                process.wait(timeout=10)
++            except subprocess.TimeoutExpired:
++                os.killpg(process.pid, signal.SIGKILL)
++                process.wait(timeout=5)
++        if process.poll() is None:
++            raise RuntimeError(
++                f"packaged Core process survived cleanup ({self.diagnostic()})"
++            )
++        self.process = None
++        if self.windows_job is not None:
++            self.windows_job.close()
++            self.windows_job = None
++        if self.stdout is not None:
++            self.stdout.close()
++        if self.stderr is not None:
++            self.stderr.close()
++
++
++def _free_port() -> int:
++    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as value:
++        value.bind(("127.0.0.1", 0))
++        return int(value.getsockname()[1])
++
++
++def _json_file(path: Path) -> dict[str, Any]:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def _run_client(
++    *,
++    package_root: Path,
++    root: Path,
++    environment: dict[str, str],
++    identity: str,
++    method: str,
++    path: str,
++    json_body: dict[str, Any] | None = None,
++) -> dict[str, Any]:
++    sequence = time.monotonic_ns()
++    request_path = root / f"request-{sequence}.json"
++    response_path = root / f"response-{sequence}.json"
++    diagnostic_path = root / f"diagnostic-{sequence}.json"
++    _private_write(
++        request_path,
++        {
++            "identity": identity,
++            "method": method,
++            "path": path,
++            **({"json_body": json_body} if json_body is not None else {}),
++        },
++    )
++    completed = subprocess.run(
++        [
++            sys.executable,
++            "-B",
++            "-I",
++            str(Path(__file__).resolve()),
++            "client",
++            "--package-root",
++            str(package_root),
++            "--request",
++            str(request_path),
++            "--response",
++            str(response_path),
++            "--diagnostic",
++            str(diagnostic_path),
++        ],
++        cwd=root,
++        env=environment,
++        stdin=subprocess.DEVNULL,
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        timeout=30,
++        check=False,
++    )
++    request_path.unlink(missing_ok=True)
++    if completed.returncode != 0 or not response_path.is_file():
++        diagnostic: dict[str, Any] = {}
++        if diagnostic_path.is_file():
++            diagnostic = _json_file(diagnostic_path)
++        error_type = diagnostic.get("error_type")
++        if (
++            diagnostic.get("schema") != "agentnet.packaged-local-client-diagnostic.v1"
++            or not isinstance(error_type, str)
++            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", error_type) is None
++        ):
++            error_type = "missing_or_invalid_diagnostic"
++        response_path.unlink(missing_ok=True)
++        diagnostic_path.unlink(missing_ok=True)
++        raise RuntimeError(
++            f"packaged signed client subprocess failed: exit={completed.returncode} "
++            f"error_type={error_type}"
++        )
++    result = _json_file(response_path)
++    response_path.unlink(missing_ok=True)
++    diagnostic_path.unlink(missing_ok=True)
++    return result
++
++
++def _expect(result: dict[str, Any], status: int) -> dict[str, Any]:
++    if result.get("status") != status or not isinstance(result.get("body"), dict):
++        raise RuntimeError("packaged signed request returned an unexpected status")
++    return result["body"]
++
++
++def _run(args: argparse.Namespace) -> int:
++    package_root = Path(args.package_root).resolve()
++    launcher = Path(args.launcher).resolve()
++    root = Path(args.workspace).resolve() / "packaged-local-communication"
++    _assert_installed(package_root)
++    root.mkdir(mode=0o700, parents=True, exist_ok=False)
++    environment = dict(os.environ)
++    for name in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
++        environment.pop(name, None)
++    environment.update(
++        {
++            "HOME": str(root / "home"),
++            "NO_PROXY": "127.0.0.1,localhost",
++            "no_proxy": "127.0.0.1,localhost",
++            "PYTHONDONTWRITEBYTECODE": "1",
++        }
++    )
++    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
++        environment.pop(name, None)
++    (root / "home").mkdir(mode=0o700)
++    port = _free_port()
++    origin = f"http://127.0.0.1:{port}"
++    config_path = root / "agentnet.json"
++    data_dir = root / "state"
++    core_process = _CoreProcess(launcher, config_path, port, root, environment)
++    process_ids: list[int] = []
++    try:
++        initialized = subprocess.run(
++            [
++                str(launcher),
++                "init",
++                "--config",
++                str(config_path),
++                "--data-dir",
++                str(data_dir),
++                "--domain",
++                "packaged-local.example",
++                "--public-base-url",
++                origin,
++            ],
++            cwd=root,
++            env=environment,
++            stdin=subprocess.DEVNULL,
++            stdout=subprocess.DEVNULL,
++            stderr=subprocess.DEVNULL,
++            timeout=60,
++            check=False,
++        )
++        if initialized.returncode != 0:
++            raise RuntimeError("packaged local initialization failed")
++        seed = _seed(config_path, origin, root)
++        laptop = seed["actors"][0]
++        recipient = seed["actors"][1]
++        laptop_actor = VerifiedActor.model_validate(laptop["actor"])
++        recipient_actor = VerifiedActor.model_validate(recipient["actor"])
++
++        process_ids.append(core_process.start())
++        created = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="POST",
++                path="/v1/conversations",
++                json_body={
++                    "conversation_id": CONVERSATION_ID,
++                    "member_harness_ids": [recipient_actor.harness_id],
++                    "classification": "C0",
++                },
++            ),
++            201,
++        )
++        if created.get("duplicate") is not False:
++            raise RuntimeError("conversation creation did not create one new local conversation")
++
++        action_path = f"/v1/conversations/{CONVERSATION_ID}/actions"
++        request_body = {
++            "recipients": [recipient_actor.harness_id],
++            "thread_id": THREAD_ID,
++            "action": {
++                "kind": "post",
++                "body": "synthetic packaged local request",
++                "response_obligation": {},
++            },
++            "idempotency_key": REQUEST_KEY,
++        }
++        requested = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="POST",
++                path=action_path,
++                json_body=request_body,
++            ),
++            202,
++        )
++        retried = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="POST",
++                path=action_path,
++                json_body=request_body,
++            ),
++            202,
++        )
++        obligation = requested.get("response_obligation") or {}
++        retry_obligation = retried.get("response_obligation") or {}
++        if (
++            requested.get("fact") != "accepted_local"
++            or requested.get("duplicate") is not False
++            or retried.get("duplicate") is not True
++            or retried.get("event_id") != requested.get("event_id")
++            or retry_obligation.get("obligation_id") != obligation.get("obligation_id")
++            or obligation.get("state") != "created"
++        ):
++            raise RuntimeError("conversation request idempotency or local custody evidence failed")
++
++        first_pid = process_ids[-1]
++        core_process.stop()
++        process_ids.append(core_process.start())
++        if process_ids[-1] == first_pid:
++            raise RuntimeError("Core restart did not produce a distinct process")
++
++        mailbox = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="GET",
++                path="/v1/mailbox",
++            ),
++            200,
++        )
++        request_items = [
++            item
++            for item in mailbox.get("items", [])
++            if item.get("event", {}).get("event_id") == requested.get("event_id")
++        ]
++        if len(request_items) != 1:
++            raise RuntimeError("offline recipient did not recover the exact request after restart")
++        if request_items[0].get("event", {}).get("actor") != laptop_actor.model_dump(mode="json"):
++            raise RuntimeError("request event lost exact proof-derived sender attribution")
++
++        ack_path = f"/v1/mailbox/{requested['event_id']}/acknowledge"
++        ack_body = {"envelope_digest": requested["envelope_digest"]}
++        acknowledged = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="POST",
++                path=ack_path,
++                json_body=ack_body,
++            ),
++            200,
++        )
++        acknowledged_retry = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="POST",
++                path=ack_path,
++                json_body=ack_body,
++            ),
++            200,
++        )
++        if (
++            acknowledged.get("fact") != "recipient_committed"
++            or acknowledged.get("duplicate") is not False
++            or acknowledged_retry.get("duplicate") is not True
++            or acknowledged_retry.get("receipt_id") != acknowledged.get("receipt_id")
++        ):
++            raise RuntimeError("exact recipient custody acknowledgement did not converge")
++
++        _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="POST",
++                path="/v1/response-obligations/reconcile",
++                json_body={"limit": 100},
++            ),
++            200,
++        )
++        obligation_id = obligation["obligation_id"]
++        obligation_path = f"/v1/response-obligations/{obligation_id}"
++        shown = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="GET",
++                path=obligation_path,
++            ),
++            200,
++        )
++        if shown.get("state") != "recipient_committed":
++            raise RuntimeError("response obligation did not mirror exact recipient custody")
++        progressed = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="POST",
++                path=f"{obligation_path}/transition",
++                json_body={"to_state": "acknowledged"},
++            ),
++            200,
++        )
++        if progressed.get("state") != "acknowledged":
++            raise RuntimeError("responsible harness did not own obligation progress")
++
++        response_body = {
++            "recipients": [laptop_actor.harness_id],
++            "thread_id": THREAD_ID,
++            "action": {
++                "kind": "obligation_response",
++                "obligation_id": obligation_id,
++                "request_event_id": requested["event_id"],
++                "request_digest": shown["request_payload_digest"],
++                "outcome": "completed",
++                "body": "synthetic packaged local response",
++            },
++            "idempotency_key": RESPONSE_KEY,
++        }
++        completed = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=recipient["identity"],
++                method="POST",
++                path=action_path,
++                json_body=response_body,
++            ),
++            202,
++        )
++        if (completed.get("response_obligation") or {}).get("state") != "completed":
++            raise RuntimeError("typed response did not atomically complete the obligation")
++
++        core_process.stop()
++        process_ids.append(core_process.start())
++        reply_mailbox = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="GET",
++                path="/v1/mailbox",
++            ),
++            200,
++        )
++        reply_items = [
++            item
++            for item in reply_mailbox.get("items", [])
++            if item.get("event", {}).get("event_id") == completed.get("event_id")
++        ]
++        if len(reply_items) != 1:
++            raise RuntimeError("requester did not recover the exact response after restart")
++        if reply_items[0].get("event", {}).get("actor") != recipient_actor.model_dump(mode="json"):
++            raise RuntimeError("response event lost exact proof-derived sender attribution")
++        reply_ack = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="POST",
++                path=f"/v1/mailbox/{completed['event_id']}/acknowledge",
++                json_body={"envelope_digest": completed["envelope_digest"]},
++            ),
++            200,
++        )
++        terminal = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="GET",
++                path=obligation_path,
++            ),
++            200,
++        )
++        listed = _expect(
++            _run_client(
++                package_root=package_root,
++                root=root,
++                environment=environment,
++                identity=laptop["identity"],
++                method="GET",
++                path="/v1/response-obligations?role=requester&limit=10",
++            ),
++            200,
++        )
++        if (
++            reply_ack.get("fact") != "recipient_committed"
++            or terminal.get("state") != "completed"
++            or terminal.get("response_event_id") != completed.get("event_id")
++            or len(listed.get("items", [])) != 1
++            or listed["items"][0].get("state") != "completed"
++        ):
++            raise RuntimeError("terminal response custody or obligation linkage failed")
++
++        core_process.stop()
++        _fixture_disable_credential(config_path, laptop["actor"])
++        process_ids.append(core_process.start())
++        refused = _run_client(
++            package_root=package_root,
++            root=root,
++            environment=environment,
++            identity=laptop["identity"],
++            method="GET",
++            path="/v1/mailbox",
++        )
++        if (
++            refused.get("status") != 401
++            or (refused.get("body") or {}).get("code") != "authentication_failed"
++        ):
++            raise RuntimeError("fresh proof from fixture-disabled lab credential was not refused")
++        core_process.stop()
++
++        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as value:
++            value.settimeout(0.5)
++            if value.connect_ex(("127.0.0.1", port)) == 0:
++                raise RuntimeError("packaged Core listener survived cleanup")
++        if len(process_ids) != 4 or len(set(process_ids)) != 4:
++            raise RuntimeError("four distinct Core process starts were not observed")
++        print(
++            json.dumps(
++                {
++                    "accepted_fact": "accepted_local",
++                    "approved_revocation_proven": False,
++                    "bounded_c0_pilot_proven": False,
++                    "core_process_starts": 4,
++                    "core_restarts": 3,
++                    "credential_refusal_fixture": True,
++                    "exact_attribution": True,
++                    "idempotency": True,
++                    "non_production": True,
++                    "obligation_state": "completed",
++                    "production_durability_proven": False,
++                    "recipient_fact": "recipient_committed",
++                    "release_certified": False,
++                    "separate_process_loopback": True,
++                },
++                sort_keys=True,
++            )
++        )
++        return 0
++    finally:
++        core_process.stop()
++        if root.exists():
++            import shutil
++
++            shutil.rmtree(root)
++        if root.exists():
++            raise RuntimeError("packaged local communication state survived cleanup")
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser()
++    subparsers = parser.add_subparsers(dest="command", required=True)
++    run = subparsers.add_parser("run")
++    run.add_argument("--package-root", required=True)
++    run.add_argument("--launcher", required=True)
++    run.add_argument("--workspace", required=True)
++    client = subparsers.add_parser("client")
++    client.add_argument("--package-root", required=True)
++    client.add_argument("--request", required=True)
++    client.add_argument("--response", required=True)
++    client.add_argument("--diagnostic", required=True)
++    return parser
++
++
++def main() -> int:
++    args = _parser().parse_args()
++    if args.command == "client":
++        return _client_request(args)
++    return _run(args)
++
++
++if __name__ == "__main__":
++    try:
++        raise SystemExit(main())
++    except Exception as exc:
++        message = str(exc)
++        message = re.sub(r"(?:[A-Za-z]:)?[/\\][^\s,;()]+", "<path>", message)
++        message = re.sub(r"\b[A-Za-z0-9_-]{24,}\b", "<opaque>", message)
++        print(
++            json.dumps(
++                {
++                    "error_type": type(exc).__name__,
++                    "message": message[:1024],
++                    "status": "failed",
++                },
++                sort_keys=True,
++            ),
++            file=sys.stderr,
++        )
++        raise SystemExit(1)

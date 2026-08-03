@@ -3,7 +3,7 @@
 Snapshot: 2026-08-03
 Candidate: `agentnet 0.1.39`
 Latest published package: `agentnet 0.1.38`
-Evidence profile: public-health request-identity candidate
+Evidence profile: public-health request identity plus packaged local communication candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -25,7 +25,7 @@ owner, installer, or production-topology gates.
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
 | `uv.lock` | format `1`, revision `3`, SHA-256 `942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285` |
-| `pyproject.toml` | SHA-256 `8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8` |
+| `pyproject.toml` | SHA-256 `ed6bac592c242f59d1500d6d118bf7dc0118e7938c3ccc87e596c14b96d9375f` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -342,13 +342,25 @@ fresh-install preflight that its default `Python-urllib/*` User-Agent received
 HTTP 403 before origin routing; no 0.1.38 Hub installation occurred. That report
 is corroboration only, not retained reproducible proof.
 
-Candidate `0.1.39` changes only health request identity: explicit GET,
+Candidate `0.1.39` changes health request identity to explicit GET,
 `User-Agent: AgentNet/0.1.39`, and `Accept: application/json`. Proxy disabling,
 redirect rejection, system TLS and hostname verification, per-attempt timeout,
 response bounds, exact JSON identity/readiness, finite retries, authority, and
-auxiliary-unit ordering remain unchanged. It is a fresh clean-state setup
-candidate, adds no release-marker migration edge, and rejects every existing
-release marker or journal.
+auxiliary-unit ordering remain unchanged.
+
+It also closes a local-conformance-only composition gap. Exact lab-bound
+`deterministic_only` harnesses may resolve the pre-existing narrow C0 policy,
+recipient, and custody-acknowledgement path without becoming active; production
+policy continues to reject them. A fresh npm installation has passed a real
+loopback Core plus separate fresh-proof client-process journey covering
+`accepted_local`, exact attribution, business and receipt idempotency,
+`recipient_committed`, typed obligation completion across restarts, lab-fixture
+credential refusal, listener release, and state cleanup. This is synthetic local
+evidence only, not bounded C0 completion, approved revocation, real enrollment,
+ordinary server-agent topology, PostgreSQL durability, or certification.
+
+It is a fresh clean-state setup candidate, adds no release-marker migration
+edge, and rejects every existing release marker or journal.
 
 Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production

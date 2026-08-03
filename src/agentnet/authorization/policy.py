@@ -1006,6 +1006,32 @@ class LocalConformancePolicyEngine(PolicyEngine):
             runtime_profile=RuntimeProfile.LOCAL_CONFORMANCE,
         )
 
+    def current_policy_revision(self, actor: VerifiedActor, *, when: datetime | None = None) -> int:
+        """Resolve a lab actor revision without promoting its harness to active."""
+
+        when = when or datetime.now(UTC)
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT policy_revision FROM domains WHERE domain_id=?",
+                (actor.domain_id,),
+            ).fetchone()
+            if row is None:
+                raise AuthorizationError("missing_domain_state")
+            revision = int(row["policy_revision"])
+            denial, current = validate_actor_state(
+                connection,
+                actor=actor,
+                expected_policy_revision=revision,
+                when=when,
+                allow_deterministic_only=bool(
+                    actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
+                    and actor.binding_assurance == "lab"
+                ),
+            )
+            if denial is not None:
+                raise AuthorizationError(denial)
+            return current
+
     def _is_synthetic_inert_c0(self, request: AuthorizationRequest) -> bool:
         return bool(
             request.actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS

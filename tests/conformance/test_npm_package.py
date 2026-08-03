@@ -77,6 +77,24 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "installed package tree has unsafe mode",
     ):
         assert required in packed_checker
+    lifecycle_gate = (
+        ROOT / "scripts/ci/packaged_local_communication_e2e.py"
+    ).read_text(encoding="utf-8")
+    for required in (
+        '"-B",',
+        '"agentnet.packaged-local-client-diagnostic.v1"',
+        'error_type={error_type}',
+        'core_exit=',
+        'f"{name}_bytes={len(data)}"',
+        'f"{name}_sha256={hashlib.sha256(data).hexdigest()[:16]}"',
+        'len(process_ids) != 4',
+        '"core_process_starts": 4',
+        '"core_restarts": 3',
+        'self.windows_job = WindowsJobGuard()',
+        'self.windows_job.assign_and_resume(self.process)',
+        'self.windows_job.stop(process, timeout_seconds=10)',
+    ):
+        assert required in lifecycle_gate
     for rejected_blocker in (
         "missing_package_provenance",
         "missing_executable",

@@ -1,25 +1,22 @@
-HEAD: f1f312824d785ac06134f1d21d8b6edc6b7421ba
- PUBLIC_RELEASE_STATUS.md                           | 34 ++++++++++++-----
- README.md                                          | 31 ++++++++++------
- RELEASE_MANIFEST.json                              | 22 +++++------
- REQUIREMENTS_STATUS.md                             | 31 +++++++++++-----
- docs/ARCHITECTURE.md                               | 20 +++++++---
- docs/GATE_EVIDENCE.md                              |  3 +-
- docs/RELEASE_MANIFEST.md                           | 32 ++++++++++------
- docs/implementation-guide.md                       | 17 ++++++---
- npm/scripts/check-package.mjs                      |  8 ++--
- package-lock.json                                  |  4 +-
- package.json                                       |  8 ++--
- pyproject.toml                                     |  2 +-
- scripts/verify_release.py                          | 43 +++++++++++-----------
- skills/agentnet-operator/evals/evals.json          |  4 +-
- .../references/ordinary-server-setup.md            | 18 ++++-----
- .../agentnet-operator/references/safe-commands.md  |  4 +-
- src/agentnet/__init__.py                           |  2 +-
- src/agentnet/operations/server_setup.py            |  8 +++-
- tests/conformance/test_npm_package.py              |  8 ++--
- tests/conformance/test_release_manifest.py         | 38 +++++++++----------
- tests/operations/test_server_setup.py              |  7 +++-
- tests/operations/test_server_setup_recovery.py     | 20 ++++++++++
- uv.lock                                            |  2 +-
- 23 files changed, 231 insertions(+), 135 deletions(-)
+ .github/workflows/server-setup-upgrade-e2e.yml     |   6 +-
+ PUBLIC_RELEASE_STATUS.md                           |  39 +++--
+ README.md                                          |  39 +++--
+ RELEASE_MANIFEST.json                              |  20 ++-
+ REQUIREMENTS_STATUS.md                             |  41 +++--
+ docs/ARCHITECTURE.md                               |  15 ++
+ docs/GATE_EVIDENCE.md                              |   2 +-
+ docs/RELEASE_MANIFEST.md                           |  24 ++-
+ docs/implementation-guide.md                       |  21 +++
+ .../artifacts/agentnet-0.1.39-py3-none-any.whl     | Bin 911239 -> 912523 bytes
+ .../artifacts/agentnet-0.1.39.tar.gz               | Bin 1057530 -> 1067296 bytes
+ evidence/local/2026-08-03-v0.1.39/manifest.json    |  35 ++--
+ npm/scripts/check-packed-package.mjs               |  45 +++++
+ pyproject.toml                                     |   1 +
+ scripts/ci/ordinary-server-upgrade-e2e.sh          | 182 +++++++++++++--------
+ scripts/verify_release.py                          |  31 +++-
+ src/agentnet/authorization/policy.py               |  26 +++
+ src/agentnet/identity/recipients.py                |  24 ++-
+ src/agentnet/mailbox/service.py                    |   4 +
+ tests/conformance/test_npm_package.py              |  18 ++
+ tests/core/test_synthetic_lane.py                  |  78 ++++++++-
+ 21 files changed, 511 insertions(+), 140 deletions(-)

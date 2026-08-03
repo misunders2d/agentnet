@@ -148,6 +148,7 @@ EXPECTED_RELEASE_INPUT_PATHS = {
     "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
     "evidence/gates/G04/2026-07-13-alpha2-http-json/manifest.json",
     "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
+    "scripts/ci/packaged_local_communication_e2e.py",
     "scripts/export_schemas.py",
     "scripts/verify_release.py",
 }
@@ -189,6 +190,7 @@ EXPECTED_SDIST_ONLY_INCLUDE = (
     "pyproject.toml",
     "schemas/README.md",
     "schemas/v1",
+    "scripts/ci/packaged_local_communication_e2e.py",
     "scripts/export_schemas.py",
     "scripts/verify_release.py",
     "src/agentnet",
@@ -1013,13 +1015,40 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         npm_result = command_results.get("npm run check", "")
         if (
             not npm_result.startswith("PASS:")
-            or "1641 passed and 16 expected" not in npm_result
+            or "1642 passed and 16 expected" not in npm_result
             or "generations 1 and 2" not in npm_result
+            or "installed-byte multiprocess local communication gate" not in npm_result
             or "excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence" not in npm_result
             or "two installed-harness pin failures remain non-green" not in npm_result
             or "not rerun or waived" not in npm_result
         ):
             failures.append("0.1.39 npm source and recursive packed evidence is incomplete")
+        local_communication_result = next(
+            (
+                result
+                for command, result in command_results.items()
+                if command.startswith("fresh npm pack; install tarball into unrelated temporary prefix;")
+            ),
+            "",
+        )
+        required_local_markers = (
+            "PASS:",
+            "accepted_local",
+            "proof-derived request/reply attribution",
+            "recipient_committed",
+            "typed obligation completed",
+            "fresh 401 authentication refusal",
+            "four distinct Core PIDs (three restarts)",
+            "closed listener",
+            "empty workspace",
+            "non_production=true",
+            "bounded_c0_pilot_proven=false",
+            "approved_revocation_proven=false",
+            "production_durability_proven=false",
+            "release_certified=false",
+        )
+        if not all(marker in local_communication_result for marker in required_local_markers):
+            failures.append("0.1.39 packaged local communication evidence is incomplete")
         required_focused_paths = (
             "tests/approval",
             "tests/identity",

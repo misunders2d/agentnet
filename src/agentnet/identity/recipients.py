@@ -36,12 +36,28 @@ class RecipientResolver:
         ).fetchone()
         if domain is None or domain["status"] != "active" or harness is None:
             raise AuthorizationError("recipient is not a current enrolled address")
-        synthetic_delivery = (
-            event_actor.kind is ActorKind.WORKLOAD
-            and event_actor.binding_assurance == "synthetic_lab"
+        lab_sender = None
+        if (
+            event_actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
+            and event_actor.binding_assurance == "lab"
+            and event_actor.harness_id is not None
+        ):
+            lab_sender = connection.execute(
+                "SELECT status FROM harnesses WHERE harness_id=? AND domain_id=?",
+                (event_actor.harness_id, event_domain_id),
+            ).fetchone()
+        synthetic_delivery = bool(
+            (
+                event_actor.kind is ActorKind.WORKLOAD
+                and event_actor.binding_assurance == "synthetic_lab"
+            )
+            or (lab_sender is not None and lab_sender["status"] == "deterministic_only")
         )
         allowed_status = "deterministic_only" if synthetic_delivery else "active"
-        if harness["status"] != allowed_status:
+        if (
+            harness["status"] != allowed_status
+            or (allowed_status == "deterministic_only" and harness["binding_assurance"] != "lab")
+        ):
             raise AuthorizationError("recipient is not a current enrolled address")
 
         principal_id = harness["principal_id"]

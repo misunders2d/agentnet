@@ -5,7 +5,7 @@
   "release": {
     "name": "agentnet",
     "version": "0.1.39",
-    "profile": "public_health_request_identity_candidate",
+    "profile": "public_health_and_packaged_local_communication_candidate",
     "status": "BLOCKED",
     "production_ready": false,
     "ship_eligible": false,
@@ -37,7 +37,7 @@
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "8a22d1c8abf32a824b920f39d323059693d6641538d12083d05a4361d04c12f8"
+      "sha256": "ed6bac592c242f59d1500d6d118bf7dc0118e7938c3ccc87e596c14b96d9375f"
     },
     "direct_dependencies": {
       "build": {
@@ -193,11 +193,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "5d5fc1c876a274369e23895cc9d717ae919e58a294716014352be3430a06a620"
+      "sha256": "2af059607f85d9188f69508495f8b866e897565fd78e704e001c4a7aaf7eea70"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "8c7e9446f52f908b9b02a6efd783bf87113c0423330bdece461797551ec70197"
+      "sha256": "a3ea62531f9a4dc2d8f65e187e6e4c9c12703328418d57c94184c3980ceb983b"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -217,11 +217,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "1430a4de136ab3dce070bd4d93a594de2d046cba3ad58d0ac62fc3e93c270a98"
+      "sha256": "4a1678c7fefdfee1c6e1ee870b2ca417b2e2491031af69d276313efdedcac3ff"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "ccd7b029701e30b52fdbed4911ee03c86ab20dfcf417588d1f61852427e5b20e"
+      "sha256": "c9eccf4898307b232bf168e71ca7cbfbc74885ed3afc78ca23f7bac95beec864"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -239,19 +239,23 @@
       "path": "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
       "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb"
     },
+    "scripts/ci/packaged_local_communication_e2e.py": {
+      "path": "scripts/ci/packaged_local_communication_e2e.py",
+      "sha256": "c579e4afb4e433556c0179bcb3d2ff7c11b65d1ed969636f110688813b49f0e6"
+    },
     "scripts/export_schemas.py": {
       "path": "scripts/export_schemas.py",
       "sha256": "f8d8cf238c4ce1318331ae60efb1c8db5388cbbd558e2d1d355c80dd870e2ff9"
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "b0020815af2120b0c7d6eefeebc1ffd17a983df28dc2c0ba6bb2149be135dd01"
+      "sha256": "fafc39b1abd19b767d1f11c7e4c63572dbb6b4512fe46593deabaed1b9798ecc"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "77238099a5c473fa52b0c15e29ece3394e2c75d9d9f32f0ae9338dfb25f64a39"
+    "sha256": "4d3961f7c871fc969828a5119cba02946e410e141f019b9a97f41aa0ca4c7016"
   },
   "protocols": {
     "a2a": {

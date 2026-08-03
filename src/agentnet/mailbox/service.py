@@ -273,6 +273,10 @@ class MailboxService:
             actor=actor,
             expected_policy_revision=policy_revision,
             when=datetime.fromtimestamp(now, UTC),
+            allow_deterministic_only=bool(
+                actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS
+                and actor.binding_assurance == "lab"
+            ),
         )
         if denial is not None:
             raise AuthorizationError(f"recipient receipt actor is not current: {denial}")

@@ -170,20 +170,35 @@ fresh-install preflight that the package's default `Python-urllib/*` request
 identity received HTTP 403 on all three public routes. No 0.1.38 Hub installation
 occurred.
 
-Corrective candidate `0.1.39` changes only public health request identity: it sends
-an explicit GET with `User-Agent: AgentNet/0.1.39` and
-`Accept: application/json`. The remote Hub peer reported from a bounded read-only
-comparison that the default urllib identity returned 403 on 3/3 routes while the
-explicit product identity passed edge classification and reached the expected
-offline-origin 502 class. This is peer-reported corroboration, not retained
-reproducible release proof.
+Corrective candidate `0.1.39` changes public health request identity: it sends an
+explicit GET with `User-Agent: AgentNet/0.1.39` and `Accept: application/json`.
+The remote Hub peer reported from a bounded read-only comparison that the default
+urllib identity returned 403 on 3/3 routes while the explicit product identity
+passed edge classification and reached the expected offline-origin 502 class.
+This is peer-reported corroboration, not retained reproducible release proof.
 Proxy disabling, redirect rejection, system TLS and hostname verification, the
 two-second per-attempt timeout, response bound, exact JSON identity/readiness, and
-finite retry behavior remain unchanged. This candidate is for fresh clean-state
-setup only and adds no release-marker migration edge. Same-commit CI, immutable
-tag, trusted npm stage, public bytes, and fresh Hub setup remain pending separately
-approved actions. No deployment, reset, database, enrollment, authority, C0,
-federation, production, or gate mutation is implied.
+finite retry behavior remain unchanged.
+
+The candidate also repairs a local-conformance-only composition gap: intentional
+`deterministic_only` lab harnesses can now traverse the existing narrow signed C0
+authorization, recipient resolution, and exact custody-acknowledgement path without
+being promoted to `active`. The production policy engine still rejects those
+harnesses. A fresh npm-tarball installation has run separate signed client and
+Core processes over loopback, with the recipient client absent until after Core
+restart. It proved `accepted_local`, proof-derived actor attribution, idempotent
+request/receipt convergence, `recipient_committed`, typed response-obligation
+completion across restarts, fresh refusal after a lab-only credential fixture,
+and temporary-state cleanup. This is local synthetic evidence only—not the bounded
+C0 pilot, approved revocation, OIDC/WebAuthn enrollment, ordinary server-agent
+operation, PostgreSQL durability, or a production/ship claim.
+
+This candidate is for fresh clean-state setup only and adds no release-marker
+migration edge. Same-commit cross-platform, clean-setup, exact released-marker
+rejection, and packaged-local-communication CI, immutable tag, trusted npm stage,
+public bytes, and fresh Hub setup remain pending separately approved actions. No
+Hub deployment, reset, database, enrollment, authority, native C0, federation,
+production, or gate mutation is implied.
 
 ## Release and gate posture
 

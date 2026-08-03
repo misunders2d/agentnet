@@ -98,6 +98,27 @@ vendor glue. A missing product component is a named blocker, not an operator
 integration assignment or justification to weaken identity, authority,
 durability, artifact, task, room, federation, or non-interruption semantics.
 
+## Packaged local-communication gate
+
+Release validation runs `scripts/ci/packaged_local_communication_e2e.py` from a
+clean npm installation rather than the source checkout. The gate requires the
+script and every `agentnet` import to resolve inside the installed package. It
+starts a loopback Core subprocess, signs each request in a fresh client
+subprocess, keeps the recipient client absent until after Core restart, and
+requires exact `accepted_local`, actor attribution, stable idempotent business
+identifiers with fresh proofs, `recipient_committed`, typed response-obligation
+completion, reply custody after another restart, and refusal of a fresh request
+after a lab-only credential fixture. Process groups, listener, database, keys,
+and temporary package/runtime state must be gone at exit.
+
+This gate intentionally uses synthetic `binding_assurance=lab` identities in
+`deterministic_only` state. The narrow local policy resolves them without making
+them active; production policy must still reject the same state. Fixture-based
+credential refusal is not approved revocation. The gate is not evidence for
+OIDC/WebAuthn enrollment, `COMPLETED_C0_ROUND_TRIP`, ordinary server-agent
+`COM-002`/`COM-003`, five-power cleanup, PostgreSQL durability, or release
+certification.
+
 ## Product-owned ordinary Linux server setup
 
 The default host path is one fixed wrapper, not a general deployment framework. The target agent first resolves system-wide root-owned AgentNet, Node.js, and `uv` executables accessible to the locked service identities:

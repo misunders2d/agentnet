@@ -1,6 +1,1 @@
-Candidate evidence inventory; review packet files excluded to avoid self-reference.
-9a051cffc6224ab4aa090e5ab994fbf7419c0d39cd0bab005d8e226198e1e761  evidence/local/2026-08-03-v0.1.39/artifacts/.gitignore
-46547eb5665a341fea0dff8036f5c4be76505aebfbfed835a748eeff5f391b39  evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md
-3585ebbffd377d4d1bab0db7b77c4259b2a06a78a1f9438147596c0d2d23c3ef  evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl
-9ba503aff08ee500bfaa3b7e370b5e8c4cf159b5706554e7cae9e8bf42850a62  evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz
-35f249717182bbcf5125011bb3333f13ab265dff194f1ce62fe9c4ed2f01b47c  evidence/local/2026-08-03-v0.1.39/manifest.json
+scripts/ci/packaged_local_communication_e2e.py

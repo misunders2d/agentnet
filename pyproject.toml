@@ -79,6 +79,7 @@ only-include = [
   "pyproject.toml",
   "schemas/README.md",
   "schemas/v1",
+  "scripts/ci/packaged_local_communication_e2e.py",
   "scripts/export_schemas.py",
   "scripts/verify_release.py",
   "src/agentnet",

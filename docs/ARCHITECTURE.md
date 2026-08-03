@@ -72,6 +72,21 @@ path-descriptor primitive fails the MCP binding closed.
 Real-host CI proves only the named package/local contracts, not production
 deployment or semantic clean-worker qualification.
 
+The packaged local-communication gate composes a narrower signed lab lane. It
+creates exact `binding_assurance=lab`, `deterministic_only` harnesses through the
+existing local-conformance bootstrap, then runs Core and every client as separate
+OS processes from an unrelated npm installation over real loopback HTTP. Only
+`LocalConformancePolicyEngine` may resolve a policy revision for those harnesses,
+and only the existing inert C0 allowlist may authorize them. Recipient resolution
+and exact mailbox acknowledgement accept `deterministic_only` only when the
+persisted verified-human harness is also lab-bound. No code promotes it to
+`active`; the production `PolicyEngine` continues to reject it. The gate proves
+`accepted_local`, exact proof-derived attribution, request/receipt idempotency,
+`recipient_committed`, typed obligation completion, restart recovery, and fresh
+authentication refusal after a clearly labeled local credential fixture. It does
+not prove enrollment, bounded C0 pilot completion, approved revocation,
+five-power cleanup, ordinary server-agent topology, or production durability.
+
 An always-on process has a separate deployment-identity binding step. After
 real enrollment, `server-agent activate` holds the exact runtime lease under a
 distinct activation owner, verifies the current credential and private key

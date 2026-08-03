@@ -341,7 +341,21 @@ uv run agentnet verify
 
 The demo uses synthetic identities and explicitly reports `accepted_local`. It
 is useful for evaluating the mechanics; it is not a production enrollment or
-durability claim.
+durability claim. The release package gate goes further:
+
+```bash
+npm run check:packed
+```
+
+Its second clean npm installation starts a real loopback Core process and
+separate signed client processes from installed bytes. It proves local C0-classified
+conversation custody, exact actor attribution, idempotent request and receipt
+convergence, `recipient_committed`, typed response-obligation completion across
+Core restarts, and fresh authentication refusal after a clearly labeled lab-only
+credential fixture. It removes the temporary process/state boundary afterward.
+The result remains synthetic `local_conformance`: it does not prove bounded C0
+pilot completion, approved revocation, OIDC/WebAuthn enrollment, ordinary
+server-agent topology, PostgreSQL durability, or production readiness.
 
 To inspect the complete operator journey—from creating a network and enrolling
 the first administrator through invitations, messaging, recovery, and
@@ -363,10 +377,13 @@ for that exact state. Published `0.1.37` removes one unsatisfiable fresh-init
 identity-profile check. Published `0.1.38` extends only the bounded public
 post-restart health/readiness wait, but the remote Hub peer reported from bounded
 read-only preflight that its default `Python-urllib/*` request identity was
-rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit `AgentNet/0.1.39` User-Agent and
-JSON Accept header while preserving the same TLS, redirect, proxy, timeout,
-payload, and exact-identity checks. It is a clean-state setup candidate and
-accepts no earlier release marker as migration input. No release proves completed
+rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit
+`AgentNet/0.1.39` User-Agent and JSON Accept header while preserving the same TLS,
+redirect, proxy, timeout, payload, and exact-identity checks. It also repairs the
+local-only signed lab path so intentional `deterministic_only` harnesses can use
+the existing narrow C0 allowlist without becoming production-active, and adds the
+installed-package multiprocess gate described above. It is a clean-state setup
+candidate and accepts no earlier release marker as migration input. No release proves completed
 fresh-laptop enrollment, native
 cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
@@ -473,11 +490,13 @@ and failure semantics are unchanged. The remote Hub peer reported from bounded
 read-only preflight that the stdlib default `Python-urllib/*` User-Agent received
 HTTP 403 on all three public routes, while an explicit AgentNet product User-Agent
 passed edge classification and reached the offline origin response. That report is
-corroboration only, not retained reproducible release proof. Candidate `0.1.39` changes only request
-identity: explicit GET, `User-Agent: AgentNet/0.1.39`, and
-`Accept: application/json`. It adds no migration edge and rejects existing
-release markers. Release still requires exact same-commit terminal-green
-cross-platform and clean-setup workflow evidence; post-push run IDs are not
+corroboration only, not retained reproducible release proof. Candidate `0.1.39`
+changes request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
+`Accept: application/json`; it also adds the bounded synthetic installed-package
+communication gate without weakening the production policy engine. It adds no
+migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
+cross-platform, clean-setup, and exact released-marker rejection workflow
+evidence; post-push run IDs are not
 self-authored into source. Required runtime proof remains exact public `0.1.39`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact

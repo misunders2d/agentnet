@@ -2,27 +2,27 @@
 set -euo pipefail
 
 # Destructive only inside a fresh GitHub-hosted Ubuntu 24.04 runner. This lane
-# realizes the exact public 0.1.37 predecessor through package execution, then
-# upgrades it with the current candidate. It never fabricates marker, journal,
-# unit, or database state.
+# realizes the exact public 0.1.38 marker through a fresh package-owned setup,
+# then proves the current fresh-only candidate rejects it without mutation. It
+# never fabricates marker, journal, unit, or database state.
 if [[ "${CI:-}" != "true" || "${GITHUB_ACTIONS:-}" != "true" || -z "${RUNNER_TEMP:-}" ]]; then
-  echo "ordinary server upgrade E2E requires an ephemeral GitHub Actions runner" >&2
+  echo "released marker rejection E2E requires an ephemeral GitHub Actions runner" >&2
   exit 2
 fi
 . /etc/os-release
 if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" ]]; then
-  echo "ordinary server upgrade E2E requires Ubuntu 24.04" >&2
+  echo "released marker rejection E2E requires Ubuntu 24.04" >&2
   exit 2
 fi
 if getent passwd agentnet >/dev/null || getent passwd agentnet-approval >/dev/null ||
    getent passwd agentnet-c0 >/dev/null || getent group agentnet >/dev/null ||
    getent group agentnet-approval >/dev/null || getent group agentnet-c0 >/dev/null; then
-  echo "ordinary server upgrade E2E requires clean AgentNet identities and groups" >&2
+  echo "released marker rejection E2E requires clean AgentNet identities and groups" >&2
   exit 2
 fi
 for path in /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /var/lib/agentnet-setup /etc/agentnet-secrets; do
   if sudo test -e "$path"; then
-    echo "ordinary server upgrade E2E requires clean AgentNet state" >&2
+    echo "released marker rejection E2E requires clean AgentNet state" >&2
     exit 2
   fi
 done
@@ -30,7 +30,7 @@ done
 WORK="$RUNNER_TEMP/agentnet-ordinary-server-upgrade-e2e"
 INPUTS="$WORK/inputs"
 PACK="$WORK/pack"
-PREFIX_0137="/opt/agentnet-upgrade-e2e-0.1.37"
+PREFIX_0138="/opt/agentnet-upgrade-e2e-0.1.38"
 CANDIDATE_VERSION="$(node -p "require('./package.json').version")"
 PREFIX_CANDIDATE="/opt/agentnet-upgrade-e2e-$CANDIDATE_VERSION"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
@@ -80,7 +80,7 @@ cleanup() {
     sudo sed -i '/# agentnet-upgrade-e2e$/d' "$HBA_FILE"
     sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' >/dev/null 2>&1
   fi
-  sudo rm -rf "$PREFIX_0137" "$PREFIX_CANDIDATE"
+  sudo rm -rf "$PREFIX_0138" "$PREFIX_CANDIDATE"
   sudo chown "$OPT_UID:$OPT_GID" /opt
   sudo chmod "$OPT_MODE" /opt
   rm -rf "$WORK"
@@ -152,7 +152,7 @@ apply_setup() {
 # independently so every plan binds its own immutable runtime path and bytes.
 sudo chown root:root /opt
 sudo chmod 0755 /opt
-install_runtime "$PREFIX_0137" "@misunders2d/agentnet@0.1.37"
+install_runtime "$PREFIX_0138" "@misunders2d/agentnet@0.1.38"
 CANDIDATE_TARBALL="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
 install_runtime "$PREFIX_CANDIDATE" "$PACK/$CANDIDATE_TARBALL"
 
@@ -253,73 +253,125 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-# Exact public 0.1.37 creates the real released five-unit predecessor state.
-# Local nginx normally converges within its ordinary public-health bound. If it
-# does not, accept only the exact known post-marker health refusal; the current
-# candidate must then converge that same committed predecessor without reset.
-PLAN_0137="$WORK/plan-0.1.37.json"
-APPLY_0137="$WORK/apply-0.1.37.json"
-plan_setup "$PREFIX_0137" "$PLAN_0137"
-DIGEST_0137="$(jq -r '.request_digest' "$PLAN_0137")"
-APPLY_0137_EXIT=0
-apply_setup "$PREFIX_0137" "$DIGEST_0137" "$APPLY_0137" || APPLY_0137_EXIT=$?
-if [[ "$APPLY_0137_EXIT" -eq 0 ]]; then
-  jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0137" >/dev/null
-else
-  [[ "$APPLY_0137_EXIT" -eq 1 ]]
-  jq -e '
-    .schema == "agentnet.server-setup.evidence.v1"
-    and .status == "blocked"
-    and .blocker == "service_health"
-    and .message == "AgentNet service did not return exact healthy identity evidence"
-    and .identity_enrolled == false
-    and .authority_granted == false
-    and .production_durability_proven == false
-  ' "$APPLY_0137" >/dev/null
-fi
-sudo jq -e '.package_version == "0.1.37" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+# Exact public 0.1.38 creates its real five-unit marker from clean state. Local
+# nginx accepts its historical default User-Agent, so setup must fully converge;
+# a health refusal would not prove the immediate predecessor marker boundary.
+PLAN_0138="$WORK/plan-0.1.38.json"
+APPLY_0138="$WORK/apply-0.1.38.json"
+plan_setup "$PREFIX_0138" "$PLAN_0138"
+DIGEST_0138="$(jq -r '.request_digest' "$PLAN_0138")"
+apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138"
+jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
+sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
+SCHEMA_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")"
+MIGRATION_MAX_0138="$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')"
+[[ "$SCHEMA_0138" == "5" ]]
+[[ "$MIGRATION_MAX_0138" == "5" ]]
 sudo systemctl is-active --quiet agentnet-core.service
 sudo systemctl is-active --quiet agentnet-approval.service
+MARKER_0138="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
+REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
+sudo test ! -e /var/lib/agentnet-setup/attempt.json
+sudo test -f /var/lib/agentnet-c0/config.json
+sudo test ! -e /var/lib/agentnet-c0/terminal.json
 
-# Current candidate must consume only that exact released marker, converge five
-# units, and start the unenrolled profile without changing the operator request.
+# Current candidate is fresh-only. It must reject the exact released marker
+# before any setup attempt, journal, database, unit, identity, or authority write.
 PLAN_CANDIDATE="$WORK/plan-candidate.json"
 APPLY_CANDIDATE="$WORK/apply-candidate.json"
 RETRY_CANDIDATE="$WORK/retry-candidate.json"
+FILES_0138="$(sudo sha256sum \
+  /var/lib/agentnet/agentnet.json \
+  /var/lib/agentnet/oidc-enrollment.json \
+  /var/lib/agentnet-approval/config.json \
+  /var/lib/agentnet-c0/config.json \
+  /etc/agentnet-secrets/core.env \
+  /etc/agentnet-secrets/approval.env \
+  /etc/systemd/system/agentnet-core.service \
+  /etc/systemd/system/agentnet-approval.service \
+  /etc/systemd/system/agentnet-c0-responder.service \
+  /etc/systemd/system/agentnet-credential-renew.service \
+  /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)"
+DATABASE_0138="$(sudo -u agentnet pg_dump \
+  --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)"
+
+assert_rejection() {
+  local output="$1"
+  jq -e '
+    .schema == "agentnet.server-setup.evidence.v1"
+    and .status == "blocked"
+    and .blocker == "setup_marker_conflict"
+    and .message == "setup marker version or provenance is invalid"
+    and .identity_enrolled == false
+    and .authority_granted == false
+    and .production_durability_proven == false
+  ' "$output" >/dev/null
+}
+
+assert_released_state_unchanged() {
+  sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+  [[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_0138" ]]
+  [[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_0138" ]]
+  sudo test ! -e /var/lib/agentnet-setup/attempt.json
+  sudo test ! -e /var/lib/agentnet-setup/upgrade.json
+  sudo test ! -e /var/lib/agentnet/server-agent-identity.json
+  sudo test ! -e /var/lib/agentnet/guided-join.key.pem
+  sudo test ! -e /var/lib/agentnet/credential-renewal-state.json
+  sudo test ! -e /var/lib/agentnet-c0/terminal.json
+  [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
+  [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
+  [[ "$(sudo -u agentnet pg_dump --no-owner --no-privileges --dbname=agentnet | sha256sum | cut -d' ' -f1)" == "$DATABASE_0138" ]]
+  [[ "$(sudo sha256sum \
+    /var/lib/agentnet/agentnet.json \
+    /var/lib/agentnet/oidc-enrollment.json \
+    /var/lib/agentnet-approval/config.json \
+    /var/lib/agentnet-c0/config.json \
+    /etc/agentnet-secrets/core.env \
+    /etc/agentnet-secrets/approval.env \
+    /etc/systemd/system/agentnet-core.service \
+    /etc/systemd/system/agentnet-approval.service \
+    /etc/systemd/system/agentnet-c0-responder.service \
+    /etc/systemd/system/agentnet-credential-renew.service \
+    /etc/systemd/system/agentnet-credential-renew.timer | sha256sum | cut -d' ' -f1)" == "$FILES_0138" ]]
+  sudo systemctl is-active --quiet agentnet-core.service
+  sudo systemctl is-enabled --quiet agentnet-core.service
+  sudo systemctl is-active --quiet agentnet-approval.service
+  sudo systemctl is-enabled --quiet agentnet-approval.service
+  ! sudo systemctl is-failed --quiet agentnet-approval.service
+  [[ "$(sudo systemctl show agentnet-c0-responder.service --property=ActiveState --value)" == "inactive" ]]
+  [[ "$(sudo systemctl show agentnet-c0-responder.service --property=UnitFileState --value)" == "disabled" ]]
+  [[ "$(sudo systemctl show agentnet-credential-renew.service --property=ActiveState --value)" == "inactive" ]]
+  [[ "$(sudo systemctl show agentnet-credential-renew.service --property=UnitFileState --value)" == "static" ]]
+  [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=ActiveState --value)" == "inactive" ]]
+  [[ "$(sudo systemctl show agentnet-credential-renew.timer --property=UnitFileState --value)" == "disabled" ]]
+  env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
+  env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
+}
+
+# Capture every released-state fingerprint before even the no-managed-host-write
+# candidate plan. Planning and both rejected apply attempts must preserve it.
 plan_setup "$PREFIX_CANDIDATE" "$PLAN_CANDIDATE"
 DIGEST_CANDIDATE="$(jq -r '.request_digest' "$PLAN_CANDIDATE")"
-apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false' "$APPLY_CANDIDATE" >/dev/null
-sudo jq -e --arg version "$CANDIDATE_VERSION" '.package_version == $version and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
-sudo test ! -e /var/lib/agentnet-setup/upgrade.json
-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "5" ]]
-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "5" ]]
-sudo systemctl is-active --quiet agentnet-core.service
-sudo systemctl is-enabled --quiet agentnet-core.service
-sudo systemctl is-active --quiet agentnet-approval.service
-sudo systemctl is-enabled --quiet agentnet-approval.service
-! sudo systemctl is-failed --quiet agentnet-approval.service
-[[ "$(sudo systemctl show agentnet-c0-responder.service --property=ActiveState --value)" == "inactive" ]]
-[[ "$(sudo systemctl show agentnet-c0-responder.service --property=UnitFileState --value)" == "disabled" ]]
-[[ "$(sudo systemctl show agentnet-credential-renew.service --property=ActiveState --value)" == "inactive" ]]
-[[ "$(sudo systemctl show agentnet-credential-renew.service --property=UnitFileState --value)" == "static" ]]
-[[ "$(sudo systemctl show agentnet-credential-renew.timer --property=ActiveState --value)" == "inactive" ]]
-[[ "$(sudo systemctl show agentnet-credential-renew.timer --property=UnitFileState --value)" == "disabled" ]]
-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
+assert_released_state_unchanged
 
-MARKER_CANDIDATE="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
-REVISION_CANDIDATE="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
-apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE"
-jq -e '.status == "waiting_owner_oidc_or_passkey" and any(.steps[]; .id == "setup_marker" and .status == "already_satisfied")' "$RETRY_CANDIDATE" >/dev/null
-[[ "$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)" == "$MARKER_CANDIDATE" ]]
-[[ "$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)" == "$REVISION_CANDIDATE" ]]
+APPLY_CANDIDATE_EXIT=0
+apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$APPLY_CANDIDATE" || APPLY_CANDIDATE_EXIT=$?
+[[ "$APPLY_CANDIDATE_EXIT" -eq 1 ]]
+assert_rejection "$APPLY_CANDIDATE"
+assert_released_state_unchanged
+
+RETRY_CANDIDATE_EXIT=0
+apply_setup "$PREFIX_CANDIDATE" "$DIGEST_CANDIDATE" "$RETRY_CANDIDATE" || RETRY_CANDIDATE_EXIT=$?
+[[ "$RETRY_CANDIDATE_EXIT" -eq 1 ]]
+assert_rejection "$RETRY_CANDIDATE"
+cmp --silent "$APPLY_CANDIDATE" "$RETRY_CANDIDATE"
+assert_released_state_unchanged
+
 ! grep -Fq "$TOKEN" \
-  "$PLAN_0137" "$PLAN_0137.stderr" "$APPLY_0137" "$APPLY_0137.stderr" \
+  "$PLAN_0138" "$PLAN_0138.stderr" "$APPLY_0138" "$APPLY_0138.stderr" \
   "$PLAN_CANDIDATE" "$PLAN_CANDIDATE.stderr" \
   "$APPLY_CANDIDATE" "$APPLY_CANDIDATE.stderr" \
   "$RETRY_CANDIDATE" "$RETRY_CANDIDATE.stderr"
 
-echo "ordinary server upgrade E2E: PASS"
+echo "released marker rejection E2E: PASS"
