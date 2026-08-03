@@ -266,7 +266,6 @@ APPLY_0138_EXIT=0
 apply_setup "$PREFIX_0138" "$DIGEST_0138" "$APPLY_0138" || APPLY_0138_EXIT=$?
 if [[ "$APPLY_0138_EXIT" -eq 0 ]]; then
   jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false and .authority_granted == false and .production_durability_proven == false' "$APPLY_0138" >/dev/null
-  C0_CONFIG_EXPECTATION="present"
 else
   [[ "$APPLY_0138_EXIT" -eq 1 ]]
   jq -e '
@@ -278,7 +277,6 @@ else
     and .authority_granted == false
     and .production_durability_proven == false
   ' "$APPLY_0138" >/dev/null
-  C0_CONFIG_EXPECTATION="absent"
 fi
 echo "released 0.1.38 apply outcome: bounded"
 sudo jq -e '.package_version == "0.1.38" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
@@ -298,23 +296,8 @@ REVISION_0138="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
 echo "released 0.1.38 marker fingerprint: captured"
 sudo test ! -e /var/lib/agentnet-setup/attempt.json
 echo "released 0.1.38 setup attempt journal: absent"
-# Full convergence writes the C0 configuration; the exact historical
-# service_health stop occurs before that later phase and must leave it absent.
-if sudo test -f /var/lib/agentnet-c0/config.json; then
-  echo "released 0.1.38 observed C0 configuration: present"
-else
-  echo "released 0.1.38 observed C0 configuration: absent"
-fi
-if sudo test -e /var/lib/agentnet-c0/terminal.json; then
-  echo "released 0.1.38 observed C0 terminal: present"
-else
-  echo "released 0.1.38 observed C0 terminal: absent"
-fi
-if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
-  sudo test -f /var/lib/agentnet-c0/config.json
-else
-  sudo test ! -e /var/lib/agentnet-c0/config.json
-fi
+# Both bounded outcomes stop before enrollment and the later C0 phase.
+sudo test ! -e /var/lib/agentnet-c0/config.json
 sudo test ! -e /var/lib/agentnet-c0/terminal.json
 echo "released 0.1.38 marker/schema/unit invariants: verified"
 
@@ -335,9 +318,6 @@ MANAGED_FILES_0138=(
   /etc/systemd/system/agentnet-credential-renew.service
   /etc/systemd/system/agentnet-credential-renew.timer
 )
-if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
-  MANAGED_FILES_0138+=(/var/lib/agentnet-c0/config.json)
-fi
 FILES_0138="$(sudo sha256sum "${MANAGED_FILES_0138[@]}" | sha256sum | cut -d' ' -f1)"
 echo "released 0.1.38 managed-file fingerprint: captured"
 # PostgreSQL 18 randomizes the plain-dump psql restrict key by default.
@@ -371,11 +351,7 @@ assert_released_state_unchanged() {
   sudo test ! -e /var/lib/agentnet/server-agent-identity.json
   sudo test ! -e /var/lib/agentnet/guided-join.key.pem
   sudo test ! -e /var/lib/agentnet/credential-renewal-state.json
-  if [[ "$C0_CONFIG_EXPECTATION" == "present" ]]; then
-    sudo test -f /var/lib/agentnet-c0/config.json
-  else
-    sudo test ! -e /var/lib/agentnet-c0/config.json
-  fi
+  sudo test ! -e /var/lib/agentnet-c0/config.json
   sudo test ! -e /var/lib/agentnet-c0/terminal.json
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c "SELECT value FROM metadata WHERE key='schema_version'")" == "$SCHEMA_0138" ]]
   [[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT COALESCE(MAX(version),0) FROM schema_migrations')" == "$MIGRATION_MAX_0138" ]]
