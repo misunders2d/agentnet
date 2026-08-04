@@ -140,13 +140,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     Migration(
         6,
-        "persistent_same_principal_communication_scope",
-        COMMUNICATION_SCOPE_TABLE_DDL.replace(" INTEGER", " BIGINT"),
-    ),
-    Migration(
-        7,
-        "private_administration_console",
-        ADMIN_CONSOLE_SCHEMA.replace(" INTEGER", " BIGINT"),
+        "communication_scope_and_private_administration",
+        (COMMUNICATION_SCOPE_TABLE_DDL + ADMIN_CONSOLE_SCHEMA).replace(
+            " INTEGER", " BIGINT"
+        ),
     ),
 )
 

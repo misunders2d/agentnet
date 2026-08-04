@@ -424,6 +424,22 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
                 idempotency_key=key,
             )
 
+    for recipient, label in ((sibling, "sibling"), (outsider, "outsider")):
+        with pytest.raises(AuthorizationError, match="communication_scope_request_mismatch"):
+            core.send_message(
+                actor=owner,
+                recipients=(recipient.harness_id,),
+                payload={"text": "approved scope must not reach an unbound same-domain harness"},
+                idempotency_key=f"persistent-{label}-recipient-denied-0001",
+            )
+        with pytest.raises(AuthorizationError, match="communication_scope_request_mismatch"):
+            core.create_conversation(
+                actor=owner,
+                conversation_id=f"conversation:persistent-{label}-denied",
+                member_harness_ids=(recipient.harness_id,),
+                classification=Classification.C0_PUBLIC,
+            )
+
     owner_to_server = core.send_message(
         actor=owner,
         recipients=(server.harness_id,),

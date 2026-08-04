@@ -27,6 +27,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError as PydanticValidationError,
+    field_validator,
 )
 
 from agentnet.bindings.ipc import IPCSessionClaims, UnixIPCServer, mint_inherited_session_capability
@@ -90,6 +91,26 @@ _SHUTDOWN_GRACE_SECONDS = 5.0
 _SYS_PIDFD_SEND_SIGNAL = 424
 _SYS_PIDFD_OPEN = 434
 _REMOTE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+_MAX_PI_EXTENSION_BYTES = 1_048_576
+_PI_EXTENSION_DIRECTORY = Path("src/agentnet/bindings")
+_PI_EXTENSION_FILES = ("pi_extension.ts", "pi_response.ts")
+_PI_TOOL_NAMES = tuple(name.replace(".", "_") for name in CANONICAL_TOOL_NAMES)
+_PI_RESERVED_OPTIONS = frozenset(
+    {
+        "--exclude-tools",
+        "--extension",
+        "--no-extensions",
+        "--no-builtin-tools",
+        "--no-tools",
+        "--tools",
+        "-e",
+        "-ne",
+        "-nt",
+        "-t",
+        "-nbt",
+        "-xt",
+    }
+)
 _FORWARDED_SIGNALS = tuple(
     candidate
     for candidate in (
@@ -193,11 +214,19 @@ class _CustodyReference(_RemoteResult):
     envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     payload_access: Literal["task_grant_required"]
 
+def _payload_separated_event(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or "payload" in value:
+        raise ValueError("mailbox event must separate payload custody from its envelope")
+    EventEnvelope.model_validate({**value, "payload": {}})
+    return value
+
+
+
 
 class _InboxItem(_RemoteResult):
     cursor: int = Field(ge=1)
     fact: str = Field(min_length=1, max_length=128)
-    event: EventEnvelope
+    event: dict[str, Any]
     envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     payload: Any
     payload_available: bool
@@ -205,10 +234,15 @@ class _InboxItem(_RemoteResult):
     payload_access: Literal["task_grant_required"] | None = None
     payload_withheld_reason: Literal["exact_task_grant_required"] | None = None
     custody_reference: _CustodyReference | None = None
+
+    @field_validator("event", mode="before")
+    @classmethod
+    def validate_event(cls, value: Any) -> dict[str, Any]:
+        return _payload_separated_event(value)
 
 
 class _ThreadItem(_RemoteResult):
-    event: EventEnvelope
+    event: dict[str, Any]
     envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     payload: Any
     payload_available: bool
@@ -216,6 +250,11 @@ class _ThreadItem(_RemoteResult):
     payload_access: Literal["task_grant_required"] | None = None
     payload_withheld_reason: Literal["exact_task_grant_required"] | None = None
     custody_reference: _CustodyReference | None = None
+
+    @field_validator("event", mode="before")
+    @classmethod
+    def validate_event(cls, value: Any) -> dict[str, Any]:
+        return _payload_separated_event(value)
 
 
 class _MailboxAcknowledgementResult(_RemoteResult):
@@ -663,16 +702,13 @@ def _private_state_root(configured: Path | None) -> Path:
 
 
 def _binding_descriptors() -> tuple[int, int | None]:
-    platform_name = host_platform()
-    if platform_name == "macos" or (
-        platform_name == "linux" and not hasattr(os, "memfd_create")
-    ):
+    if host_platform() != "linux":
+        raise GateBlocked("remote_manager", "interactive Manager requires Linux")
+    if not hasattr(os, "memfd_create"):
         reader, writer = os.pipe()
         os.set_inheritable(reader, True)
         os.set_inheritable(writer, False)
         return reader, writer
-    if platform_name != "linux":
-        raise GateBlocked("remote_manager", "interactive manager binding requires memfd or pipe")
     return (
         os.memfd_create(
             "agentnet-manager-binding",
@@ -741,11 +777,136 @@ def _validate_command(command: Sequence[str]) -> tuple[str, ...]:
     return result
 
 
+def resolve_packaged_pi_extension(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    source = os.environ if environment is None else environment
+    package_root = source.get("AGENTNET_PACKAGE_ROOT")
+    directory = (
+        Path(package_root) / _PI_EXTENSION_DIRECTORY
+        if package_root is not None
+        else Path(__file__).parent
+    )
+    resolved: dict[str, Path] = {}
+    for name in _PI_EXTENSION_FILES:
+        candidate = directory / name
+        try:
+            candidate_metadata = candidate.lstat()
+            if stat.S_ISLNK(candidate_metadata.st_mode):
+                raise GateBlocked(
+                    "remote_manager",
+                    "packaged Pi Manager extension is invalid",
+                )
+            source_file = candidate.resolve(strict=True)
+            metadata = source_file.lstat()
+        except OSError as exc:
+            raise GateBlocked(
+                "remote_manager",
+                "packaged Pi Manager extension is unavailable",
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size <= 0
+            or metadata.st_size > _MAX_PI_EXTENSION_BYTES
+        ):
+            raise GateBlocked(
+                "remote_manager",
+                "packaged Pi Manager extension is invalid",
+            )
+        resolved[name] = source_file
+    return resolved["pi_extension.ts"]
+
+
+def validate_pi_manager_command(command: Sequence[str]) -> tuple[str, ...]:
+    validated = _validate_command(command)
+    if Path(validated[0]).name != "pi":
+        raise ValidationError("manager-run requires the Pi executable")
+    for argument in validated[1:]:
+        option = argument.split("=", 1)[0]
+        if option in _PI_RESERVED_OPTIONS:
+            raise ValidationError(
+                "manager-run owns Pi extension discovery and tool selection"
+            )
+    return validated
+
+
+def _stage_pi_extension(
+    command: tuple[str, ...],
+    *,
+    source: Path,
+    session_path: Path,
+) -> tuple[str, ...]:
+    staged: dict[str, Path] = {}
+    for name in _PI_EXTENSION_FILES:
+        source_file = source.with_name(name)
+        try:
+            payload = source_file.read_bytes()
+        except OSError as exc:
+            raise GateBlocked(
+                "remote_manager",
+                "packaged Pi Manager extension is unreadable",
+            ) from exc
+        if not payload or len(payload) > _MAX_PI_EXTENSION_BYTES:
+            raise GateBlocked(
+                "remote_manager",
+                "packaged Pi Manager extension is invalid",
+            )
+        target_path = session_path / name
+        try:
+            with target_path.open("xb") as target:
+                target.write(payload)
+            target_path.chmod(0o400)
+        except OSError as exc:
+            raise GateBlocked(
+                "remote_manager",
+                "packaged Pi Manager extension could not be staged",
+            ) from exc
+        staged[name] = target_path
+    return (
+        *command,
+        "--extension",
+        str(staged["pi_extension.ts"]),
+        "--no-extensions",
+        "--no-builtin-tools",
+        "--tools",
+        ",".join(_PI_TOOL_NAMES),
+    )
+
+
 def _sandbox_parent_directories(path: Path) -> tuple[Path, ...]:
     resolved = path.resolve()
     parents = [parent for parent in reversed(resolved.parents) if parent != Path("/")]
     parents.append(resolved)
     return tuple(dict.fromkeys(parents))
+
+
+def _measured_manager_executable(command_name: str, executable: Path) -> Path:
+    if Path(command_name).name != "pi":
+        return executable
+    try:
+        with executable.open("rb") as source:
+            shebang = source.readline(128)
+    except OSError as exc:
+        raise GateBlocked(
+            "remote_manager",
+            "interactive Pi launcher could not be inspected",
+        ) from exc
+    if shebang != b"#!/usr/bin/env node\n":
+        return executable
+    node = shutil.which("node", path=_CHILD_PATH)
+    if node is None:
+        raise GateBlocked(
+            "remote_manager",
+            "interactive Pi Node.js runtime is unavailable",
+        )
+    runtime = Path(node).resolve(strict=True)
+    metadata = runtime.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or not os.access(runtime, os.X_OK):
+        raise GateBlocked(
+            "remote_manager",
+            "interactive Pi Node.js runtime is invalid",
+        )
+    return runtime
 
 
 def _sandboxed_command(
@@ -780,12 +941,14 @@ def _sandboxed_command(
     executable_metadata = executable.lstat()
     if not stat.S_ISREG(executable_metadata.st_mode) or not os.access(executable, os.X_OK):
         raise GateBlocked("remote_manager", "interactive Manager executable is invalid")
+    expected_executable = _measured_manager_executable(command[0], executable)
 
     arguments: list[str] = [
         str(_SANDBOX_LAUNCHER),
         "--unshare-user",
         "--unshare-ipc",
         "--unshare-uts",
+        "--unshare-pid",
         "--unshare-cgroup-try",
         "--die-with-parent",
         "--dev",
@@ -824,7 +987,7 @@ def _sandboxed_command(
     for name, value in sorted(child_environment.items()):
         arguments.extend(("--setenv", name, value))
     arguments.extend(("--", str(executable), *command[1:]))
-    return tuple(arguments), executable
+    return tuple(arguments), expected_executable
 
 
 def _posix_uid(account_id: str) -> int:
@@ -868,13 +1031,7 @@ def _measure_sandboxed_child(
                 )
             matches: list[tuple[int, HostProcessIdentity]] = []
             for candidate in supervisor.children(recursive=True):
-                arguments = {
-                    os.path.realpath(item)
-                    for item in candidate.cmdline()
-                    if os.path.isabs(item)
-                }
-                executable = os.path.realpath(candidate.exe())
-                if executable == target or target in arguments:
+                if os.path.realpath(candidate.exe()) == target:
                     matches.append(
                         (
                             candidate.pid,
@@ -1080,6 +1237,7 @@ async def _run_manager_gateway(
     state_dir: Path | None,
     environment: Mapping[str, str] | None,
     capability_ttl_seconds: int,
+    pi_extension: Path | None,
 ) -> int:
     if host_platform() != "linux":
         raise GateBlocked(
@@ -1096,6 +1254,12 @@ async def _run_manager_gateway(
     temporary_path = session_path / "tmp"
     home_path.mkdir(mode=0o700)
     temporary_path.mkdir(mode=0o700)
+    if pi_extension is not None:
+        command = _stage_pi_extension(
+            command,
+            source=pi_extension,
+            session_path=session_path,
+        )
     socket_path = session_path / "m.sock"
     limit = 103 if host_platform() == "macos" else 107
     if len(os.fsencode(socket_path)) > limit:
@@ -1210,6 +1374,7 @@ def run_manager_gateway(
     state_dir: Path | None = None,
     environment: Mapping[str, str] | None = None,
     capability_ttl_seconds: int = 3600,
+    pi_extension: Path | None = None,
 ) -> int:
     """Run an interactive child with only one exact process-bound binding FD.
 
@@ -1223,8 +1388,8 @@ def run_manager_gateway(
     validated_command = _validate_command(command)
     if not 1 <= capability_ttl_seconds <= 3600:
         raise ValidationError("manager process capability lifetime is outside the bounded profile")
-    if host_platform() not in {"linux", "macos"}:
-        raise GateBlocked("remote_manager", "interactive manager gateway requires Unix IPC")
+    if host_platform() != "linux":
+        raise GateBlocked("remote_manager", "interactive manager gateway requires Linux")
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -1239,6 +1404,7 @@ def run_manager_gateway(
             state_dir=state_dir,
             environment=environment,
             capability_ttl_seconds=capability_ttl_seconds,
+            pi_extension=pi_extension,
         )
     )
 
@@ -1246,5 +1412,7 @@ def run_manager_gateway(
 __all__ = [
     "RemoteManagerDispatcher",
     "RemoteManagerRequestError",
+    "resolve_packaged_pi_extension",
     "run_manager_gateway",
+    "validate_pi_manager_command",
 ]

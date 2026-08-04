@@ -253,7 +253,7 @@ def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -
         store.close()
 
 
-def test_sqlite_v5_migrates_atomically_to_v6_communication_scope(tmp_path: Path) -> None:
+def test_sqlite_v5_migrates_atomically_to_v6_candidate_schema(tmp_path: Path) -> None:
     path = tmp_path / "v5.sqlite3"
     connection = sqlite3.connect(path)
     try:
@@ -282,11 +282,14 @@ def test_sqlite_v5_migrates_atomically_to_v6_communication_scope(tmp_path: Path)
         assert store.fetch_one(
             "SELECT COUNT(*) AS n FROM communication_scope_items"
         )["n"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM console_browser_sessions"
+        )["n"] == 0
     finally:
         store.close()
 
 
-def test_postgres_catalog_preserves_v4_plan_v5_identity_and_adds_v6_scope() -> None:
+def test_postgres_catalog_preserves_public_v5_and_adds_combined_v6_candidate() -> None:
     assert CURRENT_SCHEMA_VERSION == 6
     migration = MIGRATIONS[3]
     assert migration.version == 4
@@ -306,9 +309,11 @@ def test_postgres_catalog_preserves_v4_plan_v5_identity_and_adds_v6_scope() -> N
     assert "begin_idempotency_key_hash" in lifecycle.sql
     assert "credential_renewal_requests" in lifecycle.sql
     assert " INTEGER" not in lifecycle.sql
-    communication_scope = MIGRATIONS[5]
-    assert communication_scope.version == 6
-    assert communication_scope.name == "persistent_same_principal_communication_scope"
-    assert "communication_scopes" in communication_scope.sql
-    assert "communication_scope_items" in communication_scope.sql
-    assert " INTEGER" not in communication_scope.sql
+    candidate = MIGRATIONS[5]
+    assert candidate.version == 6
+    assert candidate.name == "communication_scope_and_private_administration"
+    assert "communication_scopes" in candidate.sql
+    assert "communication_scope_items" in candidate.sql
+    assert "console_browser_sessions" in candidate.sql
+    assert "console_enrollment_intents" in candidate.sql
+    assert " INTEGER" not in candidate.sql

@@ -151,7 +151,8 @@ def _seed(config_path: Path, origin: str, root: Path) -> dict[str, Any]:
                 "conversation.message.send",
                 "conversation.response_obligation.create",
                 "conversation.response_obligation.respond",
-                "conversation.response_obligation.update",
+                "conversation.response_obligation.read",
+                "conversation.response_obligation.transition",
                 "mailbox.acknowledge",
                 "mailbox.read",
             ):

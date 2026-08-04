@@ -85,7 +85,7 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_numbered_migration_catalog_preserves_prior_versions_and_adds_communication_scope(
+def test_numbered_migration_catalog_preserves_public_v5_and_adds_candidate_schema(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
@@ -96,7 +96,7 @@ def test_numbered_migration_catalog_preserves_prior_versions_and_adds_communicat
         (3, "guided_oidc_enrollment_continuation"),
         (4, "bounded_c0_bootstrap_plan"),
         (5, "identity_begin_idempotency_and_credential_renewal"),
-        (6, "persistent_same_principal_communication_scope"),
+        (6, "communication_scope_and_private_administration"),
     ]
     assert (
         MIGRATIONS[0].checksum
@@ -243,6 +243,7 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
 
     v1 = sqlite3.connect(path)
     try:
+        _drop_v6_admin_console_schema(v1)
         _drop_v6_communication_scope_schema(v1)
         _drop_v5_identity_lifecycle_schema(v1)
         _drop_v4_bootstrap_plan_schema(v1)
@@ -258,6 +259,22 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
         v1.commit()
     finally:
         v1.close()
+
+
+def _drop_v6_admin_console_schema(connection: sqlite3.Connection) -> None:
+    for table in (
+        "console_enrollment_candidates",
+        "console_enrollment_reviews",
+        "console_oidc_transactions",
+        "console_mutation_authorizations",
+        "console_browser_sessions",
+        "console_server_status",
+        "console_enrollment_intents",
+        "console_mutations",
+        "console_session_challenges",
+    ):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("DELETE FROM installed_migration_catalog WHERE version=6")
 
 
 def _drop_v6_communication_scope_schema(connection: sqlite3.Connection) -> None:
@@ -303,6 +320,7 @@ def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
 
     v2 = sqlite3.connect(path)
     try:
+        _drop_v6_admin_console_schema(v2)
         _drop_v6_communication_scope_schema(v2)
         _drop_v5_identity_lifecycle_schema(v2)
         _drop_v4_bootstrap_plan_schema(v2)
@@ -330,6 +348,7 @@ def _make_exact_v3_sqlite(path: Path, *, key: bytes) -> None:
 
     v3 = sqlite3.connect(path)
     try:
+        _drop_v6_admin_console_schema(v3)
         _drop_v6_communication_scope_schema(v3)
         _drop_v5_identity_lifecycle_schema(v3)
         _drop_v4_bootstrap_plan_schema(v3)
@@ -354,6 +373,7 @@ def _make_exact_v4_sqlite(path: Path, *, key: bytes) -> None:
 
     v4 = sqlite3.connect(path)
     try:
+        _drop_v6_admin_console_schema(v4)
         _drop_v6_communication_scope_schema(v4)
         _drop_v5_identity_lifecycle_schema(v4)
         v4.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
@@ -377,6 +397,7 @@ def _make_exact_v5_sqlite(path: Path, *, key: bytes) -> None:
 
     v5 = sqlite3.connect(path)
     try:
+        _drop_v6_admin_console_schema(v5)
         _drop_v6_communication_scope_schema(v5)
         v5.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
         v5.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
@@ -385,6 +406,17 @@ def _make_exact_v5_sqlite(path: Path, *, key: bytes) -> None:
         v5.commit()
     finally:
         v5.close()
+def _make_exact_v6_sqlite(path: Path, *, key: bytes) -> None:
+    store = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('preserved-sentinel','exact-v6-data')"
+            )
+    finally:
+        store.close()
+
+
 
 
 def test_sqlite_exact_v2_database_is_outside_n_minus_one_window(tmp_path: Path) -> None:
@@ -431,8 +463,36 @@ def test_sqlite_exact_v5_database_upgrades_to_v6_without_data_loss(
         assert upgraded.fetch_one(
             "SELECT COUNT(*) AS count FROM communication_scopes"
         )["count"] == 0
+        assert upgraded.fetch_one(
+            "SELECT COUNT(*) AS count FROM console_browser_sessions"
+        )["count"] == 0
     finally:
         upgraded.close()
+
+
+def test_sqlite_exact_v6_database_reopens_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v6-current.sqlite3"
+    key = b"u" * 32
+    _make_exact_v6_sqlite(path, key=key)
+
+    reopened = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        assert reopened.fetch_one(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        )["value"] == "6"
+        assert reopened.fetch_one(
+            "SELECT value FROM metadata WHERE key='preserved-sentinel'"
+        )["value"] == "exact-v6-data"
+        assert [tuple(row) for row in reopened.fetch_all(
+            "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
+        )] == [
+            (migration.version, migration.name, migration.checksum)
+            for migration in MIGRATIONS
+        ]
+    finally:
+        reopened.close()
 
 
 def test_sqlite_v5_to_v6_migration_failure_rolls_back_without_partial_schema(
@@ -940,6 +1000,16 @@ def test_postgres_catalog_normalization_preserves_semantics_across_pg_rendering(
         "CHECK (((poll_count >= 0) AND (poll_count <= 60)))"
     )
     assert normalize_catalog_sql(
+        "CHECK (method = upper(method))"
+    ) == normalize_catalog_sql(
+        "CHECK ((method = upper(method)))"
+    )
+    assert normalize_catalog_sql(
+        "CHECK (substr(path,1,1) = '/')"
+    ) == normalize_catalog_sql(
+        "CHECK ((substr(path, 1, 1) = '/'::text))"
+    )
+    assert normalize_catalog_sql(
         "FOREIGN KEY (plan_id) REFERENCES bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
     ) == normalize_catalog_sql(
         "FOREIGN KEY (plan_id) REFERENCES public.bootstrap_grant_plans(plan_id) ON DELETE CASCADE"
@@ -1025,7 +1095,14 @@ def test_postgres_full_v6_catalog_checks_every_table_column_constraint_and_index
     spec_v5 = expected_catalog(MIGRATIONS[:5])
     spec_v6 = expected_catalog(MIGRATIONS)
     assert len(spec_v5.tables) == 101
-    assert len(spec_v6.tables) == 103
+    assert len(spec_v6.tables) == 112
+    assert any(
+        constraint.table_name == "console_enrollment_candidates"
+        and constraint.constraint_type == "c"
+        and constraint.definition
+        == normalize_catalog_sql("CHECK (length(candidate_key_id) = 43)")
+        for constraint in spec_v6.constraints
+    )
     assert len(spec_v6.columns) > len(spec_v5.columns)
     assert len(spec_v6.constraints) > len(spec_v5.constraints)
     assert len(spec_v6.indexes) > len(spec_v5.indexes)
@@ -1269,7 +1346,10 @@ class _MigrationConnection:
         return _Cursor()
 
 
-def test_postgres_v5_rejects_partial_s6_catalog_before_migration() -> None:
+@pytest.mark.parametrize("partial_relation", ["communication_scopes", "console_browser_sessions"])
+def test_postgres_v5_rejects_partial_v6_candidate_catalog_before_migration(
+    partial_relation: str,
+) -> None:
     applied_v5 = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS[:5]
@@ -1277,7 +1357,7 @@ def test_postgres_v5_rejects_partial_s6_catalog_before_migration() -> None:
     connection = _MigrationConnection(
         relations=(
             {"name": "schema_migrations", "kind": "r"},
-            {"name": "communication_scopes", "kind": "r"},
+            {"name": partial_relation, "kind": "r"},
         ),
         applied=applied_v5,
     )

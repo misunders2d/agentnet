@@ -3,7 +3,7 @@
 Snapshot: 2026-08-04
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.38` release and corrective `0.1.43` candidate. It does not replace
+published `0.1.43` release and private-administration `0.1.44` candidate. It does not replace
 requirements, gate ledgers, or accountable-owner evidence.
 
 ## Current public package
@@ -11,8 +11,8 @@ requirements, gate ledgers, or accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.38`
-- published source commit: `f1f312824d785ac06134f1d21d8b6edc6b7421ba`
+- latest published version: `0.1.43`
+- published source commit: `a4a1f589a3741a07e43f151826d80652dbfa46ad`
 
 Package availability does not authorize deployment and does not establish
 production readiness.
@@ -222,6 +222,28 @@ records final release-manifest/direct-verifier and retained byte-identical
 archive outcomes. Same-commit CI, immutable tag, trusted npm stage,
 staged-package remote deployment, and publication remain required external
 actions; none is inferred from the historical `0.1.42` run.
+
+Package `0.1.43` was subsequently published from that immutable source commit
+with npm trusted-publisher provenance, a registry signature, and SLSA
+attestation. Publication did not authorize deployment or promote a gate.
+
+Candidate `0.1.44` adds a loopback-only private administration dashboard, one
+fresh-approval same-principal communication-scope activation, and a
+parent-owned Manager gateway that gives sandbox children only short-lived
+measured local capabilities. The dashboard revalidates the exact current
+harness credential and authority per request, keeps credentials out of URLs,
+binds every mutation to a single-use method/path/body token, and emits only
+content-free passive update state. Manager operations cross the canonical
+signed AgentNet HTTP boundary; prompt text and child arguments cannot establish
+identity or authority.
+
+Local affected and broad source lanes report 322 passed with seven expected
+dedicated-PostgreSQL skips and 1754 passed with 16 expected
+platform/dedicated-PostgreSQL skips, respectively. Authenticated browser smoke
+and a Lighthouse accessibility score of 100 cover the dashboard path.
+Recursive installed-package checks, same-commit CI, staged remote deployment,
+production IdP/WebAuthn, privileged process-boundary, and owner evidence remain
+required. No requirement or must-not-ship gate is promoted.
 
 ## Release and gate posture
 

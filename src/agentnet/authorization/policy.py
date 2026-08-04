@@ -594,6 +594,13 @@ class PolicyEngine:
                 is not None
             )
 
+        def current_scope_peer(harness_id: Any) -> bool:
+            return (
+                isinstance(harness_id, str)
+                and harness_id in peer_harness_ids
+                and current_same_domain_harness(harness_id)
+            )
+
         for key in (
             "harness_id",
             "responsible_harness_id",
@@ -601,7 +608,7 @@ class PolicyEngine:
             "to_harness_id",
         ):
             target = request.context.get(key)
-            if target is not None and not current_same_domain_harness(target):
+            if target is not None and not current_scope_peer(target):
                 return False
         released_artifact_count = request.context.get("released_artifact_count", 0)
         if (
@@ -615,7 +622,7 @@ class PolicyEngine:
             return (
                 isinstance(recipients, list)
                 and bool(recipients)
-                and all(current_same_domain_harness(recipient) for recipient in recipients)
+                and all(current_scope_peer(recipient) for recipient in recipients)
             )
         if request.action in {"mailbox.read", "mailbox.acknowledge", "room.create"}:
             return True
@@ -624,7 +631,7 @@ class PolicyEngine:
             return (
                 isinstance(members, list)
                 and bool(members)
-                and all(current_same_domain_harness(member) for member in members)
+                and all(current_scope_peer(member) for member in members)
             )
         if request.action.startswith("conversation."):
             if request.action not in COMMUNICATION_SCOPE_ACTIONS:
@@ -640,7 +647,7 @@ class PolicyEngine:
                 (conversation_id,),
             ).fetchall()
             active = frozenset(str(row["harness_id"]) for row in members)
-            return bool(active) and all(current_same_domain_harness(member) for member in active)
+            return bool(active) and all(current_scope_peer(member) for member in active)
         if request.action in {"room.action", "room.read"}:
             members = connection.execute(
                 """
@@ -650,7 +657,7 @@ class PolicyEngine:
                 (request.resource,),
             ).fetchall()
             active = frozenset(str(row["harness_id"]) for row in members)
-            return bool(active) and all(current_same_domain_harness(member) for member in active)
+            return bool(active) and all(current_scope_peer(member) for member in active)
         return False
 
     def _record_c0_decision(

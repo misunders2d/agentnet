@@ -22,7 +22,7 @@ from agentnet.authorization.communication_scope import (
 )
 from agentnet.authorization.communication_scope_service import CommunicationScopeService
 from agentnet.authorization.evidence import AUTHORITY_COMMAND_PURPOSE, IssuanceAuthority, SignedAuthorityCommand
-from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement, LocalConformancePolicyEngine
 from agentnet.bindings.remote_manager import RemoteManagerDispatcher, RemoteManagerRequestError
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
@@ -147,7 +147,8 @@ def _authority_command(key: P256KeyPair, actor: VerifiedActor, *, resource: str,
 
 def _issue_manager_authority(core: CommunicationCore, *, administrator: VerifiedActor, administrator_key: P256KeyPair, manager: VerifiedActor) -> None:
     revision = core.policy.current_policy_revision(administrator)
-    core.policy.bootstrap_entitlement_for_local_conformance(
+    fixture_policy = LocalConformancePolicyEngine(core.store)
+    fixture_policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(entitlement_id="manager-journey-root-entitlement-issuer", domain_id=administrator.domain_id, principal_id=administrator.principal_id, action="authorization.entitlement.issue", resource_pattern="*", revision=revision, expires_at=datetime.now(UTC) + timedelta(minutes=15))
     )
     for action in sorted(COMMUNICATION_SCOPE_ACTIONS):
@@ -160,6 +161,41 @@ def _issue_manager_authority(core: CommunicationCore, *, administrator: Verified
             command=_authority_command(administrator_key, administrator, resource=resource, mutation=mutation, reason=reason, revision=revision),
             authority=IssuanceAuthority(actor=administrator, policy_decision_id=decision.decision_id),
         )
+    outbound = HumanEntitlement(
+        entitlement_id="manager-a-cross-principal-direct-send",
+        domain_id=administrator.domain_id,
+        principal_id=administrator.principal_id,
+        action="message.send",
+        resource_pattern="direct",
+        revision=revision,
+        expires_at=None,
+    )
+    reason = "grant Manager A explicit cross-principal direct-send authority"
+    resource, mutation = core.policy.entitlement_issuance_binding(outbound, reason=reason)
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=administrator,
+            action="authorization.entitlement.issue",
+            resource=resource,
+            policy_revision=revision,
+            context={"request_digest": canonical_digest(mutation)},
+        )
+    )
+    core.policy.add_entitlement(
+        outbound,
+        command=_authority_command(
+            administrator_key,
+            administrator,
+            resource=resource,
+            mutation=mutation,
+            reason=reason,
+            revision=revision,
+        ),
+        authority=IssuanceAuthority(
+            actor=administrator,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
 
 
 class _SignedInProcessClient:
@@ -196,7 +232,7 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
     domain_id = "remote-manager-journey.example"
     person_a_manager, person_a_key = identity_factory(domain=domain_id, kind="pi", binding_assurance="os_bound")
     person_a_server, _server_key = identity_factory(domain=domain_id, principal_id=person_a_manager.principal_id, kind="server", binding_assurance="os_bound")
-    person_a_sibling, person_a_sibling_key = identity_factory(domain=domain_id, principal_id=person_a_manager.principal_id, kind="codex", binding_assurance="os_bound")
+    unscoped_manager, unscoped_manager_key = identity_factory(domain=domain_id, kind="codex", binding_assurance="os_bound")
     person_b_manager, person_b_key = identity_factory(domain=domain_id, kind="claude", binding_assurance="os_bound")
     assert person_a_manager.principal_id != person_b_manager.principal_id
 
@@ -229,15 +265,15 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
     with TestClient(create_app(core), base_url="http://127.0.0.1", raise_server_exceptions=False) as http:
         client_a = _SignedInProcessClient(http, actor=person_a_manager, key=person_a_key)
         client_b = _SignedInProcessClient(http, actor=person_b_manager, key=person_b_key)
-        client_sibling = _SignedInProcessClient(http, actor=person_a_sibling, key=person_a_sibling_key)
+        client_unscoped = _SignedInProcessClient(http, actor=unscoped_manager, key=unscoped_manager_key)
         manager_a = RemoteManagerDispatcher(client_a, person_a_manager)  # type: ignore[arg-type]
         manager_b = RemoteManagerDispatcher(client_b, person_b_manager)  # type: ignore[arg-type]
-        sibling = RemoteManagerDispatcher(client_sibling, person_a_sibling)  # type: ignore[arg-type]
+        unscoped = RemoteManagerDispatcher(client_unscoped, unscoped_manager)  # type: ignore[arg-type]
 
         with pytest.raises(RemoteManagerRequestError) as denied:
-            invoke(sibling, "agentnet.send", {"recipients": [person_b_manager.harness_id], "payload": {"text": "unscoped sibling must not inherit Manager A authority"}, "idempotency_key": "unscoped-sibling-manager-send-0001", "classification": "C1"})
-        assert denied.value.status_code == 403
-        assert store.fetch_one("SELECT event_id FROM events WHERE idempotency_key=?", ("unscoped-sibling-manager-send-0001",)) is None
+            invoke(unscoped, "agentnet.send", {"recipients": [person_b_manager.harness_id], "payload": {"text": "unscoped manager must not inherit Manager A authority"}, "idempotency_key": "unscoped-manager-send-0001", "classification": "C1"})
+        assert denied.value.status_code == 404
+        assert store.fetch_one("SELECT event_id FROM events WHERE idempotency_key=?", ("unscoped-manager-send-0001",)) is None
 
         sent = invoke(manager_a, "agentnet.send", {"recipients": [person_b_manager.harness_id], "payload": {"text": "signed Manager A to Manager B"}, "idempotency_key": "manager-a-to-manager-b-0001", "classification": "C1"})
         assert sent["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
@@ -264,7 +300,7 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
 
     forbidden_child_arguments = {"authorization", "bearer", "bearer_token", "private_key", "remote_bearer", "signing_key"}
     assert all(_all_keys(call["arguments"]).isdisjoint(forbidden_child_arguments) for call in calls)
-    for client, actor in ((client_a, person_a_manager), (client_b, person_b_manager), (client_sibling, person_a_sibling)):
+    for client, actor in ((client_a, person_a_manager), (client_b, person_b_manager), (client_unscoped, unscoped_manager)):
         assert client.requests
         assert all("Authorization" not in request["headers"] for request in client.requests)
         assert all(request["headers"]["X-AgentNet-Harness"] == actor.harness_id for request in client.requests)

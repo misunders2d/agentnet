@@ -1,6 +1,6 @@
 """Durable, bounded state owned by the private administration console."""
 
-ADMIN_CONSOLE_SCHEMA_VERSION = 7
+ADMIN_CONSOLE_SCHEMA_VERSION = 6
 
 ADMIN_CONSOLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS console_session_challenges (
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS console_enrollment_candidates (
         candidate_binding_assurance IN ('os_bound','hardware_bound')
     ),
     candidate_public_key_pem TEXT NOT NULL,
-    candidate_key_id TEXT NOT NULL CHECK (length(candidate_key_id) = 64),
+    candidate_key_id TEXT NOT NULL CHECK (length(candidate_key_id) = 43),
     intent_id TEXT UNIQUE REFERENCES console_enrollment_intents(intent_id),
     oidc_issuer TEXT,
     oidc_subject TEXT,

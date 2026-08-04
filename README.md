@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.43` coverage targets
+Only non-EOL Node.js release lines are supported: current `0.1.44` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
 the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
 compatible npm 10.9.3; the deployed Hub compatibility target is reported
@@ -327,15 +327,21 @@ After the exact C0 round trip completes, the server harness can run
 then atomically gives the existing laptop harness and ordinary server harness
 the fixed permanent canonical message, mailbox, conversation, response-
 obligation, and room actions. The human selects no IDs or permissions. Every
-operation still revalidates the current exact harness, credential, human,
-domain-revocation epoch, and policy revision; revocation denies immediately.
-Artifacts, effects, federation, public A2A, tasks, administration, data, tools,
+operation still revalidates the current exact caller harness, credential, human,
+domain-revocation epoch, and policy revision. Each exact caller may communicate
+only with the other active enrolled harness named by the scope in the same trust
+domain; an unknown, inactive, revoked, additional, or cross-domain target fails
+closed. Caller or target revocation denies immediately.
+Artifacts, effects, federation, public A2A, administration, data, tools,
 and secrets remain excluded.
 
-The enrolled laptop launches an interactive agent through
-`agentnet manager-run --identity .agentnet/identity.json -- pi`. The child gets
-only a short-lived, exact-process local binding for canonical communication
-tools—not the laptop key or reusable remote credentials. The parent owns
+On a supported Linux owner laptop, the enrolled harness launches an interactive
+agent through `agentnet manager-run --identity .agentnet/identity.json -- pi`.
+The launcher stages the exact packaged Pi extension inside the private session,
+disables extension discovery, and rejects caller-supplied extension or tool-
+selection flags before opening the identity. The child gets only a short-lived,
+exact-process local binding for canonical communication tools—not the laptop key
+or reusable remote credentials. The parent owns
 authentication, strict request parsing, and cleanup. Full commands and
 failure/recovery behavior are in the
 [implementation guide](docs/implementation-guide.md#ordinary-server-agent-activation).
@@ -382,7 +388,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.38` at commit `f1f312824d785ac06134f1d21d8b6edc6b7421ba`.
+`0.1.43` at commit `a4a1f589a3741a07e43f151826d80652dbfa46ad`.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -405,7 +411,7 @@ candidate and accepts no earlier release marker as migration input. No release
 proves completed fresh-laptop enrollment, native cross-host message/ACK,
 production readiness, or ship eligibility.
 
-Candidate `0.1.43` carries the corrected first-C0 path proven narrowly by the
+Published `0.1.43` carries the corrected first-C0 path proven narrowly by the
 unpublished `0.1.42` deployment: real workforce OIDC, owner-controlled WebAuthn
 UV, separately enrolled server and laptop harnesses, one fixed
 `BootstrapGrantPlan`, `COMPLETED_C0_ROUND_TRIP`, and exact five-power revocation.
@@ -414,8 +420,15 @@ the responder's P-256 private key as bytes instead of corrupting it through text
 decoding, permits only the package-owned systemd credential file, and opens that
 credential with `O_NONBLOCK` before regular-file custody validation so a FIFO or
 device fails closed without stalling startup. The historical live run remains
-bound to `d8884b6c03a0dd38baab03386982aae8ad11dd58`; candidate `0.1.43` requires
-fresh same-commit build, CI, staged-package, and remote deployment evidence.
+bound to `d8884b6c03a0dd38baab03386982aae8ad11dd58`; publication does not replace
+fresh staged-package and remote deployment evidence.
+Candidate `0.1.44` adds a loopback-only private administration dashboard,
+one-approval durable communication activation for an exact same-principal
+harness pair, and a parent-owned Manager gateway that gives sandbox children
+only measured short-lived local capabilities. Dashboard requests revalidate the
+current credential and authority, mutation tokens bind method/path/body, and
+credentials never enter browser URLs. Manager tools cross the canonical signed
+HTTP boundary rather than treating prompt text or child arguments as identity.
 No requirement or must-not-ship gate is promoted by the narrow prior run. The
 earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
@@ -529,7 +542,7 @@ communication gate without weakening the production policy engine. It adds no
 migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
 cross-platform, clean-setup, and exact released-marker rejection workflow
 evidence; post-push run IDs are not
-self-authored into source. Required runtime proof now targets exact staged `0.1.43`, clean five-unit readiness,
+self-authored into source. Required runtime proof now targets exact staged `0.1.44`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.

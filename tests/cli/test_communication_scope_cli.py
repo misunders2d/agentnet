@@ -269,7 +269,7 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
     client = _Client([])
     actor = object()
     loaded_paths: list[Path] = []
-    calls: list[tuple[object, object, tuple[str, ...], Path | None]] = []
+    calls: list[tuple[object, object, tuple[str, ...], Path | None, Path]] = []
 
     def load_identity(path: Path):
         loaded_paths.append(path)
@@ -281,8 +281,9 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
         command: tuple[str, ...],
         *,
         state_dir: Path | None = None,
+        pi_extension: Path,
     ) -> int:
-        calls.append((loaded_client, signing_context, command, state_dir))
+        calls.append((loaded_client, signing_context, command, state_dir, pi_extension))
         return 23
 
     monkeypatch.setattr(cli, "_load_identity_client", load_identity)
@@ -296,5 +297,13 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
 
     assert cli.command_manager_run(args) == 23
     assert loaded_paths == [Path("identity.json")]
-    assert calls == [(client, actor, ("pi", "--print", "hello"), state_dir)]
+    assert calls == [
+        (
+            client,
+            actor,
+            ("pi", "--print", "hello"),
+            state_dir,
+            cli.resolve_packaged_pi_extension(),
+        )
+    ]
     assert client.closed is True

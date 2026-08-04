@@ -254,6 +254,32 @@ published and historical release evidence:
   `AUTH-004`, `AUTH-007`, `AUTH-009`, `COM-001`, `COM-002`, `COM-003`,
   `COM-006`, `COM-009`, `AVL-003`, `AVL-005`, `AVL-006`, `SEC-003`,
   `SEC-005`, `OPS-003`, and `OPS-006`. No requirement or gate is promoted.
+- Candidate `0.1.44` adds the private administration dashboard, durable
+  same-principal communication-scope activation, and the parent-owned local
+  Manager binding used by ordinary laptop agents. The dashboard is loopback
+  only, opens through a one-time browser handoff, revalidates the exact
+  harness credential and `console.session.open` authority, binds every
+  mutation to a single-use method/path/body token, and stores only
+  content-free refresh state. Communication activation requires one fresh
+  WebAuthn-UV approval for one exact same-principal harness pair; the resulting
+  human entitlements remain current-policy/current-credential scoped and
+  independently revocable. The Manager gateway keeps the laptop credential in
+  its parent, gives each sandbox child only a short-lived measured local
+  capability, and forwards canonical operations as signed AgentNet HTTP
+  requests. Local verification reports **329 passed and 7 expected dedicated-
+  PostgreSQL skips** in the affected release lane and **1761 passed and 16
+  expected platform/dedicated-PostgreSQL skips** in the broad source lane.
+  Source plus both clean recursive installed-package generations each report
+  **1788 passed and 16 expected skips**; generation 2 also passed the installed-
+  byte multiprocess communication gate. Same-commit CI, staging, and remote
+  deployment evidence remain required.
+  Affected IDs are `ID-006`, `AUTH-001`,
+  `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-007`, `AUTH-009`, `COM-001`,
+  `COM-002`, `COM-003`, `COM-006`, `COM-009`, `AVL-003`, `AVL-005`,
+  `AVL-006`, `UX-001`, `UX-002`, `SEC-003`, `SEC-005`, `SEC-006`,
+  `OPS-003`, `OPS-004`, `OPS-006`, and `OPS-007`. No requirement or gate is
+  promoted.
+
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,

@@ -6,8 +6,7 @@ from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS
 
 def test_console_schema_is_current_and_additive(store) -> None:
     assert ADMIN_CONSOLE_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION
-    assert MIGRATIONS[-1].name == "private_administration_console"
-    assert MIGRATIONS[-2].name == "persistent_same_principal_communication_scope"
+    assert MIGRATIONS[-1].name == "communication_scope_and_private_administration"
     tables = {
         row["name"]
         for row in store.fetch_all("SELECT name FROM sqlite_master WHERE type='table'")

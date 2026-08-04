@@ -5,6 +5,7 @@ import { closeSync, fstatSync, readSync } from "node:fs";
 import { createConnection } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AgentNetLocalOperationError, localResponseResult } from "./pi_response.ts";
 
 type Binding = {
 	capability: string;
@@ -203,12 +204,16 @@ async function invoke(method: CanonicalMethod, args: Record<string, unknown>): P
 			if (length < 2 || length > 1048576) return reject(new Error("AgentNet local response length rejected"));
 			if (response.length < length + 4) return;
 			const raw = response.subarray(4, length + 4).toString("utf8");
-			const value = JSON.parse(raw) as Record<string, unknown>;
+			const value: unknown = JSON.parse(raw);
 			socket.end();
-			if (canonical(value) !== raw || value.ok !== true || !("result" in value)) {
-				return reject(new Error("AgentNet local operation rejected"));
+			if (canonical(value) !== raw) {
+				return reject(new AgentNetLocalOperationError("local_operation_rejected"));
 			}
-			resolve(value.result);
+			try {
+				resolve(localResponseResult(value));
+			} catch (error) {
+				reject(error);
+			}
 		});
 		socket.on("timeout", () => socket.destroy(new Error("AgentNet local operation timed out")));
 		socket.on("error", reject);

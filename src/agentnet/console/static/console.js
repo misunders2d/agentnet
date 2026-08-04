@@ -1,6 +1,35 @@
 'use strict';
 
 (() => {
+  const enrollmentForm = document.querySelector('form[action="/enrollments/review"]');
+  if (enrollmentForm) {
+    const choices = enrollmentForm.querySelectorAll('input[name="target_kind"]');
+    const existing = enrollmentForm.querySelector('[data-enrollment-existing]');
+    const invited = enrollmentForm.querySelector('[data-enrollment-new]');
+    const updateTarget = () => {
+      const selected = enrollmentForm.querySelector('input[name="target_kind"]:checked');
+      const useExisting = selected?.value === 'existing_person';
+      if (existing) {
+        existing.hidden = !useExisting;
+        const select = existing.querySelector('select');
+        if (select) {
+          select.disabled = !useExisting;
+          select.required = useExisting;
+        }
+      }
+      if (invited) {
+        invited.hidden = useExisting;
+        const email = invited.querySelector('input[type="email"]');
+        if (email) {
+          email.disabled = useExisting;
+          email.required = !useExisting;
+        }
+      }
+    };
+    choices.forEach((choice) => choice.addEventListener('change', updateTarget));
+    updateTarget();
+  }
+
   const live = document.querySelector('[data-live-status]');
   if (!live) return;
 

@@ -14,11 +14,20 @@ from agentnet.console.session import ConsoleSessionService
 
 
 class _AllowConsoleReads:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
     def require(self, *, actor, action: str, resource: str, context=None):
+        self.requests.append(
+            {"actor": actor, "action": action, "resource": resource, "context": context}
+        )
         if action.startswith("console."):
             assert resource == f"console-domain:{actor.domain_id}"
         elif action == "identity.harness.revoke":
             assert resource.startswith("harness:")
+            assert isinstance(context, dict)
+            assert set(context) == {"request_digest"}
+            assert re.fullmatch(r"[a-f0-9]{64}", str(context["request_digest"]))
         else:
             assert action == "identity.enrollment.propose"
             assert resource.startswith(("principal:", "domain:"))
@@ -43,19 +52,20 @@ class _ApprovalRecorder:
 
 def _client(store, identity_factory):
     actor, _ = identity_factory(domain="corp.example", binding_assurance="hardware_bound")
+    authority = _AllowConsoleReads()
     sessions = ConsoleSessionService(
         store=store,
         audience="https://console.example",
         ttl_seconds=900,
-        require=_AllowConsoleReads().require,
+        require=authority.require,
     )
     issued = sessions.issue_for_verified_actor(actor=actor)
-    reader = ConsoleReadService(store=store, require=_AllowConsoleReads().require)
+    reader = ConsoleReadService(store=store, require=authority.require)
     approvals = _ApprovalRecorder()
     mutations = ConsoleMutationService(
         store=store,
         approval_client=approvals,
-        require=_AllowConsoleReads().require,
+        require=authority.require,
     )
     app = create_console_app(
         sessions=sessions,
@@ -65,11 +75,11 @@ def _client(store, identity_factory):
     )
     client = TestClient(app, base_url="https://console.example")
     client.cookies.set("__Host-agentnet_console", issued.session_token, path="/")
-    return client, actor, issued, approvals
+    return client, actor, issued, approvals, authority
 
 
 def test_console_routes_are_narrow_and_server_fleet_is_read_only(store, identity_factory) -> None:
-    client, _, _, _ = _client(store, identity_factory)
+    client, _, _, _, _ = _client(store, identity_factory)
 
     assert client.get("/").status_code == 200
     assert client.get("/servers").status_code == 200
@@ -84,7 +94,7 @@ def test_console_routes_are_narrow_and_server_fleet_is_read_only(store, identity
 
 
 def test_sensitive_action_requires_same_origin_one_use_token_and_exact_confirmation(store, identity_factory) -> None:
-    client, actor, _, approvals = _client(store, identity_factory)
+    client, actor, _, approvals, authority = _client(store, identity_factory)
     sibling, _ = identity_factory(
         domain="corp.example",
         principal_id=actor.principal_id,
@@ -93,10 +103,10 @@ def test_sensitive_action_requires_same_origin_one_use_token_and_exact_confirmat
     path = f"/harnesses/{sibling.harness_id}/revoke"
     review_path = f"{path}/review"
 
-    missing = client.post(review_path, data={"reason": "Lost laptop"})
-    assert missing.status_code == 403
+    missing_origin = client.post(review_path, data={"reason": "Lost laptop"})
+    assert missing_origin.status_code == 403
 
-    wrong = client.post(
+    wrong_confirmation = client.post(
         review_path,
         headers={"Origin": "https://console.example"},
         data={
@@ -105,43 +115,100 @@ def test_sensitive_action_requires_same_origin_one_use_token_and_exact_confirmat
             "idempotency_key": secrets.token_urlsafe(24),
         },
     )
-    assert wrong.status_code == 400
+    assert wrong_confirmation.status_code == 400
 
     idempotency_key = secrets.token_urlsafe(24)
+    confirmation = f"Remove access for {sibling.harness_id}"
+    exact_request = {
+        "reason": "Lost laptop",
+        "confirmation": confirmation,
+        "idempotency_key": idempotency_key,
+    }
     review = client.post(
         review_path,
         headers={"Origin": "https://console.example"},
-        data={
-            "reason": "Lost laptop",
-            "confirmation": f"Remove access for {sibling.harness_id}",
-            "idempotency_key": idempotency_key,
-        },
+        data=exact_request,
     )
     assert review.status_code == 200
-    match = re.search(r'name=\"mutation_token\" value=\"([^\"]+)\"', review.text)
+    match = re.search(
+        rf'<form method="post" action="{re.escape(path)}">.*?'
+        r'name="mutation_token" value="([^"]+)"',
+        review.text,
+        re.DOTALL,
+    )
     assert match is not None
+    mutation_token = match.group(1)
+    wrong_mutation_token = (
+        ("A" if mutation_token[0] != "A" else "B") + mutation_token[1:]
+    )
+
+    missing_token = client.post(
+        path,
+        headers={"Origin": "https://console.example"},
+        data=exact_request,
+        follow_redirects=False,
+    )
+    assert missing_token.status_code == 403
+
+    wrong_token = client.post(
+        path,
+        headers={"Origin": "https://console.example"},
+        data={**exact_request, "mutation_token": wrong_mutation_token},
+        follow_redirects=False,
+    )
+    assert wrong_token.status_code == 403
+
+    drifted = client.post(
+        path,
+        headers={"Origin": "https://console.example"},
+        data={
+            **exact_request,
+            "mutation_token": mutation_token,
+            "reason": "Different reason",
+        },
+        follow_redirects=False,
+    )
+    assert drifted.status_code == 403
 
     accepted = client.post(
         path,
         headers={"Origin": "https://console.example"},
-        data={
-            "mutation_token": match.group(1),
-            "reason": "Lost laptop",
-            "confirmation": f"Remove access for {sibling.harness_id}",
-            "idempotency_key": idempotency_key,
-        },
+        data={**exact_request, "mutation_token": mutation_token},
         follow_redirects=False,
     )
     assert accepted.status_code == 303
+
+    replayed = client.post(
+        path,
+        headers={"Origin": "https://console.example"},
+        data={**exact_request, "mutation_token": mutation_token},
+        follow_redirects=False,
+    )
+    assert replayed.status_code == 403
+
     assert len(approvals.requests) == 1
-    assert approvals.requests[0]["approval_purpose"] == "identity.harness.revoke.approve"
-    assert len(str(approvals.requests[0]["transaction_digest"])) == 64
+    approval = approvals.requests[0]
+    assert approval["approval_purpose"] == "identity.harness.revoke.approve"
+    assert len(str(approval["transaction_digest"])) == 64
+    revocation_checks = [
+        request
+        for request in authority.requests
+        if request["action"] == "identity.harness.revoke"
+    ]
+    assert revocation_checks == [
+        {
+            "actor": actor,
+            "action": "identity.harness.revoke",
+            "resource": f"harness:{sibling.harness_id}",
+            "context": {"request_digest": approval["transaction_digest"]},
+        }
+    ]
     row = store.fetch_one("SELECT status FROM harnesses WHERE harness_id=?", (sibling.harness_id,))
     assert row["status"] == "active"
 
 
 def test_static_assets_are_local_and_session_is_not_exposed_to_javascript(store, identity_factory) -> None:
-    client, _, issued, _ = _client(store, identity_factory)
+    client, _, issued, _, _ = _client(store, identity_factory)
     css = client.get("/assets/console.css")
     js = client.get("/assets/console.js")
 
@@ -158,7 +225,7 @@ def test_static_assets_are_local_and_session_is_not_exposed_to_javascript(store,
 def test_initial_enrollment_submit_only_renders_an_exact_review(
     store, identity_factory
 ) -> None:
-    client, _, _, _ = _client(store, identity_factory)
+    client, _, _, _, _ = _client(store, identity_factory)
 
     response = client.post(
         "/enrollments/review",
@@ -190,7 +257,7 @@ def test_initial_enrollment_submit_only_renders_an_exact_review(
 def test_enrollment_review_validation_rerenders_non_sensitive_values_inline(
     store, identity_factory
 ) -> None:
-    client, _, _, _ = _client(store, identity_factory)
+    client, _, _, _, _ = _client(store, identity_factory)
 
     response = client.post(
         "/enrollments/review",

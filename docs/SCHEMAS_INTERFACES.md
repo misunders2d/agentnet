@@ -54,10 +54,14 @@ locator and close the pin; retryable renewal preserves it. Runtime status and
 its content-free state expose a fixed `last_failure` code, never raw exception
 text. Platforms without that primitive fail the MCP binding closed. Windows uses
 protected named pipes with remote-client rejection and server-derived client
-PID. Pi capability bytes never enter argv or environment:
-Linux uses sealed memfd, macOS a read-only inherited pipe, and Windows a one-time
-exact-process private pipe. Missing delivery acknowledgement fails local-binding
-activation.
+PID. Pi capability bytes never enter argv or environment. Interactive
+`manager-run` stages the packaged Pi extension inside the private session and
+owns extension discovery/tool-selection flags; caller overrides fail before
+identity loading. Supervisor Pi capability delivery uses sealed memfd on Linux,
+a read-only inherited pipe on macOS, and a one-time exact-process pipe on
+Windows. Interactive `manager-run` is Linux-only until equivalent process-tree
+and filesystem containment exists elsewhere. Missing delivery acknowledgement
+fails local-binding activation.
 
 ## Approval configuration, storage, and HTTP contract
 
@@ -260,7 +264,7 @@ The signed persistent communication-scope routes are:
 |---|---|
 | `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact current same-principal harness pair and creates the one-hour Approval request |
 | `POST /v1/communication-scope/status` | `agentnet.communication-scope.status.v1`; returns only caller-bound pending/ready/terminal state, approval URL/expiry when applicable, and `complete_automatically` only after issuance |
-| `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 26-item commit; exact retry returns the encrypted committed result |
+| `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 38-item commit; exact retry returns the encrypted committed result |
 
 The only success body is
 `agentnet.communication-scope.complete-result.v1` with

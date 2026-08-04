@@ -314,29 +314,40 @@ transaction: 19 communication actions for each exact harness. The Approval
 request itself expires after one hour and its possession-bound receipt remains
 short-lived; successful completion stores `authority_expires_at=NULL`. This is
 not elevation: every policy decision still starts from the human principal,
-then the committed scope narrows use to the two named harnesses and their
-current room/conversation membership.
+then the committed scope narrows use to the two named caller harnesses. Each
+caller may communicate only with the other active harness named by that scope,
+subject to current room/conversation membership.
 
 The scope covers signed direct messages, mailbox read/acknowledgement,
 conversation/thread/task/handoff/response-obligation lifecycle operations, and
 room create/action/read. It deliberately excludes artifacts, tools, effects,
 federation, public A2A, administration, and entitlement mutation. Its 38
 entitlements and scope audit record commit atomically. Policy denies a missing,
-revoked, stale-policy, cross-principal, sibling-harness, or third-peer use.
+revoked, stale-policy, cross-principal caller, sibling-caller, cross-domain
+target, or unknown/inactive/revoked target. It does not confine communication
+to the two same-principal scope harnesses; they are the authorized callers, not
+the only permissible network recipients.
 Normal current-credential renewal preserves the scope because authority is
 harness-bound; harness/principal/domain revocation stops it immediately.
 
-`agentnet manager-run` is the laptop-side interactive composition. It launches
-one Pi child without signing keys, exposes only the canonical AgentNet tool
-surface through a private per-process Unix socket, and derives every remote
-signed request from the Manager's authenticated actor. A short-lived inherited
+`agentnet manager-run` is the laptop-side interactive composition. Before
+identity loading it accepts only a Pi command and rejects caller extension/tool
+selection overrides. It copies the exact packaged AgentNet extension into the
+private session, disables extension discovery, launches one Pi child without
+signing keys, exposes only the canonical AgentNet tool surface through a private
+per-process Unix socket, and derives every remote signed request from the
+Manager's authenticated actor. A short-lived inherited
 capability binds the exact child PID/process measurement, credential epoch,
-method set, session, replay store, and socket. Linux uses a sealed anonymous
-descriptor when available and an inherited pipe otherwise; macOS uses the pipe
-path. The child receives no reusable AgentNet credential, and session state is
-removed after normal exit, signal termination, or launch failure. Windows
-fails closed for this interactive gateway until an equivalent protected local
-binding is implemented.
+method set, session, replay store, and socket. The first-release gateway is
+Linux-only and requires a trusted Bubblewrap filesystem sandbox. It uses a
+sealed anonymous `memfd` when the Python runtime exposes it and an inherited
+one-way pipe otherwise; macOS and Windows fail closed until equivalent protected
+local process and filesystem containment is implemented. The PID namespace's
+trusted init contains and reaps the entire child process tree; when the measured
+child exits or is terminated, namespace teardown kills every surviving
+descendant before private session state is removed. The child receives no
+reusable AgentNet credential, and session state is removed after normal exit,
+signal termination, or launch failure.
 
 ## Versioned storage authority boundary
 

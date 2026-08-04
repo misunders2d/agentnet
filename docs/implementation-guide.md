@@ -632,15 +632,19 @@ agentnet communication-scope complete \
 
 The server resolves the only eligible second harness; the human supplies no
 harness, action, entitlement, credential, or TTL selector. Completion grants
-both exact harnesses all 13 canonical message, mailbox, conversation,
-response-obligation, and room actions permanently (`expires_at=NULL`) in one
-transaction. It does not grant artifacts, business effects, federation, public
-A2A, administration, generic tasks, data, tools, or secrets. Current credential,
-harness, principal, domain-revocation, and policy state is rechecked on every
-use, so harness revocation, principal revocation, or credential rotation denies
-immediately without deleting the durable scope.
+each of the two exact harnesses all 19 canonical message, mailbox, conversation,
+response-obligation, and room actions—38 exact entitlements total—permanently
+(`expires_at=NULL`) in one transaction.
+Those exact callers may communicate only with the other active enrolled harness
+named by the scope in the same trust domain; unknown, inactive, revoked,
+additional, and cross-domain targets fail closed. It does not grant artifacts,
+business effects, federation, public A2A, administration, generic data access,
+tools, or secrets. Current
+credential, harness, principal, domain-revocation, and policy state is rechecked
+on every use, so harness revocation, principal revocation, or credential rotation
+denies immediately without deleting the durable scope.
 
-On the enrolled owner laptop, start the interactive Manager gateway around the
+On a supported Linux enrolled owner laptop, start the interactive Manager gateway around the
 agent process instead of copying the laptop private key or bearer material into
 the child:
 
@@ -651,15 +655,22 @@ agentnet manager-run \
   -- pi
 ```
 
-`manager-run` creates one owner-only session directory, passes only an inherited
-local binding descriptor, and mints a one-process capability for the canonical
+`manager-run` accepts only a Pi command, rejects caller-supplied extension or
+tool-selection flags before opening the identity, stages the exact packaged
+AgentNet Pi extension in the private session, and disables extension discovery.
+It creates one owner-only session directory, passes only an inherited local
+binding descriptor, and mints a one-process capability for the canonical
 communication methods. Its lifetime is at most one hour and is re-created on
 each run; the permanent remote communication authority is not a reusable local
-capability. Linux uses sealed `memfd`; macOS uses an unlinked pipe; unsupported
-platforms fail closed. Child exit, signal, timeout, parent shutdown, or socket
-failure cleans the descriptor, socket, process-bound session, and private
-directory. Remote authentication/authorization failures propagate unchanged
-through the local binding.
+capability. The first-release gateway requires Linux and a trusted Bubblewrap
+filesystem sandbox. It uses sealed `memfd` when the Python runtime exposes it
+and an inherited one-way pipe otherwise; macOS, Windows, and other unsupported
+platforms fail closed. The sandbox's PID namespace contains the entire child
+process tree; measured-child exit, signal, timeout, or parent shutdown tears
+down that namespace and its surviving descendants before the descriptor,
+socket, process-bound session, and private directory are removed. Remote
+authentication/authorization failures propagate unchanged through the local
+binding.
 
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation
@@ -976,7 +987,8 @@ Current unreleased Core schema v6 adds durable protected payload-release
 receipts in migration 2, guided OIDC enrollment continuation in migration 3,
 the bounded C0 bootstrap-plan contract in migration 4, exact OIDC-begin
 response-loss recovery plus current-credential renewal custody in migration 5,
-and the persistent same-principal communication scope in migration 6. Fresh
+and the persistent same-principal communication scope plus private administration
+state in migration 6. Fresh
 SQLite and PostgreSQL stores create schema v6. An existing SQLite store upgrades
 only when metadata, every migration record/checksum, and the entire N/N-1 v5
 object catalog match exactly; the v5→v6 change commits atomically or rolls back

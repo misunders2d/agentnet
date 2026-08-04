@@ -142,7 +142,7 @@ _CHECK_KEYWORDS = {
     "or",
     "true",
 }
-_ALLOWED_CHECK_FUNCTIONS = {"length"}
+_ALLOWED_CHECK_FUNCTIONS = {"length", "substr", "upper"}
 _ALLOWED_CHECK_CASTS = {"bigint", "text"}
 
 

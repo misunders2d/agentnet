@@ -367,6 +367,9 @@ def test_people_renderer_stages_enrollment_review_and_uses_harness_wording() -> 
     assert "Remove this laptop’s access" not in document
     assert "&lt;Field agent&gt;" in document
     assert "Requested service is not allowed" in document
+    assert 'data-enrollment-existing hidden' in document
+    assert 'data-enrollment-new>' in document
+    assert 'data-enrollment-new hidden' not in document
 
 
 def test_core_console_authority_forwards_exact_context(

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from agentnet.errors import AuthenticationError
+from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.identity.enrollment import VerifiedOIDCIdentity
 from agentnet.identity.invitations import InternalInvitationRecord, InternalInvitationTransaction
 from agentnet.identity.oidc import OIDCVerificationResult
@@ -89,6 +89,19 @@ class _ApprovalClient:
         if self.advance_receipt_to is not None:
             self.now[0] = self.advance_receipt_to
         return {"receipt": "must not be verified after expiry"}
+
+
+class _LostCreateResponseApprovalClient(_ApprovalClient):
+    def __init__(self, now: list[int]) -> None:
+        super().__init__(now)
+        self.create_calls: list[dict[str, object]] = []
+
+    def create_request(self, **request):
+        self.create_calls.append(request)
+        if len(self.create_calls) == 1:
+            raise ConnectionError("approval response lost after remote commit")
+        assert request == self.create_calls[0]
+        return {"request_id": "approval-response-loss", "state": "pending"}
 
 
 class _NeverVerifier:
@@ -286,6 +299,95 @@ def test_sponsored_intent_rejects_noncanonical_capability_set() -> None:
         _request(requested_capabilities=("message.send", "message.send"))
 
 
+def test_candidate_persists_canonical_public_key_thumbprint(
+    store, identity_factory
+) -> None:
+    actor, _ = identity_factory(binding_assurance="os_bound")
+    now = [1_900_000_000]
+    key = P256KeyPair.generate()
+    service = _service(store, _identity_for(store, actor.principal_id), now)
+
+    begin = service.begin_candidate(
+        candidate_harness_id="candidate-harness",
+        harness_kind="laptop",
+        harness_name="Field laptop",
+        binding_assurance="os_bound",
+        public_key_pem=key.public_pem,
+        idempotency_key="candidate-key-idempotency",
+    )
+
+    candidate = store.fetch_one(
+        """SELECT candidate_key_id,candidate_public_key_pem
+           FROM console_enrollment_candidates WHERE transaction_id=?""",
+        (begin.transaction_id,),
+    )
+    assert candidate is not None
+    assert candidate["candidate_key_id"] == key.thumbprint
+    assert len(candidate["candidate_key_id"]) == 43
+    assert candidate["candidate_public_key_pem"] == key.public_pem
+
+
+def test_candidate_rejects_malformed_public_key(
+    store, identity_factory
+) -> None:
+    actor, _ = identity_factory(binding_assurance="os_bound")
+    service = _service(
+        store,
+        _identity_for(store, actor.principal_id),
+        [1_900_000_000],
+    )
+
+    with pytest.raises(ValidationError, match="invalid public key"):
+        service.begin_candidate(
+            candidate_harness_id="candidate-harness",
+            harness_kind="laptop",
+            harness_name="Field laptop",
+            binding_assurance="os_bound",
+            public_key_pem="not a public key",
+            idempotency_key="candidate-malformed-idempotency",
+        )
+
+
+def test_candidate_rejects_substituted_public_key_before_invitation(
+    store, identity_factory
+) -> None:
+    actor, _ = identity_factory(binding_assurance="os_bound")
+    now = [1_900_000_000]
+    service = _service(store, _identity_for(store, actor.principal_id), now)
+    key = P256KeyPair.generate()
+    begin = service.begin_candidate(
+        candidate_harness_id="candidate-harness",
+        harness_kind="laptop",
+        harness_name="Field laptop",
+        binding_assurance="os_bound",
+        public_key_pem=key.public_pem,
+        idempotency_key="candidate-substitution-idempotency",
+    )
+    _insert_intent(
+        store,
+        actor,
+        intent_id="intent-substitution-123",
+        now=now[0],
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            """UPDATE console_enrollment_candidates SET candidate_public_key_pem=?
+               WHERE transaction_id=?""",
+            (P256KeyPair.generate().public_pem, begin.transaction_id),
+        )
+
+    with pytest.raises(
+        PydanticValidationError,
+        match="candidate key identifier does not match its public key",
+    ):
+        service.complete_candidate_oidc(state=begin.state, code="code")
+
+    assert store.fetch_one(
+        "SELECT state FROM console_enrollment_intents WHERE intent_id=?",
+        ("intent-substitution-123",),
+    )["state"] == "waiting_target"
+
+
 def test_candidate_matches_only_the_exact_harness_kind_and_name(
     store, identity_factory
 ) -> None:
@@ -322,6 +424,82 @@ def test_candidate_matches_only_the_exact_harness_kind_and_name(
         "SELECT state FROM console_enrollment_intents WHERE intent_id=?",
         ("intent-tablet-123456",),
     )["state"] == "waiting_target"
+
+
+def test_approval_request_reuses_persisted_possession_after_response_loss(
+    store, identity_factory
+) -> None:
+    actor, _ = identity_factory(binding_assurance="os_bound")
+    now = [1_900_000_000]
+    identity = _identity_for(store, actor.principal_id)
+    client = _LostCreateResponseApprovalClient(now)
+    service = _service(store, identity, now, approval_client=client)
+    key = P256KeyPair.generate()
+    begin = service.begin_candidate(
+        candidate_harness_id="candidate-response-loss",
+        harness_kind="laptop",
+        harness_name="Response loss laptop",
+        binding_assurance="os_bound",
+        public_key_pem=key.public_pem,
+        idempotency_key="candidate-response-loss-idempotency",
+    )
+    intent_id = "intent-response-loss-123"
+    _insert_intent(
+        store,
+        actor,
+        intent_id=intent_id,
+        now=now[0],
+        harness_name="Response loss laptop",
+    )
+    assert service.complete_candidate_oidc(state=begin.state, code="code") == intent_id
+    with store.transaction() as connection:
+        connection.execute(
+            """INSERT INTO policy_decisions(
+                   decision_id,occurred_at,actor_json,action,resource_json,
+                   context_json,allowed,reason,policy_revision
+               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                "decision-1",
+                now[0],
+                canonical_json(actor.audit_view()).decode(),
+                "identity.internal_invitation.issue",
+                "{}",
+                "{}",
+                1,
+                "test authority",
+                1,
+            ),
+        )
+
+    with pytest.raises(ConnectionError, match="response lost"):
+        service.request_approval(actor=actor, intent_id=intent_id)
+    reserved = store.fetch_one(
+        """SELECT state,approval_request_id,approval_transaction_digest,
+                  approval_transaction_json,possession_secret_encrypted
+             FROM console_enrollment_intents WHERE intent_id=?""",
+        (intent_id,),
+    )
+    assert reserved is not None
+    assert reserved["state"] == "candidate_verified"
+    assert reserved["approval_request_id"] is None
+    assert reserved["approval_transaction_digest"] == client.create_calls[0]["transaction_digest"]
+    assert reserved["approval_transaction_json"]
+    assert reserved["possession_secret_encrypted"]
+
+    assert service.request_approval(actor=actor, intent_id=intent_id) == "approval-response-loss"
+    assert len(client.create_calls) == 2
+    committed = store.fetch_one(
+        """SELECT state,approval_request_id,approval_transaction_digest,
+                  approval_transaction_json,possession_secret_encrypted
+             FROM console_enrollment_intents WHERE intent_id=?""",
+        (intent_id,),
+    )
+    assert committed is not None
+    assert committed["state"] == "waiting_approval"
+    assert committed["approval_request_id"] == "approval-response-loss"
+    assert committed["approval_transaction_digest"] == reserved["approval_transaction_digest"]
+    assert committed["approval_transaction_json"] == reserved["approval_transaction_json"]
+    assert committed["possession_secret_encrypted"] == reserved["possession_secret_encrypted"]
 
 
 @pytest.mark.parametrize("external_call", ["status", "receipt"])
@@ -361,7 +539,7 @@ def test_delayed_approval_external_call_cannot_issue_after_transaction_expiry(
     assert client.receipt_calls == (0 if external_call == "status" else 1)
 
 
-def test_continuation_expires_and_is_consumed_only_when_invitation_is_released(
+def test_continuation_invitation_is_recoverable_until_acceptance(
     store, identity_factory
 ) -> None:
     actor, _ = identity_factory(binding_assurance="os_bound")
@@ -409,6 +587,19 @@ def test_continuation_expires_and_is_consumed_only_when_invitation_is_released(
         )
     released = service.candidate_status(continuation_token=begin.continuation_token)
     assert released["invitation"]["transaction"]["invitation_id"] == record.transaction.invitation_id
+    recovered = service.candidate_status(continuation_token=begin.continuation_token)
+    assert recovered == released
+    assert store.fetch_one(
+        "SELECT consumed_at FROM console_enrollment_candidates WHERE transaction_id=?",
+        (begin.transaction_id,),
+    )["consumed_at"] is None
+    with store.transaction() as connection:
+        connection.execute(
+            """UPDATE console_enrollment_candidates
+               SET state='enrolled',consumed_at=?,updated_at=?
+               WHERE transaction_id=? AND consumed_at IS NULL""",
+            (now[0], now[0], begin.transaction_id),
+        )
     with pytest.raises(AuthenticationError):
         service.candidate_status(continuation_token=begin.continuation_token)
 
@@ -423,3 +614,36 @@ def test_continuation_expires_and_is_consumed_only_when_invitation_is_released(
     now[0] = expired.expires_at
     with pytest.raises(AuthenticationError):
         service.candidate_status(continuation_token=expired.continuation_token)
+
+
+def test_verified_candidate_continuation_extends_to_intent_deadline(
+    store, identity_factory
+) -> None:
+    actor, _ = identity_factory(binding_assurance="os_bound")
+    started_at = 1_900_000_000
+    now = [started_at]
+    key = P256KeyPair.generate()
+    service = _service(store, _identity_for(store, actor.principal_id), now)
+    begin = service.begin_candidate(
+        candidate_harness_id="candidate-continuation-extension",
+        harness_kind="laptop",
+        harness_name="Continuation extension laptop",
+        binding_assurance="os_bound",
+        public_key_pem=key.public_pem,
+        idempotency_key="candidate-continuation-extension-idempotency",
+    )
+    intent_id = "intent-continuation-extension"
+    _insert_intent(
+        store,
+        actor,
+        intent_id=intent_id,
+        now=started_at,
+        harness_name="Continuation extension laptop",
+    )
+
+    now[0] = begin.expires_at - 1
+    assert service.complete_candidate_oidc(state=begin.state, code="code") == intent_id
+    now[0] = begin.expires_at + 1
+    status = service.candidate_status(continuation_token=begin.continuation_token)
+
+    assert status == {"state": "candidate_verified", "expires_at": started_at + 3_600}

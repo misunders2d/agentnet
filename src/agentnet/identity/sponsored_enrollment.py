@@ -165,8 +165,8 @@ class SponsoredEnrollmentService:
             requested_capabilities=tuple(request.get("capabilities", ())), expires_at=datetime.fromtimestamp(int(intent["expires_at"]), UTC),
             reason=str(request["reason"]))
         with self.store.transaction() as connection:
-            one = connection.execute("""UPDATE console_enrollment_candidates SET state='candidate_verified',intent_id=?,oidc_issuer=?,oidc_subject=?,verified_email=?,updated_at=? WHERE transaction_id=? AND state='waiting_oidc'""",
-                (intent["intent_id"],verified.identity.issuer,verified.identity.subject,verified.identity.verified_email.casefold(),now,row["transaction_id"]))
+            one = connection.execute("""UPDATE console_enrollment_candidates SET state='candidate_verified',intent_id=?,oidc_issuer=?,oidc_subject=?,verified_email=?,updated_at=?,expires_at=? WHERE transaction_id=? AND state='waiting_oidc'""",
+                (intent["intent_id"],verified.identity.issuer,verified.identity.subject,verified.identity.verified_email.casefold(),now,int(intent["expires_at"]),row["transaction_id"]))
             two = connection.execute("""UPDATE console_enrollment_intents SET state='candidate_verified',revision=revision+1,candidate_transaction_id=?,canonical_invitation_json=?,invitation_id=?,updated_at=? WHERE intent_id=? AND state='waiting_target'""",
                 (row["transaction_id"],canonical_json(invitation.model_dump(mode="json")).decode(),invitation.invitation_id,now,intent["intent_id"]))
             if one.rowcount != 1 or two.rowcount != 1:
@@ -175,33 +175,204 @@ class SponsoredEnrollmentService:
 
     def request_approval(self, *, actor: VerifiedActor, intent_id: str) -> str:
         now = self.clock()
-        row = self.store.fetch_one("SELECT * FROM console_enrollment_intents WHERE intent_id=? AND domain_id=?", (intent_id,actor.domain_id))
-        if row is None or row["sponsor_principal_id"] != actor.principal_id or row["sponsor_harness_id"] != actor.harness_id or row["state"] not in {"candidate_verified","waiting_approval"}:
+        row = self.store.fetch_one(
+            "SELECT * FROM console_enrollment_intents WHERE intent_id=? AND domain_id=?",
+            (intent_id, actor.domain_id),
+        )
+        if (
+            row is None
+            or row["sponsor_principal_id"] != actor.principal_id
+            or row["sponsor_harness_id"] != actor.harness_id
+            or row["state"] not in {"candidate_verified", "waiting_approval"}
+        ):
             raise AuthenticationError("sponsored enrollment is unavailable")
-        invitation = InternalInvitationRequest.model_validate_json(str(row["canonical_invitation_json"]))
+        invitation = InternalInvitationRequest.model_validate_json(
+            str(row["canonical_invitation_json"])
+        )
         resource, context = InternalInvitationService.issuance_binding(invitation)
-        decision = self.require(actor=actor, action="identity.internal_invitation.issue", resource=resource, context=context)
+        decision = self.require(
+            actor=actor,
+            action="identity.internal_invitation.issue",
+            resource=resource,
+            context=context,
+        )
         if row["state"] == "waiting_approval":
-            return str(row["approval_request_id"])
-        candidate = self.store.fetch_one("SELECT * FROM console_enrollment_candidates WHERE transaction_id=?", (row["candidate_transaction_id"],))
+            request_id = row["approval_request_id"]
+            if not isinstance(request_id, str) or not request_id:
+                raise AuthenticationError("sponsored enrollment is unavailable")
+            return request_id
+        candidate = self.store.fetch_one(
+            "SELECT * FROM console_enrollment_candidates WHERE transaction_id=?",
+            (row["candidate_transaction_id"],),
+        )
         if candidate is None:
             raise AuthenticationError("sponsored enrollment is unavailable")
-        expires = min(int(row["expires_at"]), now+600)
-        transaction = {"schema":"agentnet.enrollment.challenge.v1","purpose":"human_harness_credential_binding","challenge_id":intent_id,"domain_id":actor.domain_id,
-            "nonce":str(candidate["transaction_id"]),"candidate_key":{"algorithm":"ES256/P-256","thumbprint":invitation.candidate_key_id},
-            "harness":{"binding_assurance":invitation.candidate_binding_assurance,"display_name":invitation.candidate_harness_display_name,"kind":invitation.candidate_harness_kind,
-                       "requested_capabilities":list(invitation.requested_capabilities),"requested_class":"protected_business"},
-            "human":{"oidc_issuer":invitation.invited_oidc_issuer,"oidc_subject":invitation.invited_oidc_subject,"verified_email":invitation.invited_verified_email},"issued_at":now,"expires_at":expires}
-        digest, possession = canonical_digest(transaction), self._token()
-        created = self.approval_client.create_request(idempotency_key=f"sponsored:{intent_id}",domain_id=actor.domain_id,approval_purpose=self.APPROVAL_PURPOSE,
-            canonical_transaction=canonical_json(transaction),transaction_digest=digest,possession_hash=hashlib.sha256(possession.encode("ascii")).hexdigest(),request_expires_at=expires)
+
+        reserved_fields = (
+            row["approval_transaction_digest"],
+            row["approval_transaction_json"],
+            row["possession_secret_encrypted"],
+            row["policy_decision_id"],
+        )
+        if all(value is None for value in reserved_fields):
+            expires = min(int(row["expires_at"]), now + 600)
+            transaction = {
+                "schema": "agentnet.enrollment.challenge.v1",
+                "purpose": "human_harness_credential_binding",
+                "challenge_id": intent_id,
+                "domain_id": actor.domain_id,
+                "nonce": str(candidate["transaction_id"]),
+                "candidate_key": {
+                    "algorithm": "ES256/P-256",
+                    "thumbprint": invitation.candidate_key_id,
+                },
+                "harness": {
+                    "binding_assurance": invitation.candidate_binding_assurance,
+                    "display_name": invitation.candidate_harness_display_name,
+                    "kind": invitation.candidate_harness_kind,
+                    "requested_capabilities": list(invitation.requested_capabilities),
+                    "requested_class": "protected_business",
+                },
+                "human": {
+                    "oidc_issuer": invitation.invited_oidc_issuer,
+                    "oidc_subject": invitation.invited_oidc_subject,
+                    "verified_email": invitation.invited_verified_email,
+                },
+                "issued_at": now,
+                "expires_at": expires,
+            }
+            transaction_json = canonical_json(transaction).decode()
+            digest = canonical_digest(transaction)
+            possession = self._token()
+            encrypted_possession = self.store.encrypted_payload(
+                {"possession_secret": possession}, intent_id
+            )
+            with self.store.transaction() as connection:
+                updated = connection.execute(
+                    """UPDATE console_enrollment_intents
+                       SET revision=revision+1,policy_decision_id=?,
+                           approval_transaction_digest=?,approval_transaction_json=?,
+                           possession_secret_encrypted=?,updated_at=?
+                       WHERE intent_id=? AND state='candidate_verified'
+                         AND approval_request_id IS NULL
+                         AND approval_transaction_digest IS NULL
+                         AND approval_transaction_json IS NULL
+                         AND possession_secret_encrypted IS NULL
+                         AND policy_decision_id IS NULL""",
+                    (
+                        decision.decision_id,
+                        digest,
+                        transaction_json,
+                        encrypted_possession,
+                        now,
+                        intent_id,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    current = connection.execute(
+                        "SELECT state,approval_request_id FROM console_enrollment_intents WHERE intent_id=?",
+                        (intent_id,),
+                    ).fetchone()
+                    if (
+                        current is not None
+                        and current["state"] == "waiting_approval"
+                        and isinstance(current["approval_request_id"], str)
+                    ):
+                        return str(current["approval_request_id"])
+        elif any(value is None for value in reserved_fields):
+            raise AuthenticationError("sponsored enrollment is unavailable")
+
+        reserved = self.store.fetch_one(
+            "SELECT * FROM console_enrollment_intents WHERE intent_id=? AND domain_id=?",
+            (intent_id, actor.domain_id),
+        )
+        if reserved is None:
+            raise AuthenticationError("sponsored enrollment is unavailable")
+        if reserved["state"] == "waiting_approval":
+            request_id = reserved["approval_request_id"]
+            if isinstance(request_id, str) and request_id:
+                return request_id
+            raise AuthenticationError("sponsored enrollment is unavailable")
+        if reserved["state"] != "candidate_verified":
+            raise ConflictError("enrollment changed while approval was reserved")
+        try:
+            transaction_json = str(reserved["approval_transaction_json"])
+            transaction = json.loads(transaction_json)
+            digest = str(reserved["approval_transaction_digest"])
+            if (
+                canonical_json(transaction).decode() != transaction_json
+                or canonical_digest(transaction) != digest
+                or transaction["challenge_id"] != intent_id
+                or transaction["domain_id"] != actor.domain_id
+                or type(transaction["expires_at"]) is not int
+            ):
+                raise ValueError("reserved approval transaction mismatch")
+            possession = self.store.decrypted_payload(
+                str(reserved["possession_secret_encrypted"]), intent_id
+            ).get("possession_secret")
+            if not isinstance(possession, str) or not possession:
+                raise ValueError("reserved approval possession mismatch")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AuthenticationError("sponsored enrollment is unavailable") from exc
+
+        created = self.approval_client.create_request(
+            idempotency_key=f"sponsored:{intent_id}",
+            domain_id=actor.domain_id,
+            approval_purpose=self.APPROVAL_PURPOSE,
+            canonical_transaction=transaction_json.encode(),
+            transaction_digest=digest,
+            possession_hash=hashlib.sha256(possession.encode("ascii")).hexdigest(),
+            request_expires_at=transaction["expires_at"],
+        )
         request_id = created.get("request_id")
-        if not isinstance(request_id,str) or created.get("state") not in {"pending","issued"}:
+        if not isinstance(request_id, str) or created.get("state") not in {"pending", "issued"}:
             raise AuthorizationError("enrollment approval request was not accepted")
         with self.store.transaction() as connection:
-            updated=connection.execute("""UPDATE console_enrollment_intents SET state='waiting_approval',revision=revision+1,policy_decision_id=?,approval_request_id=?,approval_transaction_digest=?,approval_transaction_json=?,possession_secret_encrypted=?,updated_at=? WHERE intent_id=? AND state='candidate_verified'""",
-                (decision.decision_id,request_id,digest,canonical_json(transaction).decode(),self.store.encrypted_payload({"possession_secret":possession},intent_id),now,intent_id))
-            if updated.rowcount != 1: raise ConflictError("enrollment changed while approval was requested")
+            updated = connection.execute(
+                """UPDATE console_enrollment_intents
+                   SET state='waiting_approval',revision=revision+1,
+                       approval_request_id=?,updated_at=?
+                   WHERE intent_id=? AND state='candidate_verified'
+                     AND approval_request_id IS NULL
+                     AND approval_transaction_digest=?""",
+                (request_id, now, intent_id, digest),
+            )
+            candidate_updated = connection.execute(
+                """UPDATE console_enrollment_candidates
+                   SET state='waiting_approval',updated_at=?,expires_at=?
+                   WHERE transaction_id=? AND intent_id=?
+                     AND state='candidate_verified' AND expires_at>?""",
+                (
+                    now,
+                    int(transaction["expires_at"]),
+                    reserved["candidate_transaction_id"],
+                    intent_id,
+                    now,
+                ),
+            )
+            if updated.rowcount == 1:
+                if candidate_updated.rowcount != 1:
+                    raise ConflictError("enrollment candidate changed while approval was requested")
+            else:
+                current = connection.execute(
+                    "SELECT state,approval_request_id FROM console_enrollment_intents WHERE intent_id=?",
+                    (intent_id,),
+                ).fetchone()
+                current_candidate = connection.execute(
+                    """SELECT state,expires_at FROM console_enrollment_candidates
+                       WHERE transaction_id=? AND intent_id=?""",
+                    (reserved["candidate_transaction_id"], intent_id),
+                ).fetchone()
+                if (
+                    candidate_updated.rowcount != 0
+                    or current is None
+                    or current["state"] != "waiting_approval"
+                    or current["approval_request_id"] != request_id
+                    or current_candidate is None
+                    or current_candidate["state"] != "waiting_approval"
+                    or int(current_candidate["expires_at"]) != int(transaction["expires_at"])
+                ):
+                    raise ConflictError("enrollment changed while approval was requested")
         return request_id
 
     def reconcile(self, *, actor: VerifiedActor, intent_id: str) -> str:
@@ -312,10 +483,14 @@ class SponsoredEnrollmentService:
             )
             if updated.rowcount != 1:
                 raise ConflictError("enrollment changed before invitation commit")
-            connection.execute(
-                "UPDATE console_enrollment_candidates SET state='invitation_issued',updated_at=? WHERE intent_id=?",
-                (now, intent_id),
+            candidate = connection.execute(
+                """UPDATE console_enrollment_candidates
+                   SET state='invitation_issued',updated_at=?,expires_at=?
+                   WHERE intent_id=? AND state='waiting_approval' AND expires_at>?""",
+                (now, int(row["expires_at"]), intent_id, now),
             )
+            if candidate.rowcount != 1:
+                raise ConflictError("enrollment candidate changed before invitation commit")
 
         self.invitations.issue(
             invitation,
@@ -348,14 +523,6 @@ class SponsoredEnrollmentService:
                     (row["intent_id"],),
                 ).fetchone()
                 if invitation is not None:
-                    consumed = connection.execute(
-                        """UPDATE console_enrollment_candidates
-                           SET consumed_at=?,updated_at=?
-                           WHERE transaction_id=? AND consumed_at IS NULL AND expires_at>?""",
-                        (now, now, row["transaction_id"], now),
-                    )
-                    if consumed.rowcount != 1:
-                        raise AuthenticationError("sponsored enrollment is unavailable")
                     result["invitation"] = self.invitations._from_row(invitation).model_dump(
                         mode="json"
                     )

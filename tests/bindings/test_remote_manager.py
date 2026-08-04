@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import subprocess
 import sys
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,8 +16,11 @@ import pytest
 from agentnet.bindings.remote_manager import (
     RemoteManagerDispatcher,
     RemoteManagerRequestError,
+    resolve_packaged_pi_extension,
     run_manager_gateway,
+    validate_pi_manager_command,
 )
+from agentnet.bindings.tools import CANONICAL_TOOL_NAMES
 from agentnet.errors import GateBlocked, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 
@@ -686,3 +692,144 @@ def test_runner_propagates_child_exit_and_signal_status_and_still_cleans_state(
 
     assert status == expected_status
     assert list(state_dir.iterdir()) == []
+
+
+def test_pi_manager_command_rejects_non_pi_and_owned_flags() -> None:
+    assert validate_pi_manager_command(("pi", "--model", "example/model")) == (
+        "pi",
+        "--model",
+        "example/model",
+    )
+    with pytest.raises(ValidationError, match="Pi executable"):
+        validate_pi_manager_command(("python",))
+    for arguments in (
+        ("pi", "--extension", "other.ts"),
+        ("pi", "--extension=other.ts"),
+        ("pi", "-e", "other.ts"),
+        ("pi", "--tools", "read"),
+        ("pi", "--no-tools"),
+        ("pi", "--no-builtin-tools"),
+        ("pi", "--exclude-tools=agentnet_send"),
+    ):
+        with pytest.raises(ValidationError, match="owns Pi extension"):
+            validate_pi_manager_command(arguments)
+
+
+def test_runner_stages_complete_extension_for_measured_pi_node_launcher(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "s"
+    state_dir.mkdir(mode=0o700)
+    pi_executable = tmp_path / "pi"
+    pi_executable.write_text(
+        """#!/usr/bin/env node
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+assert(fs.readFileSync(Number(process.env.AGENTNET_LOCAL_BINDING_FD)).length > 0);
+const args = process.argv.slice(2);
+assert.equal(args.filter((value) => value === "--extension").length, 1);
+assert.equal(args.filter((value) => value === "--no-extensions").length, 1);
+assert.equal(args.filter((value) => value === "--no-builtin-tools").length, 1);
+assert.equal(args.filter((value) => value === "--tools").length, 1);
+assert.equal(args[args.indexOf("--tools") + 1], args[2]);
+const extension = args[args.indexOf("--extension") + 1];
+const response = path.join(path.dirname(extension), "pi_response.ts");
+assert.equal(path.basename(extension), "pi_extension.ts");
+assert.equal(fs.statSync(extension).mode & 0o777, 0o400);
+assert.equal(fs.statSync(response).mode & 0o777, 0o400);
+const digest = (target) => crypto.createHash("sha256").update(fs.readFileSync(target)).digest("hex");
+assert.equal(digest(extension), args[0]);
+assert.equal(digest(response), args[1]);
+""",
+        encoding="utf-8",
+    )
+    pi_executable.chmod(0o700)
+    extension = resolve_packaged_pi_extension({})
+    digest = hashlib.sha256(extension.read_bytes()).hexdigest()
+    response_digest = hashlib.sha256(
+        extension.with_name("pi_response.ts").read_bytes()
+    ).hexdigest()
+    expected_tools = ",".join(name.replace(".", "_") for name in CANONICAL_TOOL_NAMES)
+
+    status = run_manager_gateway(
+        RecordingClient({"items": []}),
+        _actor(),
+        (str(pi_executable), digest, response_digest, expected_tools),
+        state_dir=state_dir,
+        environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        pi_extension=extension,
+    )
+
+    assert status == 0
+    assert list(state_dir.iterdir()) == []
+
+
+def test_runner_kills_descendants_when_measured_child_exits(tmp_path: Path) -> None:
+    state_dir = tmp_path / "s"
+    state_dir.mkdir(mode=0o700)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        descendant_source = (
+            "import socket,time;"
+            "time.sleep(0.5);"
+            f"socket.create_connection(('127.0.0.1',{port}),timeout=1).close()"
+        )
+        parent_source = (
+            "import os,subprocess,sys;"
+            "fd=int(os.environ['AGENTNET_LOCAL_BINDING_FD']);"
+            "payload=b'';"
+            "\nwhile chunk:=os.read(fd,65536): payload+=chunk\n"
+            "assert payload;"
+            f"subprocess.Popen([sys.executable,'-c',{descendant_source!r}])"
+        )
+
+        status = run_manager_gateway(
+            RecordingClient({"items": []}),
+            _actor(),
+            (sys.executable, "-c", parent_source),
+            state_dir=state_dir,
+            environment={
+                "LANG": "C.UTF-8",
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            },
+        )
+
+        assert status == 0
+        listener.settimeout(1.0)
+        with pytest.raises(TimeoutError):
+            listener.accept()
+    assert list(state_dir.iterdir()) == []
+
+
+def test_pi_local_response_preserves_only_safe_exact_error_codes() -> None:
+    script = """
+import assert from "node:assert/strict";
+import { localResponseResult } from "./src/agentnet/bindings/pi_response.ts";
+
+assert.deepEqual(localResponseResult({ok: true, result: {state: "ready"}}), {state: "ready"});
+for (const error of ["authorization_denied", "no_positive_human_entitlement"]) {
+  assert.throws(
+    () => localResponseResult({error}),
+    (raised) => raised.code === error && raised.message.endsWith(`: ${error}`),
+  );
+}
+for (const response of [
+  {error: "Authorization denied"},
+  {error: "authorization_denied", extra: true},
+  {ok: true, result: {}, extra: true},
+]) {
+  assert.throws(
+    () => localResponseResult(response),
+    (raised) => raised.code === "local_operation_rejected",
+  );
+}
+"""
+    subprocess.run(
+        ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+        check=True,
+        cwd=Path.cwd(),
+    )

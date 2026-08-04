@@ -130,7 +130,7 @@ def _observe() -> dict[str, Any]:
 def _verify(kind: str, forbidden_path: Path) -> int:
     observed = _observe()
     claims = observed["claims"]
-    assert claims["pid"] == observed["pid"]
+    assert claims["pid"] != observed["pid"]
     assert claims["process_binding"] == "exact"
     assert claims["harness_id"] == "pi-owner-harness-0001"
     assert claims["credential_id"] == "pi-owner-credential-0001"

@@ -237,6 +237,7 @@ class ExactBootstrapHarnessResolver:
                         "binding_assurance": row["transaction_binding_assurance"],
                         "display_name": row["harness_name"],
                         "kind": row["harness_kind"],
+                        "requested_capabilities": [],
                         "requested_class": "protected_business",
                     }
                     or transcript.get("candidate_key")

@@ -1,9 +1,9 @@
 # Release Manifest
 
 Snapshot: 2026-08-04
-Candidate: `agentnet 0.1.43`
-Latest published package: `agentnet 0.1.38`
-Evidence profile: corrected real first-C0 path plus packaged release candidate
+Candidate: `agentnet 0.1.44`
+Latest published package: `agentnet 0.1.43`
+Evidence profile: private administration, durable communication activation, and Manager binding candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `d961a710a41d71923ce5565ccdc6200d7720f121eda8c0c9623143d6cf140c1c` |
-| `pyproject.toml` | SHA-256 `3402f8e836bed7c8a083777d0bb3a0a35361a525f5f05fce17a3bc7855a47402` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `2af940ff41b5b01fdc858fa6abc1f9052dc64d7007a6416e85f3c001ab053f91` |
+| `pyproject.toml` | SHA-256 `ecab8e57b29f52f80f4f5112978c74febb2e3986f5cb6c8413eeb1f2713e611b` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -387,6 +387,32 @@ records final release-manifest/direct-verifier and retained byte-identical
 archive outcomes. Same-commit CI, staged-package remote deployment, and
 publication remain required external actions. This evidence does not change
 the blocked release posture, any requirement status, or any must-not-ship gate.
+
+Package `0.1.43` was subsequently published from immutable commit
+`a4a1f589a3741a07e43f151826d80652dbfa46ad`; its publication does not promote
+any requirement or gate.
+
+Candidate `0.1.44` adds three linked operator paths without creating a
+privileged Hub identity. First, a loopback-only private administration
+dashboard opens through a one-time browser handoff, revalidates the exact
+harness credential and current `console.session.open` authority on every
+request, uses single-use method/path/body-bound mutation tokens, and stores
+only content-free update state. Second, one fresh WebAuthn-UV approval can
+activate the documented same-principal communication scope for one exact
+owner/server harness pair; human entitlements remain current-policy and
+current-credential scoped. Third, the Manager gateway keeps the laptop
+credential in its parent process, measures each sandbox child, gives it only a
+short-lived local capability, and dispatches canonical tools as signed
+AgentNet HTTP requests.
+
+The affected release lane reports 322 passed with seven expected
+dedicated-PostgreSQL skips. The broad source lane reports 1754 passed with 16
+expected platform/dedicated-PostgreSQL skips. Authenticated browser smoke
+exercised the Home and People routes plus both enrollment targets; Lighthouse
+reported accessibility 100 with no accessibility failures. Recursive
+installed-package verification, same-commit CI, staged remote deployment, and
+all higher-tier owner/privileged/external evidence remain separately required.
+No requirement or gate is promoted.
 
 ## Verification boundary
 

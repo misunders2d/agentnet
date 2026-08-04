@@ -62,7 +62,11 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeStatusResult,
 )
 from agentnet.authorization.c0_pilot import C0PilotResult
-from agentnet.bindings.remote_manager import run_manager_gateway
+from agentnet.bindings.remote_manager import (
+    resolve_packaged_pi_extension,
+    run_manager_gateway,
+    validate_pi_manager_command,
+)
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.console.http import create_console_app
 from agentnet.core.app import CommunicationCore
@@ -4581,6 +4585,7 @@ def command_console_open(args: argparse.Namespace) -> int:
                 "harness_id",
                 "credential_id",
                 "credential_epoch",
+                "binding_assurance",
                 "nonce",
                 "issued_at",
                 "expires_at",
@@ -4593,6 +4598,7 @@ def command_console_open(args: argparse.Namespace) -> int:
             or transaction.get("harness_id") != actor.harness_id
             or transaction.get("credential_id") != actor.credential_id
             or transaction.get("credential_epoch") != actor.credential_epoch
+            or transaction.get("binding_assurance") != actor.binding_assurance
             or not isinstance(transaction_digest, str)
             or canonical_digest(transaction) != transaction_digest
             or type(expires_at) is not int
@@ -4681,9 +4687,11 @@ def command_supervisor_run(args: argparse.Namespace) -> int:
 
 
 def command_manager_run(args: argparse.Namespace) -> int:
-    command = tuple(args.manager_command)
-    if not command or any(not isinstance(item, str) or not item for item in command):
-        raise SystemExit("manager-run requires a command after --")
+    try:
+        command = validate_pi_manager_command(tuple(args.manager_command))
+        pi_extension = resolve_packaged_pi_extension()
+    except (GateBlocked, ValidationError) as exc:
+        raise SystemExit(str(exc)) from None
     client, actor, _key = _load_identity_client(Path(args.identity))
     try:
         return int(
@@ -4692,6 +4700,7 @@ def command_manager_run(args: argparse.Namespace) -> int:
                 actor,
                 command,
                 state_dir=Path(args.state_dir) if args.state_dir is not None else None,
+                pi_extension=pi_extension,
             )
         )
     finally:
@@ -5802,7 +5811,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     manager_run = commands.add_parser(
         "manager-run",
-        help="run an interactive child through the local signed Manager gateway",
+        help="run interactive Pi with the packaged local signed Manager extension",
     )
     manager_run.add_argument("--identity", required=True)
     manager_run.add_argument(
@@ -5813,7 +5822,7 @@ def build_parser() -> argparse.ArgumentParser:
         "manager_command",
         nargs="+",
         metavar="COMMAND",
-        help="required child command and arguments after --",
+        help="required Pi command and arguments after --; AgentNet owns extension/tool flags",
     )
     manager_run.set_defaults(func=command_manager_run)
 

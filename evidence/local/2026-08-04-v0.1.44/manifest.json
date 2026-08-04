@@ -1,0 +1,92 @@
+{
+  "run_id": "2026-08-04-v0.1.44",
+  "evaluated_at": "2026-08-04T14:03:00Z",
+  "scope": "v0_1_44_private_admin_manager_communication_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "766e46ebd59836e7975eee1b7988969d6236d440db392c8ae7ac273641035c1c",
+  "prior_runtime_evidence": "evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-04-v0.1.43/manifest.json",
+  "change_boundary": "Candidate 0.1.44 adds the loopback-only private administration dashboard, one-approval durable same-principal communication-scope activation, parent-owned short-lived Manager bindings, signed canonical HTTP dispatch, strict sponsored-enrollment state, and combined schema-v6 persistence preserving the published v5 upgrade path. It does not create a privileged Hub identity, grant authority from prompt text or child arguments, prove a production IdP/WebAuthn boundary, prove a privileged browser/process boundary, establish multi-host PostgreSQL durability, or promote a requirement or must-not-ship gate.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; browser smoke used a synthetic loopback server and no external system mutation",
+    "focused_source": "PASS: 329 passed and 7 expected dedicated-PostgreSQL skips for console, approval, enrollment, sponsored invitation, communication scope, server activation, Manager binding, signed Manager journey, and production storage paths.",
+    "broad_source": "PASS: 1761 passed and 16 expected platform/dedicated-PostgreSQL skips, with one deprecation warning; installed-live-inference, subprocess-lifecycle, bake-off-evidence, and release-manifest tests were excluded for their separate gates.",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1788 passed and 16 expected skips; generation 2 passes the installed-byte multiprocess local communication gate, complete package-tree digest equality, empty communication workspace, and no named verification residue.",
+    "root_installed_external_host": "NOT RUN: candidate remote deployment remains a separately approved external gate; no production or shared host was mutated.",
+    "callback_incident": "No prior callback, continuation, browser session, mutation token, communication scope, Manager capability, sponsored invitation, or runtime state is reused by the candidate package; fresh exact external evidence remains required."
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.43",
+    "candidate": "0.1.44",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "NOT RUN for candidate 0.1.44; the retained 0.1.42 live result remains historical and does not prove this source"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/console tests/approval tests/identity/test_enrollment.py tests/cli/test_console_open_cli.py tests/cli/test_sponsored_invitation_cli.py tests/cli/test_communication_scope_cli.py tests/cli/test_server_agent_activation.py tests/bindings/test_remote_manager.py tests/integration/test_persistent_communication_journey.py tests/integration/test_remote_manager_signed_journey.py tests/integration/test_enrollment_http.py tests/production/test_postgres_runtime.py",
+      "result": "PASS: 329 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1761 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each 1788 passed and 16 expected skips; generation 2 also passed the installed-byte multiprocess local communication gate; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, empty communication workspace, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/packaged_local_communication_e2e.py with installed interpreter and empty workspace",
+      "result": "PASS: real loopback Core plus separate fresh-proof client processes; accepted_local; exact proof-derived request/reply attribution; recipient absent until Core restart; stable idempotent request event, obligation, and ACK receipt; recipient_committed; typed obligation completed; response custody after a second restart; fresh 401 authentication refusal after explicitly non-approved lab credential fixture; four distinct Core PIDs (three restarts); closed listener; empty workspace; temporary install/runtime/state removed; non_production=true, bounded_c0_pilot_proven=false, approved_revocation_proven=false, production_durability_proven=false, release_certified=false"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds are byte-identical and match retained candidate artifacts; source-tree digest 766e46ebd59836e7975eee1b7988969d6236d440db392c8ae7ac273641035c1c; sdist ad3c3b1158759b58dedf022bde8aa7274b86e75e085aaf7d34b6793df486832f; wheel bcd629b601b3c77d107836198bb43f8219771948879cc39ff83fbd2286d37829"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.44 direct disposable-package verification completed with 1788 passed and 16 expected skips and no source-tree residue"
+    },
+    {
+      "command": "authenticated loopback browser smoke: open one-time console handoff; navigate Home and People; switch enrollment target between existing person and new person",
+      "result": "PASS: authenticated routes rendered, navigation succeeded, dynamic target-specific fields and required-state changed correctly, credentials remained in a secure host-only cookie and not in the URL"
+    },
+    {
+      "command": "Chrome DevTools Lighthouse accessibility audit against the authenticated loopback dashboard",
+      "result": "PASS: accessibility score 100 with zero accessibility failures; separate best-practices meta-description advisory is non-accessibility and does not affect the private loopback application contract"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven affected-lane tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform, ordinary-server clean-setup, exact public-0.1.43-marker rejection, staged-package, and remote Manager communication workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows and separately approved staging are required; terminal run IDs are retained by GitHub and npm and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Integrated dashboard security and contract review",
+      "model": "independent security and contract reviewers",
+      "result": "REMEDIATED: exact production authority context, harness-kind persistence, live fleet state, requested-capability binding, and session/mutation correctness findings were fixed with focused regressions; no gate promotion is inferred."
+    },
+    {
+      "review": "Focused failure root-cause and Manager containment review",
+      "model": "independent implementation and release-review agents",
+      "result": "PASS: revoke-form token extraction, canonical key-id length, combined immutable schema-v6 migration preserving the published v5 upgrade path, signed cross-principal Manager entitlement, descendant process-tree containment, complete two-file Pi staging, exact Node-runtime measurement, and safe Pi denial-code propagation defects were corrected at source without weakening fail-closed checks."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-04-v0.1.44/artifacts/agentnet-0.1.44.tar.gz",
+      "sha256": "ad3c3b1158759b58dedf022bde8aa7274b86e75e085aaf7d34b6793df486832f"
+    },
+    {
+      "path": "evidence/local/2026-08-04-v0.1.44/artifacts/agentnet-0.1.44-py3-none-any.whl",
+      "sha256": "bcd629b601b3c77d107836198bb43f8219771948879cc39ff83fbd2286d37829"
+    }
+  ]
+}
