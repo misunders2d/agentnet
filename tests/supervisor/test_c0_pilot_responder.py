@@ -259,6 +259,34 @@ def test_direct_c0_credential_remains_owner_only(
         )
 
 
+@pytest.mark.skipif(
+    not getattr(os, "O_NONBLOCK", 0),
+    reason="host does not expose nonblocking file opens",
+)
+def test_c0_credential_open_cannot_block_on_special_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_path = tmp_path / "credential.pem"
+    payload = P256KeyPair.generate().private_pem
+    credential_path.write_bytes(payload)
+    credential_path.chmod(0o600)
+    actual_open = os.open
+
+    def guarded_open(path: Path, flags: int) -> int:
+        assert flags & os.O_NONBLOCK, "credential open could block on a FIFO or device"
+        return actual_open(path, flags)
+
+    monkeypatch.setattr(c0_responder.os, "open", guarded_open)
+
+    assert (
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
+        == payload
+    )
+
 def test_waiting_owner_responds_once_then_waiting_fresh_keeps_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

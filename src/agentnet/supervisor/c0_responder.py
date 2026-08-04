@@ -59,7 +59,12 @@ def _owner_file(path: Path, *, label: str) -> bytes:
 
 def _credential_file(path: Path, *, label: str) -> bytes:
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
     except OSError as exc:
         raise ValidationError(f"{label} is unavailable") from exc
     try:
