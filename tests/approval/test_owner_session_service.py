@@ -44,9 +44,10 @@ class FakeApprovalRequests:
             "domain_id": "corp.example",
             "expires_at": NOW + 300,
             "harness": {
-                "binding_assurance": "protected",
+                "binding_assurance": "os_bound",
                 "display_name": "Owner laptop",
                 "kind": "pi",
+                "requested_capabilities": ["message.send"],
                 "requested_class": "protected_business",
             },
             "human": {
@@ -71,10 +72,11 @@ class FakeApprovalRequests:
             "summary": {
                 "title": "Enroll a laptop identity",
                 "statements": [
-                    "Laptop: Owner laptop (pi)",
-                    "Verified account: owner@example.test",
+                    "Laptop or agent: Owner laptop (pi)",
+                    "Verified person: owner@example.test",
                     "Corporate domain: corp.example",
-                    "Authority granted: none",
+                    "Requested capabilities (not granted by enrollment): message.send",
+                    "Authority granted by enrollment: none",
                 ],
                 "advanced_digest": "a" * 64,
             },
@@ -300,10 +302,11 @@ def test_bound_owner_session_lists_reviews_and_approves_without_browser_capabili
         assert options["summary"] == {
             "title": "Enroll a laptop identity",
             "statements": [
-                "Laptop: Owner laptop (pi)",
-                "Verified account: owner@example.test",
+                "Laptop or agent: Owner laptop (pi)",
+                "Verified person: owner@example.test",
                 "Corporate domain: corp.example",
-                "Authority granted: none",
+                "Requested capabilities (not granted by enrollment): message.send",
+                "Authority granted by enrollment: none",
             ],
             "advanced_digest": "a" * 64,
         }

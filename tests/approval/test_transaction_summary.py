@@ -129,6 +129,7 @@ def test_enrollment_summary_rejects_hidden_or_malformed_transaction_fields() -> 
             "binding_assurance": "os_bound",
             "display_name": "Fresh laptop",
             "kind": "pi",
+            "requested_capabilities": ["message.send"],
             "requested_class": "protected_business",
         },
         "human": {
@@ -153,6 +154,9 @@ def test_enrollment_summary_rejects_hidden_or_malformed_transaction_fields() -> 
         lambda value: value.update({"hidden_authority": "authorization.entitlement.issue"}),
         lambda value: value["human"].update({"hidden": "value"}),
         lambda value: value["harness"].update({"requested_class": "unbounded"}),
+        lambda value: value["harness"].update(
+            {"requested_capabilities": ["message.send", "artifact.read"]}
+        ),
         lambda value: value["candidate_key"].update({"algorithm": "unknown"}),
         lambda value: value.update({"expires_at": value["issued_at"]}),
     ]

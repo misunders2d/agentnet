@@ -44,6 +44,7 @@ def _approval_transaction(marker: str = "Owner laptop") -> bytes:
                 "binding_assurance": "os_bound",
                 "display_name": marker,
                 "kind": "pi",
+                "requested_capabilities": ["message.send"],
                 "requested_class": "protected_business",
             },
             "human": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 from typing import Any
 
 from agentnet.authorization.bootstrap_plan import (
@@ -24,6 +25,7 @@ from agentnet.security.signatures import canonical_json
 _REQUEST_MESSAGE = "AgentNet C0 pilot request: fixed harmless transport check."
 _REPLY_MESSAGE = "AgentNet C0 pilot reply: fixed harmless transport check."
 _MANAGED_SERVER_REAUTHORIZATION_PURPOSE = "identity.credential.recover.approve"
+_SAFE_CAPABILITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
 
 
 def _denied() -> AuthenticationError:
@@ -136,12 +138,19 @@ def _validate_enrollment(transaction: dict[str, Any], digest: str) -> dict[str, 
     candidate_key = _keys(transaction["candidate_key"], {"algorithm", "thumbprint"})
     harness = _keys(
         transaction["harness"],
-        {"binding_assurance", "display_name", "kind", "requested_class"},
+        {
+            "binding_assurance",
+            "display_name",
+            "kind",
+            "requested_capabilities",
+            "requested_class",
+        },
     )
     human = _keys(
         transaction["human"],
         {"oidc_issuer", "oidc_subject", "verified_email"},
     )
+    requested_capabilities = harness["requested_capabilities"]
     issued_at = transaction["issued_at"]
     expires_at = transaction["expires_at"]
     required_strings = (
@@ -161,19 +170,32 @@ def _validate_enrollment(transaction: dict[str, Any], digest: str) -> dict[str, 
         or candidate_key["algorithm"] != "ES256/P-256"
         or harness["binding_assurance"] not in {"os_bound", "hardware_bound"}
         or harness["requested_class"] != "protected_business"
+        or not isinstance(requested_capabilities, list)
+        or len(requested_capabilities) > 64
+        or any(
+            not isinstance(capability, str)
+            or len(capability) > 128
+            or _SAFE_CAPABILITY.fullmatch(capability) is None
+            for capability in requested_capabilities
+        )
+        or requested_capabilities != sorted(set(requested_capabilities))
         or any(not isinstance(value, str) or not value for value in required_strings)
         or type(issued_at) is not int
         or type(expires_at) is not int
         or not 30 <= expires_at - issued_at <= 600
     ):
         raise _denied()
+    capabilities = (
+        ", ".join(requested_capabilities) if requested_capabilities else "none"
+    )
     return {
         "title": "Enroll a laptop identity",
         "statements": [
-            f"Laptop: {harness['display_name']} ({harness['kind']})",
-            f"Verified account: {human['verified_email']}",
+            f"Laptop or agent: {harness['display_name']} ({harness['kind']})",
+            f"Verified person: {human['verified_email']}",
             f"Corporate domain: {transaction['domain_id']}",
-            "Authority granted: none",
+            f"Requested capabilities (not granted by enrollment): {capabilities}",
+            "Authority granted by enrollment: none",
         ],
         "advanced_digest": digest,
     }

@@ -103,6 +103,7 @@ def canonical_challenge_transcript(
             "binding_assurance": binding_assurance,
             "display_name": harness_name,
             "kind": harness_kind,
+            "requested_capabilities": [],
             "requested_class": "deterministic_control_only" if binding_assurance == "lab" else "protected_business",
         },
         "human": {
@@ -549,6 +550,7 @@ class EnrollmentService:
                 "binding_assurance": self.binding_assurance,
                 "display_name": row["harness_name"],
                 "kind": row["harness_kind"],
+                "requested_capabilities": [],
                 "requested_class": "deterministic_control_only"
                 if self.binding_assurance == "lab"
                 else "protected_business",

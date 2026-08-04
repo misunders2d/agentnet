@@ -19,6 +19,7 @@ def test_exact_transcript_and_atomic_binding(identity_stack: object) -> None:
     assert challenge.signed_fields()["schema"] == "agentnet.enrollment.challenge.v1"
     assert challenge.signed_fields()["candidate_key"]["thumbprint"] == key.thumbprint
     assert challenge.signed_fields()["harness"]["binding_assurance"] == "lab"
+    assert challenge.signed_fields()["harness"]["requested_capabilities"] == []
 
     result = identity_stack.complete(key, challenge)
     assert result.actor.principal_id == result.principal_id

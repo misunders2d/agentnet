@@ -6,9 +6,11 @@ import argparse
 import asyncio
 import base64
 import getpass
+import html
 import hashlib
 import ipaddress
 import json
+import socket
 import os
 import secrets
 import shutil
@@ -18,6 +20,7 @@ import sys
 import tempfile
 import time
 import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -234,7 +237,13 @@ def _write_owner_json(path: Path, value: dict[str, object], *, force: bool = Fal
     )
 
 
-def _write_private_config(path: Path, value: dict[str, object], *, force: bool = False) -> None:
+def _write_private_config(
+    path: Path,
+    value: dict[str, object],
+    *,
+    force: bool = False,
+    expected_content: bytes | None = None,
+) -> None:
     """Atomically write a private config without following a raced link/reparse point.
 
     Config files commonly live in an ordinary 0755 project directory, unlike
@@ -244,6 +253,10 @@ def _write_private_config(path: Path, value: dict[str, object], *, force: bool =
     """
 
     if host_platform() == "windows":
+        if expected_content is not None:
+            current = _owner_only_file(path.absolute(), label="private state")
+            if not secrets.compare_digest(current, expected_content):
+                raise SystemExit(f"private state changed before replacement: {path}")
         _write_owner_only(
             path,
             json.dumps(value, indent=2, sort_keys=True).encode("utf-8") + b"\n",
@@ -271,6 +284,54 @@ def _write_private_config(path: Path, value: dict[str, object], *, force: bool =
                 raise SystemExit(f"refusing to overwrite {path}; use --force")
             if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.geteuid():
                 raise SystemExit(f"existing configuration is unsafe: {path}")
+        if expected_content is not None:
+            if existing is None:
+                raise SystemExit(f"private state disappeared before replacement: {path}")
+            existing_descriptor = os.open(
+                path.name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory,
+            )
+            try:
+                opened = os.fstat(existing_descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or opened.st_uid != os.geteuid()
+                    or opened.st_mode & 0o077
+                    or opened.st_size > 65_536
+                    or (opened.st_dev, opened.st_ino)
+                    != (existing.st_dev, existing.st_ino)
+                ):
+                    raise SystemExit(f"existing private state is unsafe: {path}")
+                current_content = bytearray()
+                while True:
+                    chunk = os.read(existing_descriptor, 16_384)
+                    if not chunk:
+                        break
+                    current_content.extend(chunk)
+                    if len(current_content) > 65_536:
+                        raise SystemExit(f"existing private state is unsafe: {path}")
+                after = os.fstat(existing_descriptor)
+                if (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_mode,
+                    opened.st_uid,
+                    opened.st_size,
+                    opened.st_mtime_ns,
+                    opened.st_ctime_ns,
+                ) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ) or not secrets.compare_digest(bytes(current_content), expected_content):
+                    raise SystemExit(f"private state changed before replacement: {path}")
+            finally:
+                os.close(existing_descriptor)
         create_flags = (
             os.O_WRONLY
             | os.O_CREAT
@@ -299,6 +360,20 @@ def _write_private_config(path: Path, value: dict[str, object], *, force: bool =
                 raise SystemExit(f"configuration destination raced during creation: {path}")
         elif current is None or (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
             raise SystemExit(f"configuration destination raced during replacement: {path}")
+        elif expected_content is not None and (
+            current.st_mode,
+            current.st_uid,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        ) != (
+            after.st_mode,
+            after.st_uid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise SystemExit(f"private state changed before replacement: {path}")
         os.replace(
             temporary_name,
             path.name,
@@ -2591,7 +2666,14 @@ def command_join_complete(args: argparse.Namespace) -> int:
 
 
 def _invitation_record(path: Path) -> InternalInvitationRecord:
-    value = _read_json_object(path, label="internal invitation")
+    try:
+        value = json.loads(
+            _owner_only_file(path.absolute(), label="internal invitation")
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("internal invitation is not readable JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("internal invitation must be one JSON object")
     if set(value) != {"invitation", "zero_authority_proposal"}:
         raise SystemExit("internal invitation file does not match the exact schema")
     if value["zero_authority_proposal"] is not True:
@@ -2606,7 +2688,14 @@ def _invitation_record(path: Path) -> InternalInvitationRecord:
 
 
 def _invitation_candidate_state(path: Path) -> tuple[dict[str, object], InternalInvitationRequest, P256KeyPair]:
-    state = _read_json_object(path, label="invitation candidate state")
+    try:
+        state = json.loads(
+            _owner_only_file(path.absolute(), label="invitation candidate state")
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("invitation candidate state is not readable JSON") from exc
+    if not isinstance(state, dict):
+        raise SystemExit("invitation candidate state must be one JSON object")
     if set(state) != {
         "schema",
         "server_base_url",
@@ -2622,14 +2711,12 @@ def _invitation_candidate_state(path: Path) -> tuple[dict[str, object], Internal
     except Exception as exc:
         raise SystemExit("invitation candidate request is invalid") from exc
     key_path = Path(str(state["private_key_path"]))
-    if (
-        not key_path.is_absolute()
-        or key_path.is_symlink()
-        or not key_path.is_file()
-        or key_path.stat().st_mode & 0o077
-    ):
-        raise SystemExit("invitation candidate key is not an owner-only absolute file")
-    key = P256KeyPair.from_private_pem(key_path.read_bytes())
+    try:
+        key = P256KeyPair.from_private_pem(
+            _owner_only_file(key_path, label="invitation candidate key")
+        )
+    except Exception as exc:
+        raise SystemExit("invitation candidate key is invalid") from exc
     if key.thumbprint != request.candidate_key_id or key.public_pem != request.candidate_public_key_pem:
         raise SystemExit("invitation candidate key no longer matches the exact request")
     return state, request, key
@@ -2768,10 +2855,16 @@ def command_invitation_issue(args: argparse.Namespace) -> int:
 
 def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
     """Create candidate-owned proof state, discover one intent, and enter normal acceptance."""
-    state_path = Path(args.state)
-    invitation_path = Path(args.invitation)
-    if state_path.exists():
-        value = _read_json_object(state_path, label="sponsored enrollment state")
+    state_path = Path(args.state).resolve()
+    invitation_path = Path(args.invitation).resolve()
+    if os.path.lexists(state_path):
+        state_bytes = _owner_only_file(state_path, label="sponsored enrollment state")
+        try:
+            value = json.loads(state_bytes)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise SystemExit("sponsored enrollment state is not readable JSON") from exc
+        if not isinstance(value, dict):
+            raise SystemExit("sponsored enrollment state must be one JSON object")
         if value.get("schema") == "agentnet.invitation-candidate.v1":
             if args.callback:
                 return command_invitation_complete(
@@ -2797,6 +2890,8 @@ def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
             or value.get("schema") != "agentnet.sponsored-enrollment-candidate.v1"
         ):
             raise SystemExit("sponsored enrollment state does not match the exact schema")
+        if os.path.lexists(invitation_path):
+            raise SystemExit(f"refusing to overwrite {invitation_path}; choose a new invitation path")
         status = _public_json_request(
             server=str(value["server_base_url"]),
             method="POST",
@@ -2809,6 +2904,18 @@ def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
             return 0
         record = InternalInvitationRecord.model_validate(invitation_value)
         transaction = record.transaction
+        key_path = Path(str(value["private_key_path"]))
+        try:
+            candidate_key = P256KeyPair.from_private_pem(
+                _owner_only_file(key_path, label="sponsored enrollment candidate key")
+            )
+        except Exception as exc:
+            raise SystemExit("sponsored enrollment candidate key is invalid") from exc
+        if (
+            candidate_key.thumbprint != transaction.candidate_key_id
+            or candidate_key.public_pem != transaction.candidate_public_key_pem
+        ):
+            raise SystemExit("issued invitation does not match the sponsored candidate key")
         request = InternalInvitationRequest(
             invitation_id=transaction.invitation_id,
             domain_id=transaction.domain_id,
@@ -2826,18 +2933,23 @@ def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
             predecessor_invitation_id=transaction.predecessor_invitation_id,
             reason=transaction.reason,
         )
-        _write_owner_json(
-            invitation_path,
-            {"invitation": record.model_dump(mode="json"), "zero_authority_proposal": True},
-        )
-        _write_owner_json(
+        invitation_output = {
+            "invitation": record.model_dump(mode="json"),
+            "zero_authority_proposal": True,
+        }
+        candidate_state = {
+            "schema": "agentnet.invitation-candidate.v1",
+            "server_base_url": value["server_base_url"],
+            "private_key_path": value["private_key_path"],
+            "request": request.model_dump(mode="json"),
+        }
+        _write_owner_json(invitation_path, invitation_output)
+        _owner_only_directory(state_path.parent)
+        _write_private_config(
             state_path,
-            {
-                "schema": "agentnet.invitation-candidate.v1",
-                "server_base_url": value["server_base_url"],
-                "private_key_path": value["private_key_path"],
-                "request": request.model_dump(mode="json"),
-            },
+            candidate_state,
+            force=True,
+            expected_content=state_bytes,
         )
         return command_invitation_oidc_begin(
             argparse.Namespace(state=str(state_path), invitation=str(invitation_path))
@@ -4311,6 +4423,217 @@ def command_serve(args: argparse.Namespace) -> int:
     finally:
         core.close()
     return 0
+
+
+def _console_json_response(response: httpx.Response, *, label: str) -> dict[str, object]:
+    if response.status_code < 200 or response.status_code >= 300:
+        raise SystemExit(f"{label} was rejected with HTTP {response.status_code}")
+    try:
+        value = response.json()
+    except ValueError as exc:
+        raise SystemExit(f"{label} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} returned a non-object response")
+    return value
+
+
+def _canonical_console_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise SystemExit("console challenge returned an invalid console origin")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit("console challenge returned an invalid console origin")
+    return f"https://{parsed.netloc}"
+
+
+def _serve_one_shot_loopback_page(
+    *,
+    document: str,
+    open_browser=webbrowser.open,
+    timeout_seconds: float,
+) -> None:
+    served = False
+    payload = document.encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            nonlocal served
+            if served or self.path != "/":
+                self.send_error(404)
+                return
+            served = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action https:",
+            )
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            del args
+
+    try:
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+    except OSError as exc:
+        raise SystemExit("console browser handoff could not bind a loopback listener") from exc
+    server.timeout = timeout_seconds
+    loopback_url = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        try:
+            opened = open_browser(loopback_url, new=1)
+        except Exception as exc:
+            raise SystemExit("console browser handoff could not open the system browser") from exc
+        if not opened:
+            raise SystemExit("console browser handoff could not open the system browser")
+        try:
+            server.handle_request()
+        except (OSError, socket.timeout) as exc:
+            raise SystemExit("console browser handoff failed before the page was delivered") from exc
+        if not served:
+            raise SystemExit("console browser handoff page was not delivered")
+    finally:
+        server.server_close()
+
+
+def _open_console_handoff_page(
+    *,
+    console_origin: str,
+    handoff_token: str,
+    timeout_seconds: float,
+    open_browser=webbrowser.open,
+) -> None:
+    if (
+        not isinstance(handoff_token, str)
+        or not 32 <= len(handoff_token) <= 128
+        or any(ord(character) > 0x7F for character in handoff_token)
+    ):
+        raise SystemExit("console handoff response is invalid")
+    action = html.escape(f"{console_origin}/v1/console/open", quote=True)
+    token = html.escape(handoff_token, quote=True)
+    document = (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="referrer" content="no-referrer"><title>Open AgentNet console</title></head>'
+        '<body><main><h1>Open AgentNet administration</h1>'
+        '<p>Continue to the configured private console. This page can be used once.</p>'
+        f'<form method="post" action="{action}">'
+        f'<input type="hidden" name="handoff_token" value="{token}">'
+        '<button type="submit">Continue securely</button></form></main></body></html>'
+    )
+    _serve_one_shot_loopback_page(
+        document=document,
+        open_browser=open_browser,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def command_console_open(args: argparse.Namespace) -> int:
+    if not 1.0 <= args.handoff_timeout <= 60.0:
+        raise SystemExit("console browser handoff timeout must be between 1 and 60 seconds")
+    client, actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        begun = _console_json_response(
+            client.request(
+                "POST",
+                "/v1/console/session-challenges",
+                json_body={"schema": "agentnet.console.session-challenge-begin.v1"},
+            ),
+            label="console challenge",
+        )
+        transaction = begun.get("transaction")
+        challenge_id = begun.get("challenge_id")
+        transaction_digest = begun.get("transaction_digest")
+        expires_at = begun.get("expires_at")
+        if (
+            set(begun)
+            != {
+                "schema",
+                "challenge_id",
+                "transaction",
+                "transaction_digest",
+                "expires_at",
+                "console_origin",
+            }
+            or begun.get("schema") != "agentnet.console.session-challenge-result.v1"
+            or not isinstance(transaction, dict)
+            or set(transaction)
+            != {
+                "schema",
+                "challenge_id",
+                "audience",
+                "domain_id",
+                "principal_id",
+                "harness_id",
+                "credential_id",
+                "credential_epoch",
+                "nonce",
+                "issued_at",
+                "expires_at",
+            }
+            or transaction.get("schema") != "agentnet.console.session-challenge.v1"
+            or not isinstance(challenge_id, str)
+            or transaction.get("challenge_id") != challenge_id
+            or transaction.get("domain_id") != actor.domain_id
+            or transaction.get("principal_id") != actor.principal_id
+            or transaction.get("harness_id") != actor.harness_id
+            or transaction.get("credential_id") != actor.credential_id
+            or transaction.get("credential_epoch") != actor.credential_epoch
+            or not isinstance(transaction_digest, str)
+            or canonical_digest(transaction) != transaction_digest
+            or type(expires_at) is not int
+            or transaction.get("expires_at") != expires_at
+            or expires_at <= int(time.time())
+        ):
+            raise SystemExit("console challenge response is invalid")
+        console_origin = _canonical_console_origin(begun["console_origin"])
+        completed = _console_json_response(
+            client.request(
+                "POST",
+                f"/v1/console/session-challenges/{challenge_id}/complete",
+                json_body={"transaction_digest": transaction_digest},
+            ),
+            label="console challenge completion",
+        )
+    finally:
+        client.close()
+    if (
+        set(completed) != {"schema", "handoff_token", "expires_at"}
+        or completed.get("schema") != "agentnet.console.session-handoff.v1"
+        or type(completed.get("expires_at")) is not int
+        or int(completed["expires_at"]) > expires_at
+        or int(completed["expires_at"]) <= int(time.time())
+    ):
+        raise SystemExit("console handoff response is invalid")
+    _open_console_handoff_page(
+        console_origin=console_origin,
+        handoff_token=completed.get("handoff_token"),
+        timeout_seconds=args.handoff_timeout,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "browser_handoff_opened",
+                "console_origin": console_origin,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
 def command_console_serve(args: argparse.Namespace) -> int:
     config = _load_config(Path(args.config))
     config.require_feature("admin_console")
@@ -5456,6 +5779,13 @@ def build_parser() -> argparse.ArgumentParser:
     console_serve.add_argument("--port", type=int, default=8090)
     console_serve.add_argument("--log-level", default="info")
     console_serve.set_defaults(func=command_console_serve)
+    console_open = console_commands.add_parser(
+        "open",
+        help="open a signed private console session without disclosing credentials in a URL",
+    )
+    console_open.add_argument("--identity", default=".agentnet/identity.json")
+    console_open.add_argument("--handoff-timeout", type=float, default=10.0)
+    console_open.set_defaults(func=command_console_open)
 
 
     supervisor_run = commands.add_parser(
