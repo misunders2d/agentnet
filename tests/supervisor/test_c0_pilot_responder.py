@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agentnet.cli import command_c0_pilot_responder
-from agentnet.errors import GateBlocked
+from agentnet.errors import GateBlocked, ValidationError
+from agentnet.security.signatures import P256KeyPair
 
 from agentnet.supervisor import c0_responder
 from agentnet.supervisor.c0_responder import (
@@ -63,6 +67,164 @@ def test_dedicated_responder_config_is_strict_owner_only_and_redacted(
     path.chmod(0o644)
     with pytest.raises(Exception, match="custody"):
         load_c0_responder_config(path)
+
+
+@pytest.mark.parametrize("mode", [0o400, 0o440])
+def test_systemd_load_credential_custody_is_accepted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: int,
+) -> None:
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    credential_path = credential_dir / "signing-key.pem"
+    payload = P256KeyPair.generate().private_pem
+    credential_path.write_bytes(payload)
+
+    actual_fstat = os.fstat
+
+    def systemd_fstat(descriptor: int) -> SimpleNamespace:
+        info = actual_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | mode,
+            st_nlink=1,
+            st_uid=0,
+            st_gid=0,
+            st_size=info.st_size,
+        )
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    monkeypatch.setattr(c0_responder.os, "geteuid", lambda: 995)
+    monkeypatch.setattr(c0_responder.os, "fstat", systemd_fstat)
+
+    assert (
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
+        == payload
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"st_mode": stat.S_IFDIR | 0o440},
+        {"st_mode": stat.S_IFREG | 0o600},
+        {"st_mode": stat.S_IFREG | 0o640},
+        {"st_mode": stat.S_IFREG | 0o450},
+        {"st_mode": stat.S_IFREG | 0o444},
+        {"st_nlink": 2},
+        {"st_uid": 1},
+        {"st_gid": 1},
+        {"st_size": 65_537},
+    ],
+)
+def test_systemd_load_credential_rejects_invalid_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, int],
+) -> None:
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    credential_path = credential_dir / "signing-key.pem"
+    credential_path.write_bytes(P256KeyPair.generate().private_pem)
+    actual_fstat = os.fstat
+
+    def invalid_fstat(descriptor: int) -> SimpleNamespace:
+        info = actual_fstat(descriptor)
+        metadata = {
+            "st_mode": stat.S_IFREG | 0o440,
+            "st_nlink": 1,
+            "st_uid": 0,
+            "st_gid": 0,
+            "st_size": info.st_size,
+        }
+        return SimpleNamespace(**(metadata | overrides))
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    monkeypatch.setattr(c0_responder.os, "geteuid", lambda: 995)
+    monkeypatch.setattr(c0_responder.os, "fstat", invalid_fstat)
+
+    with pytest.raises(ValidationError, match="custody"):
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
+
+
+@pytest.mark.parametrize(
+    ("credential_root", "credential_name"),
+    [
+        (None, "signing-key.pem"),
+        ("relative", "signing-key.pem"),
+        ("exact", "other.pem"),
+    ],
+)
+def test_systemd_load_credential_rejects_wrong_path_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_root: str | None,
+    credential_name: str,
+) -> None:
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    credential_path = credential_dir / credential_name
+    credential_path.write_bytes(P256KeyPair.generate().private_pem)
+    actual_fstat = os.fstat
+
+    def systemd_fstat(descriptor: int) -> SimpleNamespace:
+        info = actual_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o440,
+            st_nlink=1,
+            st_uid=0,
+            st_gid=0,
+            st_size=info.st_size,
+        )
+
+    if credential_root == "relative":
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", "credentials")
+    elif credential_root == "exact":
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    else:
+        monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    monkeypatch.setattr(c0_responder.os, "geteuid", lambda: 995)
+    monkeypatch.setattr(c0_responder.os, "fstat", systemd_fstat)
+
+    with pytest.raises(ValidationError, match="custody"):
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
+
+
+def test_direct_c0_credential_remains_owner_only(
+    tmp_path: Path,
+) -> None:
+    credential_path = tmp_path / "credential.pem"
+    payload = P256KeyPair.generate().private_pem
+    credential_path.write_bytes(payload)
+    credential_path.chmod(0o600)
+
+    assert (
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
+        == payload
+    )
+
+    target = tmp_path / "target.pem"
+    target.write_bytes(payload)
+    target.chmod(0o600)
+    credential_path.unlink()
+    credential_path.symlink_to(target)
+    with pytest.raises(ValidationError, match="unavailable"):
+        c0_responder._credential_file(
+            credential_path,
+            label="C0 responder credential",
+        )
 
 
 def test_waiting_owner_responds_once_then_waiting_fresh_keeps_config(

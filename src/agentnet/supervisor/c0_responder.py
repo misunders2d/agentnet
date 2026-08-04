@@ -57,6 +57,42 @@ def _owner_file(path: Path, *, label: str) -> bytes:
         os.close(descriptor)
 
 
+def _credential_file(path: Path, *, label: str) -> bytes:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValidationError(f"{label} is unavailable") from exc
+    try:
+        info = os.fstat(descriptor)
+        credential_root = os.environ.get("CREDENTIALS_DIRECTORY")
+        systemd_path = (
+            credential_root is not None
+            and Path(credential_root).is_absolute()
+            and path.parent == Path(credential_root)
+            and path.name == "signing-key.pem"
+        )
+        owner_custody = info.st_uid == os.geteuid() and not info.st_mode & 0o077
+        systemd_custody = (
+            systemd_path
+            and info.st_uid == 0
+            and info.st_gid == 0
+            and stat.S_IMODE(info.st_mode) in {0o400, 0o440}
+        )
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or not (owner_custody or systemd_custody)
+            or info.st_size > 65_536
+        ):
+            raise ValidationError(f"{label} custody is invalid")
+        value = os.read(descriptor, info.st_size + 1)
+        if len(value) != info.st_size:
+            raise ValidationError(f"{label} changed while reading")
+        return value
+    finally:
+        os.close(descriptor)
+
+
 def load_c0_responder_config(path: Path) -> C0PilotResponderConfig:
     try:
         return C0PilotResponderConfig.model_validate_json(
@@ -125,7 +161,7 @@ def _client(
 ) -> tuple[AgentNetClient, AgentNetSupervisorCoreClient]:
     try:
         key = P256KeyPair.from_private_pem(
-            _owner_file(credential_path, label="C0 responder credential").decode("utf-8")
+            _credential_file(credential_path, label="C0 responder credential").decode("utf-8")
         )
     except (UnicodeError, ValueError) as exc:
         raise ValidationError("C0 responder credential is invalid") from exc
