@@ -607,7 +607,7 @@ def test_runner_propagates_remote_denial_over_the_local_socket(tmp_path: Path) -
     status = run_manager_gateway(
         client,
         _actor(),
-        (sys.executable, "-c", source, "--verify-denied", str(identity)),
+        (sys.executable, "-c", source, "--verify-denied", str(identity), source),
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
     )
@@ -631,7 +631,7 @@ def test_runner_binds_exact_child_without_exposing_signing_material_and_cleans_l
     status = run_manager_gateway(
         client,
         _actor(),
-        (sys.executable, "-c", source, "--verify-bound", str(identity)),
+        (sys.executable, "-c", source, "--verify-bound", str(identity), source),
         state_dir=state_dir,
         environment={
             "A2HUB_TOKEN": "must-not-reach-child",

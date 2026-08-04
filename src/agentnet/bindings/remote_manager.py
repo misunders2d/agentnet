@@ -182,6 +182,7 @@ class _MessageAcceptanceResult(_RemoteResult):
     audit_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
+class _CustodyReference(_RemoteResult):
     schema_: Literal["agentnet.custody-payload-reference.v1"] = Field(alias="schema")
     event_id: str = Field(min_length=1, max_length=256)
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -213,6 +214,7 @@ class _ThreadItem(_RemoteResult):
     custody_reference: _CustodyReference | None = None
 
 
+class _MailboxAcknowledgementResult(_RemoteResult):
     schema_: Literal["agentnet.mailbox-acknowledgement.v1"] = Field(alias="schema")
     event_id: str = Field(min_length=1, max_length=256)
     recipient_id: str = Field(min_length=1, max_length=256)
@@ -340,10 +342,10 @@ class RemoteManagerDispatcher:
     def _typed_object(cls, model: type[BaseModel], value: Any) -> dict[str, Any]:
         wrapped = cls._object(value)
         try:
-            parsed = model.model_validate(wrapped)
+            model.model_validate_json(canonical_json(wrapped))
         except PydanticValidationError as exc:
             raise ValidationError("signed upstream response schema is invalid") from exc
-        return parsed.model_dump(mode="json", exclude_none=True, by_alias=True)
+        return wrapped
     @classmethod
     def _items(cls, value: Any) -> list[dict[str, Any]]:
         wrapped = cls._object(value)
@@ -359,13 +361,13 @@ class RemoteManagerDispatcher:
     def _typed_items(cls, model: type[BaseModel], value: Any) -> list[dict[str, Any]]:
         items = cls._items(value)
         try:
-            parsed = [model.model_validate(item) for item in items]
+            [
+                model.model_validate_json(canonical_json(item))
+                for item in items
+            ]
         except PydanticValidationError as exc:
             raise ValidationError("signed upstream collection item schema is invalid") from exc
-        return [
-            item.model_dump(mode="json", exclude_none=True, by_alias=True)
-            for item in parsed
-        ]
+        return items
     def _request(
         self,
         method: str,
@@ -807,6 +809,13 @@ def _sandboxed_command(
         for directory in _sandbox_parent_directories(executable.parent):
             arguments.extend(("--dir", str(directory)))
         arguments.extend(("--ro-bind", str(executable), str(executable)))
+        runtime_library = executable.parent.parent / "lib"
+        if runtime_library.is_dir():
+            for directory in _sandbox_parent_directories(runtime_library.parent):
+                arguments.extend(("--dir", str(directory)))
+            arguments.extend(
+                ("--ro-bind", str(runtime_library), str(runtime_library))
+            )
     arguments.extend(("--chdir", str(session_path / "home"), "--clearenv"))
     for name, value in sorted(child_environment.items()):
         arguments.extend(("--setenv", name, value))

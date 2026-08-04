@@ -101,11 +101,11 @@ def _sibling() -> int:
 def _observe() -> dict[str, Any]:
     binding = _binding()
     valid = _request(binding, nonce="remote-manager-child-nonce-0000001")
-    own_command = Path("/proc/self/cmdline").read_bytes().split(b"\x00")
-    if len(own_command) < 3 or own_command[1] != b"-c":
-        raise RuntimeError("manager verifier must run from an inline isolated program")
+    if len(sys.argv) < 4:
+        raise RuntimeError("manager verifier lacks its isolated inline program")
+    source = sys.argv[3]
     sibling = subprocess.run(
-        [sys.executable, "-c", own_command[2].decode("utf-8"), "--sibling"],
+        [sys.executable, "-c", source, "--sibling"],
         input=json.dumps(binding, separators=(",", ":"), sort_keys=True),
         text=True,
         capture_output=True,
