@@ -1,0 +1,85 @@
+{
+  "run_id": "2026-08-04-v0.1.43",
+  "evaluated_at": "2026-08-04T12:06:49Z",
+  "scope": "v0_1_43_corrected_first_c0_release_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "667d9ebe8d4ba60d3ac931a321f9c9cb10749ed601c6047c3efdd58eaf6cdd67",
+  "prior_runtime_evidence": "evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-03-v0.1.39/manifest.json",
+  "change_boundary": "Candidate 0.1.43 consolidates the post-0.1.39 first-C0 corrections without claiming a new live run: strict remote-browser bootstrap evidence, byte-preserving P-256 responder credential handling, package-owned systemd credential custody, and O_NONBLOCK before regular-file descriptor validation so FIFO/device inputs fail closed without stalling startup. Historical real workforce Google OIDC, owner-controlled WebAuthn UV, separate server/laptop harness enrollment, one committed fixed BootstrapGrantPlan, COMPLETED_C0_ROUND_TRIP, and exact five-power revocation remain bound to source d8884b6c03a0dd38baab03386982aae8ad11dd58 and the retained 0.1.42 live manifest. The corrected source requires fresh same-commit package, CI, staging, and remote deployment evidence; no requirement or must-not-ship gate is promoted by historical evidence.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; no live service or external system mutation",
+    "historical_live_boundary": "The retained 0.1.42 C0 journey ran on a disposable local server-agent VM and is not attributed to candidate 0.1.43 source.",
+    "focused_source": "PASS: 757 passed and 7 expected dedicated-PostgreSQL skips for approval, identity, bootstrap-plan, enrollment, first-C0, setup/recovery, responder, daemon, and credential-renewal paths.",
+    "broad_source": "PASS: 1640 passed and 16 expected platform/dedicated-PostgreSQL skips, with one deprecation warning; installed-live-inference, subprocess-lifecycle, bake-off-evidence, and release-manifest tests were excluded for their separate gates.",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 1667 passed and 16 expected skips; generation 2 passes the installed-byte multiprocess local communication gate, complete package-tree digest equality, empty communication workspace, and no named verification residue.",
+    "root_installed_external_host": "NOT RUN: corrected-source remote deployment remains a separately approved external gate; no production or shared host was mutated.",
+    "callback_incident": "No callback, continuation, receipt, setup marker, upgrade state, or C0 state is reused by the candidate package; fresh clean-state setup and exact external evidence remain required."
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.38",
+    "candidate": "0.1.43",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "HISTORICAL NARROW PASS ONLY at source d8884b6c03a0dd38baab03386982aae8ad11dd58; candidate 0.1.43 requires a fresh same-commit deployment rerun before any release or gate promotion"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider tests/approval tests/identity tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_bootstrap_plan_service.py tests/integration/test_enrollment_http.py tests/integration/test_cli_product_journey.py tests/integration/test_c0_pilot_http.py tests/operations/test_fail_closed_config.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/operations/test_released_setup_runtime_probe.py tests/production/test_postgres_runtime.py tests/supervisor/test_c0_pilot_responder.py tests/supervisor/test_daemon_config.py tests/cli/test_credential_renewal_cli.py",
+      "result": "PASS: 757 passed, 7 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q -p no:cacheprovider --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 1640 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 deprecation warning"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each 1667 passed and 16 expected skips; generation 2 also passed the installed-byte multiprocess local communication gate; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, two clean recursive npm installations, package-tree digest equality, launcher/setup probes, empty communication workspace, and residue checks all passed; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/packaged_local_communication_e2e.py with installed interpreter and empty workspace",
+      "result": "PASS: real loopback Core plus separate fresh-proof client processes; accepted_local; exact proof-derived request/reply attribution; recipient absent until Core restart; stable idempotent request event, obligation, and ACK receipt; recipient_committed; typed obligation completed; response custody after a second restart; fresh 401 authentication refusal after explicitly non-approved lab credential fixture; four distinct Core PIDs (three restarts); closed listener; empty workspace; temporary install/runtime/state removed; non_production=true, bounded_c0_pilot_proven=false, approved_revocation_proven=false, production_durability_proven=false, release_certified=false"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <independent-output-directory>",
+      "result": "PASS: two independent builds are byte-identical and match retained candidate artifacts; source-tree digest 667d9ebe8d4ba60d3ac931a321f9c9cb10749ed601c6047c3efdd58eaf6cdd67; sdist 7debeb3faa88f4588eb9d884e829536e4071ec4f11f844594055dcf4f2e7cee1; wheel 9b83c170b2c39ae3e14094ce6dc568fd168eac06c0c9580c37bcbe28dd74fd23"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: exact 0.1.43 direct disposable-package verification completed with 1667 passed and 16 expected skips and no source-tree residue"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; seven tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform, ordinary-server clean-setup, exact public-0.1.38-marker rejection, and staged-package workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows and separately approved staging are required; terminal run IDs are retained by GitHub and npm and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Historical narrow C0 implementation review",
+      "model": "COFixReviewer independent reviewer",
+      "result": "PASS: retained 0.1.42 live correction review concluded NO_BLOCKING_FINDINGS after exact parent-scoped postconditions replaced global aggregate claims."
+    },
+    {
+      "review": "Post-live credential-open correction review",
+      "model": "COFixReviewer independent reviewer",
+      "result": "PASS: after O_NONBLOCK was added before descriptor metadata validation, the dedicated regression passed and the reviewer concluded NO_BLOCKING_FINDINGS."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-04-v0.1.43/artifacts/agentnet-0.1.43.tar.gz",
+      "sha256": "7debeb3faa88f4588eb9d884e829536e4071ec4f11f844594055dcf4f2e7cee1"
+    },
+    {
+      "path": "evidence/local/2026-08-04-v0.1.43/artifacts/agentnet-0.1.43-py3-none-any.whl",
+      "sha256": "9b83c170b2c39ae3e14094ce6dc568fd168eac06c0c9580c37bcbe28dd74fd23"
+    }
+  ]
+}

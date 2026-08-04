@@ -234,6 +234,26 @@ published and historical release evidence:
   candidate build and deployment evidence before any release handoff.
   Focused corrective evidence and review closure are retained at
   `evidence/local/2026-08-04-v0.1.42-post-live-corrective/manifest.json`.
+- Candidate `0.1.43` packages the corrected source for a fresh same-commit
+  release path. It includes strict remote-browser bootstrap evidence,
+  byte-preserving P-256 responder credential handling, package-owned systemd
+  credential custody, and `O_NONBLOCK` before regular-file validation. Current
+  local source verification reports **757 passed and 7 expected dedicated-
+  PostgreSQL skips** in the affected lane and **1640 passed and 16 expected
+  platform/dedicated-PostgreSQL skips** in the broad source lane. Fresh npm
+  tarballs from both recursive generations each repeated that **1640 passed,
+  16 expected skips** source lane; the retained-content second generation also
+  completed the real loopback Core/separate-client local communication journey
+  and left an empty workspace. The candidate evidence manifest records the
+  final release-manifest/direct-verifier and retained byte-identical archive
+  outcomes. Same-commit CI, immutable tag, npm stage, staged-package remote
+  deployment, and publication remain external actions. The `0.1.42` live run
+  remains historical evidence only and was not rerun after the descriptor-open
+  correction. Affected IDs remain
+  `ID-001`, `ID-002`, `ID-004`, `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
+  `AUTH-004`, `AUTH-007`, `AUTH-009`, `COM-001`, `COM-002`, `COM-003`,
+  `COM-006`, `COM-009`, `AVL-003`, `AVL-005`, `AVL-006`, `SEC-003`,
+  `SEC-005`, `OPS-003`, and `OPS-006`. No requirement or gate is promoted.
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,

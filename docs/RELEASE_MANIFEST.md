@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-08-03
-Candidate: `agentnet 0.1.39`
+Snapshot: 2026-08-04
+Candidate: `agentnet 0.1.43`
 Latest published package: `agentnet 0.1.38`
-Evidence profile: public-health request identity plus packaged local communication candidate
+Evidence profile: corrected real first-C0 path plus packaged release candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `942a612badeff0d02349359bbdcd528fd09d4cc583c57f3c9fd92d05da796285` |
-| `pyproject.toml` | SHA-256 `ed6bac592c242f59d1500d6d118bf7dc0118e7938c3ccc87e596c14b96d9375f` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `d961a710a41d71923ce5565ccdc6200d7720f121eda8c0c9623143d6cf140c1c` |
+| `pyproject.toml` | SHA-256 `3402f8e836bed7c8a083777d0bb3a0a35361a525f5f05fce17a3bc7855a47402` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -366,6 +366,27 @@ Privileged clean-host apply, cross-SDK/public-peer interoperability, live
 OIDC/WebAuthn ceremony, independent public-artifact deployment, and production
 evidence remain pending or separately gated. No production-certification or
 gate-promotion claim is made.
+
+Candidate `0.1.43` consolidates the unpublished first-C0 correction sequence.
+The retained historical `0.1.42` run proves real workforce OIDC and owner
+WebAuthn UV for separately enrolled server and laptop harnesses, identity-only
+state before one fixed approved plan, `COMPLETED_C0_ROUND_TRIP`, and exact
+revocation of all five temporary communication entitlements. That run remains
+bound to source `d8884b6c03a0dd38baab03386982aae8ad11dd58`.
+
+The candidate additionally preserves the systemd responder's P-256 private key
+as bytes, accepts strict remote-browser bootstrap evidence without weakening
+local-browser evidence, permits only the package-owned credential file, and
+opens it with `O_NONBLOCK` before regular-file custody validation. The
+nonblocking regression failed before correction and the responder file passed
+23 tests afterward. Local focused and broad-source gates passed. Fresh npm
+tarballs from both recursive generations repeated the broad source lane, and
+the retained-content generation completed the real installed-byte local
+communication journey with an empty workspace. The candidate evidence manifest
+records final release-manifest/direct-verifier and retained byte-identical
+archive outcomes. Same-commit CI, staged-package remote deployment, and
+publication remain required external actions. This evidence does not change
+the blocked release posture, any requirement status, or any must-not-ship gate.
 
 ## Verification boundary
 

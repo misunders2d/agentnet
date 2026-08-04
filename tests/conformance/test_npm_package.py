@@ -43,6 +43,9 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
         "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
         "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39-py3-none-any.whl",
         "evidence/local/2026-08-03-v0.1.39/artifacts/agentnet-0.1.39.tar.gz",
+        "evidence/local/2026-08-04-v0.1.43/artifacts/RETENTION.md",
+        "evidence/local/2026-08-04-v0.1.43/artifacts/agentnet-0.1.43-py3-none-any.whl",
+        "evidence/local/2026-08-04-v0.1.43/artifacts/agentnet-0.1.43.tar.gz",
         "skills/**/*.md",
         "tests/fixtures/**/*.json",
     } <= set(package["files"])
@@ -645,6 +648,7 @@ def test_npm_dry_run_tarball_contains_release_verifier_inputs() -> None:
         "evidence/gates/G04/2026-07-13-alpha2-http-json/junitreport.xml",
         "evidence/gates/G04/2026-07-13-alpha2-http-json/tck_report.html",
         "evidence/local/2026-08-03-v0.1.39/artifacts/RETENTION.md",
+        "evidence/local/2026-08-04-v0.1.43/artifacts/RETENTION.md",
         "skills/agentnet-operator/SKILL.md",
         "skills/agentnet-operator/references/safe-commands.md",
         "skills/agentnet-operator/references/fail-closed-boundaries.md",

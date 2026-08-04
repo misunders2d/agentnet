@@ -1,10 +1,10 @@
 # Public Package Status
 
-Snapshot: 2026-08-03
+Snapshot: 2026-08-04
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.38` release and corrective `0.1.39` candidate. It does not replace requirements, gate ledgers, or
-accountable-owner evidence.
+published `0.1.38` release and corrective `0.1.43` candidate. It does not replace
+requirements, gate ledgers, or accountable-owner evidence.
 
 ## Current public package
 
@@ -199,6 +199,29 @@ rejection, and packaged-local-communication CI, immutable tag, trusted npm stage
 public bytes, and fresh Hub setup remain pending separately approved actions. No
 Hub deployment, reset, database, enrollment, authority, native C0, federation,
 production, or gate mutation is implied.
+
+Candidate `0.1.43` consolidates the unpublished corrective sequence and the
+narrow first-C0 evidence. A disposable ordinary server and separately stored
+laptop harness completed real Google workforce OIDC plus owner WebAuthn UV,
+remained identity-only before one fixed approved plan, then completed one native
+request/reply/ACK round trip and exact revocation of all five temporary
+communication entitlements. The retained historical deployment used source
+`d8884b6c03a0dd38baab03386982aae8ad11dd58`; it did not include the later
+credential-open correction.
+
+The candidate accepts strict remote-browser bootstrap evidence without weakening
+local-browser evidence, preserves the systemd responder's P-256 private key as
+bytes, permits only its package-owned credential file, and opens that file with
+`O_NONBLOCK` before regular-file custody validation. A dedicated regression
+demonstrably failed before the nonblocking correction and the responder file
+then passed 23 tests. Local focused and broad-source gates passed. Fresh npm
+tarballs from both recursive generations repeated the broad source lane, and
+the retained-content generation completed the real installed-byte local
+communication journey with an empty workspace. The candidate evidence manifest
+records final release-manifest/direct-verifier and retained byte-identical
+archive outcomes. Same-commit CI, immutable tag, trusted npm stage,
+staged-package remote deployment, and publication remain required external
+actions; none is inferred from the historical `0.1.42` run.
 
 ## Release and gate posture
 

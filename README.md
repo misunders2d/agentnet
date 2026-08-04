@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.39` coverage targets
+Only non-EOL Node.js release lines are supported: current `0.1.43` coverage targets
 Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
 the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
 compatible npm 10.9.3; the deployed Hub compatibility target is reported
@@ -377,15 +377,29 @@ for that exact state. Published `0.1.37` removes one unsatisfiable fresh-init
 identity-profile check. Published `0.1.38` extends only the bounded public
 post-restart health/readiness wait, but the remote Hub peer reported from bounded
 read-only preflight that its default `Python-urllib/*` request identity was
-rejected with HTTP 403 before origin routing. Candidate `0.1.39` sends an explicit
+rejected with HTTP 403 before origin routing. Unpublished `0.1.39` sent an explicit
 `AgentNet/0.1.39` User-Agent and JSON Accept header while preserving the same TLS,
 redirect, proxy, timeout, payload, and exact-identity checks. It also repairs the
 local-only signed lab path so intentional `deterministic_only` harnesses can use
 the existing narrow C0 allowlist without becoming production-active, and adds the
 installed-package multiprocess gate described above. It is a clean-state setup
-candidate and accepts no earlier release marker as migration input. No release proves completed
-fresh-laptop enrollment, native
-cross-host message/ACK, production readiness, or ship eligibility. The earlier `0.1.24`
+candidate and accepts no earlier release marker as migration input. No release
+proves completed fresh-laptop enrollment, native cross-host message/ACK,
+production readiness, or ship eligibility.
+
+Candidate `0.1.43` carries the corrected first-C0 path proven narrowly by the
+unpublished `0.1.42` deployment: real workforce OIDC, owner-controlled WebAuthn
+UV, separately enrolled server and laptop harnesses, one fixed
+`BootstrapGrantPlan`, `COMPLETED_C0_ROUND_TRIP`, and exact five-power revocation.
+It additionally accepts only strict remote-browser bootstrap evidence, keeps
+the responder's P-256 private key as bytes instead of corrupting it through text
+decoding, permits only the package-owned systemd credential file, and opens that
+credential with `O_NONBLOCK` before regular-file custody validation so a FIFO or
+device fails closed without stalling startup. The historical live run remains
+bound to `d8884b6c03a0dd38baab03386982aae8ad11dd58`; candidate `0.1.43` requires
+fresh same-commit build, CI, staged-package, and remote deployment evidence.
+No requirement or must-not-ship gate is promoted by the narrow prior run. The
+earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
 public HTTPS health identity, interruption recovery, redacted evidence, and
@@ -490,14 +504,14 @@ and failure semantics are unchanged. The remote Hub peer reported from bounded
 read-only preflight that the stdlib default `Python-urllib/*` User-Agent received
 HTTP 403 on all three public routes, while an explicit AgentNet product User-Agent
 passed edge classification and reached the offline origin response. That report is
-corroboration only, not retained reproducible release proof. Candidate `0.1.39`
-changes request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
+corroboration only, not retained reproducible release proof. Unpublished `0.1.39`
+changed request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
 `Accept: application/json`; it also adds the bounded synthetic installed-package
 communication gate without weakening the production policy engine. It adds no
 migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
 cross-platform, clean-setup, and exact released-marker rejection workflow
 evidence; post-push run IDs are not
-self-authored into source. Required runtime proof remains exact public `0.1.39`, clean five-unit readiness,
+self-authored into source. Required runtime proof now targets exact staged `0.1.43`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.
