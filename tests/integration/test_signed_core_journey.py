@@ -114,7 +114,8 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
             "conversation.message.send",
             "conversation.response_obligation.create",
             "conversation.response_obligation.respond",
-            "conversation.response_obligation.update",
+            "conversation.response_obligation.read",
+            "conversation.response_obligation.transition",
         ):
             _allow(core, actor, action, f"conversation:{conversation_id}")
     relationship = Relationship(

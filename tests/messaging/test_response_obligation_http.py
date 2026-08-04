@@ -53,16 +53,20 @@ async def test_signed_http_response_obligation_lifecycle(
         for action in (
             "conversation.create",
             "conversation.message.send",
-            "conversation.response_obligation.create",
             "conversation.response_obligation.respond",
-            "conversation.response_obligation.update",
+            "conversation.response_obligation.create",
+            "conversation.response_obligation.read",
+            "conversation.response_obligation.transition",
         ):
             core.policy.bootstrap_entitlement_for_local_conformance(
                 HumanEntitlement(
                     domain_id=actor.domain_id,
                     principal_id=actor.principal_id,
                     action=action,
-                    resource_pattern=f"conversation:{conversation_id}",
+                    resource_pattern=(
+                        "*" if action == "conversation.response_obligation.read"
+                        else f"conversation:{conversation_id}"
+                    ),
                     revision=1,
                 )
             )
@@ -107,7 +111,7 @@ async def test_signed_http_response_obligation_lifecycle(
                 **signed(requester_key, requester, "POST", action_path, request_body),
             },
         )
-        assert posted.status_code == 202
+        assert posted.status_code == 202, posted.text
         obligation = posted.json()["response_obligation"]
         obligation_id = obligation["obligation_id"]
         request_event_id = posted.json()["event_id"]

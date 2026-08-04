@@ -26,10 +26,10 @@ class InjectedObligationCrash(RuntimeError):
 OBLIGATION_ACTIONS = (
     "conversation.create",
     "conversation.message.send",
-    "conversation.structured_request.send",
-    "conversation.response_obligation.create",
     "conversation.response_obligation.respond",
-    "conversation.response_obligation.update",
+    "conversation.response_obligation.create",
+    "conversation.response_obligation.read",
+    "conversation.response_obligation.transition",
     "conversation.response_obligation.cancel",
 )
 
@@ -41,7 +41,10 @@ def grant_actions(policy, actor, conversation_id: str) -> None:
                 domain_id=actor.domain_id,
                 principal_id=actor.principal_id,
                 action=action,
-                resource_pattern=f"conversation:{conversation_id}",
+                resource_pattern=(
+                    "*" if action == "conversation.response_obligation.read"
+                    else f"conversation:{conversation_id}"
+                ),
                 revision=1,
             )
         )
@@ -55,12 +58,16 @@ def stack(store, identity_factory):
         kind="codex",
         principal_id=responder.principal_id,
     )
+    requester_sibling, _ = identity_factory(
+        kind="claude",
+        principal_id=requester.principal_id,
+    )
     observer, _ = identity_factory(kind="claude")
     policy = LocalConformancePolicyEngine(store)
     mailbox = MailboxService(store)
     service = ConversationService(store, policy, mailbox)
     conversation_id = f"conversation:obligation-{uuid4().hex[:8]}"
-    for actor in (requester, responder, responder_sibling, observer):
+    for actor in (requester, requester_sibling, responder, responder_sibling, observer):
         grant_actions(policy, actor, conversation_id)
     service.create(
         actor=requester,
@@ -76,6 +83,7 @@ def stack(store, identity_factory):
         "obligations": service.obligations,
         "conversation_id": conversation_id,
         "requester": requester,
+        "requester_sibling": requester_sibling,
         "responder": responder,
         "responder_sibling": responder_sibling,
         "observer": observer,
@@ -183,6 +191,15 @@ def test_obligation_binds_request_and_idempotent_retry_creates_one(stack) -> Non
     assert record["response_required"] is True
 
     retry = post_request(stack, idempotency_key=key)
+    requested_actions = {
+        row["action"]
+        for row in stack["store"].fetch_all("SELECT action FROM policy_decisions")
+    }
+    assert {
+        "conversation.message.send",
+        "conversation.response_obligation.create",
+        "conversation.response_obligation.read",
+    } <= requested_actions
     assert retry["duplicate"] is True
     assert retry["response_obligation"] == obligation
     rows = stack["store"].fetch_all(
@@ -335,6 +352,12 @@ def test_typed_response_closes_atomically_with_exact_linkage(stack) -> None:
     )
     assert closed["response_obligation"]["state"] == "completed"
     record = stack["obligations"].get(actor=stack["requester"], obligation_id=obligation_id)
+    requested_actions = {
+        row["action"]
+        for row in stack["store"].fetch_all("SELECT action FROM policy_decisions")
+    }
+    assert "conversation.response_obligation.transition" in requested_actions
+    assert "conversation.response_obligation.respond" in requested_actions
     assert record["state"] == "completed"
     assert record["response_event_id"] == closed["event_id"]
     assert record["response_outcome"] == "completed"
@@ -454,18 +477,14 @@ def test_structured_request_rejects_conflicting_obligation_schema_identifier() -
         )
 
 
-def test_sibling_harness_shares_principal_visibility_but_not_response_ownership(stack) -> None:
+def test_sibling_harness_shares_no_obligation_visibility_or_response_ownership(stack) -> None:
     result = post_request(stack)
     obligation_id = result["response_obligation"]["obligation_id"]
     sibling = stack["responder_sibling"]
 
-    assert stack["obligations"].get(actor=sibling, obligation_id=obligation_id)[
-        "viewer_role"
-    ] == "responsible"
-    assert [
-        item["obligation_id"]
-        for item in stack["obligations"].list_for(actor=sibling, role="responsible")
-    ] == [obligation_id]
+    with pytest.raises(AuthorizationError, match="unavailable"):
+        stack["obligations"].get(actor=sibling, obligation_id=obligation_id)
+    assert stack["obligations"].list_for(actor=sibling, role="responsible") == []
     with pytest.raises(AuthorizationError, match="exact responsible recipient harness"):
         post_response(
             stack,
@@ -567,10 +586,20 @@ def test_cancellation_requires_exact_requester(stack) -> None:
     obligation_id = result["response_obligation"]["obligation_id"]
     with pytest.raises(AuthorizationError, match="exact accountable requester"):
         stack["obligations"].cancel(actor=stack["responder"], obligation_id=obligation_id)
+    with pytest.raises(AuthorizationError, match="exact accountable requester"):
+        stack["obligations"].cancel(
+            actor=stack["requester_sibling"],
+            obligation_id=obligation_id,
+        )
     canceled = stack["obligations"].cancel(
         actor=stack["requester"], obligation_id=obligation_id, reason_code="no_longer_needed"
     )
     assert canceled["state"] == "canceled"
+    cancel_decisions = stack["store"].fetch_all(
+        """SELECT action FROM policy_decisions
+             WHERE action='conversation.response_obligation.cancel'"""
+    )
+    assert len(cancel_decisions) == 1
     with pytest.raises(ConflictError):
         stack["obligations"].cancel(actor=stack["requester"], obligation_id=obligation_id)
     with pytest.raises(ConflictError, match="already has a terminal outcome"):
@@ -601,6 +630,11 @@ def test_overdue_visibility_and_deadline_expiry_reconciliation(stack) -> None:
     assert outcome["expired"] == [obligation_id]
     record = obligations.get(actor=stack["requester"], obligation_id=obligation_id)
     assert record["state"] == "expired" and record["closed_at"] is not None
+    reconcile_actions = stack["store"].fetch_all(
+        """SELECT action FROM policy_decisions
+             WHERE action='conversation.response_obligation.transition'"""
+    )
+    assert reconcile_actions
 
     repeat = obligations.reconcile(
         actor=stack["requester"], authoritative_now=datetime.fromtimestamp(late, UTC)
@@ -706,6 +740,19 @@ def test_exact_fetch_and_list_visibility(stack) -> None:
             actor=stack["responder"], role="responsible", states=("created",)
         )[0]["obligation_id"]
         == obligation_id
+    )
+    actions = {
+        row["action"]
+        for row in stack["store"].fetch_all("SELECT action FROM policy_decisions")
+    }
+    assert "conversation.response_obligation.read" in actions
+    assert "conversation.message.send" in actions
+    assert actions.isdisjoint(
+        {
+            "conversation.structured_request.send",
+            "conversation.response_obligation.respond",
+            "conversation.response_obligation.update",
+        }
     )
     with pytest.raises(ValidationError, match="unknown state"):
         stack["obligations"].list_for(actor=stack["requester"], states=("bogus",))

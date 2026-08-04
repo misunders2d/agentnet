@@ -59,6 +59,15 @@ async def test_signed_http_conversation_create_post_and_thread_round_trip(
                 revision=1,
             )
         )
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=recipient.domain_id,
+            principal_id=recipient.principal_id,
+            action="conversation.thread",
+            resource_pattern="*",
+            revision=1,
+        )
+    )
     app = create_app(core)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:19101") as client:
@@ -88,7 +97,7 @@ async def test_signed_http_conversation_create_post_and_thread_round_trip(
             content=action_body,
             headers={"Content-Type": "application/json", **signed(creator_key, creator, "POST", action_path, action_body)},
         )
-        assert posted.status_code == 202
+        assert posted.status_code == 202, posted.text
         assert posted.json()["fact"] == "accepted_local"
 
         thread_path = f"/v1/conversations/{conversation_id}/threads/thread:http-e2e"

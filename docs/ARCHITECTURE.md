@@ -304,6 +304,40 @@ fallback interval. It stores the content-free counter snapshot encrypted in the
 local WAL queue, so attention survives a supervisor restart without injecting
 message content into the foreground. Wake events still carry no authority.
 
+## Persistent same-principal communication activation
+
+After the ordinary server harness is enrolled, it may request one independent
+Approval transaction for permanent communication with the owner's existing
+harness. Core resolves both current harnesses and credentials server-side,
+binds their common principal/domain, and presents one exact 38-item
+transaction: 19 communication actions for each exact harness. The Approval
+request itself expires after one hour and its possession-bound receipt remains
+short-lived; successful completion stores `authority_expires_at=NULL`. This is
+not elevation: every policy decision still starts from the human principal,
+then the committed scope narrows use to the two named harnesses and their
+current room/conversation membership.
+
+The scope covers signed direct messages, mailbox read/acknowledgement,
+conversation/thread/task/handoff/response-obligation lifecycle operations, and
+room create/action/read. It deliberately excludes artifacts, tools, effects,
+federation, public A2A, administration, and entitlement mutation. Its 38
+entitlements and scope audit record commit atomically. Policy denies a missing,
+revoked, stale-policy, cross-principal, sibling-harness, or third-peer use.
+Normal current-credential renewal preserves the scope because authority is
+harness-bound; harness/principal/domain revocation stops it immediately.
+
+`agentnet manager-run` is the laptop-side interactive composition. It launches
+one Pi child without signing keys, exposes only the canonical AgentNet tool
+surface through a private per-process Unix socket, and derives every remote
+signed request from the Manager's authenticated actor. A short-lived inherited
+capability binds the exact child PID/process measurement, credential epoch,
+method set, session, replay store, and socket. Linux uses a sealed anonymous
+descriptor when available and an inherited pipe otherwise; macOS uses the pipe
+path. The child receives no reusable AgentNet credential, and session state is
+removed after normal exit, signal termination, or launch failure. Windows
+fails closed for this interactive gateway until an equivalent protected local
+binding is implemented.
+
 ## Versioned storage authority boundary
 
 Immutable Core schema migration 1 is the complete first-release authority
@@ -313,11 +347,12 @@ adds protected task-payload disclosure receipts. Migration 3 adds
 challenge/completion state, approval-request binding, bounded polling, and
 response-loss idempotency. Migration 4 adds the bounded same-principal C0
 bootstrap-plan, exact ten-item plan/guard mapping, pilot-attempt, and seven-fact
-evidence tables. Migration 5 adds recoverable OIDC-begin idempotency and exact
-finite current-credential renewal request custody. Fresh SQLite and PostgreSQL
-stores create v5; the tested N/N-1 Core path accepts only an exact
-catalog/checksum-verified v4 store for atomic v4→v5 upgrade. PostgreSQL verifies
-the complete live v4/v5 table, column type,
+evidence tables. Migration 5 adds recoverable OIDC-begin idempotency
+and exact finite current-credential renewal request custody. Migration 6 adds
+the durable persistent communication scope and its exact-harness entitlement
+mapping. Fresh SQLite and PostgreSQL stores create v6; the tested N/N-1 Core
+path accepts only an exact catalog/checksum-verified v5 store for atomic
+v5→v6 upgrade. PostgreSQL verifies the complete live v5/v6 table, column type,
 nullability/default, constraint-definition, and non-constraint-index catalog in
 addition to the contiguous migration checksums; any mismatch fails before use.
 

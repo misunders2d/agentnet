@@ -204,6 +204,14 @@ contract: `bootstrap_grant_plans`, `bootstrap_grant_plan_items`,
 `c0_pilot_facts`. Core migration 5 adds recoverable OIDC-begin idempotency
 (hash-only public key, exact request digest, and encrypted exact response) plus
 `credential_renewal_requests` for selector-free finite server-credential renewal.
+Core migration 6 adds `communication_scopes` and
+`communication_scope_items`. The parent row binds the exact owner/fresh
+harnesses, issuance credentials and epochs, current domain revocation/policy
+epochs, canonical preimage and Approval transaction digests, hash-only
+idempotency keys, encrypted responses, and terminal/audit state. The child
+table contains exactly 38 rows: each of 19 fixed actions for each exact harness,
+with `resource_pattern='*'`, `expires_at=NULL`, and an entitlement foreign key.
+The scope and all items commit or roll back together.
 The plan binds one exact principal, two distinct enrolled
 harnesses and credential epochs, policy/revocation epochs, one-use profile,
 expiry, idempotency digest, and encrypted committed result. Its ten deterministic
@@ -245,6 +253,29 @@ expiry; inside the window it compare-and-swaps to `now + 24 hours`; exact retrie
 return the persisted result; expired, revoked, rotated, wrong-profile, or stale
 bindings fail closed. `agentnet credential renew` stores the request ID in one
 owner-only file before network and rotates it only after an exact response.
+
+The signed persistent communication-scope routes are:
+
+| Route | Exact request/effect |
+|---|---|
+| `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact current same-principal harness pair and creates the one-hour Approval request |
+| `POST /v1/communication-scope/status` | `agentnet.communication-scope.status.v1`; returns only caller-bound pending/ready/terminal state, approval URL/expiry when applicable, and `complete_automatically` only after issuance |
+| `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 26-item commit; exact retry returns the encrypted committed result |
+
+The only success body is
+`agentnet.communication-scope.complete-result.v1` with
+`status=communication_active`, `authority_granted=true`,
+`communication_usable=true`, `authority_expires_at=null`, and all artifact,
+business-effect, federation, and public-A2A flags false. CLI persists retry
+identity in an owner-only file and exposes the same flow as
+`agentnet communication-scope begin|status|complete`.
+
+The canonical local tool set additionally exposes
+`agentnet.room.create|member.add|get|send`; together with the existing
+`agentnet.send`, inbox/acknowledgement, conversation, and obligation methods,
+this is the complete communication surface shared by MCP, Pi direct binding,
+and the laptop Manager gateway. Local arguments remain strict and contain no
+caller identity or reusable remote credential.
 
 The signed selector-free C0 routes are:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from uuid import uuid4
 
 import pytest
@@ -227,9 +228,44 @@ def grant_actions(policy: PolicyEngine, actor, conversation_id: str, actions: tu
                 domain_id=actor.domain_id,
                 principal_id=actor.principal_id,
                 action=action,
-                resource_pattern=f"conversation:{conversation_id}",
+                resource_pattern=(
+                    "*" if action == "conversation.thread" else f"conversation:{conversation_id}"
+                ),
                 revision=1,
             )
+        )
+
+
+def test_legacy_generic_conversation_action_does_not_authorize_exact_operation(
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory()
+    recipient, _ = identity_factory()
+    conversation_id = "conversation:generic-action-denied"
+    policy = LocalConformancePolicyEngine(store)
+    service = ConversationService(store, policy, MailboxService(store))
+    grant_actions(
+        policy,
+        actor,
+        conversation_id,
+        ("conversation.create", "conversation.action"),
+    )
+    service.create(
+        actor=actor,
+        conversation_id=conversation_id,
+        member_harness_ids=(recipient.harness_id,),
+        classification=Classification.C0_PUBLIC,
+    )
+
+    with pytest.raises(AuthorizationError, match="no_positive_human_entitlement"):
+        service.post(
+            actor=actor,
+            recipients=(recipient.harness_id,),
+            conversation_id=conversation_id,
+            thread_id="thread:generic-action-denied",
+            action={"kind": "post", "body": "must not use a generic entitlement"},
+            idempotency_key="generic-conversation-action-denied-0001",
         )
 
 
@@ -343,7 +379,7 @@ def test_operational_conversation_task_handoff_cancel_completion_and_receipts(
         policy,
         second_assignee,
         conversation_id,
-        ("conversation.message.send", "conversation.task.complete"),
+        ("conversation.task.complete", "conversation.thread"),
     )
     created = service.create(
         actor=creator,
@@ -490,6 +526,12 @@ def test_operational_conversation_task_handoff_cancel_completion_and_receipts(
     assert completed["fact"] == "accepted_local"
     state = service.task_state(actor=creator, conversation_id=conversation_id, task_id="task:work")
     assert state["state"] == "canceled"
+    with pytest.raises(AuthorizationError):
+        service.thread(
+            actor=creator,
+            conversation_id=conversation_id,
+            thread_id="thread:work",
+        )
     assert state["assignee_harness_id"] == second_assignee.harness_id
     thread_items = service.thread(
         actor=second_assignee,
@@ -512,6 +554,34 @@ def test_operational_conversation_task_handoff_cancel_completion_and_receipts(
     assert all(item["payload"] is None for item in task_controlled)
     assert all(item["payload_access"] == "task_grant_required" for item in task_controlled)
     assert "do exact work" not in str(task_controlled)
+    decisions = store.fetch_all(
+        """SELECT action,resource_json,context_json
+             FROM policy_decisions ORDER BY occurred_at,decision_id"""
+    )
+    requested_actions = {row["action"] for row in decisions}
+    assert {
+        "conversation.create",
+        "conversation.message.send",
+        "conversation.task.request",
+        "conversation.task.handoff",
+        "conversation.task.cancel_request",
+        "conversation.task.complete",
+        "conversation.thread",
+    } <= requested_actions
+    assert requested_actions.isdisjoint(
+        {
+            "conversation.action",
+            "conversation.structured_request.send",
+            "conversation.response_obligation.respond",
+        }
+    )
+    create_decision = next(row for row in decisions if row["action"] == "conversation.create")
+    assert json.loads(create_decision["context_json"])["request"]["member_harness_ids"] == sorted(
+        (creator.harness_id, first_assignee.harness_id, second_assignee.harness_id)
+    )
+    thread_decision = next(row for row in decisions if row["action"] == "conversation.thread")
+    assert json.loads(thread_decision["resource_json"]) == {"id": f"conversation:{conversation_id}"}
+    assert json.loads(thread_decision["context_json"])["request"]["thread_id"] == "thread:work"
     assert mailbox.reconcile(first_assignee.harness_id)
     assert mailbox.reconcile(second_assignee.harness_id)
     with pytest.raises(AuthorizationError, match="member"):
@@ -525,7 +595,12 @@ def test_conversation_policy_and_mailbox_projection_rollback_together(store, ide
     policy = LocalConformancePolicyEngine(store)
     mailbox = MailboxService(store)
     service = ConversationService(store, policy, mailbox)
-    grant_actions(policy, actor, conversation_id, ("conversation.create", "conversation.message.send"))
+    grant_actions(
+        policy,
+        actor,
+        conversation_id,
+        ("conversation.create", "conversation.message.send"),
+    )
     service.create(
         actor=actor,
         conversation_id=conversation_id,

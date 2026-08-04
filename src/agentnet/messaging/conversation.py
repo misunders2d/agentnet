@@ -465,6 +465,7 @@ class ConversationService:
             context = {
                 "classification": classification.value,
                 "member_digest": canonical_digest({"members": sorted(mapped.items())}),
+                "member_harness_ids": sorted(mapped),
             }
             decision = self.policy._decide_in_transaction(
                 connection,
@@ -646,7 +647,6 @@ class ConversationService:
                 if parent is None:
                     raise AuthorizationError("reply parent is outside the exact conversation thread")
             elif isinstance(parsed, TaskAction):
-                policy_action = "conversation.task.request"
                 if len(recipients) != 1:
                     raise ValidationError("a conversation task requires one exact assignee harness")
                 task_row = connection.execute(
@@ -655,8 +655,8 @@ class ConversationService:
                 ).fetchone()
                 if task_row is not None:
                     raise AuthorizationError("conversation task identifier is already in use")
+                policy_action = "conversation.task.request"
             elif isinstance(parsed, HandoffAction):
-                policy_action = "conversation.task.handoff"
                 parent_event_id = parsed.source_event_id
                 task_row = connection.execute(
                     "SELECT * FROM conversation_tasks WHERE conversation_id=? AND task_id=?",
@@ -670,8 +670,8 @@ class ConversationService:
                     or parsed.to_harness_id not in recipients
                 ):
                     raise AuthorizationError("handoff does not bind the current task owner and state")
+                policy_action = "conversation.task.handoff"
             elif isinstance(parsed, CancellationAction):
-                policy_action = "conversation.task.cancel_request"
                 parent_event_id = parsed.target_event_id
                 if parsed.task_id is None:
                     raise ValidationError("task cancellation requires the exact task identifier")
@@ -686,8 +686,8 @@ class ConversationService:
                     or task_row["state"] in {"completed", "failed_terminal", "canceled", "effect_unknown"}
                 ):
                     raise AuthorizationError("cancellation does not bind the current task creator and state")
+                policy_action = "conversation.task.cancel_request"
             elif isinstance(parsed, CompletionAcknowledgementAction):
-                policy_action = "conversation.task.complete"
                 parent_event_id = parsed.target_event_id
                 if parsed.task_id is None:
                     raise ValidationError("completion acknowledgement requires the exact task identifier")
@@ -702,12 +702,13 @@ class ConversationService:
                     or task_row["state"] in {"completed", "failed_terminal", "canceled", "effect_unknown"}
                 ):
                     raise AuthorizationError("completion does not bind the current exact task assignee and state")
+                policy_action = "conversation.task.complete"
             elif isinstance(parsed, StructuredRequestAction):
                 policy_action = "conversation.structured_request.send"
-
+            elif isinstance(parsed, ObligationResponseAction):
+                policy_action = "conversation.response_obligation.respond"
             obligation_row: Any | None = None
             if isinstance(parsed, ObligationResponseAction):
-                policy_action = "conversation.response_obligation.respond"
                 parent_event_id = parsed.request_event_id
                 obligation_row = self.obligations.require_open_for_response_in_transaction(
                     connection,
@@ -769,6 +770,9 @@ class ConversationService:
                 "action_digest": event.payload_digest,
                 "recipient_authority_digest": canonical_digest({"recipients": sorted(recipient_authorities.items())}),
                 "thread_id": thread_id,
+                "operation": parsed.kind,
+                "recipient_harness_ids": list(recipients),
+                "released_artifact_count": len(parsed.released_artifacts),
             }
             decision = self.policy._decide_in_transaction(
                 connection,
@@ -1026,7 +1030,27 @@ class ConversationService:
             raise ValidationError("conversation thread limit is invalid")
         now = int(time.time())
         with self.store.transaction(immediate=False) as connection:
-            self._require_member(connection, actor, conversation_id, now=now)
+            conversation, _authority_id, revision = self._require_member(
+                connection,
+                actor,
+                conversation_id,
+                now=now,
+            )
+            classification = Classification(conversation["classification"])
+            decision = self.policy._decide_in_transaction(
+                connection,
+                AuthorizationRequest(
+                    actor=actor,
+                    action="conversation.thread",
+                    resource=f"conversation:{conversation_id}",
+                    policy_revision=revision,
+                    context={"conversation_id": conversation_id, "thread_id": thread_id, "limit": limit},
+                    classification=classification,
+                ),
+                when=datetime.fromtimestamp(now, UTC),
+            )
+            if not decision.allowed:
+                raise AuthorizationError(decision.reason)
             rows = connection.execute(
                 """SELECT a.*,e.payload_encrypted,e.envelope_json,e.envelope_digest,
                           e.retention_delete_at,e.legal_hold

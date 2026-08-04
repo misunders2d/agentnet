@@ -23,6 +23,10 @@ from agentnet.authorization.bootstrap_plan_service import (
     BootstrapPlanService,
     ExactBootstrapHarnessResolver,
 )
+from agentnet.authorization.communication_scope_service import (
+    CommunicationScopeService,
+    ExactCommunicationHarnessResolver,
+)
 from agentnet.authorization.c0_pilot_service import C0PilotService
 from agentnet.authorization.elevation import ElevationService
 from agentnet.authorization.grants import GrantUse
@@ -374,6 +378,7 @@ class CommunicationCore:
         self.oidc_enrollment: OIDCEnrollmentCoordinator | None = None
         self.approval_service_client: ApprovalServiceClient | None = None
         self.bootstrap_plan_service: BootstrapPlanService | None = None
+        self.communication_scope_service: CommunicationScopeService | None = None
         self.c0_pilot_service: C0PilotService | None = None
         self.internal_invitation_oidc: InternalInvitationOIDCCoordinator | None = None
         self.internal_invitations: InternalInvitationService | None = None
@@ -449,6 +454,31 @@ class CommunicationCore:
                         store,
                         self.approval_verifier,
                     ),
+                    public_approval_url=(
+                        oidc.approval_service.public_origin.rstrip("/") + "/approval"
+                    ),
+                    clock=lambda: int(time.time()),
+                )
+                exact_communication_resolver = ExactCommunicationHarnessResolver(
+                    store,
+                    self.approval_verifier,
+                    fresh_max_age_seconds=3_600,
+                )
+
+                def resolve_current_server_harness(
+                    connection: Any,
+                    actor: VerifiedActor,
+                    now: int,
+                ) -> dict[str, Any]:
+                    if actor.harness_id != config.enrolled_harness_id:
+                        raise AuthorizationError("communication scope denied")
+                    return exact_communication_resolver(connection, actor, now)
+
+                self.communication_scope_service = CommunicationScopeService(
+                    store,
+                    self.approval_service_client,
+                    self.approval_verifier,
+                    resolver=resolve_current_server_harness,
                     public_approval_url=(
                         oidc.approval_service.public_origin.rstrip("/") + "/approval"
                     ),
@@ -1114,6 +1144,12 @@ class CommunicationCore:
                 action="message.send",
                 resource=resource,
                 classification=classification,
+                context={
+                    "recipient_harness_ids": list(recipients),
+                    "conversation_id": conversation_id,
+                    "room_id": room_id,
+                    "released_artifact_count": len(released_artifacts),
+                },
             )
             if classification is Classification.C3_SEALED and (
                 room_id is None

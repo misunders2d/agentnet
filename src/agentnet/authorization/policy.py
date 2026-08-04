@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentnet.authorization.bootstrap_plan import C0_REQUIRED_FACTS
+from agentnet.authorization.communication_scope import COMMUNICATION_SCOPE_ACTIONS
 from agentnet.authorization.decision import AuthorizationDecision, DecisionRecorder
 from agentnet.authorization.evidence import (
     IssuanceAuthority,
@@ -53,25 +54,10 @@ GRANT_REQUIRED_OPERATION_CLASSES = frozenset(
     }
 )
 
-_LOCAL_CONFORMANCE_C0_ACTIONS = frozenset(
-    {
-        "conversation.create",
-        "conversation.message.send",
-        "conversation.response_obligation.cancel",
-        "conversation.response_obligation.create",
-        "conversation.response_obligation.respond",
-        "conversation.response_obligation.update",
-        "conversation.structured_request.send",
-        "conversation.task.cancel_request",
-        "conversation.task.complete",
-        "conversation.task.handoff",
-        "conversation.task.request",
-        "mailbox.acknowledge",
-        "mailbox.read",
-        "message.send",
-        "server_agent.relay.send",
-    }
+_LOCAL_CONFORMANCE_C0_ACTIONS = COMMUNICATION_SCOPE_ACTIONS | frozenset(
+    {"server_agent.relay.send"}
 )
+
 
 
 class DenyOnlyEligibility(BaseModel):
@@ -487,11 +473,12 @@ class PolicyEngine:
         *,
         domain_id: str,
         principal_id: str,
+        harness_id: str,
         action: str,
         resource: str,
         revision: int,
         now: int,
-    ) -> tuple[str | None, str]:
+    ) -> tuple[str | None, str, frozenset[str] | None]:
         rows = connection.execute(
             """
             SELECT e.* FROM entitlements AS e
@@ -502,12 +489,14 @@ class PolicyEngine:
                      FROM bootstrap_grant_plan_items AS i
                     WHERE i.entitlement_id=e.entitlement_id
                )
-             ORDER BY CASE WHEN e.resource_pattern=? THEN 0 ELSE 1 END, e.entitlement_id
+             ORDER BY CASE WHEN e.resource_pattern=? THEN 0 ELSE 1 END,
+                      e.entitlement_id
             """,
             (domain_id, principal_id, action, resource, resource),
         ).fetchall()
         if not rows:
-            return None, "no_positive_human_entitlement"
+            return None, "no_positive_human_entitlement", None
+        scope_harness_mismatch = False
         for row in rows:
             if int(row["revision"]) != revision:
                 continue
@@ -515,10 +504,127 @@ class PolicyEngine:
                 continue
             if row["expires_at"] is not None and int(row["expires_at"]) <= now:
                 continue
-            return str(row["entitlement_id"]), "positive_human_entitlement"
+            scope = connection.execute(
+                """
+                SELECT i.harness_id,s.owner_harness_id,s.fresh_harness_id,s.state,
+                       s.domain_revocation_epoch,
+                       d.revocation_epoch AS current_domain_revocation_epoch,
+                       owner_h.status AS owner_harness_status,
+                       fresh_h.status AS fresh_harness_status
+                  FROM communication_scope_items AS i
+                  JOIN communication_scopes AS s ON s.scope_id=i.scope_id
+                  JOIN domains AS d ON d.domain_id=s.domain_id
+                  JOIN harnesses AS owner_h
+                    ON owner_h.harness_id=s.owner_harness_id
+                  JOIN harnesses AS fresh_h
+                    ON fresh_h.harness_id=s.fresh_harness_id
+                 WHERE i.entitlement_id=?
+                """,
+                (row["entitlement_id"],),
+            ).fetchone()
+            if scope is not None:
+                if (
+                    scope["state"] != "committed"
+                    or int(scope["domain_revocation_epoch"])
+                    != int(scope["current_domain_revocation_epoch"])
+                    or scope["harness_id"] != harness_id
+                    or scope["owner_harness_status"] != "active"
+                    or scope["fresh_harness_status"] != "active"
+                ):
+                    scope_harness_mismatch = True
+                    continue
+                return (
+                    str(row["entitlement_id"]),
+                    "positive_human_entitlement",
+                    frozenset(
+                        {
+                            str(scope["owner_harness_id"]),
+                            str(scope["fresh_harness_id"]),
+                        }
+                    ),
+                )
+            return str(row["entitlement_id"]), "positive_human_entitlement", None
+        if scope_harness_mismatch:
+            return None, "communication_scope_harness_mismatch", None
         if any(int(row["revision"]) != revision for row in rows):
-            return None, "stale_positive_entitlement"
-        return None, "no_current_positive_entitlement"
+            return None, "stale_positive_entitlement", None
+        return None, "no_current_positive_entitlement", None
+
+    @staticmethod
+    def _communication_scope_request_allowed(
+        connection: sqlite3.Connection,
+        *,
+        request: AuthorizationRequest,
+        peer_harness_ids: frozenset[str],
+    ) -> bool:
+        if (
+            len(peer_harness_ids) != 2
+            or request.actor.harness_id not in peer_harness_ids
+        ):
+            return False
+        for key in (
+            "harness_id",
+            "responsible_harness_id",
+            "recipient_harness_id",
+            "to_harness_id",
+        ):
+            target = request.context.get(key)
+            if target is not None and (
+                not isinstance(target, str) or target not in peer_harness_ids
+            ):
+                return False
+        released_artifact_count = request.context.get("released_artifact_count", 0)
+        if (
+            not isinstance(released_artifact_count, int)
+            or isinstance(released_artifact_count, bool)
+            or released_artifact_count != 0
+        ):
+            return False
+        if request.action == "message.send":
+            recipients = request.context.get("recipient_harness_ids")
+            return (
+                isinstance(recipients, list)
+                and bool(recipients)
+                and all(
+                    isinstance(recipient, str) and recipient in peer_harness_ids
+                    for recipient in recipients
+                )
+            )
+        if request.action in {"mailbox.read", "mailbox.acknowledge", "room.create"}:
+            return True
+        if request.action == "conversation.create":
+            members = request.context.get("member_harness_ids")
+            return (
+                isinstance(members, list)
+                and all(isinstance(member, str) for member in members)
+                and frozenset(members) == peer_harness_ids
+            )
+        if request.action.startswith("conversation."):
+            if request.action not in COMMUNICATION_SCOPE_ACTIONS:
+                return False
+            if not request.resource.startswith("conversation:"):
+                return False
+            conversation_id = request.resource.removeprefix("conversation:")
+            members = connection.execute(
+                """
+                SELECT harness_id FROM conversation_members
+                 WHERE conversation_id=? AND status='active'
+                """,
+                (conversation_id,),
+            ).fetchall()
+            active = frozenset(str(row["harness_id"]) for row in members)
+            return bool(active) and active <= peer_harness_ids
+        if request.action in {"room.action", "room.read"}:
+            members = connection.execute(
+                """
+                SELECT harness_id FROM room_members
+                 WHERE room_id=? AND removed_sequence IS NULL
+                """,
+                (request.resource,),
+            ).fetchall()
+            active = frozenset(str(row["harness_id"]) for row in members)
+            return bool(active) and active <= peer_harness_ids
+        return False
 
     def _record_c0_decision(
         self,
@@ -893,6 +999,7 @@ class PolicyEngine:
 
         now = epoch_seconds(when)
         entitlement_id: str | None = None
+        communication_scope_peers: frozenset[str] | None = None
         grant_consumed = False
         grant_id = request.grant_use.grant_id if request.grant_use else None
 
@@ -910,17 +1017,30 @@ class PolicyEngine:
             denial = self.attenuation_policy.denial_reason(request.actor.binding_assurance)
 
         if denial is None and request.actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS:
-            entitlement_id, entitlement_reason = self._current_entitlement(
-                connection,
-                domain_id=request.actor.domain_id,
-                principal_id=request.actor.principal_id or "",
-                action=request.action,
-                resource=request.resource,
-                revision=policy_revision,
-                now=now,
+            entitlement_id, entitlement_reason, communication_scope_peers = (
+                self._current_entitlement(
+                    connection,
+                    domain_id=request.actor.domain_id,
+                    principal_id=request.actor.principal_id or "",
+                    harness_id=request.actor.harness_id or "",
+                    action=request.action,
+                    resource=request.resource,
+                    revision=policy_revision,
+                    now=now,
+                )
             )
             if entitlement_id is None:
                 denial = entitlement_reason
+        if (
+            denial is None
+            and communication_scope_peers is not None
+            and not self._communication_scope_request_allowed(
+                connection,
+                request=request,
+                peer_harness_ids=communication_scope_peers,
+            )
+        ):
+            denial = "communication_scope_request_mismatch"
 
         requires_grant = (
             request.actor.kind is ActorKind.HOST_GUEST_HARNESS
