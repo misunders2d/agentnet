@@ -179,6 +179,41 @@ def _validate_enrollment(transaction: dict[str, Any], digest: str) -> dict[str, 
     }
 
 
+def _validate_harness_revocation(transaction: dict[str, Any], digest: str) -> dict[str, Any]:
+    _keys(
+        transaction,
+        {
+            "type",
+            "request_id",
+            "domain_id",
+            "harness_id",
+            "expected_credential_epoch",
+            "expected_domain_revocation_epoch",
+            "reason",
+        },
+    )
+    if (
+        transaction["type"] != "harness_revocation"
+        or any(
+            not _string(transaction[field])
+            for field in ("request_id", "domain_id", "harness_id", "reason")
+        )
+        or not _positive_int(transaction["expected_credential_epoch"])
+        or not _positive_int(transaction["expected_domain_revocation_epoch"])
+    ):
+        raise _denied()
+    return {
+        "title": "Remove one laptop or agent",
+        "statements": [
+            f"Exact device: {transaction['harness_id']}",
+            f"Network: {transaction['domain_id']}",
+            f"Reason: {transaction['reason']}",
+            "Other devices and the person remain active",
+        ],
+        "advanced_digest": digest,
+    }
+
+
 def _validate_managed_server_credential_reauthorization(
     transaction: dict[str, Any],
     digest: str,
@@ -641,6 +676,8 @@ def validate_and_summarize_approval_transaction(
     transaction = _strict_object(canonical_transaction)
     if purpose == "identity.enrollment.approve":
         return _validate_enrollment(transaction, transaction_digest)
+    if purpose == "identity.harness.revoke.approve":
+        return _validate_harness_revocation(transaction, transaction_digest)
     if (
         purpose == _MANAGED_SERVER_REAUTHORIZATION_PURPOSE
         and transaction.get("schema")

@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.approval.service import IndependentApprovalVerifier
+from agentnet.console.server_status import ServerStatusContribution
 from agentnet.bootstrap_plan_http import create_bootstrap_plan_routes
 from agentnet.c0_pilot_http import create_c0_pilot_routes
 from agentnet.communication_scope_http import create_communication_scope_routes
@@ -41,7 +42,7 @@ from agentnet.organization.conflicts import TaskExecutionIntent
 from agentnet.protocol.models import Classification, ReleasedArtifactBinding
 from agentnet.product_http import RELATIONSHIP_RESPONSE_HEADERS, create_product_routes
 from agentnet.relay.http import create_relay_routes
-from agentnet.security.dpop import proof_from_headers
+from agentnet.http_auth import authenticate_proof_request
 from agentnet.supervisor_http import create_supervisor_routes
 
 
@@ -171,32 +172,7 @@ class TaskProposalReauthorizationBody(TaskProposalDecisionBody):
 
 
 async def _body_and_actor(request: Request, core: CommunicationCore) -> tuple[bytes, Any]:
-    body = await request.body()
-    if len(body) > core.config.max_request_bytes:
-        raise ValidationError("request body exceeds configured limit")
-    proof = proof_from_headers(dict(request.headers))
-    try:
-        raw_path = request.scope.get("raw_path", request.url.path.encode("ascii")).decode("ascii")
-        raw_query = request.scope.get("query_string", b"").decode("ascii")
-    except UnicodeError as exc:
-        raise ValidationError("request target must use canonical ASCII encoding") from exc
-    authority = request.headers.get("host")
-    if not authority:
-        raise ValidationError("request authority is required")
-    context = core.authenticate(
-        proof,
-        method=request.method,
-        scheme=request.scope.get("scheme", ""),
-        authority=authority,
-        path=raw_path,
-        query=raw_query,
-        body=body,
-        caller_claims=None,
-    )
-    # Private ASGI state: only the proof verifier may populate this value.
-    # Inspection handlers consume the full transport binding so request JSON
-    # can never select another principal, guest, harness, or domain.
-    request.scope["agentnet.trusted_transport"] = context
+    body, context = await authenticate_proof_request(request, core)
     return body, context.actor
 
 
@@ -526,10 +502,19 @@ def create_app(core: CommunicationCore) -> Starlette:
             headers=headers,
         )
 
+    async def publish_console_status(request: Request) -> Response:
+        if core.console_status is None:
+            raise ValidationError("admin console status publishing is disabled")
+        body, actor = await _body_and_actor(request, core)
+        contribution = ServerStatusContribution.model_validate_json(body)
+        core.console_status.publish(actor=actor, contribution=contribution)
+        return Response(status_code=204)
+
     routes = [
         Route("/healthz", health, methods=["GET"]),
         Route("/readyz", ready, methods=["GET"]),
         Route("/recoveryz", recovery, methods=["GET"]),
+        Route("/v1/console/server-status", publish_console_status, methods=["POST"]),
         Route("/v1/messages", send_message, methods=["POST"]),
         Route("/v1/mailbox", mailbox, methods=["GET"]),
         Route("/v1/mailbox/watch", mailbox_watch, methods=["GET"]),

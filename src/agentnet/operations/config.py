@@ -43,6 +43,7 @@ class FeatureFlags(BaseModel):
     peer_mesh: bool = False
     protected_effects: bool = False
     local_bindings: bool = False
+    admin_console: bool = False
 
 
 A2A_ACTIONS = frozenset(
@@ -540,6 +541,96 @@ class OIDCEnrollmentConfig(BaseModel):
         return self
 
 
+class AdminConsoleOIDCConfig(BaseModel):
+    """Pinned workforce OIDC configuration for the dedicated console origin."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    issuer: str = Field(min_length=8, max_length=512)
+    client_id: str = Field(min_length=1, max_length=512)
+    redirect_uri: str = Field(min_length=8, max_length=2_048)
+    audience: str | None = Field(default=None, min_length=1, max_length=512)
+    token_endpoint_auth_method: OIDCTokenEndpointAuthMethod = OIDCTokenEndpointAuthMethod.NONE
+    client_secret_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Z][A-Z0-9_]{2,127}$",
+    )
+    allowed_endpoint_origins: tuple[str, ...] = Field(default=(), max_length=32)
+    allowed_private_endpoint_cidrs: tuple[str, ...] = Field(default=(), max_length=64)
+    pinned_endpoint_addresses: tuple[str, ...] = Field(default=(), max_length=128)
+    allowed_signing_algorithms: tuple[Literal["RS256", "ES256"], ...] = ("RS256",)
+    pinned_jwk_thumbprints: dict[str, str] = Field(default_factory=dict)
+    verifier_id: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def exact_provider_profile(self) -> "AdminConsoleOIDCConfig":
+        confidential = self.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE
+        if confidential != (self.client_secret_env is not None):
+            raise ValueError("confidential console OIDC authentication requires client_secret_env")
+        if not self.allowed_signing_algorithms or len(set(self.allowed_signing_algorithms)) != len(
+            self.allowed_signing_algorithms
+        ):
+            raise ValueError("console OIDC signing algorithms must be a non-empty unique tuple")
+        if len(self.pinned_jwk_thumbprints) > 128 or any(
+            not key_id
+            or len(key_id) > 512
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for key_id, digest in self.pinned_jwk_thumbprints.items()
+        ):
+            raise ValueError("console OIDC JWK pins must be lowercase SHA-256 digests")
+        return self
+
+
+class AdminConsoleConfig(BaseModel):
+    """Non-secret, fail-closed configuration for the private administration console."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    public_origin: str
+    service_audience: str = Field(min_length=3, max_length=512)
+    oidc: AdminConsoleOIDCConfig
+    approval_service: ApprovalServiceClientConfig | None = None
+    session_ttl_seconds: int = Field(default=900, ge=300, le=3_600)
+    challenge_ttl_seconds: int = Field(default=300, ge=60, le=600)
+    preauth_ttl_seconds: int = Field(default=300, ge=60, le=600)
+    server_status_ttl_seconds: int = Field(default=120, ge=30, le=300)
+    polling_interval_seconds: int = Field(default=15, ge=5, le=60)
+
+    @model_validator(mode="after")
+    def exact_console_origin(self) -> "AdminConsoleConfig":
+        try:
+            parsed = urlsplit(self.public_origin)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("admin console public origin is invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("admin console public origin must be one exact HTTPS origin")
+        host = parsed.hostname.lower()
+        rendered_host = f"[{host}]" if ":" in host else host
+        canonical = f"https://{rendered_host}"
+        if port not in {None, 443}:
+            canonical += f":{port}"
+        if self.public_origin.rstrip("/") != canonical:
+            raise ValueError("admin console public origin must use canonical spelling")
+        expected_callback = f"{canonical}/v1/console/oidc/callback"
+        if self.oidc.redirect_uri != expected_callback:
+            raise ValueError("admin console OIDC callback must exactly match the public origin")
+        if self.service_audience != self.service_audience.strip() or any(
+            ord(character) < 0x21 for character in self.service_audience
+        ):
+            raise ValueError("admin console audience is not canonical")
+        return self
+
+
 class ScannerTrustConfig(BaseModel):
     """Pinned maintained-scanner public evidence accepted by artifact release."""
 
@@ -722,6 +813,7 @@ class ExtensionConfig(BaseModel):
     local_bindings: LocalBindingConfig | None = None
     relay: RelayServiceConfig | None = None
     oidc_enrollment: OIDCEnrollmentConfig | None = None
+    admin_console: AdminConsoleConfig | None = None
     scanner_trust: ScannerTrustConfig | None = None
     federation_trust: FederationTrustConfig | None = None
     backup_trust: BackupTrustConfig | None = None
@@ -770,6 +862,15 @@ class ExtensionConfig(BaseModel):
                 loopback = False
             if not loopback:
                 raise ValueError("http public_base_url is allowed only on an explicit loopback address")
+        if self.features.admin_console:
+            if self.admin_console is None:
+                raise ValueError("admin_console requires explicit dedicated-origin configuration")
+            if self.admin_console.public_origin == canonical_origin:
+                raise ValueError("admin_console requires a dedicated origin separate from the Core API")
+            if self.admin_console.approval_service is None:
+                raise ValueError("admin_console requires an independently operated Approval service")
+        elif self.admin_console is not None:
+            raise ValueError("admin console configuration is inert unless admin_console is enabled")
         if self.service_audience is not None:
             if (
                 len(self.service_audience) < 3

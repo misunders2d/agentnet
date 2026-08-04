@@ -149,6 +149,13 @@ class AgentNetClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def publish_console_status(self, contribution: dict[str, Any]) -> httpx.Response:
+        return self.request(
+            "POST",
+            "/v1/console/server-status",
+            json_body=contribution,
+        )
+
     def renew_current_credential(self, *, request_id: str) -> httpx.Response:
         return self.request(
             "POST",

@@ -308,10 +308,25 @@ def validate_applied_migrations(
     return current
 
 
+
 _S6_RELATIONS = frozenset(
     {
         "communication_scopes",
         "communication_scope_items",
+        "idx_communication_scopes_current",
+        "idx_communication_scope_items_entitlement_harness",
+    }
+)
+
+_S7_RELATIONS = frozenset(
+    {
+        "console_session_challenges",
+        "console_browser_sessions",
+        "console_oidc_transactions",
+        "console_server_status",
+        "console_enrollment_intents",
+        "console_enrollment_candidates",
+        "console_mutations",
     }
 )
 
@@ -472,13 +487,15 @@ def apply_postgres_migrations(connection: Any) -> int:
                     "schema_migration_history",
                     "an empty PostgreSQL migration catalog is not a released schema",
                 )
-            if (
-                current == COMMUNICATION_SCOPE_SCHEMA_VERSION - 1
-                and relation_names & _S6_RELATIONS
-            ):
+            if current == 5 and relation_names & _S6_RELATIONS:
                 raise GateBlocked(
                     "schema_s6_partial",
                     "PostgreSQL v5 contains unsupported partial S6 relations",
+                )
+            if current == 6 and relation_names & _S7_RELATIONS:
+                raise GateBlocked(
+                    "schema_s7_partial",
+                    "PostgreSQL v6 contains unsupported partial S7 relations",
                 )
             require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:current])
         else:

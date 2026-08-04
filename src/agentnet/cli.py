@@ -61,6 +61,7 @@ from agentnet.authorization.communication_scope import (
 from agentnet.authorization.c0_pilot import C0PilotResult
 from agentnet.bindings.remote_manager import run_manager_gateway
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
+from agentnet.console.http import create_console_app
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked, ValidationError
@@ -2765,6 +2766,120 @@ def command_invitation_issue(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
+    """Create candidate-owned proof state, discover one intent, and enter normal acceptance."""
+    state_path = Path(args.state)
+    invitation_path = Path(args.invitation)
+    if state_path.exists():
+        value = _read_json_object(state_path, label="sponsored enrollment state")
+        if value.get("schema") == "agentnet.invitation-candidate.v1":
+            if args.callback:
+                return command_invitation_complete(
+                    argparse.Namespace(
+                        state=str(state_path),
+                        invitation=str(invitation_path),
+                        callback=args.callback,
+                        identity=args.identity,
+                        force=args.force,
+                    )
+            )
+            return command_invitation_oidc_begin(
+                argparse.Namespace(state=str(state_path), invitation=str(invitation_path))
+            )
+        if (
+            set(value)
+            != {
+                "schema",
+                "server_base_url",
+                "private_key_path",
+                "continuation_token",
+            }
+            or value.get("schema") != "agentnet.sponsored-enrollment-candidate.v1"
+        ):
+            raise SystemExit("sponsored enrollment state does not match the exact schema")
+        status = _public_json_request(
+            server=str(value["server_base_url"]),
+            method="POST",
+            path="/v1/sponsored-enrollment/candidate/status",
+            body={"continuation_token": value["continuation_token"]},
+        )
+        invitation_value = status.get("invitation")
+        if not isinstance(invitation_value, dict):
+            print(json.dumps({"state": status.get("state"), "next": "retry after sponsor approval"}, indent=2))
+            return 0
+        record = InternalInvitationRecord.model_validate(invitation_value)
+        transaction = record.transaction
+        request = InternalInvitationRequest(
+            invitation_id=transaction.invitation_id,
+            domain_id=transaction.domain_id,
+            invited_oidc_issuer=transaction.invited_oidc_issuer,
+            invited_oidc_subject=transaction.invited_oidc_subject,
+            invited_verified_email=transaction.invited_verified_email,
+            candidate_harness_id=transaction.candidate_harness_id,
+            candidate_harness_kind=transaction.candidate_harness_kind,
+            candidate_harness_display_name=transaction.candidate_harness_display_name,
+            candidate_binding_assurance=transaction.candidate_binding_assurance,
+            candidate_key_id=transaction.candidate_key_id,
+            candidate_public_key_pem=transaction.candidate_public_key_pem,
+            requested_capabilities=transaction.requested_capabilities,
+            expires_at=transaction.expires_at,
+            predecessor_invitation_id=transaction.predecessor_invitation_id,
+            reason=transaction.reason,
+        )
+        _write_owner_json(
+            invitation_path,
+            {"invitation": record.model_dump(mode="json"), "zero_authority_proposal": True},
+        )
+        _write_owner_json(
+            state_path,
+            {
+                "schema": "agentnet.invitation-candidate.v1",
+                "server_base_url": value["server_base_url"],
+                "private_key_path": value["private_key_path"],
+                "request": request.model_dump(mode="json"),
+            },
+        )
+        return command_invitation_oidc_begin(
+            argparse.Namespace(state=str(state_path), invitation=str(invitation_path))
+        )
+
+    key_path = (
+        Path(args.private_key).resolve()
+        if args.private_key
+        else state_path.with_suffix(".key.pem").resolve()
+    )
+    key = P256KeyPair.generate()
+    _write_owner_only(key_path, key.private_pem)
+    result = _public_json_request(
+        server=args.server,
+        method="POST",
+        path="/v1/sponsored-enrollment/candidate/begin",
+        body={
+            "candidate_harness_id": args.harness_id or str(uuid4()),
+            "harness_kind": args.harness,
+            "harness_name": args.name,
+            "binding_assurance": args.binding_assurance,
+            "public_key_pem": key.public_pem,
+            "idempotency_key": secrets.token_urlsafe(24),
+        },
+    )
+    required = {"authorization_url", "continuation_token"}
+    if not required <= result.keys() or any(not isinstance(result[key], str) for key in required):
+        raise SystemExit("sponsored enrollment begin response is invalid")
+    _write_owner_json(
+        state_path,
+        {
+            "schema": "agentnet.sponsored-enrollment-candidate.v1",
+            "server_base_url": _canonical_server_origin(args.server),
+            "private_key_path": str(key_path),
+            "continuation_token": result["continuation_token"],
+        },
+    )
+    print(json.dumps({"authorization_url": result["authorization_url"], "state": str(state_path),
+                      "next": "open authorization_url, then rerun this command"}, indent=2))
+    return 0
+
+
 def command_invitation_oidc_begin(args: argparse.Namespace) -> int:
     state, request, _key = _invitation_candidate_state(Path(args.state))
     record = _invitation_record(Path(args.invitation))
@@ -4196,6 +4311,35 @@ def command_serve(args: argparse.Namespace) -> int:
     finally:
         core.close()
     return 0
+def command_console_serve(args: argparse.Namespace) -> int:
+    config = _load_config(Path(args.config))
+    config.require_feature("admin_console")
+    try:
+        bind_address = ipaddress.ip_address(args.host)
+    except ValueError as exc:
+        raise GateBlocked(
+            "remote_plaintext_bind",
+            "console serve requires an explicit loopback bind behind its HTTPS origin",
+        ) from exc
+    if not bind_address.is_loopback:
+        raise GateBlocked(
+            "remote_plaintext_bind",
+            "console serve refuses a remotely reachable plaintext bind",
+        )
+    core = CommunicationCore.open(config)
+    try:
+        core.bootstrap_domain()
+        uvicorn.run(
+            create_console_app(core),
+            host=args.host,
+            port=args.port,
+            log_level=args.log_level,
+        )
+    finally:
+        core.close()
+    return 0
+
+
 
 
 def command_supervisor_run(args: argparse.Namespace) -> int:
@@ -4892,6 +5036,23 @@ def build_parser() -> argparse.ArgumentParser:
     invitation_complete.add_argument("--identity", default=".agentnet/identity.json")
     invitation_complete.add_argument("--force", action="store_true")
     invitation_complete.set_defaults(func=command_invitation_complete)
+    invitation_sponsored = invitation_commands.add_parser("join-sponsored")
+    invitation_sponsored.add_argument("--server", required=True)
+    invitation_sponsored.add_argument("--harness-id")
+    invitation_sponsored.add_argument("--harness", default="laptop")
+    invitation_sponsored.add_argument("--name", required=True)
+    invitation_sponsored.add_argument(
+        "--binding-assurance",
+        choices=("os_bound", "hardware_bound"),
+        default="os_bound",
+    )
+    invitation_sponsored.add_argument("--state", default=".agentnet/sponsored-enrollment.json")
+    invitation_sponsored.add_argument("--invitation", default=".agentnet/invitation.json")
+    invitation_sponsored.add_argument("--private-key")
+    invitation_sponsored.add_argument("--callback")
+    invitation_sponsored.add_argument("--identity", default=".agentnet/identity.json")
+    invitation_sponsored.add_argument("--force", action="store_true")
+    invitation_sponsored.set_defaults(func=command_invitation_join_sponsored)
     invitation_revoke = invitation_commands.add_parser("revoke")
     invitation_revoke.add_argument("--identity", default=".agentnet/identity.json")
     invitation_revoke.add_argument("--invitation", default=".agentnet/invitation.json")
@@ -5281,6 +5442,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--log-level", default="info")
     serve.set_defaults(func=command_serve)
+    console = commands.add_parser(
+        "console",
+        help="operate the private AgentNet administration console",
+    )
+    console_commands = console.add_subparsers(dest="console_command", required=True)
+    console_serve = console_commands.add_parser(
+        "serve",
+        help="serve only the private administration console on loopback",
+    )
+    console_serve.add_argument("--config", default="agentnet.json")
+    console_serve.add_argument("--host", default="127.0.0.1")
+    console_serve.add_argument("--port", type=int, default=8090)
+    console_serve.add_argument("--log-level", default="info")
+    console_serve.set_defaults(func=command_console_serve)
+
 
     supervisor_run = commands.add_parser(
         "supervisor-run",

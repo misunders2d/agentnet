@@ -14,6 +14,12 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from agentnet.approval.internal_client import ApprovalServiceClient
 from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
+from agentnet.console.mutations import ConsoleMutationService
+from agentnet.console.read_service import ConsoleReadService
+from agentnet.identity.revocation import HarnessRevocationService
+from agentnet.identity.sponsored_enrollment import SponsoredEnrollmentService
+from agentnet.console.server_status import ServerStatusService
+from agentnet.console.session import ConsoleOIDCCoordinator, ConsoleSessionService
 from agentnet.artifacts.service import ArtifactService, FilesystemArtifactStore
 from agentnet.artifacts.scanner import ScannerTrustPolicy
 from agentnet.attention.policy import AttentionService
@@ -503,6 +509,127 @@ class CommunicationCore:
                 credential_ttl_seconds=config.policies.identity.credential_ttl_seconds,
             )
 
+        self.console_sessions: ConsoleSessionService | None = None
+        self.console_oidc: ConsoleOIDCCoordinator | None = None
+        self.console_status: ServerStatusService | None = None
+        self.console_reads: ConsoleReadService | None = None
+        self.console_mutations: ConsoleMutationService | None = None
+        self.console_approval_service_client: ApprovalServiceClient | None = None
+        self.sponsored_enrollment: SponsoredEnrollmentService | None = None
+        if config.features.admin_console:
+            console = config.admin_console
+            if console is None or console.approval_service is None:  # pragma: no cover - config invariant
+                raise GateBlocked("admin_console", "admin console configuration is unavailable")
+            if self.approval_verifier is None:
+                raise GateBlocked(
+                    "approval_trust",
+                    "admin console mutations require configured independent approval trust",
+                )
+            console_secret: str | None = None
+            if console.oidc.token_endpoint_auth_method is not OIDCTokenEndpointAuthMethod.NONE:
+                console_secret = os.environ.get(console.oidc.client_secret_env or "", "")
+                if (
+                    not console_secret
+                    or len(console_secret) > 4_096
+                    or any(ord(character) < 0x20 or ord(character) == 0x7F for character in console_secret)
+                ):
+                    raise GateBlocked(
+                        "oidc_client_secret",
+                        "configured console OIDC client secret environment variable is absent or invalid",
+                    )
+            console_provider = OIDCProvider(
+                OIDCProviderConfig(
+                    issuer=console.oidc.issuer,
+                    client_id=console.oidc.client_id,
+                    redirect_uri=console.oidc.redirect_uri,
+                    audience=console.oidc.audience,
+                    token_endpoint_auth_method=console.oidc.token_endpoint_auth_method,
+                    client_secret=console_secret,
+                    allowed_signing_algorithms=console.oidc.allowed_signing_algorithms,
+                    pinned_jwk_thumbprints=tuple(sorted(console.oidc.pinned_jwk_thumbprints.items())),
+                    allowed_endpoint_origins=console.oidc.allowed_endpoint_origins,
+                    allowed_private_endpoint_cidrs=console.oidc.allowed_private_endpoint_cidrs,
+                    pinned_endpoint_addresses=console.oidc.pinned_endpoint_addresses,
+                )
+            )
+            approval_credential = os.environ.get(
+                console.approval_service.service_credential_env, ""
+            )
+            if (
+                self.approval_service_client is not None
+                and config.oidc_enrollment is not None
+                and config.oidc_enrollment.approval_service == console.approval_service
+            ):
+                console_approval = self.approval_service_client
+            else:
+                console_approval = ApprovalServiceClient(
+                    console.approval_service,
+                    approval_credential,
+                )
+                self.console_approval_service_client = console_approval
+
+            def require_console_authority(
+                *,
+                actor: VerifiedActor,
+                action: str,
+                resource: str,
+            ) -> Any:
+                return self._require(
+                    actor=actor,
+                    action=action,
+                    resource=resource,
+                    operation_class=(
+                        OperationClass.PROTECTED_READ
+                        if action.startswith("console.")
+                        else OperationClass.PRIVILEGED
+                    ),
+                )
+
+            self.console_sessions = ConsoleSessionService(
+                store=store,
+                audience=console.service_audience,
+                ttl_seconds=console.session_ttl_seconds,
+                challenge_ttl_seconds=console.challenge_ttl_seconds,
+            )
+            self.console_oidc = ConsoleOIDCCoordinator(
+                sessions=self.console_sessions,
+                provider=console_provider,
+                preauth_ttl_seconds=console.preauth_ttl_seconds,
+            )
+            self.console_status = ServerStatusService(
+                store=store,
+                ttl_seconds=console.server_status_ttl_seconds,
+            )
+            self.console_reads = ConsoleReadService(
+                store=store,
+                require=require_console_authority,
+            )
+            if self.internal_invitations is None:
+                raise GateBlocked(
+                    "admin_console",
+                    "admin console enrollment requires configured internal invitations",
+                )
+            self.sponsored_enrollment = SponsoredEnrollmentService(
+                store=store,
+                provider=console_provider,
+                invitations=self.internal_invitations,
+                approval_client=console_approval,
+                approval_verifier=self.approval_verifier,
+                require=require_console_authority,
+            )
+            console_harness_revocations = HarnessRevocationService(
+                store,
+                approval_verifier=self.approval_verifier,
+                relationships=self.relationships,
+                task_grants=self.grants,
+            )
+            self.console_mutations = ConsoleMutationService(
+                store=store,
+                approval_client=console_approval,
+                require=require_console_authority,
+                harness_revocations=console_harness_revocations,
+                approval_public_origin=console.approval_service.public_origin,
+            )
     @classmethod
     def open(
         cls,
@@ -586,6 +713,8 @@ class CommunicationCore:
     def close(self) -> None:
         if self.approval_service_client is not None:
             self.approval_service_client.close()
+        if self.console_approval_service_client is not None:
+            self.console_approval_service_client.close()
         self.store.close()
 
     def create_enrollment_service(

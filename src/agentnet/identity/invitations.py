@@ -15,7 +15,7 @@ import json
 import re
 import secrets
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -412,6 +412,7 @@ class InternalInvitationService:
         *,
         authority: IssuanceAuthority | None,
         when: datetime | None = None,
+        commit_callback: Callable[[Any, InternalInvitationRecord], None] | None = None,
     ) -> InternalInvitationRecord:
         # Pydantic's generic ``model_copy(update=...)`` does not re-run model
         # validators.  Re-parse at this trust boundary so a Python caller
@@ -474,6 +475,8 @@ class InternalInvitationService:
                     domain_revocation_epoch=int(domain["revocation_epoch"]),
                 ):
                     raise ConflictError("invitation identifier already names different canonical bytes")
+                if commit_callback is not None:
+                    commit_callback(connection, existing_record)
                 return existing_record
 
             predecessor = self._require_safe_predecessor(
@@ -584,7 +587,10 @@ class InternalInvitationService:
             ).fetchone()
             if row is None:  # pragma: no cover - same authoritative transaction
                 raise RuntimeError("invitation insert was not observable")
-            return self._from_row(row)
+            record = self._from_row(row)
+            if commit_callback is not None:
+                commit_callback(connection, record)
+            return record
 
     def accept(
         self,
@@ -869,6 +875,17 @@ class InternalInvitationService:
                     "oidc_token_hash": verification.id_token_hash,
                     "positive_entitlements_issued": 0,
                 },
+            )
+            connection.execute(
+                """UPDATE console_enrollment_intents
+                   SET state='enrolled',revision=revision+1,terminal_at=?,updated_at=?
+                   WHERE invitation_id=? AND state IN ('invitation_issued','waiting_possession')""",
+                (now, now, transaction.invitation_id),
+            )
+            connection.execute(
+                """UPDATE console_enrollment_candidates SET state='enrolled',consumed_at=?,updated_at=?
+                   WHERE intent_id=? AND state IN ('invitation_issued','waiting_possession')""",
+                (now, now, transaction.invitation_id),
             )
 
         actor = VerifiedActor(

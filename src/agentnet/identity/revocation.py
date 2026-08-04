@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -124,6 +124,7 @@ class HarnessRevocationService:
         harness_id: str | None = None,
         reason: str | None = None,
         now: int | None = None,
+        commit_callback: Callable[[Any, HarnessRevocationResult], None] | None = None,
     ) -> HarnessRevocationResult:
         if request is None:
             if domain_id is not None or harness_id is not None or reason is not None:
@@ -222,7 +223,7 @@ class HarnessRevocationService:
                         "revoked_at": revoked_at,
                     },
                 )
-                return HarnessRevocationResult(
+                result = HarnessRevocationResult(
                     request.domain_id,
                     request.harness_id,
                     harness["credential_epoch"],
@@ -230,6 +231,9 @@ class HarnessRevocationService:
                     revoked_credentials,
                     True,
                 )
+                if commit_callback is not None:
+                    commit_callback(connection, result)
+                return result
 
             next_credential_epoch = harness["credential_epoch"] + 1
             connection.execute(
@@ -273,11 +277,14 @@ class HarnessRevocationService:
                     "revoked_at": revoked_at,
                 },
             )
-        return HarnessRevocationResult(
-            request.domain_id,
-            request.harness_id,
-            next_credential_epoch,
-            next_domain_epoch,
-            credentials.rowcount,
-            False,
-        )
+            result = HarnessRevocationResult(
+                request.domain_id,
+                request.harness_id,
+                next_credential_epoch,
+                next_domain_epoch,
+                credentials.rowcount,
+                False,
+            )
+            if commit_callback is not None:
+                commit_callback(connection, result)
+        return result
