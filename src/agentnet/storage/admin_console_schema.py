@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS console_session_challenges (
     harness_id TEXT NOT NULL REFERENCES harnesses(harness_id),
     credential_id TEXT NOT NULL REFERENCES credentials(credential_id),
     credential_epoch INTEGER NOT NULL CHECK (credential_epoch >= 1),
+    binding_assurance TEXT NOT NULL CHECK (binding_assurance IN ('os_bound','hardware_bound')),
     audience TEXT NOT NULL,
     nonce_hash TEXT NOT NULL CHECK (length(nonce_hash) = 64),
     transaction_digest TEXT NOT NULL CHECK (length(transaction_digest) = 64),
@@ -17,6 +18,9 @@ CREATE TABLE IF NOT EXISTS console_session_challenges (
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     completed_at INTEGER,
+    handoff_hash TEXT UNIQUE CHECK (handoff_hash IS NULL OR length(handoff_hash) = 64),
+    handoff_expires_at INTEGER,
+    handoff_consumed_at INTEGER,
     consumed_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS console_challenge_expiry_idx
@@ -31,6 +35,7 @@ CREATE TABLE IF NOT EXISTS console_oidc_transactions (
     preauth_hash TEXT NOT NULL UNIQUE CHECK (length(preauth_hash) = 64),
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
+    exchange_started_at INTEGER,
     consumed_at INTEGER
 );
 
@@ -53,11 +58,25 @@ CREATE TABLE IF NOT EXISTS console_browser_sessions (
 CREATE INDEX IF NOT EXISTS console_session_harness_idx
     ON console_browser_sessions(harness_id,expires_at,revoked_at);
 
+CREATE TABLE IF NOT EXISTS console_mutation_authorizations (
+    authorization_hash TEXT PRIMARY KEY CHECK (length(authorization_hash) = 64),
+    session_hash TEXT NOT NULL REFERENCES console_browser_sessions(session_hash) ON DELETE RESTRICT,
+    method TEXT NOT NULL CHECK (method = upper(method)),
+    path TEXT NOT NULL CHECK (substr(path,1,1) = '/'),
+    body_sha256 TEXT NOT NULL CHECK (length(body_sha256) = 64),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL CHECK (expires_at > created_at),
+    consumed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS console_mutation_authorization_expiry_idx
+    ON console_mutation_authorizations(session_hash,expires_at,consumed_at);
+
 CREATE TABLE IF NOT EXISTS console_server_status (
     harness_id TEXT PRIMARY KEY REFERENCES harnesses(harness_id),
     domain_id TEXT NOT NULL REFERENCES domains(domain_id),
     contribution_json TEXT NOT NULL,
     contribution_digest TEXT NOT NULL CHECK (length(contribution_digest) = 64),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
     received_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
 );
@@ -97,6 +116,21 @@ CREATE TABLE IF NOT EXISTS console_enrollment_intents (
 );
 CREATE INDEX IF NOT EXISTS console_enrollment_state_idx
     ON console_enrollment_intents(domain_id,state,expires_at);
+
+CREATE TABLE IF NOT EXISTS console_enrollment_reviews (
+    review_token_hash TEXT PRIMARY KEY CHECK (length(review_token_hash) = 64),
+    domain_id TEXT NOT NULL REFERENCES domains(domain_id),
+    sponsor_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+    sponsor_harness_id TEXT NOT NULL REFERENCES harnesses(harness_id),
+    request_json TEXT NOT NULL,
+    request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+    state TEXT NOT NULL CHECK (state IN ('pending','consumed','expired')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS console_enrollment_review_expiry_idx
+    ON console_enrollment_reviews(domain_id,state,expires_at);
 
 CREATE TABLE IF NOT EXISTS console_enrollment_candidates (
     transaction_id TEXT PRIMARY KEY,
@@ -145,13 +179,16 @@ CREATE TABLE IF NOT EXISTS console_mutations (
     request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
     idempotency_key TEXT NOT NULL UNIQUE,
     state TEXT NOT NULL CHECK (state IN (
-        'prepared','waiting_approval','completed','failed','expired','canceled','unknown'
+        'prepared','waiting_approval','completed','rejected','failed','expired','canceled','unknown'
     )),
     revision INTEGER NOT NULL CHECK (revision >= 1),
     policy_decision_id TEXT REFERENCES policy_decisions(decision_id),
     approval_request_id TEXT UNIQUE,
     approval_transaction_digest TEXT CHECK (
         approval_transaction_digest IS NULL OR length(approval_transaction_digest) = 64
+    ),
+    approval_receipt_digest TEXT CHECK (
+        approval_receipt_digest IS NULL OR length(approval_receipt_digest) = 64
     ),
     possession_secret_encrypted TEXT,
     result_json TEXT,

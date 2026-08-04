@@ -100,12 +100,14 @@ class ServerStatusService:
                     raise ConflictError("server status contribution conflicts at the same revision")
             connection.execute(
                 """INSERT INTO console_server_status(
-                    harness_id,domain_id,contribution_json,contribution_digest,received_at,expires_at
-                ) VALUES(?,?,?,?,?,?)
+                    harness_id,domain_id,contribution_json,contribution_digest,revision,
+                    received_at,expires_at
+                ) VALUES(?,?,?,?,1,?,?)
                 ON CONFLICT(harness_id) DO UPDATE SET
                     domain_id=excluded.domain_id,
                     contribution_json=excluded.contribution_json,
                     contribution_digest=excluded.contribution_digest,
+                    revision=console_server_status.revision+1,
                     received_at=excluded.received_at,
                     expires_at=excluded.expires_at""",
                 (

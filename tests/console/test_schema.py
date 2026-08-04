@@ -16,8 +16,19 @@ def test_console_schema_is_current_and_additive(store) -> None:
         "console_session_challenges",
         "console_oidc_transactions",
         "console_browser_sessions",
+        "console_mutation_authorizations",
         "console_server_status",
         "console_enrollment_intents",
+        "console_enrollment_reviews",
         "console_enrollment_candidates",
         "console_mutations",
     } <= tables
+
+    mutation_columns = {
+        row["name"] for row in store.fetch_all("PRAGMA table_info(console_mutations)")
+    }
+    status_columns = {
+        row["name"] for row in store.fetch_all("PRAGMA table_info(console_server_status)")
+    }
+    assert "approval_receipt_digest" in mutation_columns
+    assert "revision" in status_columns

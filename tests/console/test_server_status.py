@@ -70,3 +70,47 @@ def test_server_status_body_cannot_substitute_another_harness(store, identity_fa
 
     with pytest.raises(AuthenticationError):
         service.publish(actor=alpha, contribution=contribution)
+
+
+def test_live_revision_changes_on_status_write_and_expiry(store, identity_factory) -> None:
+    now = int(time.time())
+    current = {"now": now}
+    actor, _ = identity_factory(
+        domain="corp.example", kind="server-agent", binding_assurance="os_bound"
+    )
+    row = store.fetch_one(
+        "SELECT capabilities_json FROM harnesses WHERE harness_id=?",
+        (actor.harness_id,),
+    )
+    status = ServerStatusService(
+        store=store, ttl_seconds=120, clock=lambda: current["now"]
+    )
+    reader = ConsoleReadService(
+        store=store,
+        require=_Allow().require,
+        clock=lambda: current["now"],
+    )
+    before = reader.live_revision(actor=actor)
+
+    status.publish(
+        actor=actor,
+        contribution=ServerStatusContribution(
+            schema="agentnet.console.server-status.v1",
+            domain_id=actor.domain_id,
+            harness_id=actor.harness_id,
+            runtime_instance_id="server-live-revision",
+            version="0.1.43",
+            capability_digest=hashlib.sha256(
+                row["capabilities_json"].encode()
+            ).hexdigest(),
+            service_states=("message_delivery",),
+            emitted_at=now,
+            expires_at=now + 120,
+        ),
+    )
+    written = reader.live_revision(actor=actor)
+    current["now"] = now + 120
+    expired = reader.live_revision(actor=actor)
+
+    assert before < written < expired
+    assert reader.servers(actor=actor).servers[0].state.value == "Offline"

@@ -27,6 +27,8 @@ from agentnet.identity.actors import VerifiedActor
 from agentnet.storage.backend import StoreBackend
 
 
+_ACTIVITY_LIMIT = 100
+
 _CAPABILITY_LABELS = {
     "offline_custody": "Offline delivery",
     "artifact_storage": "Artifact storage",
@@ -36,11 +38,13 @@ _CAPABILITY_LABELS = {
     "federation": "Federation",
     "effect_executor": "Business effect execution",
     "local_binding": "Local manager binding",
+    "message_delivery": "Message delivery",
+    "offline_delivery": "Offline delivery",
 }
 
 _ACTION_LABELS = {
-    "harness.revoked": "Removed laptop access",
-    "harness.revocation_reconfirmed": "Confirmed removed laptop access",
+    "harness.revoked": "Removed harness access",
+    "harness.revocation_reconfirmed": "Confirmed removed harness access",
     "console.session.opened": "Signed in",
     "console.mutation.requested": "Requested administrator action",
     "console.enrollment.requested": "Started laptop enrollment",
@@ -90,9 +94,16 @@ class ConsoleReadService:
         )
         issue_count = self._security_issue_count(actor.domain_id, now=now)
         online = sum(server.state is VisibleState.ONLINE for server in servers)
-        healthy = issue_count == 0 and online == len(servers)
+        healthy = bool(servers) and issue_count == 0 and online == len(servers)
+        visible_state = (
+            VisibleState.WAITING_SERVER
+            if not servers
+            else VisibleState.ONLINE
+            if healthy
+            else VisibleState.OFFLINE
+        )
         return HomeSummary(
-            state=VisibleState.ONLINE if healthy else VisibleState.OFFLINE,
+            state=visible_state,
             server_total=len(servers),
             server_online=online,
             people_total=int(people_total["count"]) if people_total else 0,
@@ -109,6 +120,28 @@ class ConsoleReadService:
             servers=self._servers(actor.domain_id, now=now, include_technical=include_technical),
             fresh_at=now,
         )
+
+    def live_revision(self, *, actor: VerifiedActor) -> int:
+        self._authorize(actor, "home")
+        now = self.clock()
+        audit_revision = 0
+        for row in self.store.fetch_all(
+            "SELECT sequence,record_json FROM audit_log ORDER BY sequence DESC"
+        ):
+            record = self._json_object(row["record_json"])
+            if record.get("domain_id") == actor.domain_id:
+                audit_revision = int(row["sequence"])
+                break
+        status_revision = 0
+        for row in self.store.fetch_all(
+            "SELECT revision,expires_at FROM console_server_status WHERE domain_id=?",
+            (actor.domain_id,),
+        ):
+            status_revision += 2 * int(row["revision"])
+            if int(row["expires_at"]) <= now:
+                status_revision += 1
+        combined = audit_revision + status_revision
+        return combined * (combined + 1) // 2 + status_revision
 
     def _servers(
         self, domain_id: str, *, now: int, include_technical: bool
@@ -265,7 +298,7 @@ class ConsoleReadService:
         approvals: list[ApprovalSummary] = []
         mutations = self.store.fetch_all(
             """SELECT mutation_id,mutation_kind,resource,request_json,state,expires_at
-               FROM console_mutations WHERE domain_id=? AND state IN ('prepared','waiting_approval','unknown')
+               FROM console_mutations WHERE domain_id=?
                ORDER BY created_at,mutation_id""",
             (actor.domain_id,),
         )
@@ -281,14 +314,26 @@ class ConsoleReadService:
                     consequence=str(request.get("consequence", "The reviewed access change will be applied.")),
                     state=self._pending_state(str(row["state"]), int(row["expires_at"]), now=now),
                     expires_at=int(row["expires_at"]),
-                    action_path=f"/mutations/{row['mutation_id']}/reconcile",
-                    action_confirmation="Apply this approved action",
-                    action_label="Check approval and apply",
+                    action_path=(
+                        f"/mutations/{row['mutation_id']}/reconcile"
+                        if row["state"] == "waiting_approval"
+                        else None
+                    ),
+                    action_confirmation=(
+                        "Apply this approved action"
+                        if row["state"] == "waiting_approval"
+                        else None
+                    ),
+                    action_label=(
+                        "Check approval and apply"
+                        if row["state"] == "waiting_approval"
+                        else None
+                    ),
                 )
             )
         enrollments = self.store.fetch_all(
-            """SELECT intent_id,target_kind,request_json,state,expires_at FROM console_enrollment_intents
-               WHERE domain_id=? AND state IN ('waiting_target','candidate_verified','waiting_approval','unknown')
+            """SELECT intent_id,target_kind,request_json,state,expires_at
+               FROM console_enrollment_intents WHERE domain_id=?
                ORDER BY created_at,intent_id""",
             (actor.domain_id,),
         )
@@ -348,12 +393,12 @@ class ConsoleReadService:
         self._authorize(actor, "activity")
         now = self.clock()
         rows = self.store.fetch_all(
-            "SELECT sequence,occurred_at,record_json,record_hash FROM audit_log ORDER BY sequence DESC LIMIT 100"
+            "SELECT sequence,occurred_at,record_json,record_hash FROM audit_log ORDER BY sequence DESC"
         )
         events: list[ActivitySummary] = []
         for row in rows:
             record = self._json_object(row["record_json"])
-            if record.get("domain_id") not in {None, actor.domain_id}:
+            if record.get("domain_id") != actor.domain_id:
                 continue
             action_code = str(record.get("action", ""))
             harness_id = record.get("harness_id") or record.get("actor_harness_id")
@@ -368,7 +413,7 @@ class ConsoleReadService:
                     ),
                     action=_ACTION_LABELS.get(action_code, "Administrative activity"),
                     resource=str(resource),
-                    result="Could not complete" if record.get("outcome") in {"denied", "failed"} else "Completed",
+                    result=self._outcome_label(record.get("outcome")),
                     server=str(harness_id) if harness_id else None,
                     technical=(
                         {"Audit digest": str(row["record_hash"]), "Action code": action_code or "unknown"}
@@ -377,6 +422,8 @@ class ConsoleReadService:
                     ),
                 )
             )
+            if len(events) == _ACTIVITY_LIMIT:
+                break
         return ActivityPage(events=tuple(events), fresh_at=now)
 
     def _security_issue_count(self, domain_id: str, *, now: int) -> int:
@@ -521,7 +568,7 @@ class ConsoleReadService:
     @staticmethod
     def _mutation_title(value: str) -> str:
         return {
-            "harness_revoke": "Remove laptop access",
+            "harness_revoke": "Remove harness access",
             "credential_rotation_start": "Rotate a credential",
             "credential_recovery_start": "Recover a credential",
             "entitlement_issue": "Grant access",
@@ -530,14 +577,46 @@ class ConsoleReadService:
         }.get(value, "Administrator action")
 
     @staticmethod
+    def _outcome_label(value: Any) -> str:
+        return {
+            "completed": "Completed",
+            "success": "Completed",
+            "accepted": "Completed",
+            "allowed": "Completed",
+            "waiting": "Waiting",
+            "pending": "Waiting",
+            "issued": "Waiting",
+            "waiting_approval": "Waiting",
+            "waiting_target": "Waiting",
+            "waiting_possession": "Waiting",
+            "unknown": "Unknown — needs reconciliation",
+            "rejected": "Rejected",
+            "expired": "Expired",
+            "canceled": "Canceled",
+            "denied": "Denied",
+            "blocked": "Blocked",
+            "failed": "Failed",
+        }.get(str(value), "Unknown — needs reconciliation")
+
+    @staticmethod
     def _pending_state(value: str, expires_at: int, *, now: int) -> VisibleState:
-        if expires_at <= now:
+        if value == "expired" or expires_at <= now:
             return VisibleState.EXPIRED
-        if value == "waiting_approval":
-            return VisibleState.WAITING_APPROVAL
-        if value == "unknown":
-            return VisibleState.UNKNOWN
-        return VisibleState.WAITING_SERVER
+        return {
+            "prepared": VisibleState.WAITING_SERVER,
+            "waiting_target": VisibleState.WAITING_SERVER,
+            "invitation_issued": VisibleState.WAITING_SERVER,
+            "waiting_possession": VisibleState.WAITING_SERVER,
+            "candidate_verified": VisibleState.WAITING_APPROVAL,
+            "waiting_approval": VisibleState.WAITING_APPROVAL,
+            "enrolled": VisibleState.COMPLETED,
+            "completed": VisibleState.COMPLETED,
+            "canceled": VisibleState.CANCELED,
+            "blocked": VisibleState.BLOCKED,
+            "rejected": VisibleState.FAILED,
+            "failed": VisibleState.FAILED,
+            "unknown": VisibleState.UNKNOWN,
+        }.get(value, VisibleState.UNKNOWN)
 
 
 __all__ = ["ConsoleReadService"]

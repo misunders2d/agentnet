@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import secrets
 from datetime import UTC, datetime
-from typing import Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
 from agentnet.console.models import (
@@ -18,6 +18,8 @@ from agentnet.console.models import (
     VisibleState,
 )
 
+
+MutationAuthorizer = Callable[[str, Mapping[str, Sequence[str]]], str]
 
 _NAV = (
     ("Home", "/", "home"),
@@ -68,13 +70,23 @@ class ConsoleRenderer:
         self.asset_version = asset_version
         self.approval_origin = approval_origin.rstrip("/") if approval_origin else None
 
+    @staticmethod
+    def _mutation_token_input(
+        authorize_mutation: MutationAuthorizer,
+        *,
+        path: str,
+        form: Mapping[str, Sequence[str]],
+    ) -> str:
+        token = authorize_mutation(path, form)
+        return f'<input type="hidden" name="mutation_token" value="{_e(token)}">'
+
     def document(
         self,
         *,
         title: str,
         current_nav: str,
         body: str,
-        csrf_token: str,
+        authorize_mutation: MutationAuthorizer,
         fresh_at: int,
         revision: int = 0,
     ) -> str:
@@ -82,6 +94,7 @@ class ConsoleRenderer:
             f'<li><a href="{path}"{(" aria-current=\"page\"" if key == current_nav else "")}>{label}</a></li>'
             for label, path, key in _NAV
         )
+        sign_out_token = authorize_mutation("/v1/console/sign-out", {})
         return (
             "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -93,9 +106,9 @@ class ConsoleRenderer:
             '<a class="skip-link" href="#main">Skip to main content</a>'
             '<header class="site-header"><div class="header-inner">'
             '<a class="brand" href="/">AgentNet administration</a>'
-            f'<nav class="primary-nav" aria-label="Primary"><ul>{navigation}</ul></nav>'
+            f'<nav aria-label="Primary"><div class="primary-nav"><ul>{navigation}</ul></div></nav>'
             '<form class="sign-out" method="post" action="/v1/console/sign-out">'
-            f'<input type="hidden" name="csrf_token" value="{_e(csrf_token)}">'
+            f'<input type="hidden" name="mutation_token" value="{_e(sign_out_token)}">'
             '<button class="secondary" type="submit">Sign out</button></form>'
             "</div></header>"
             f'<main id="main" tabindex="-1">{body}'
@@ -103,12 +116,53 @@ class ConsoleRenderer:
             f"Updated {_e(_time(fresh_at))}</p></main></body></html>"
         )
 
-    def home(self, home: HomeSummary, csrf_token: str) -> str:
+    def mutation_review(
+        self,
+        *,
+        title: str,
+        consequence: str,
+        action_path: str,
+        action_label: str,
+        form: Mapping[str, Sequence[str]],
+        authorize_mutation: MutationAuthorizer,
+        fresh_at: int,
+    ) -> str:
+        hidden = "".join(
+            f'<input type="hidden" name="{_e(name)}" value="{_e(value)}">'
+            for name in sorted(form)
+            for value in form[name]
+        )
+        body = (
+            '<div class="page-heading"><div><p class="eyebrow">Exact action review</p>'
+            f"<h1>{_e(title)}</h1></div></div>"
+            f'<section class="panel"><div class="notice warning"><strong>Exact consequence:</strong> {_e(consequence)}</div>'
+            f'<form method="post" action="{_e(action_path)}">'
+            f'{self._mutation_token_input(authorize_mutation, path=action_path, form=form)}'
+            f"{hidden}"
+            f'<button class="danger" type="submit">{_e(action_label)}</button></form></section>'
+        )
+        return self.document(
+            title=title,
+            current_nav="people",
+            body=body,
+            authorize_mutation=authorize_mutation,
+            fresh_at=fresh_at,
+        )
+
+    def home(self, home: HomeSummary, authorize_mutation: MutationAuthorizer) -> str:
         healthy = home.state is VisibleState.ONLINE
-        state_title = "Network healthy" if healthy else "Network needs attention"
+        state_title = (
+            "Network healthy"
+            if healthy
+            else "Waiting for server"
+            if home.state is VisibleState.WAITING_SERVER
+            else "Network needs attention"
+        )
         state_copy = (
             "All visible server status and security checks are current."
             if healthy
+            else "No enrolled server is currently visible."
+            if home.state is VisibleState.WAITING_SERVER
             else "Review offline servers, waiting approvals, and security issues below."
         )
         body = (
@@ -133,11 +187,11 @@ class ConsoleRenderer:
             title="Home",
             current_nav="home",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=home.fresh_at,
         )
 
-    def servers(self, page: ServerPage, csrf_token: str) -> str:
+    def servers(self, page: ServerPage, authorize_mutation: MutationAuthorizer) -> str:
         if page.servers:
             cards = []
             for server in page.servers:
@@ -167,11 +221,34 @@ class ConsoleRenderer:
             title="Servers",
             current_nav="servers",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=page.fresh_at,
         )
 
-    def people(self, page: PersonPage, csrf_token: str) -> str:
+    def people(
+        self,
+        page: PersonPage,
+        authorize_mutation: MutationAuthorizer,
+        *,
+        enrollment_values: Mapping[str, object] | None = None,
+        enrollment_error: str | None = None,
+    ) -> str:
+        values = enrollment_values or {}
+        target_kind = str(values.get("target_kind", "existing_person"))
+        target_principal_id = str(values.get("target_principal_id", ""))
+        invited_email_alias = str(values.get("invited_email_alias", ""))
+        harness_name = str(values.get("harness_name", ""))
+        reason = str(values.get("reason", ""))
+        capability_values = values.get("capabilities", ())
+        selected_capabilities = (
+            {
+                str(value)
+                for value in capability_values
+                if isinstance(value, str)
+            }
+            if isinstance(capability_values, (tuple, list))
+            else set()
+        )
         people: list[str] = []
         for person in page.people:
             harnesses: list[str] = []
@@ -182,15 +259,14 @@ class ConsoleRenderer:
                     remove = (
                         '<details><summary>Review access removal</summary>'
                         '<p>This removes access for this exact laptop or agent only. The person and sibling laptops remain active.</p>'
-                        f'<form method="post" action="/harnesses/{quote(harness.harness_id, safe="")}/revoke">'
-                        f'<input type="hidden" name="csrf_token" value="{_e(csrf_token)}">'
+                        f'<form method="post" action="/harnesses/{quote(harness.harness_id, safe="")}/revoke/review">'
                         f'<input type="hidden" name="idempotency_key" value="{_e(secrets.token_urlsafe(24))}">'
                         '<div class="field"><label for="reason-'
                         f'{_e(harness.harness_id)}">Reason</label><textarea id="reason-{_e(harness.harness_id)}" name="reason" required maxlength="512"></textarea></div>'
                         '<div class="field"><label for="confirmation-'
                         f'{_e(harness.harness_id)}">Type “{_e(phrase)}”</label>'
                         f'<input id="confirmation-{_e(harness.harness_id)}" name="confirmation" required autocomplete="off"></div>'
-                        '<button class="danger" type="submit">Remove this laptop’s access</button></form></details>'
+                        '<button class="danger" type="submit">Remove this harness’s access</button></form></details>'
                     )
                 harnesses.append(
                     f'<li class="panel" id="harness-{_e(harness.harness_id)}"><div class="panel-header">'
@@ -225,30 +301,43 @@ class ConsoleRenderer:
                 f"<tbody>{rows}</tbody></table></div></section>"
             )
         options = "".join(
-            f'<option value="{_e(person.principal_id)}">{_e(person.display_name)}</option>'
+            f'<option value="{_e(person.principal_id)}"'
+            f'{(" selected" if person.principal_id == target_principal_id else "")}>'
+            f'{_e(person.display_name)}</option>'
             for person in page.people
             if person.access_state == "Active"
+        )
+        error = (
+            f'<div class="notice warning" role="alert"><strong>Review the form:</strong> {_e(enrollment_error)}</div>'
+            if enrollment_error
+            else ""
         )
         enroll = (
             '<section class="section panel" id="enroll" aria-labelledby="enroll-title"><p class="eyebrow">Proof-bound enrollment</p>'
             '<h2 id="enroll-title">Enroll a laptop</h2>'
-            '<p>Starting this request creates no access. The target must verify identity, prove device possession, and receive fresh passkey approval.</p>'
-            '<form method="post" action="/enrollments">'
-            f'<input type="hidden" name="csrf_token" value="{_e(csrf_token)}">'
+            '<p>Reviewing this request creates no access. The target must verify identity, prove device possession, and receive fresh passkey approval.</p>'
+            f"{error}"
+            '<form method="post" action="/enrollments/review">'
             f'<input type="hidden" name="idempotency_key" value="{_e(secrets.token_urlsafe(24))}">'
             '<fieldset class="field"><legend>Who will use this laptop?</legend>'
-            '<label><input type="radio" name="target_kind" value="existing_person" checked> Existing person</label>'
-            '<label><input type="radio" name="target_kind" value="new_person"> Invite someone new</label></fieldset>'
+            '<label><input type="radio" name="target_kind" value="existing_person"'
+            f'{(" checked" if target_kind == "existing_person" else "")}> Existing person</label>'
+            '<label><input type="radio" name="target_kind" value="new_person"'
+            f'{(" checked" if target_kind == "new_person" else "")}> Invite someone new</label></fieldset>'
             f'<div class="field"><label for="target-principal">Existing person</label><select id="target-principal" name="target_principal_id"><option value="">Choose a person</option>{options}</select></div>'
-            '<div class="field"><label for="invited-email">New person’s verified email</label><input id="invited-email" name="invited_email_alias" type="email" autocomplete="email" maxlength="320"></div>'
-            '<div class="field"><label for="harness-name">Laptop or agent name</label><input id="harness-name" name="harness_name" required maxlength="128" autocomplete="off"></div>'
+            '<div class="field"><label for="invited-email">New person’s verified email</label>'
+            f'<input id="invited-email" name="invited_email_alias" type="email" autocomplete="email" maxlength="320" value="{_e(invited_email_alias)}"></div>'
+            '<div class="field"><label for="harness-name">Laptop name</label>'
+            f'<input id="harness-name" name="harness_name" required maxlength="128" autocomplete="off" value="{_e(harness_name)}"></div>'
             '<fieldset class="field"><legend>Requested services</legend>'
-            '<label><input type="checkbox" name="capabilities" value="message_delivery"> Message delivery</label>'
-            '<label><input type="checkbox" name="capabilities" value="offline_delivery"> Offline delivery</label></fieldset>'
-            '<div class="field"><label for="enrollment-reason">Reason</label><textarea id="enrollment-reason" name="reason" required maxlength="512"></textarea></div>'
-            '<div class="notice warning"><strong>Exact consequence:</strong> This only starts a request. No access is created until the target verifies identity, proves device possession, and a fresh passkey approval completes.</div>'
-            '<div class="field"><label><input type="checkbox" name="confirmation" value="Start this enrollment request" required> Start this enrollment request with these exact details</label></div>'
-            '<button type="submit">Start enrollment request</button></form></section>'
+            '<label><input type="checkbox" name="capabilities" value="message_delivery"'
+            f'{(" checked" if "message_delivery" in selected_capabilities else "")}> Message delivery</label>'
+            '<label><input type="checkbox" name="capabilities" value="offline_delivery"'
+            f'{(" checked" if "offline_delivery" in selected_capabilities else "")}> Offline delivery</label></fieldset>'
+            '<div class="field"><label for="enrollment-reason">Reason</label>'
+            f'<textarea id="enrollment-reason" name="reason" required maxlength="512">{_e(reason)}</textarea></div>'
+            '<div class="notice warning"><strong>Exact consequence:</strong> This review creates no access. No access is created until the target verifies identity, proves device possession, and a fresh passkey approval completes.</div>'
+            '<button type="submit">Review enrollment request</button></form></section>'
         )
         body = (
             '<div class="page-heading"><div><p class="eyebrow">Verified identities</p><h1>People</h1>'
@@ -260,11 +349,61 @@ class ConsoleRenderer:
             title="People",
             current_nav="people",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=page.fresh_at,
         )
 
-    def approvals(self, page: ApprovalPage, csrf_token: str) -> str:
+    def enrollment_review(
+        self,
+        *,
+        person: str,
+        harness_kind: str,
+        harness_name: str,
+        capabilities: Sequence[str],
+        reason: str,
+        consequence: str,
+        expires_at: int,
+        review_token: str,
+        authorize_mutation: MutationAuthorizer,
+        fresh_at: int,
+    ) -> str:
+        confirmation = "Create this reviewed enrollment request"
+        form = {
+            "confirmation": [confirmation],
+            "review_token": [review_token],
+        }
+        capability_labels = {
+            "message_delivery": "Message delivery",
+            "offline_delivery": "Offline delivery",
+        }
+        body = (
+            '<div class="page-heading"><div><p class="eyebrow">Exact enrollment review</p>'
+            '<h1>Review enrollment request</h1>'
+            '<p>No durable enrollment intent exists yet.</p></div></div>'
+            '<section class="panel" aria-labelledby="reviewed-enrollment">'
+            '<h2 id="reviewed-enrollment">Reviewed details</h2><dl class="meta">'
+            f'<div><dt>Person</dt><dd>{_e(person)}</dd></div>'
+            f'<div><dt>Device</dt><dd>{_e(harness_name)} ({_e(harness_kind)})</dd></div>'
+            f'<div><dt>Expires</dt><dd>{_e(_time(expires_at))}</dd></div>'
+            f'<div><dt>Reason</dt><dd>{_e(reason)}</dd></div></dl>'
+            '<h3>Allowed requested services</h3>'
+            f'{_tags((capability_labels.get(value, value) for value in capabilities), empty="No additional services requested")}'
+            f'<div class="notice warning"><strong>Exact consequence:</strong> {_e(consequence)}</div>'
+            '<form method="post" action="/enrollments">'
+            f'{self._mutation_token_input(authorize_mutation, path="/enrollments", form=form)}'
+            f'<input type="hidden" name="review_token" value="{_e(review_token)}">'
+            f'<label><input type="checkbox" name="confirmation" value="{_e(confirmation)}" required> {_e(confirmation)}</label>'
+            '<button type="submit">Create enrollment request</button></form></section>'
+        )
+        return self.document(
+            title="Review enrollment request",
+            current_nav="people",
+            body=body,
+            authorize_mutation=authorize_mutation,
+            fresh_at=fresh_at,
+        )
+
+    def approvals(self, page: ApprovalPage, authorize_mutation: MutationAuthorizer) -> str:
         approval_href = (self.approval_origin + "/approval") if self.approval_origin else "/approvals"
         if page.approvals:
             items = "".join(
@@ -276,10 +415,14 @@ class ConsoleRenderer:
                 f'{_tags(item.capabilities, empty="No additional services requested")}'
                 f'<div class="notice warning"><strong>Exact consequence:</strong> {_e(item.consequence)}</div>'
                 f'<p class="muted">Expires {_e(_time(item.expires_at))}</p>'
-                f'<p><a class="button secondary" href="{_e(approval_href)}">Approve with passkey</a></p>'
+                + (
+                    f'<p><a class="button secondary" href="{_e(approval_href)}">Approve with passkey</a></p>'
+                    if item.state is VisibleState.WAITING_APPROVAL
+                    else ""
+                )
                 + (
                     f'<form method="post" action="{_e(item.action_path)}">'
-                    f'<input type="hidden" name="csrf_token" value="{_e(csrf_token)}">'
+                    f'{self._mutation_token_input(authorize_mutation, path=item.action_path, form={"confirmation": [item.action_confirmation]})}'
                     f'<label><input type="checkbox" name="confirmation" value="{_e(item.action_confirmation)}" required> {_e(item.action_confirmation)}</label>'
                     f'<button type="submit">{_e(item.action_label)}</button></form>'
                     if item.action_path and item.action_confirmation and item.action_label
@@ -300,11 +443,11 @@ class ConsoleRenderer:
             title="Approvals",
             current_nav="approvals",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=page.fresh_at,
         )
 
-    def security(self, page: SecurityPage, csrf_token: str) -> str:
+    def security(self, page: SecurityPage, authorize_mutation: MutationAuthorizer) -> str:
         audit = "Activity record healthy" if page.audit_healthy else "Activity record needs attention"
         issues = "".join(
             '<article class="panel"><div class="panel-header"><div>'
@@ -330,11 +473,11 @@ class ConsoleRenderer:
             title="Security",
             current_nav="security",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=page.fresh_at,
         )
 
-    def activity(self, page: ActivityPage, csrf_token: str) -> str:
+    def activity(self, page: ActivityPage, authorize_mutation: MutationAuthorizer) -> str:
         if page.events:
             rows = "".join(
                 '<tr>'
@@ -361,7 +504,7 @@ class ConsoleRenderer:
             title="Activity",
             current_nav="activity",
             body=body,
-            csrf_token=csrf_token,
+            authorize_mutation=authorize_mutation,
             fresh_at=page.fresh_at,
         )
 

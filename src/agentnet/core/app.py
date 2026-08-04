@@ -568,28 +568,13 @@ class CommunicationCore:
                 )
                 self.console_approval_service_client = console_approval
 
-            def require_console_authority(
-                *,
-                actor: VerifiedActor,
-                action: str,
-                resource: str,
-            ) -> Any:
-                return self._require(
-                    actor=actor,
-                    action=action,
-                    resource=resource,
-                    operation_class=(
-                        OperationClass.PROTECTED_READ
-                        if action.startswith("console.")
-                        else OperationClass.PRIVILEGED
-                    ),
-                )
 
             self.console_sessions = ConsoleSessionService(
                 store=store,
                 audience=console.service_audience,
                 ttl_seconds=console.session_ttl_seconds,
                 challenge_ttl_seconds=console.challenge_ttl_seconds,
+                require=self._require_console_authority,
             )
             self.console_oidc = ConsoleOIDCCoordinator(
                 sessions=self.console_sessions,
@@ -602,7 +587,7 @@ class CommunicationCore:
             )
             self.console_reads = ConsoleReadService(
                 store=store,
-                require=require_console_authority,
+                require=self._require_console_authority,
             )
             if self.internal_invitations is None:
                 raise GateBlocked(
@@ -615,7 +600,7 @@ class CommunicationCore:
                 invitations=self.internal_invitations,
                 approval_client=console_approval,
                 approval_verifier=self.approval_verifier,
-                require=require_console_authority,
+                require=self._require_console_authority,
             )
             console_harness_revocations = HarnessRevocationService(
                 store,
@@ -626,7 +611,7 @@ class CommunicationCore:
             self.console_mutations = ConsoleMutationService(
                 store=store,
                 approval_client=console_approval,
-                require=require_console_authority,
+                require=self._require_console_authority,
                 harness_revocations=console_harness_revocations,
                 approval_public_origin=console.approval_service.public_origin,
             )
@@ -1019,6 +1004,26 @@ class CommunicationCore:
         elapsed = min(30_000, max(0, (time.perf_counter_ns() - started) // 1_000_000))
         self.telemetry.observe_latency("auth_latency", int(elapsed))
         return context
+
+    def _require_console_authority(
+        self,
+        *,
+        actor: VerifiedActor,
+        action: str,
+        resource: str,
+        context: dict[str, Any] | None = None,
+    ) -> Any:
+        return self._require(
+            actor=actor,
+            action=action,
+            resource=resource,
+            operation_class=(
+                OperationClass.PROTECTED_READ
+                if action.startswith("console.")
+                else OperationClass.PRIVILEGED
+            ),
+            context=context,
+        )
 
     def _require(
         self,

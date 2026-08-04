@@ -114,29 +114,54 @@ def create_console_app(
         request.scope["agentnet.console_session"] = status
         return status
 
-    async def mutation_form(request: Request) -> tuple[ConsoleSessionStatus, dict[str, list[str]]]:
+    async def parsed_form(
+        request: Request,
+        *,
+        same_origin: bool = True,
+    ) -> dict[str, list[str]]:
         require_host(request)
-        require_origin(request)
+        if same_origin:
+            require_origin(request)
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
         if content_type != "application/x-www-form-urlencoded":
             raise ValidationError("form encoding is required")
-        raw_body = await request.body()
-        form = _parse_query_form(raw_body)
-        csrf_values = form.get("csrf_token", [])
-        if len(csrf_values) != 1 or not csrf_values[0]:
+        return _parse_query_form(await request.body())
+
+    async def review_form(request: Request) -> tuple[ConsoleSessionStatus, dict[str, list[str]]]:
+        form = await parsed_form(request)
+        status = session_for(request)
+        return status, form
+
+    async def mutation_form(request: Request) -> tuple[ConsoleSessionStatus, dict[str, list[str]]]:
+        form = await parsed_form(request)
+        authorization_values = form.get("mutation_token", [])
+        if len(authorization_values) != 1 or not authorization_values[0]:
             raise AuthorizationError("console mutation denied")
         status = sessions.require_mutation(
             session_token=request.cookies.get(SESSION_COOKIE, ""),
-            csrf_token=csrf_values[0],
+            authorization_token=authorization_values[0],
             method=request.method,
             path=request.url.path,
-            body_sha256=hashlib.sha256(raw_body).hexdigest(),
+            form=form,
         )
         request.scope["agentnet.console_session"] = status
         return status, form
 
     def page_response(document: str, *, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(document, status_code=status_code, headers=protected_headers())
+
+    def mutation_authorizer(request: Request):
+        session_token = request.cookies.get(SESSION_COOKIE, "")
+
+        def authorize(path: str, form) -> str:
+            return sessions.issue_mutation_authorization(
+                session_token=session_token,
+                method="POST",
+                path=path,
+                form=form,
+            )
+
+        return authorize
 
     async def health(request: Request) -> Response:
         require_host(request)
@@ -169,27 +194,57 @@ def create_console_app(
 
     async def home(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.home(read_service.home(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.home(
+                read_service.home(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def servers_page(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.servers(read_service.servers(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.servers(
+                read_service.servers(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def people_page(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.people(read_service.people(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.people(
+                read_service.people(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def approvals_page(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.approvals(read_service.approvals(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.approvals(
+                read_service.approvals(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def security_page(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.security(read_service.security(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.security(
+                read_service.security(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def activity_page(request: Request) -> Response:
         status = session_for(request)
-        return page_response(renderer.activity(read_service.activity(actor=status.actor), status.csrf_token))
+        return page_response(
+            renderer.activity(
+                read_service.activity(actor=status.actor),
+                mutation_authorizer(request),
+            )
+        )
 
     async def begin_challenge(request: Request) -> Response:
         if core is None:
@@ -209,6 +264,7 @@ def create_console_app(
                 "transaction": challenge.transaction,
                 "transaction_digest": challenge.transaction_digest,
                 "expires_at": challenge.expires_at,
+                "console_origin": origin,
             },
             status_code=201,
             headers=protected_headers(),
@@ -222,16 +278,16 @@ def create_console_app(
             parsed = _ChallengeComplete.model_validate_json(raw)
         except PydanticValidationError as exc:
             raise ValidationError("console challenge completion is invalid") from exc
-        challenge_id = request.path_params["challenge_id"]
-        sessions.complete_challenge(
+        completed = sessions.complete_challenge(
             actor=context.actor,
-            challenge_id=challenge_id,
+            challenge_id=request.path_params["challenge_id"],
             transaction_digest=parsed.transaction_digest,
         )
         return JSONResponse(
             {
-                "schema": "agentnet.console.session-challenge-completed.v1",
-                "launch_url": f"{origin}/v1/console/open/{challenge_id}",
+                "schema": "agentnet.console.session-handoff.v1",
+                "handoff_token": completed.handoff_token,
+                "expires_at": completed.expires_at,
             },
             headers=protected_headers(),
         )
@@ -240,7 +296,8 @@ def create_console_app(
         require_host(request)
         if oidc is None:
             raise GateBlocked("admin_console_oidc", "Sign in is unavailable")
-        begun = oidc.begin(challenge_id=request.path_params["challenge_id"])
+        form = await parsed_form(request, same_origin=False)
+        begun = oidc.begin(handoff_token=_single(form, "handoff_token"))
         response = RedirectResponse(begun.authorization_url, status_code=303, headers=protected_headers())
         response.set_cookie(
             PREAUTH_COOKIE,
@@ -248,7 +305,7 @@ def create_console_app(
             max_age=max(1, begun.expires_at - sessions.clock()),
             secure=True,
             httponly=True,
-            samesite="strict",
+            samesite="lax",
             path="/",
         )
         return response
@@ -332,7 +389,7 @@ def create_console_app(
             samesite="strict",
             path="/",
         )
-        response.delete_cookie(PREAUTH_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+        response.delete_cookie(PREAUTH_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
         return response
 
     async def sign_out(request: Request) -> Response:
@@ -344,29 +401,96 @@ def create_console_app(
         del status
         return response
 
+    async def review_enrollment(request: Request) -> Response:
+        status, form = await review_form(request)
+        target_kind = _single(form, "target_kind")
+        target_principal = _single(
+            form, "target_principal_id", required=False
+        ) or None
+        invited_email = _single(
+            form, "invited_email_alias", required=False
+        ) or None
+        enrollment_values = {
+            "target_kind": target_kind,
+            "target_principal_id": target_principal or "",
+            "invited_email_alias": invited_email or "",
+            "harness_name": _single(form, "harness_name"),
+            "capabilities": tuple(form.get("capabilities", [])),
+            "reason": _single(form, "reason"),
+        }
+        try:
+            review = mutation_service.prepare_enrollment_review(
+                actor=status.actor,
+                target_kind=target_kind,
+                target_principal_id=target_principal,
+                invited_email_alias=invited_email,
+                harness_kind="laptop",
+                harness_name=str(enrollment_values["harness_name"]),
+                capabilities=tuple(enrollment_values["capabilities"]),
+                reason=str(enrollment_values["reason"]),
+                idempotency_key=_single(form, "idempotency_key"),
+            )
+        except ValidationError as exc:
+            return page_response(
+                renderer.people(
+                    read_service.people(actor=status.actor),
+                    mutation_authorizer(request),
+                    enrollment_values=enrollment_values,
+                    enrollment_error=str(exc),
+                ),
+                status_code=400,
+            )
+        return page_response(
+            renderer.enrollment_review(
+                person=review.person,
+                harness_kind=review.harness_kind,
+                harness_name=review.harness_name,
+                capabilities=review.capabilities,
+                reason=review.reason,
+                consequence=review.consequence,
+                expires_at=review.expires_at,
+                review_token=review.review_token,
+                authorize_mutation=mutation_authorizer(request),
+                fresh_at=sessions.clock(),
+            )
+        )
+
     async def create_enrollment(request: Request) -> Response:
         status, form = await mutation_form(request)
-        target_kind = _single(form, "target_kind")
-        target_principal = _single(form, "target_principal_id", required=False) or None
-        invited_email = _single(form, "invited_email_alias", required=False) or None
-        if target_kind == "existing_person":
-            invited_email = None
-        elif target_kind == "new_person":
-            target_principal = None
-        confirmation = _single(form, "confirmation")
-        if confirmation != "Start this enrollment request":
-            raise ValidationError("Review and acknowledge the exact enrollment consequence")
+        if _single(form, "confirmation") != "Create this reviewed enrollment request":
+            raise ValidationError("Confirm the exact reviewed enrollment")
         mutation_service.create_enrollment_intent(
             actor=status.actor,
-            target_kind=target_kind,
-            target_principal_id=target_principal,
-            invited_email_alias=invited_email,
-            harness_name=_single(form, "harness_name"),
-            capabilities=tuple(form.get("capabilities", [])),
-            reason=_single(form, "reason"),
-            idempotency_key=_single(form, "idempotency_key"),
+            review_token=_single(form, "review_token"),
         )
-        return RedirectResponse("/approvals", status_code=303, headers=protected_headers())
+        return RedirectResponse(
+            "/approvals", status_code=303, headers=protected_headers()
+        )
+
+    async def review_harness_revocation(request: Request) -> Response:
+        status, form = await review_form(request)
+        harness_id = request.path_params["harness_id"]
+        required_confirmation = f"Remove access for {harness_id}"
+        if _single(form, "confirmation") != required_confirmation:
+            raise ValidationError(f"Type “{required_confirmation}” to continue")
+        exact_form = {
+            "confirmation": [required_confirmation],
+            "idempotency_key": [_single(form, "idempotency_key")],
+            "reason": [_single(form, "reason")],
+        }
+        return page_response(
+            renderer.mutation_review(
+                title="Review harness access removal",
+                consequence=(
+                    f"This removes access for {harness_id}. The person and sibling harnesses remain active."
+                ),
+                action_path=f"/harnesses/{harness_id}/revoke",
+                action_label="Remove this harness’s access",
+                form=exact_form,
+                authorize_mutation=mutation_authorizer(request),
+                fresh_at=sessions.clock(),
+            )
+        )
 
     async def revoke_harness(request: Request) -> Response:
         status, form = await mutation_form(request)
@@ -419,17 +543,12 @@ def create_console_app(
 
 
 
-    def revision_for(domain_id: str) -> int:
-        row = sessions.store.fetch_one(
-            """SELECT COALESCE(MAX(sequence),0) AS revision FROM audit_log
-               WHERE record_json LIKE ?""",
-            (f'%"domain_id":"{domain_id}"%',),
-        )
-        return int(row["revision"]) if row is not None else 0
+    def revision_for(actor) -> int:
+        return read_service.live_revision(actor=actor)
 
     async def snapshot(request: Request) -> Response:
         status = session_for(request)
-        revision = revision_for(status.actor.domain_id)
+        revision = revision_for(status.actor)
         return JSONResponse(
             {
                 "schema": "agentnet.console.snapshot.v1",
@@ -451,7 +570,7 @@ def create_console_app(
             raise ValidationError("event cursor is invalid") from exc
 
         async def stream():
-            revision = revision_for(status.actor.domain_id)
+            revision = revision_for(status.actor)
             payload = {
                 "revision": revision,
                 "view": "network",
@@ -496,7 +615,7 @@ def create_console_app(
             complete_challenge,
             methods=["POST"],
         ),
-        Route("/v1/console/open/{challenge_id}", open_console, methods=["GET"]),
+        Route("/v1/console/open", open_console, methods=["POST"]),
         Route("/v1/console/oidc/callback", oidc_callback, methods=["GET"]),
         Route("/v1/console/sign-out", sign_out, methods=["POST"]),
         Route("/", home, methods=["GET"]),
@@ -505,8 +624,10 @@ def create_console_app(
         Route("/approvals", approvals_page, methods=["GET"]),
         Route("/security", security_page, methods=["GET"]),
         Route("/activity", activity_page, methods=["GET"]),
+        Route("/enrollments/review", review_enrollment, methods=["POST"]),
         Route("/enrollments", create_enrollment, methods=["POST"]),
         Route("/harnesses/{harness_id}/revoke", revoke_harness, methods=["POST"]),
+        Route("/harnesses/{harness_id}/revoke/review", review_harness_revocation, methods=["POST"]),
         Route("/mutations/{mutation_id}/reconcile", reconcile_mutation, methods=["POST"]),
         Route("/v1/sponsored-enrollment/candidate/begin", sponsored_candidate_begin, methods=["POST"]),
         Route("/v1/sponsored-enrollment/candidate/status", sponsored_candidate_status, methods=["POST"]),
