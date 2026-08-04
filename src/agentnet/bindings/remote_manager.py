@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import asyncio
 import os
 import re
@@ -85,6 +87,8 @@ _SAFE_CHILD_ENVIRONMENT = frozenset(
 )
 _CHILD_PATH = "/usr/local/bin:/usr/bin:/bin"
 _SHUTDOWN_GRACE_SECONDS = 5.0
+_SYS_PIDFD_SEND_SIGNAL = 424
+_SYS_PIDFD_OPEN = 434
 _REMOTE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _FORWARDED_SIGNALS = tuple(
     candidate
@@ -836,33 +840,58 @@ def _posix_uid(account_id: str) -> int:
 
 
 def _measure_sandboxed_child(
-    pid: int,
+    supervisor_pid: int,
     *,
     expected_executable: Path,
     timeout_seconds: float = 10.0,
-) -> HostProcessIdentity:
+) -> tuple[int, HostProcessIdentity]:
     deadline = time.monotonic() + timeout_seconds
     sandbox = os.path.realpath(_SANDBOX_LAUNCHER)
     target = os.path.realpath(expected_executable)
+    try:
+        supervisor = psutil.Process(supervisor_pid)
+        supervisor_started = supervisor.create_time()
+    except psutil.Error as exc:
+        raise GateBlocked(
+            "remote_manager",
+            "manager filesystem sandbox failed before child measurement",
+        ) from exc
     while True:
         try:
-            identity = measure_process_identity(pid)
-            executable = os.path.realpath(identity.executable_path)
-            arguments = {
-                os.path.realpath(item)
-                for item in psutil.Process(pid).cmdline()
-                if os.path.isabs(item)
-            }
-        except Exception:
-            identity = None
-            executable = ""
-            arguments = set()
-        if (
-            identity is not None
-            and executable != sandbox
-            and (executable == target or target in arguments)
-        ):
-            return identity
+            if (
+                supervisor.create_time() != supervisor_started
+                or os.path.realpath(supervisor.exe()) != sandbox
+            ):
+                raise GateBlocked(
+                    "remote_manager",
+                    "manager filesystem sandbox identity changed during launch",
+                )
+            matches: list[tuple[int, HostProcessIdentity]] = []
+            for candidate in supervisor.children(recursive=True):
+                arguments = {
+                    os.path.realpath(item)
+                    for item in candidate.cmdline()
+                    if os.path.isabs(item)
+                }
+                executable = os.path.realpath(candidate.exe())
+                if executable == target or target in arguments:
+                    matches.append(
+                        (
+                            candidate.pid,
+                            measure_process_identity(candidate.pid),
+                        )
+                    )
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise GateBlocked(
+                    "remote_manager",
+                    "manager sandbox launched more than one matching child",
+                )
+        except GateBlocked:
+            raise
+        except (OSError, psutil.Error):
+            pass
         if time.monotonic() >= deadline:
             raise GateBlocked(
                 "remote_manager",
@@ -925,9 +954,44 @@ def _binding_payload(
     )
 
 
+def _open_process_handle(pid: int) -> int:
+    native = getattr(os, "pidfd_open", None)
+    if native is not None:
+        return int(native(pid, 0))
+    libc = ctypes.CDLL(None, use_errno=True)
+    descriptor = int(libc.syscall(_SYS_PIDFD_OPEN, pid, 0))
+    if descriptor < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return descriptor
+
+
+def _signal_process_handle(descriptor: int, received: signal.Signals) -> None:
+    native = getattr(signal, "pidfd_send_signal", None)
+    if native is not None:
+        native(descriptor, received)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    result = int(
+        libc.syscall(
+            _SYS_PIDFD_SEND_SIGNAL,
+            descriptor,
+            int(received),
+            ctypes.c_void_p(),
+            0,
+        )
+    )
+    if result < 0:
+        error = ctypes.get_errno()
+        if error == errno.ESRCH:
+            raise ProcessLookupError(error, os.strerror(error))
+        raise OSError(error, os.strerror(error))
+
+
 async def _wait_for_child(
     process: subprocess.Popen[Any],
     *,
+    process_handle: int,
     expires_at: int,
 ) -> int:
     loop = asyncio.get_running_loop()
@@ -938,7 +1002,7 @@ async def _wait_for_child(
         termination_requested.set()
         if process.poll() is None:
             with suppress(ProcessLookupError):
-                process.send_signal(received)
+                _signal_process_handle(process_handle, received)
 
     for received in _FORWARDED_SIGNALS:
         try:
@@ -960,7 +1024,7 @@ async def _wait_for_child(
 
         if signal_task not in done and process.poll() is None:
             with suppress(ProcessLookupError):
-                process.terminate()
+                _signal_process_handle(process_handle, signal.SIGTERM)
         try:
             return await asyncio.wait_for(
                 asyncio.shield(wait_task),
@@ -969,7 +1033,7 @@ async def _wait_for_child(
         except TimeoutError:
             if process.poll() is None:
                 with suppress(ProcessLookupError):
-                    process.terminate()
+                    _signal_process_handle(process_handle, signal.SIGTERM)
             try:
                 return await asyncio.wait_for(
                     asyncio.shield(wait_task),
@@ -978,8 +1042,17 @@ async def _wait_for_child(
             except TimeoutError:
                 if process.poll() is None:
                     with suppress(ProcessLookupError):
-                        process.kill()
-                return await wait_task
+                        _signal_process_handle(process_handle, signal.SIGKILL)
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(wait_task),
+                        timeout=_SHUTDOWN_GRACE_SECONDS,
+                    )
+                except TimeoutError:
+                    if process.poll() is None:
+                        with suppress(ProcessLookupError):
+                            process.kill()
+                    return await wait_task
     finally:
         signal_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -1032,6 +1105,7 @@ async def _run_manager_gateway(
     replay_store: SQLiteStore | None = None
     server: UnixIPCServer | None = None
     process: subprocess.Popen[Any] | None = None
+    process_handle: int | None = None
     descriptor: int | None = None
     writer: int | None = None
     try:
@@ -1065,16 +1139,17 @@ async def _run_manager_gateway(
             close_fds=True,
             pass_fds=(descriptor,),
         )
-        identity = await asyncio.to_thread(
+        child_pid, identity = await asyncio.to_thread(
             _measure_sandboxed_child,
             process.pid,
             expected_executable=expected_executable,
         )
+        process_handle = _open_process_handle(child_pid)
         payload, expires_at = _binding_payload(
             capability_root=capability_root,
             signing_context=signing_context,
             socket_path=socket_path,
-            pid=process.pid,
+            pid=child_pid,
             identity=identity,
             session_id=secrets.token_urlsafe(24),
             ttl_seconds=capability_ttl_seconds,
@@ -1085,7 +1160,11 @@ async def _run_manager_gateway(
             writer = None
         os.close(descriptor)
         descriptor = None
-        return_code = await _wait_for_child(process, expires_at=expires_at)
+        return_code = await _wait_for_child(
+            process,
+            process_handle=process_handle,
+            expires_at=expires_at,
+        )
         return return_code if return_code >= 0 else 128 - return_code
     finally:
         try:
@@ -1096,14 +1175,21 @@ async def _run_manager_gateway(
                 with suppress(OSError):
                     os.close(descriptor)
             if process is not None and process.poll() is None:
-                with suppress(ProcessLookupError):
-                    process.terminate()
+                if process_handle is not None:
+                    with suppress(ProcessLookupError):
+                        _signal_process_handle(process_handle, signal.SIGTERM)
+                else:
+                    with suppress(ProcessLookupError):
+                        process.terminate()
                 try:
                     await asyncio.to_thread(process.wait, 5)
                 except subprocess.TimeoutExpired:
                     with suppress(ProcessLookupError):
                         process.kill()
                     await asyncio.to_thread(process.wait)
+            if process_handle is not None:
+                with suppress(OSError):
+                    os.close(process_handle)
         finally:
             try:
                 if server is not None:
