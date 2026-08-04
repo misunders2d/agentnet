@@ -12,3 +12,5 @@ build/
 coverage.xml
 .coverage
 
+.worktrees/
+.superpowers/
