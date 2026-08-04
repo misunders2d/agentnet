@@ -1,0 +1,26 @@
+{
+  "schema": "agentnet.evidence.c0-postconditions.v1",
+  "captured_at": "2026-08-04T11:12:26Z",
+  "deployed_source_revision": "d8884b6c03a0dd38baab03386982aae8ad11dd58",
+  "deployed_package_version": "0.1.42",
+  "deployed_npm_tarball_sha256": "9b1b9aee911a35f8f15a23d4fe33d61b68e3e7259032b606d431b7565ca3b858",
+  "topology": "read-only psql query over pinned SSH to the disposable local always-on server-agent VM",
+  "command": "sudo -u agentnet psql -d agentnet -At -c <query>",
+  "query": "WITH selected_plan AS (SELECT plan_id FROM bootstrap_grant_plans WHERE state='committed' ORDER BY created_at DESC LIMIT 1), selected_guard AS (SELECT guard_id FROM c0_plan_guards WHERE plan_id=(SELECT plan_id FROM selected_plan) AND state='revoked'), selected_attempt AS (SELECT attempt_id FROM c0_pilot_attempts WHERE plan_id=(SELECT plan_id FROM selected_plan) AND state='communication_revoked') SELECT json_build_object('bootstrap_grant_plan_count',(SELECT COUNT(*) FROM bootstrap_grant_plans),'committed_bootstrap_grant_plan_count',(SELECT COUNT(*) FROM bootstrap_grant_plans WHERE state='committed'),'selected_plan_approval_receipt_bound',(SELECT bool_and(p.approval_receipt_id IS NOT NULL AND p.approval_receipt_digest IS NOT NULL) FROM bootstrap_grant_plans p JOIN selected_plan s ON s.plan_id=p.plan_id),'selected_plan_guard_count',(SELECT COUNT(*) FROM c0_plan_guards g JOIN selected_plan s ON s.plan_id=g.plan_id),'selected_plan_revoked_guard_count',(SELECT COUNT(*) FROM selected_guard),'selected_plan_attempt_count',(SELECT COUNT(*) FROM c0_pilot_attempts a JOIN selected_plan s ON s.plan_id=a.plan_id),'selected_plan_communication_revoked_attempt_count',(SELECT COUNT(*) FROM selected_attempt),'selected_attempt_fact_count',(SELECT COUNT(*) FROM c0_pilot_facts f JOIN selected_attempt a ON a.attempt_id=f.attempt_id),'selected_attempt_distinct_fact_kind_count',(SELECT COUNT(DISTINCT f.fact_kind) FROM c0_pilot_facts f JOIN selected_attempt a ON a.attempt_id=f.attempt_id),'selected_plan_communication_entitlement_count',(SELECT COUNT(*) FROM bootstrap_grant_plan_items i JOIN selected_plan s ON s.plan_id=i.plan_id JOIN entitlements e ON e.entitlement_id=i.entitlement_id WHERE i.item_kind='communication'),'selected_plan_revoked_communication_entitlement_count',(SELECT COUNT(*) FROM bootstrap_grant_plan_items i JOIN selected_plan s ON s.plan_id=i.plan_id JOIN entitlements e ON e.entitlement_id=i.entitlement_id WHERE i.item_kind='communication' AND e.revoked_at IS NOT NULL),'selected_plan_exact_revoke_entitlement_count',(SELECT COUNT(*) FROM bootstrap_grant_plan_items i JOIN selected_plan s ON s.plan_id=i.plan_id JOIN entitlements e ON e.entitlement_id=i.entitlement_id WHERE i.item_kind='exact_revoke'),'selected_plan_exact_revoke_item_count',(SELECT COUNT(*) FROM bootstrap_grant_plan_items i JOIN selected_plan s ON s.plan_id=i.plan_id WHERE i.item_kind='exact_revoke'));",
+  "result": {
+    "bootstrap_grant_plan_count": 1,
+    "committed_bootstrap_grant_plan_count": 1,
+    "selected_plan_approval_receipt_bound": true,
+    "selected_plan_guard_count": 1,
+    "selected_plan_revoked_guard_count": 1,
+    "selected_plan_attempt_count": 1,
+    "selected_plan_communication_revoked_attempt_count": 1,
+    "selected_attempt_fact_count": 7,
+    "selected_attempt_distinct_fact_kind_count": 7,
+    "selected_plan_communication_entitlement_count": 5,
+    "selected_plan_revoked_communication_entitlement_count": 5,
+    "selected_plan_exact_revoke_entitlement_count": 5,
+    "selected_plan_exact_revoke_item_count": 5
+  },
+  "sanitization": "Exact parent-scoped counts, typed states encoded as predicates, boolean receipt binding, source revision, and package digest only; no principal, harness, credential, plan, guard, attempt, event, receipt, entitlement, or message identifiers or protected content retained."
+}

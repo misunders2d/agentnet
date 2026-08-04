@@ -1,0 +1,59 @@
+{
+  "run_id": "2026-08-04-v0.1.42-post-live-corrective",
+  "evaluated_at": "2026-08-04T11:13:59Z",
+  "scope": "nonblocking_c0_credential_open_and_retained_parent_scoped_live_postconditions",
+  "source_revision": "52b6941adc558bfbd9599e50033b7b65c836a7d6",
+  "historical_live_source_revision": "d8884b6c03a0dd38baab03386982aae8ad11dd58",
+  "historical_live_manifest": "evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json",
+  "verification_status": "PASS_FOCUSED_SOURCE_ONLY",
+  "release_certified": false,
+  "production_ready": false,
+  "ship_eligible": false,
+  "gate_status_changed": false,
+  "affected_requirement_ids": [
+    "COM-001",
+    "SEC-003",
+    "OPS-003",
+    "OPS-006"
+  ],
+  "change": "The dedicated C0 signing-key reader now opens descriptors with O_NONBLOCK before validating regular-file custody, so a FIFO or device cannot stall responder startup before fail-closed rejection.",
+  "test_first_evidence": {
+    "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/supervisor/test_c0_pilot_responder.py::test_c0_credential_open_cannot_block_on_special_files",
+    "before": "FAIL: 1 failed because credential flags omitted O_NONBLOCK",
+    "after_command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/supervisor/test_c0_pilot_responder.py",
+    "after": "PASS: 23 passed"
+  },
+  "verification": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_bootstrap_plan_service.py tests/integration/test_bootstrap_plan_http.py tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/conformance/test_npm_package.py tests/cli/test_cli_diagnostics.py tests/supervisor/test_c0_pilot_responder.py",
+      "result": "PASS: 375 passed, 1 existing Starlette httpx deprecation warning"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/conformance/test_release_manifest.py::test_deployment_ledger_and_human_manifest_drift_fail_closed",
+      "result": "PASS: 1 passed; ledger date drift remains fail-closed against the retained public release manifest"
+    },
+    {
+      "command": "jq -e . evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json evidence/local/2026-08-04-v0.1.42-c0-live/postconditions.json evidence/local/2026-08-04-v0.1.42-post-live-corrective/manifest.json",
+      "result": "PASS"
+    }
+  ],
+  "review": {
+    "reviewer": "C0FixReviewer",
+    "initial_findings": [
+      "blocking descriptor open before non-regular-file rejection",
+      "unscoped and unretained authoritative C0 postcondition claims"
+    ],
+    "resolution": "NO_BLOCKING_FINDINGS after O_NONBLOCK regression/fix and exact parent-scoped sanitized SQL/result retention"
+  },
+  "retained_live_postconditions": {
+    "path": "evidence/local/2026-08-04-v0.1.42-c0-live/postconditions.json",
+    "sha256": "518f030c0503f93bcc6e119581c1c4d88c16f6ec06b69addc2768a5c7be2681a"
+  },
+  "limits": [
+    "The corrected source revision was not deployed for the historical live C0 run.",
+    "No live C0 journey was rerun after the descriptor-open correction.",
+    "No package build, release manifest refresh, tag, stage, publication, deployment handoff, requirement promotion, or gate promotion is claimed.",
+    "A fresh candidate build, applicable same-commit CI, deployment evidence, and release-manifest review remain required before release handoff."
+  ],
+  "release_posture": "BLOCKED"
+}

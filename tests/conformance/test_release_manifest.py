@@ -340,7 +340,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path) 
     requirements_path = summary_root / "REQUIREMENTS_STATUS.md"
     requirements_path.write_text(
         requirements_path.read_text(encoding="utf-8")
-        .replace("Snapshot: 2026-08-03.", "Snapshot: 2026-07-25.", 1)
+        .replace("Snapshot: 2026-08-04.", "Snapshot: 2026-07-25.", 1)
         .replace(
             "Requirement totals: **33 local-tested, 42 partial-external, 10 owner-blocked,\n"
             "0 implementation-gap = 85 unique requirements**.",
@@ -353,7 +353,7 @@ def test_deployment_ledger_and_human_manifest_drift_fail_closed(tmp_path: Path) 
     gate_path = summary_root / "docs/GATE_EVIDENCE.md"
     gate_path.write_text(
         gate_path.read_text(encoding="utf-8").replace(
-            "Current ledger update: 2026-08-03.",
+            "Current ledger update: 2026-08-04.",
             "Current ledger update: 2026-07-25.",
             1,
         ),

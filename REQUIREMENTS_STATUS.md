@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-03. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-04. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -200,6 +200,41 @@ published and historical release evidence:
   counts, deterministic artifacts, and release metadata are refreshed. Exact
   same-commit cross-platform, clean-setup, released-marker rejection, and
   packaged-communication CI remain pending. No requirement or gate is promoted.
+- Unpublished corrective `0.1.42` narrows the current candidate to the real
+  first-C0 path. Retained evidence at
+  `evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json` records one fresh
+  real workforce-OIDC and WebAuthn-approved server enrollment, one fresh
+  independently stored laptop enrollment, one passkey-approved fixed
+  `BootstrapGrantPlan`, terminal `COMPLETED_C0_ROUND_TRIP`, seven distinct
+  authoritative C0 facts, and exact revocation of all five temporary
+  communication entitlements through five exact-revoke plan items.
+  Sanitized query and result evidence is retained at
+  `evidence/local/2026-08-04-v0.1.42-c0-live/postconditions.json`, SHA-256
+  `518f030c0503f93bcc6e119581c1c4d88c16f6ec06b69addc2768a5c7be2681a`.
+  The systemd responder accepted only its package-owned private credential file;
+  the bootstrap resolver accepted strict remote-browser evidence without
+  weakening local-browser evidence. This is narrow real-enrollment and local
+  service evidence for `ID-001`, `ID-002`, `ID-004`, `ID-006`, `AUTH-001`,
+  `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-007`, `AUTH-009`, `COM-001`,
+  `COM-002`, `COM-003`, `COM-006`, `COM-009`, `AVL-003`, `AVL-005`,
+  `AVL-006`, `SEC-003`, and `SEC-005`; it is not a release certificate.
+  Broad verification remains non-green: the unfiltered suite reported
+  **1747 passed, 16 expected skips, and 3 failed** (two explicit installed
+  harness-pin gates plus the pre-release manifest gate); `agentnet verify`
+  reported **1665 passed, 16 expected skips, and 1 failed** on the same
+  manifest drift; and `scripts/verify_release.py` reported 15 expected
+  candidate-versus-retained-`0.1.39` drift findings. No requirement or gate is
+  promoted, and publication remains blocked.
+  A post-run review found that the dedicated credential reader could block
+  before rejecting a FIFO or device. Source revision `52b6941` adds a
+  nonblocking descriptor open and a regression that failed before the fix;
+  the responder file now reports **23 passed**. This corrective source was not
+  deployed for the historical live run, which remains bound to
+  `d8884b6c03a0dd38baab03386982aae8ad11dd58`; it therefore requires a fresh
+  candidate build and deployment evidence before any release handoff.
+  Focused corrective evidence and review closure are retained at
+  `evidence/local/2026-08-04-v0.1.42-post-live-corrective/manifest.json`.
+
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
   `AUTH-004`, `AUTH-007`, `COM-001`, `COM-009`, `AVL-005`, `AVL-006`, `UX-001`,
   `UX-002`, `SEC-003`, `SEC-005`, and `SEC-006`. Existing requirement status is

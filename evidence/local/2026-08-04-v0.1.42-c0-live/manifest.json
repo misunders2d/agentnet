@@ -1,0 +1,135 @@
+{
+  "run_id": "2026-08-04-v0.1.42-c0-live",
+  "evaluated_at": "2026-08-04T10:54:47Z",
+  "scope": "narrow_real_oidc_webauthn_two_harness_c0_round_trip_and_exact_authority_cleanup",
+  "verification_status": "PASS_NARROW_C0_ONLY",
+  "release_certified": false,
+  "production_ready": false,
+  "ship_eligible": false,
+  "gate_status_changed": false,
+  "source_revision": "d8884b6c03a0dd38baab03386982aae8ad11dd58",
+  "package": {
+    "version": "0.1.42",
+    "npm_tarball_sha256": "9b1b9aee911a35f8f15a23d4fe33d61b68e3e7259032b606d431b7565ca3b858",
+    "published": false
+  },
+  "affected_requirement_ids": [
+    "ID-001",
+    "ID-002",
+    "ID-004",
+    "ID-006",
+    "AUTH-001",
+    "AUTH-002",
+    "AUTH-003",
+    "AUTH-004",
+    "AUTH-007",
+    "AUTH-009",
+    "COM-001",
+    "COM-002",
+    "COM-003",
+    "COM-006",
+    "COM-009",
+    "AVL-003",
+    "AVL-005",
+    "AVL-006",
+    "SEC-003",
+    "SEC-005"
+  ],
+  "trust_boundaries": [
+    "real workforce Google OIDC owner identity",
+    "owner-controlled WebAuthn user-verification ceremony",
+    "public HTTPS Core and separately hosted Approval origins",
+    "proof-derived exact enrolled server and laptop harness actors",
+    "PostgreSQL-authoritative mailbox, C0 guard, facts, and entitlement cleanup",
+    "systemd-owned server C0 responder credential custody"
+  ],
+  "execution_context": {
+    "topology": "disposable local Linux VM with external self-hosted HTTPS reverse proxy to loopback Core and Approval",
+    "database": "dedicated disposable PostgreSQL agentnet database; reset was explicitly owner-approved before this run",
+    "artifact_mode": "disabled communication-only profile",
+    "human_actions": "owner registered one passkey, approved exact server enrollment, approved exact laptop enrollment, and approved one bounded C0 authority plan",
+    "privacy": "private keys, OIDC values, approval capabilities, receipts, message bodies, principal identifiers, harness identifiers, and local private paths are intentionally omitted"
+  },
+  "live_sequence": [
+    {
+      "operation": "fresh ordinary server setup and activation",
+      "result": "PASS: package 0.1.42 became operational with identity_enrolled=true, authority_granted=false, five managed units, and public HTTPS routes completed"
+    },
+    {
+      "operation": "fresh server guided enrollment",
+      "result": "PASS: enrolled_identity_only; automatic_possession_bound_signed_broker; authority_granted=false"
+    },
+    {
+      "operation": "fresh independent laptop guided enrollment",
+      "result": "PASS: enrolled_identity_only; automatic_possession_bound_signed_broker; authority_granted=false"
+    },
+    {
+      "command": "agentnet bootstrap-plan begin --identity <isolated-laptop-identity> --state <isolated-bootstrap-state>",
+      "result": "PASS: approval_pending"
+    },
+    {
+      "command": "agentnet bootstrap-plan status --identity <isolated-laptop-identity> --state <isolated-bootstrap-state>",
+      "result": "PASS: approval_ready; next_action=complete_automatically"
+    },
+    {
+      "command": "agentnet bootstrap-plan complete --identity <isolated-laptop-identity> --state <isolated-bootstrap-state>",
+      "result": "PASS AFTER ONE EXACT IDEMPOTENT RETRY: first request received HTTP 409 during approval receipt readiness convergence; status remained approval_ready and the same persisted begin/completion keys returned prepared_unusable with authority_granted=false and communication_usable=false"
+    },
+    {
+      "command": "agentnet c0-pilot start --identity <isolated-laptop-identity>",
+      "result": "PASS: waiting_owner after exact fresh-to-owner request entered durable custody"
+    },
+    {
+      "command": "agentnet c0-pilot status --identity <isolated-laptop-identity>",
+      "result": "PASS: waiting_fresh after the isolated systemd responder durably received, acknowledged, and replied"
+    },
+    {
+      "command": "agentnet c0-pilot complete --identity <isolated-laptop-identity>",
+      "result": "PASS: COMPLETED_C0_ROUND_TRIP"
+    },
+    {
+      "command": "agentnet c0-pilot status --identity <isolated-laptop-identity>",
+      "result": "PASS: terminal status remained COMPLETED_C0_ROUND_TRIP"
+    }
+  ],
+  "authoritative_postconditions": {
+    "bootstrap_grant_plans": "one committed",
+    "c0_plan_guards": "one revoked",
+    "c0_pilot_attempts": "one communication_revoked",
+    "c0_pilot_facts": "7 rows and 7 distinct fact kinds",
+    "communication_entitlements": "5 total and all 5 revoked",
+    "exact_revoke_plan_items": "5 total"
+  },
+  "retained_artifacts": [
+    {
+      "path": "evidence/local/2026-08-04-v0.1.42-c0-live/postconditions.json",
+      "sha256": "518f030c0503f93bcc6e119581c1c4d88c16f6ec06b69addc2768a5c7be2681a",
+      "scope": "sanitized read-only post-run query against the deployed 0.1.42 source revision recorded above"
+    }
+  ],
+  "full_verification": [
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q",
+      "result": "BLOCKED: 1747 passed, 16 expected platform/dedicated-PostgreSQL skips, 3 failed, 1 warning. Two installed-live tests failed because all four workstation harness binaries differ from repository pins. The release-manifest test failed because unpublished 0.1.42 source/dependency/package bytes intentionally differ from retained public 0.1.39 evidence."
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "BLOCKED: 15 release-manifest/source/package drift findings; retained public manifest remains 0.1.39 and was not rewritten for this unpublished candidate"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "BLOCKED: 1665 passed, 16 expected platform/dedicated-PostgreSQL skips, 1 failed, 1 warning; sole failure is the same release-manifest drift"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: the disposable live deployment database was not repurposed as a mutation-authorized test database; seven PostgreSQL-only tests remain explicit skips"
+    }
+  ],
+  "release_posture": {
+    "overall": "BLOCKED",
+    "reason": "narrow real C0 evidence does not waive failed broad verification, external harness pin drift, release-manifest regeneration/review, cross-platform CI, higher-tier production evidence, or accountable-owner decisions",
+    "next_gate": "perform an explicit release-candidate evidence build and review; do not publish from this run"
+  },
+  "operator": "interactive owner plus local coding agent",
+  "reviewer": "not independently reviewed; narrow evidence only"
+}
