@@ -49,6 +49,12 @@ def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_GUIDED_CHALLENGE_KEYS = frozenset(
+    {"challenge_id", "nonce", "canonical_transaction_b64"}
+)
+_REMOTE_GUIDED_CHALLENGE_KEYS = _GUIDED_CHALLENGE_KEYS | {"activation_mode"}
+
+
 def _actor_binding(actor: VerifiedActor) -> str:
     return canonical_json(actor.model_dump(mode="json")).decode("utf-8")
 
@@ -198,11 +204,16 @@ class ExactBootstrapHarnessResolver:
                     row["challenge_encrypted"],
                     purpose=f"oidc-guided-challenge:{row['transaction_id']}",
                 )
-                if not isinstance(protected, dict) or set(protected) != {
-                    "challenge_id",
-                    "nonce",
-                    "canonical_transaction_b64",
-                } or protected["challenge_id"] != challenge_id:
+                if (
+                    not isinstance(protected, dict)
+                    or frozenset(protected)
+                    not in {_GUIDED_CHALLENGE_KEYS, _REMOTE_GUIDED_CHALLENGE_KEYS}
+                    or protected["challenge_id"] != challenge_id
+                    or (
+                        "activation_mode" in protected
+                        and protected["activation_mode"] != "remote_browser"
+                    )
+                ):
                     raise self._denied()
                 canonical_transaction = base64.b64decode(
                     protected["canonical_transaction_b64"], validate=True

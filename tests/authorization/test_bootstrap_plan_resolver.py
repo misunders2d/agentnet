@@ -59,7 +59,7 @@ def resolver_stack(store):
         clock=clock,
     )
 
-    def seed(*, name: str, consumed_at: int):
+    def seed(*, name: str, consumed_at: int, remote_activation: bool = False):
         clock.value = consumed_at
         key = P256KeyPair.generate()
         identity = VerifiedOIDCIdentity(
@@ -98,6 +98,15 @@ def resolver_stack(store):
         )
         transaction_id = str(uuid4())
         challenge_digest = hashlib.sha256(challenge.canonical_transaction).hexdigest()
+        challenge_payload = {
+            "challenge_id": challenge.challenge_id,
+            "nonce": challenge.nonce,
+            "canonical_transaction_b64": base64.b64encode(
+                challenge.canonical_transaction
+            ).decode("ascii"),
+        }
+        if remote_activation:
+            challenge_payload["activation_mode"] = "remote_browser"
         with store.transaction() as connection:
             connection.execute(
                 """INSERT INTO oidc_enrollment_transactions(
@@ -142,13 +151,7 @@ def resolver_stack(store):
                     transaction_id,
                     hashlib.sha256(f"continuation:{transaction_id}".encode()).hexdigest(),
                     store.cipher.encrypt_json(
-                        {
-                            "challenge_id": challenge.challenge_id,
-                            "nonce": challenge.nonce,
-                            "canonical_transaction_b64": base64.b64encode(
-                                challenge.canonical_transaction
-                            ).decode("ascii"),
-                        },
+                        challenge_payload,
                         purpose=f"oidc-guided-challenge:{transaction_id}",
                     ),
                     f"approval-{transaction_id}",
@@ -188,6 +191,49 @@ def test_exact_two_guided_harnesses_resolve_old_owner_and_fresh_actor(resolver_s
     assert resolved["enrollment_evidence"]["owner"]["role"] == "owner"
     assert "oidc_subject" not in resolved["enrollment_evidence"]["fresh"]
     assert "verified_email" not in resolved["enrollment_evidence"]["fresh"]
+
+
+def test_exact_two_remote_guided_harnesses_resolve_for_c0_plan(resolver_stack) -> None:
+    store, verifier, seed = resolver_stack
+    seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+
+    resolved = _resolve(store, verifier, fresh)
+
+    assert resolved["harnesses"]["owner"]["display_name"] == "Owner server"
+    assert resolved["harnesses"]["fresh"]["display_name"] == "Fresh laptop"
+
+
+def test_resolver_rejects_non_remote_activation_mode(resolver_stack) -> None:
+    store, verifier, seed = resolver_stack
+    seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    with store.transaction() as connection:
+        row = connection.execute(
+            """SELECT t.transaction_id,g.challenge_encrypted
+                 FROM oidc_enrollment_transactions t
+                 JOIN oidc_enrollment_continuations g ON g.transaction_id=t.transaction_id
+                WHERE t.harness_name='Fresh laptop'"""
+        ).fetchone()
+        protected = store.cipher.decrypt_json(
+            row["challenge_encrypted"],
+            purpose=f"oidc-guided-challenge:{row['transaction_id']}",
+        )
+        protected["activation_mode"] = "local_browser"
+        connection.execute(
+            """UPDATE oidc_enrollment_continuations SET challenge_encrypted=?
+                WHERE transaction_id=?""",
+            (
+                store.cipher.encrypt_json(
+                    protected,
+                    purpose=f"oidc-guided-challenge:{row['transaction_id']}",
+                ),
+                row["transaction_id"],
+            ),
+        )
+
+    with pytest.raises(AuthorizationError, match="guided enrollment proof"):
+        _resolve(store, verifier, fresh)
 
 
 def test_resolver_rejects_one_or_three_guided_candidates(resolver_stack) -> None:
