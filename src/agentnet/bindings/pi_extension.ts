@@ -1,7 +1,7 @@
 /** Exact Pi local tools over direct process-bound Unix IPC. */
 
 import { createHmac, randomBytes } from "node:crypto";
-import { fstatSync, readSync } from "node:fs";
+import { closeSync, fstatSync, readSync } from "node:fs";
 import { createConnection } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -130,10 +130,19 @@ async function binding(): Promise<Binding> {
 	const endpoint = process.env.AGENTNET_LOCAL_BINDING_ENDPOINT;
 	if (descriptor && endpoint) throw new Error("AgentNet local binding has conflicting locators");
 	if (descriptor) {
-		cachedBinding = bindingFromDescriptor(descriptor);
-		return cachedBinding;
+		if (!/^[0-9]+$/.test(descriptor)) {
+			throw new Error("AgentNet local binding descriptor is invalid");
+		}
+		delete process.env.AGENTNET_LOCAL_BINDING_FD;
+		try {
+			cachedBinding = bindingFromDescriptor(descriptor);
+			return cachedBinding;
+		} finally {
+			closeSync(Number(descriptor));
+		}
 	}
 	if (endpoint) {
+		delete process.env.AGENTNET_LOCAL_BINDING_ENDPOINT;
 		pendingBinding = bindingFromEndpoint(endpoint).then((value) => {
 			cachedBinding = value;
 			return value;
