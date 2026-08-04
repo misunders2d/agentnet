@@ -106,6 +106,38 @@ def test_systemd_load_credential_custody_is_accepted(
     )
 
 
+def test_c0_client_loads_systemd_pem_as_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    credential_path = credential_dir / "signing-key.pem"
+    credential_path.write_bytes(P256KeyPair.generate().private_pem)
+    actual_fstat = os.fstat
+
+    def systemd_fstat(descriptor: int) -> SimpleNamespace:
+        info = actual_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o440,
+            st_nlink=1,
+            st_uid=0,
+            st_gid=0,
+            st_size=info.st_size,
+        )
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    monkeypatch.setattr(c0_responder.os, "geteuid", lambda: 995)
+    monkeypatch.setattr(c0_responder.os, "fstat", systemd_fstat)
+
+    client, _core = c0_responder._client(
+        _config(),
+        credential_path,
+        transport=None,
+    )
+    client.close()
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

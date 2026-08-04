@@ -161,7 +161,7 @@ def _client(
 ) -> tuple[AgentNetClient, AgentNetSupervisorCoreClient]:
     try:
         key = P256KeyPair.from_private_pem(
-            _credential_file(credential_path, label="C0 responder credential").decode("utf-8")
+            _credential_file(credential_path, label="C0 responder credential")
         )
     except (UnicodeError, ValueError) as exc:
         raise ValidationError("C0 responder credential is invalid") from exc
