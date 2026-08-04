@@ -1177,10 +1177,11 @@ class AssignmentService:
             return "task_proposal_reauthorization_binding_invalid"
         now = epoch_seconds(when)
         if request.actor.kind is ActorKind.VERIFIED_HUMAN_HARNESS:
-            entitlement_id, _reason = PolicyEngine._current_entitlement(
+            entitlement_id, _reason, _scope_peers = PolicyEngine._current_entitlement(
                 connection,
                 domain_id=request.actor.domain_id,
                 principal_id=request.actor.principal_id or "",
+                harness_id=request.actor.harness_id or "",
                 action=action,
                 resource=resource,
                 revision=int(row["policy_revision"]),

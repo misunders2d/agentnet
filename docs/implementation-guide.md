@@ -612,6 +612,55 @@ PD-002 default, exact waiting process retrieves Approval result automatically
 through possession-bound signed broker; owner moves no code, receipt, URL, or
 secret. Enrollment itself grants none of these entitlements.
 
+After the C0 result is `COMPLETED_C0_ROUND_TRIP`, the ordinary server harness
+requests the separate permanent same-principal communication transaction:
+
+```bash
+# Ordinary server: creates/reuses one exact one-hour Approval request.
+agentnet communication-scope begin \
+  --identity /var/lib/agentnet/server-agent-identity.json \
+  --state /var/lib/agentnet/communication-scope-state.json
+
+# After the owner approves the displayed HTTPS Approval URL with WebAuthn UV:
+agentnet communication-scope status \
+  --identity /var/lib/agentnet/server-agent-identity.json \
+  --state /var/lib/agentnet/communication-scope-state.json
+agentnet communication-scope complete \
+  --identity /var/lib/agentnet/server-agent-identity.json \
+  --state /var/lib/agentnet/communication-scope-state.json
+```
+
+The server resolves the only eligible second harness; the human supplies no
+harness, action, entitlement, credential, or TTL selector. Completion grants
+both exact harnesses all 13 canonical message, mailbox, conversation,
+response-obligation, and room actions permanently (`expires_at=NULL`) in one
+transaction. It does not grant artifacts, business effects, federation, public
+A2A, administration, generic tasks, data, tools, or secrets. Current credential,
+harness, principal, domain-revocation, and policy state is rechecked on every
+use, so harness revocation, principal revocation, or credential rotation denies
+immediately without deleting the durable scope.
+
+On the enrolled owner laptop, start the interactive Manager gateway around the
+agent process instead of copying the laptop private key or bearer material into
+the child:
+
+```bash
+agentnet manager-run \
+  --identity .agentnet/identity.json \
+  --state-dir .agentnet/manager \
+  -- pi
+```
+
+`manager-run` creates one owner-only session directory, passes only an inherited
+local binding descriptor, and mints a one-process capability for the canonical
+communication methods. Its lifetime is at most one hour and is re-created on
+each run; the permanent remote communication authority is not a reusable local
+capability. Linux uses sealed `memfd`; macOS uses an unlinked pipe; unsupported
+platforms fail closed. Child exit, signal, timeout, parent shutdown, or socket
+failure cleans the descriptor, socket, process-bound session, and private
+directory. Remote authentication/authorization failures propagate unchanged
+through the local binding.
+
 Activation acquires the exact configured runtime lease with a distinct
 activation owner. A running process therefore blocks the command; activation
 never fences or restarts a live server. It runs no migrations or artifact
@@ -923,17 +972,18 @@ reconciliation evidence tracked by the release gates.
 AgentNet has no supported prototype/pre-release database format. Immutable
 migration 1 is the complete first-release schema and retains checksum
 `c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f`.
-Current unreleased Core schema v5 adds durable protected payload-release
+Current unreleased Core schema v6 adds durable protected payload-release
 receipts in migration 2, guided OIDC enrollment continuation in migration 3,
-the bounded C0 bootstrap-plan contract in migration 4, and exact OIDC-begin
-response-loss recovery plus current-credential renewal custody in migration 5.
-Fresh SQLite and PostgreSQL stores create schema v5. An existing SQLite store
-upgrades only when metadata, every migration record/checksum, and the entire
-N/N-1 v4 object catalog match exactly; the v4→v5 change commits atomically or
-rolls back without partial objects. PostgreSQL verifies contiguous checksums and
-the complete live table, column type/null/default, constraint-definition, and
-non-constraint-index catalog before v4 migration, after migration, and on every
-v5 open.
+the bounded C0 bootstrap-plan contract in migration 4, exact OIDC-begin
+response-loss recovery plus current-credential renewal custody in migration 5,
+and the persistent same-principal communication scope in migration 6. Fresh
+SQLite and PostgreSQL stores create schema v6. An existing SQLite store upgrades
+only when metadata, every migration record/checksum, and the entire N/N-1 v5
+object catalog match exactly; the v5→v6 change commits atomically or rolls back
+without partial objects. PostgreSQL verifies contiguous checksums and the
+complete live table, column type/null/default, constraint-definition, and
+non-constraint-index catalog before v5 migration, after migration, and on every
+v6 open.
 Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
 older state fails closed before use.
 

@@ -1700,7 +1700,7 @@ async def test_room_presence_directory_and_content_free_operator_http(
         )
         assert json.loads(meeting_row["policy_json"])["persistent"] is False
         assert meeting_row["expires_at"] is not None
-        for action in ("room.member.add", "room.member.remove", "message.send"):
+        for action in ("room.action", "message.send"):
             _allow(core, owner, action, room_id)
         _allow(core, member, "room.read", room_id)
 
@@ -1895,6 +1895,19 @@ async def test_room_presence_directory_and_content_free_operator_http(
         assert removed.status_code == 200
         hidden_after_remove = await _request(client, member_key, member, "GET", f"/v1/rooms/{room_id}")
         assert hidden_after_remove.status_code == 404
+        room_policy_rows = store.fetch_all(
+            """SELECT action,context_json FROM policy_decisions
+                 WHERE action LIKE 'room.%'"""
+        )
+        room_policy_actions = {row["action"] for row in room_policy_rows}
+        assert {"room.create", "room.action", "room.read"} <= room_policy_actions
+        assert room_policy_actions.isdisjoint({"room.member.add", "room.member.remove"})
+        room_action_operations = {
+            json.loads(row["context_json"]).get("request", {}).get("operation")
+            for row in room_policy_rows
+            if row["action"] == "room.action"
+        }
+        assert {"member.add", "member.remove", "message.send"} <= room_action_operations
 
 
 @pytest.mark.anyio

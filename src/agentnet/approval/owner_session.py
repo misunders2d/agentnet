@@ -532,7 +532,11 @@ class OwnerSessionService:
             len(matches) != 1
             or matches[0].get("state") != "pending"
             or matches[0].get("approval_purpose")
-            not in {"identity.enrollment.approve", "authorization.bootstrap_plan.approve"}
+            not in {
+                "identity.enrollment.approve",
+                "authorization.bootstrap_plan.approve",
+                "authorization.communication_scope.approve",
+            }
         ):
             raise AuthenticationError("approval request denied")
         options = service.request_options_for_owner(

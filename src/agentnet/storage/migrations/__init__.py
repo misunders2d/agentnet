@@ -10,6 +10,7 @@ from agentnet.storage.artifact_lifecycle_schema import ARTIFACT_LIFECYCLE_SCHEMA
 from agentnet.storage.artifact_quota_schema import ARTIFACT_QUOTA_SCHEMA
 from agentnet.storage.authority_bootstrap_schema import AUTHORITY_BOOTSTRAP_SCHEMA
 from agentnet.storage.bootstrap_plan_schema import BOOTSTRAP_PLAN_SCHEMA
+from agentnet.storage.communication_scope_schema import COMMUNICATION_SCOPE_TABLE_DDL
 from agentnet.storage.credential_recovery_schema import CREDENTIAL_RECOVERY_SCHEMA
 from agentnet.storage.effect_lifecycle_schema import EFFECT_LIFECYCLE_SCHEMA
 from agentnet.storage.guided_enrollment_schema import GUIDED_ENROLLMENT_SCHEMA
@@ -135,6 +136,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         5,
         "identity_begin_idempotency_and_credential_renewal",
         IDENTITY_LIFECYCLE_SCHEMA.replace(" INTEGER", " BIGINT"),
+    ),
+    Migration(
+        6,
+        "persistent_same_principal_communication_scope",
+        COMMUNICATION_SCOPE_TABLE_DDL.replace(" INTEGER", " BIGINT"),
     ),
 )
 

@@ -487,6 +487,7 @@ class OIDCEnrollmentConfig(BaseModel):
             required = {
                 "identity.enrollment.approve",
                 "authorization.bootstrap_plan.approve",
+                "authorization.communication_scope.approve",
             }
             if len(selected) != 1 or not required <= selected[0].allowed_purposes:
                 raise ValueError(
@@ -890,6 +891,7 @@ class ExtensionConfig(BaseModel):
             )
             required_ceremony_purposes = {
                 "authorization.bootstrap_plan.approve",
+                "authorization.communication_scope.approve",
                 "authorization.elevation.approve",
                 "identity.credential.recover.approve",
                 "identity.harness.revoke.approve",

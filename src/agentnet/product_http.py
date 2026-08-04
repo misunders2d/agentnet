@@ -978,9 +978,10 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
         core._require(
             actor=actor,
-            action="room.member.add",
+            action="room.action",
             resource=room_id,
             context={
+                "operation": "member.add",
                 "harness_id": parsed.harness_id,
                 "role": parsed.role,
                 "mls_key_package_digest": (
@@ -1005,9 +1006,9 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         room_id = request.path_params["room_id"]
         core._require(
             actor=actor,
-            action="room.member.remove",
+            action="room.action",
             resource=room_id,
-            context={"harness_id": parsed.harness_id},
+            context={"operation": "member.remove", "harness_id": parsed.harness_id},
         )
         return JSONResponse(
             core.rooms.remove_member(actor=actor, room_id=room_id, harness_id=parsed.harness_id)
@@ -1022,6 +1023,19 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
     async def send_room_message(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
         parsed = RoomSendBody.model_validate_json(body)
+        room_id = request.path_params["room_id"]
+        core._require(
+            actor=actor,
+            action="room.action",
+            resource=room_id,
+            classification=parsed.classification,
+            context={
+                "operation": "message.send",
+                "recipient_harness_ids": sorted(parsed.recipients),
+                "payload_digest": canonical_digest(parsed.payload),
+                "expected_control_sequence": parsed.expected_control_sequence,
+            },
+        )
         result = core.send_message(
             actor=actor,
             recipients=parsed.recipients,
@@ -1030,7 +1044,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
             classification=parsed.classification,
             released_artifacts=parsed.released_artifacts,
             conversation_id=parsed.conversation_id,
-            room_id=request.path_params["room_id"],
+            room_id=room_id,
             expected_room_control_sequence=parsed.expected_control_sequence,
         )
         return JSONResponse(result, status_code=202)

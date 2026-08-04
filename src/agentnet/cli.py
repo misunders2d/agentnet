@@ -50,7 +50,16 @@ from agentnet.authorization.bootstrap_plan import (
     BootstrapPlanCompleteResult,
     BootstrapPlanStatusResult,
 )
+from agentnet.authorization.communication_scope import (
+    CommunicationScopeBeginRequest,
+    CommunicationScopeBeginResult,
+    CommunicationScopeCompleteRequest,
+    CommunicationScopeCompleteResult,
+    CommunicationScopeStatusRequest,
+    CommunicationScopeStatusResult,
+)
 from agentnet.authorization.c0_pilot import C0PilotResult
+from agentnet.bindings.remote_manager import run_manager_gateway
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
@@ -2974,6 +2983,98 @@ def _bootstrap_plan_result(response, *, expected_status: int, model):
     return result.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA = "agentnet.communication-scope-cli-state.v1"
+_COMMUNICATION_SCOPE_CLI_STATE_KEYS = frozenset(
+    {"schema", "begin_idempotency_key", "completion_idempotency_key"}
+)
+
+
+def _validate_communication_scope_cli_state(
+    value: dict[str, object],
+) -> dict[str, str]:
+    if (
+        set(value) != _COMMUNICATION_SCOPE_CLI_STATE_KEYS
+        or value.get("schema") != _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA
+    ):
+        raise SystemExit("communication scope state does not match the exact schema")
+    for key in ("begin_idempotency_key", "completion_idempotency_key"):
+        item = value.get(key)
+        if not isinstance(item, str) or not 16 <= len(item) <= 256:
+            raise SystemExit("communication scope state does not match the exact schema")
+    return {key: str(value[key]) for key in _COMMUNICATION_SCOPE_CLI_STATE_KEYS}
+
+
+def _load_communication_scope_cli_state(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    try:
+        value = json.loads(_owner_only_file(resolved, label="communication scope state"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("communication scope state is not readable JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("communication scope state does not match the exact schema")
+    return _validate_communication_scope_cli_state(value)
+
+
+def _load_or_create_communication_scope_cli_state(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    if os.path.lexists(resolved):
+        return _load_communication_scope_cli_state(resolved)
+    value = {
+        "schema": _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+        "begin_idempotency_key": secrets.token_urlsafe(32),
+        "completion_idempotency_key": secrets.token_urlsafe(32),
+    }
+    _write_owner_json(resolved, value, force=False)
+    return _validate_communication_scope_cli_state(value)
+
+
+def _require_communication_scope_approval_url(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise SystemExit("communication scope response is invalid")
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as exc:
+        raise SystemExit("communication scope response is invalid") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/approval"
+        or parsed.query
+        or parsed.fragment
+        or value != f"https://{parsed.netloc}/approval"
+    ):
+        raise SystemExit("communication scope response is invalid")
+
+
+def _communication_scope_result(response, *, expected_status: int, model):
+    if response.status_code != expected_status:
+        raise SystemExit(
+            f"communication scope request was rejected with HTTP {response.status_code}"
+        )
+    try:
+        raw = response.json()
+    except Exception as exc:
+        raise SystemExit("communication scope response is invalid") from exc
+    models = model if isinstance(model, tuple) else (model,)
+    result = None
+    for candidate in models:
+        try:
+            result = candidate.model_validate(raw)
+            break
+        except Exception:
+            continue
+    if result is None:
+        raise SystemExit("communication scope response is invalid")
+    if hasattr(result, "approval_url"):
+        _require_communication_scope_approval_url(result.approval_url)
+    return result.model_dump(mode="json", by_alias=True, exclude_unset=True)
+
+
 def _c0_pilot_cli_result(response, *, expected_status: int) -> dict[str, str]:
     if response.status_code != expected_status:
         raise SystemExit(f"C0 pilot request was rejected with HTTP {response.status_code}")
@@ -3165,6 +3266,85 @@ def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
         response,
         expected_status=201,
         model=BootstrapPlanCompleteResult,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_communication_scope_begin(args: argparse.Namespace) -> int:
+    state = _load_or_create_communication_scope_cli_state(Path(args.state))
+    body = CommunicationScopeBeginRequest.model_validate(
+        {
+            "schema": "agentnet.communication-scope.begin.v1",
+            "begin_idempotency_key": state["begin_idempotency_key"],
+        }
+    ).model_dump(mode="json", by_alias=True)
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.request(
+            "POST",
+            "/v1/communication-scope/begin",
+            json_body=body,
+        )
+    finally:
+        client.close()
+    result = _communication_scope_result(
+        response,
+        expected_status=201,
+        model=CommunicationScopeBeginResult,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_communication_scope_status(args: argparse.Namespace) -> int:
+    state = _load_communication_scope_cli_state(Path(args.state))
+    body = CommunicationScopeStatusRequest.model_validate(
+        {
+            "schema": "agentnet.communication-scope.status.v1",
+            "begin_idempotency_key": state["begin_idempotency_key"],
+        }
+    ).model_dump(mode="json", by_alias=True)
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.request(
+            "POST",
+            "/v1/communication-scope/status",
+            json_body=body,
+        )
+    finally:
+        client.close()
+    result = _communication_scope_result(
+        response,
+        expected_status=200,
+        model=(CommunicationScopeStatusResult, CommunicationScopeCompleteResult),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_communication_scope_complete(args: argparse.Namespace) -> int:
+    state = _load_communication_scope_cli_state(Path(args.state))
+    body = CommunicationScopeCompleteRequest.model_validate(
+        {
+            "schema": "agentnet.communication-scope.complete.v1",
+            "begin_idempotency_key": state["begin_idempotency_key"],
+            "completion_idempotency_key": state["completion_idempotency_key"],
+        }
+    ).model_dump(mode="json", by_alias=True)
+    client, _actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        response = client.request(
+            "POST",
+            "/v1/communication-scope/complete",
+            json_body=body,
+        )
+    finally:
+        client.close()
+    result = _communication_scope_result(
+        response,
+        expected_status=201,
+        model=CommunicationScopeCompleteResult,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
@@ -4033,6 +4213,24 @@ def command_supervisor_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_manager_run(args: argparse.Namespace) -> int:
+    command = tuple(args.manager_command)
+    if not command or any(not isinstance(item, str) or not item for item in command):
+        raise SystemExit("manager-run requires a command after --")
+    client, actor, _key = _load_identity_client(Path(args.identity))
+    try:
+        return int(
+            run_manager_gateway(
+                client,
+                actor,
+                command,
+                state_dir=Path(args.state_dir) if args.state_dir is not None else None,
+            )
+        )
+    finally:
+        client.close()
+
+
 def _require_safe_serve_binding(config: ExtensionConfig, *, host: str, port: int) -> None:
     """The built-in Uvicorn command is plaintext; expose it only on loopback."""
 
@@ -4718,6 +4916,27 @@ def build_parser() -> argparse.ArgumentParser:
         operation.add_argument("--state", default=".agentnet/bootstrap-plan-state.json")
         operation.set_defaults(func=function)
 
+    communication_scope = commands.add_parser(
+        "communication-scope",
+        help="approve or inspect the persistent same-principal communication scope",
+    )
+    communication_scope_commands = communication_scope.add_subparsers(
+        dest="communication_scope_command",
+        required=True,
+    )
+    for name, function in (
+        ("begin", command_communication_scope_begin),
+        ("status", command_communication_scope_status),
+        ("complete", command_communication_scope_complete),
+    ):
+        operation = communication_scope_commands.add_parser(name)
+        operation.add_argument("--identity", default=".agentnet/identity.json")
+        operation.add_argument(
+            "--state",
+            default=".agentnet/communication-scope-state.json",
+        )
+        operation.set_defaults(func=function)
+
     credential = commands.add_parser(
         "credential",
         help="operate the exact current signed credential",
@@ -5074,6 +5293,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="validate the owner-only configuration and print only non-secret fields",
     )
     supervisor_run.set_defaults(func=command_supervisor_run)
+
+    manager_run = commands.add_parser(
+        "manager-run",
+        help="run an interactive child through the local signed Manager gateway",
+    )
+    manager_run.add_argument("--identity", required=True)
+    manager_run.add_argument(
+        "--state-dir",
+        help="owner-only local Manager gateway state directory",
+    )
+    manager_run.add_argument(
+        "manager_command",
+        nargs="+",
+        metavar="COMMAND",
+        help="required child command and arguments after --",
+    )
+    manager_run.set_defaults(func=command_manager_run)
 
     status = commands.add_parser("status", help="show operational readiness without acquiring a runtime lease")
     status.add_argument("--config", default="agentnet.json")

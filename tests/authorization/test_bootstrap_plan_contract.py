@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sqlite3
 from importlib import import_module
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from pydantic import ValidationError
 
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS
-from agentnet.storage.sqlite import SQLiteStore
+from agentnet.storage.sqlite import SCHEMA_V5, SQLiteStore
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "bootstrap_plan_golden_vector.json"
@@ -212,7 +213,7 @@ def test_bootstrap_state_machine_keeps_s4_guard_pending_until_s5() -> None:
 def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "plan-schema.sqlite3", LocalEnvelopeCipher(b"p" * 32))
     try:
-        assert store.readiness()["schema_version"] == 5
+        assert store.readiness()["schema_version"] == 6
         tables = {
             str(row["name"])
             for row in store.fetch_all(
@@ -252,8 +253,41 @@ def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -
         store.close()
 
 
-def test_postgres_catalog_preserves_v4_plan_and_adds_v5_identity_lifecycle() -> None:
-    assert CURRENT_SCHEMA_VERSION == 5
+def test_sqlite_v5_migrates_atomically_to_v6_communication_scope(tmp_path: Path) -> None:
+    path = tmp_path / "v5.sqlite3"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(SCHEMA_V5)
+        connection.execute(
+            "INSERT INTO metadata(key,value) VALUES('schema_version','5')"
+        )
+        connection.executemany(
+            "INSERT INTO installed_migration_catalog(version,name,checksum) VALUES(?,?,?)",
+            [
+                (migration.version, migration.name, migration.checksum)
+                for migration in MIGRATIONS[:5]
+            ],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    path.chmod(0o600)
+
+    store = SQLiteStore(path, LocalEnvelopeCipher(b"m" * 32))
+    try:
+        assert store.readiness()["schema_version"] == 6
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM communication_scopes"
+        )["n"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM communication_scope_items"
+        )["n"] == 0
+    finally:
+        store.close()
+
+
+def test_postgres_catalog_preserves_v4_plan_v5_identity_and_adds_v6_scope() -> None:
+    assert CURRENT_SCHEMA_VERSION == 6
     migration = MIGRATIONS[3]
     assert migration.version == 4
     assert migration.name == "bounded_c0_bootstrap_plan"
@@ -266,9 +300,15 @@ def test_postgres_catalog_preserves_v4_plan_and_adds_v5_identity_lifecycle() -> 
     assert "issuer_kind='accepting_core' AND issuer_harness_id IS NULL" in migration.sql
     assert "issuer_kind='harness' AND issuer_harness_id IS NOT NULL" in migration.sql
     assert " INTEGER" not in migration.sql
-    lifecycle = MIGRATIONS[-1]
+    lifecycle = MIGRATIONS[4]
     assert lifecycle.version == 5
     assert lifecycle.name == "identity_begin_idempotency_and_credential_renewal"
     assert "begin_idempotency_key_hash" in lifecycle.sql
     assert "credential_renewal_requests" in lifecycle.sql
     assert " INTEGER" not in lifecycle.sql
+    communication_scope = MIGRATIONS[5]
+    assert communication_scope.version == 6
+    assert communication_scope.name == "persistent_same_principal_communication_scope"
+    assert "communication_scopes" in communication_scope.sql
+    assert "communication_scope_items" in communication_scope.sql
+    assert " INTEGER" not in communication_scope.sql

@@ -2486,6 +2486,98 @@ def _validate_inactive_auxiliary_unit_state(
             "inactive AgentNet auxiliary unit does not match fixed state",
         )
 
+def _systemd_timer_next_run(executable: Path, unit: str) -> int | None:
+    """Return the exact next realtime activation in microseconds, if scheduled."""
+
+    if any(character in unit for character in "\n\r\x00"):
+        raise ServerSetupError("unit_input", "systemd unit input contains a forbidden character")
+    try:
+        completed = subprocess.run(
+            [
+                str(executable),
+                "list-timers",
+                unit,
+                "--no-pager",
+                "--no-legend",
+                "--plain",
+                "--output=json",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": _SYSTEM_PATH, "HOME": "/root", "LANG": "C.UTF-8"},
+            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServerSetupError(
+            "credential_renewal_schedule",
+            "credential renewal schedule is not inspectable",
+        ) from exc
+    stdout = completed.stdout or b""
+    if completed.returncode != 0 or len(stdout) > 262_144:
+        raise ServerSetupError(
+            "credential_renewal_schedule",
+            "credential renewal schedule is not inspectable",
+        )
+    try:
+        rows = json.loads(stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ServerSetupError(
+            "credential_renewal_schedule",
+            "credential renewal schedule evidence is invalid",
+        ) from exc
+    if (
+        not isinstance(rows, list)
+        or len(rows) != 1
+        or not isinstance(rows[0], dict)
+        or rows[0].get("unit") != unit
+    ):
+        return None
+    next_run = rows[0].get("next")
+    if isinstance(next_run, bool) or not isinstance(next_run, int):
+        return None
+    return next_run
+
+
+def _validate_active_renewal_timer_state(
+    properties: Mapping[str, str],
+    *,
+    next_run_usec: int | None,
+    now_usec: int,
+) -> None:
+    """Require an active timer with one finite future activation."""
+
+    if (
+        properties.get("LoadState") != "loaded"
+        or properties.get("UnitFileState") != "enabled"
+        or properties.get("ActiveState") != "active"
+        or next_run_usec is None
+        or next_run_usec <= now_usec
+    ):
+        raise ServerSetupError(
+            "credential_renewal_schedule",
+            "credential renewal timer has no finite future run",
+        )
+
+
+def _credential_renewal_activation_commands(
+    *,
+    c0_responder_required: bool,
+) -> tuple[list[str], ...]:
+    """Return the race-free auxiliary activation sequence."""
+
+    return (
+        ["stop", CREDENTIAL_RENEW_UNIT],
+        ["reset-failed", CREDENTIAL_RENEW_UNIT],
+        (
+            ["enable", "--now", C0_RESPONDER_UNIT]
+            if c0_responder_required
+            else ["disable", "--now", C0_RESPONDER_UNIT]
+        ),
+        ["enable", "--now", CREDENTIAL_RENEW_TIMER],
+    )
+
 
 def _read_live_process_identity(pid: int) -> tuple[Path, tuple[str, ...]]:
     """Read the exact executable and argv of one live managed service process."""
@@ -5065,6 +5157,15 @@ def _apply_server_setup(
                         expected_unit_file_state=expected_state,
                         properties=_systemd_show(systemctl_executable, unit),
                     )
+                if auxiliary_ready and identity_enrolled:
+                    _validate_active_renewal_timer_state(
+                        _systemd_show(systemctl_executable, CREDENTIAL_RENEW_TIMER),
+                        next_run_usec=_systemd_timer_next_run(
+                            systemctl_executable,
+                            CREDENTIAL_RENEW_TIMER,
+                        ),
+                        now_usec=time.time_ns() // 1_000,
+                    )
             base_systemctl_commands: list[list[str]] = [
                 ["daemon-reload"],
                 ["disable", "--now", CREDENTIAL_RENEW_TIMER],
@@ -5180,15 +5281,9 @@ def _apply_server_setup(
                             ),
                         }
                     )
-                auxiliary_commands: list[list[str]] = [
-                    ["enable", "--now", CREDENTIAL_RENEW_TIMER],
-                    (
-                        ["enable", "--now", C0_RESPONDER_UNIT]
-                        if c0_responder_required
-                        else ["disable", "--now", C0_RESPONDER_UNIT]
-                    ),
-                    ["stop", CREDENTIAL_RENEW_UNIT],
-                ]
+                auxiliary_commands = _credential_renewal_activation_commands(
+                    c0_responder_required=c0_responder_required,
+                )
                 auxiliary_status = _run_systemctl_sequence_or_reconcile(
                     systemctl_executable,
                     auxiliary_commands,

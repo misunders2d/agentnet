@@ -153,6 +153,10 @@ type CanonicalMethod =
 	| "agentnet.conversation.create"
 	| "agentnet.conversation.action"
 	| "agentnet.conversation.thread"
+	| "agentnet.room.create"
+	| "agentnet.room.member.add"
+	| "agentnet.room.get"
+	| "agentnet.room.send"
 	| "agentnet.obligation.inbox"
 	| "agentnet.obligation.list"
 	| "agentnet.obligation.get"
@@ -308,6 +312,97 @@ export default function (pi: ExtensionAPI) {
 				conversation_id: params.conversation_id,
 				thread_id: params.thread_id,
 				limit: params.limit ?? 100,
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_room_create",
+		label: "AgentNet create room",
+		description: "Create an authorized room as this exact enrolled harness.",
+		parameters: Type.Object({
+			classification: Type.Optional(Type.Union([
+				Type.Literal("C0"), Type.Literal("C1"), Type.Literal("C2"), Type.Literal("C3"),
+			])),
+			persistent: Type.Optional(Type.Boolean()),
+			expires_at: Type.Optional(Type.Union([
+				Type.String({ format: "date-time" }),
+				Type.Null(),
+			])),
+			policy: Type.Optional(Type.Union([
+				Type.Record(Type.String(), Type.Unknown()),
+				Type.Null(),
+			])),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.room.create", {
+				classification: params.classification ?? "C1",
+				persistent: params.persistent ?? true,
+				expires_at: params.expires_at ?? null,
+				policy: params.policy ?? null,
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_room_member_add",
+		label: "AgentNet add room member",
+		description: "Add one ordinary member to an authorized room.",
+		parameters: Type.Object({
+			room_id: Type.String({ minLength: 1, maxLength: 256 }),
+			harness_id: Type.String({ minLength: 1, maxLength: 256 }),
+			role: Type.Optional(Type.Union([
+				Type.Literal("member"), Type.Literal("guest"), Type.Literal("moderator"),
+			])),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.room.member.add", {
+				room_id: params.room_id,
+				harness_id: params.harness_id,
+				role: params.role ?? "member",
+			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_room_get",
+		label: "AgentNet room detail",
+		description: "Describe one room visible to this exact enrolled harness.",
+		parameters: Type.Object({
+			room_id: Type.String({ minLength: 1, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.room.get", params);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_room_send",
+		label: "AgentNet room send",
+		description: "Send an artifact-free message to current members of an authorized room.",
+		parameters: Type.Object({
+			room_id: Type.String({ minLength: 1, maxLength: 256 }),
+			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
+			payload: Type.Record(Type.String(), Type.Unknown()),
+			idempotency_key: Type.String({ minLength: 16, maxLength: 256 }),
+			expected_control_sequence: Type.Integer({ minimum: 1 }),
+			classification: Type.Optional(Type.Union([
+				Type.Literal("C0"), Type.Literal("C1"), Type.Literal("C2"), Type.Literal("C3"),
+			])),
+			conversation_id: Type.Optional(Type.Union([
+				Type.String({ minLength: 1, maxLength: 256 }),
+				Type.Null(),
+			])),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.room.send", {
+				room_id: params.room_id,
+				recipients: params.recipients,
+				payload: params.payload,
+				idempotency_key: params.idempotency_key,
+				expected_control_sequence: params.expected_control_sequence,
+				classification: params.classification ?? "C1",
+				conversation_id: params.conversation_id ?? null,
 			});
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},

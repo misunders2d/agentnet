@@ -2354,6 +2354,56 @@ def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> No
             },
         )
 
+def test_credential_renewal_activation_stops_failed_oneshot_before_timer() -> None:
+    import agentnet.operations.server_setup as setup
+
+    assert setup._credential_renewal_activation_commands(c0_responder_required=True) == (
+        ["stop", setup.CREDENTIAL_RENEW_UNIT],
+        ["reset-failed", setup.CREDENTIAL_RENEW_UNIT],
+        ["enable", "--now", setup.C0_RESPONDER_UNIT],
+        ["enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
+    )
+    assert setup._credential_renewal_activation_commands(c0_responder_required=False) == (
+        ["stop", setup.CREDENTIAL_RENEW_UNIT],
+        ["reset-failed", setup.CREDENTIAL_RENEW_UNIT],
+        ["disable", "--now", setup.C0_RESPONDER_UNIT],
+        ["enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
+    )
+
+
+@pytest.mark.parametrize("next_run_usec", [None, 0, 1_785_868_799_999_999])
+def test_credential_renewal_timer_requires_finite_future_schedule(
+    next_run_usec: int | None,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    properties = {
+        "LoadState": "loaded",
+        "UnitFileState": "enabled",
+        "ActiveState": "active",
+    }
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validate_active_renewal_timer_state(
+            properties,
+            next_run_usec=next_run_usec,
+            now_usec=1_785_868_800_000_000,
+        )
+    assert exc_info.value.blocker == "credential_renewal_schedule"
+
+
+def test_credential_renewal_timer_accepts_only_future_microsecond_epoch() -> None:
+    import agentnet.operations.server_setup as setup
+
+    properties = {
+        "LoadState": "loaded",
+        "UnitFileState": "enabled",
+        "ActiveState": "active",
+    }
+    setup._validate_active_renewal_timer_state(
+        properties,
+        next_run_usec=1_785_869_100_000_000,
+        now_usec=1_785_868_800_000_000,
+    )
 
 def test_core_create_evidence_accepts_only_exact_healthy_pre_enrollment_state() -> None:
     import agentnet.operations.server_setup as setup
@@ -3263,6 +3313,17 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     def fake_systemctl_run(argv, **_kwargs):
         systemctl_calls.append(argv)
         arguments = argv[1:]
+        if arguments and arguments[0] == "list-timers":
+            unit = arguments[1]
+            rows = (
+                []
+                if unit in disabled_units
+                else [{"unit": unit, "next": 9_000_000_000_000_000_000}]
+            )
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(rows).encode("utf-8"),
+            )
         if len(arguments) >= 3 and arguments[:2] == ["disable", "--now"]:
             unit = arguments[2]
             disabled_units.add(unit)
@@ -3272,7 +3333,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             disabled_units.discard(unit)
             if unit == setup.C0_RESPONDER_UNIT:
                 live_pids[unit] = 4323
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0, stdout=b"")
 
     monkeypatch.setattr(setup.subprocess, "run", fake_systemctl_run)
     monkeypatch.setattr(
@@ -3302,7 +3363,17 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             "PrivateTmp": "yes",
             "ProtectHome": "yes",
             "ProtectSystem": "strict",
-            "ActiveState": "active" if unit in live_pids else "inactive",
+            "ActiveState": (
+                "active"
+                if (
+                    unit in live_pids
+                    or (
+                        unit == setup.CREDENTIAL_RENEW_TIMER
+                        and unit not in disabled_units
+                    )
+                )
+                else "inactive"
+            ),
             **(
                 {}
                 if unit == setup.CREDENTIAL_RENEW_TIMER
@@ -3475,13 +3546,23 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         ["/usr/bin/systemctl", "restart", setup.CORE_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.CORE_UNIT],
-        ["/usr/bin/systemctl", "enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
-        ["/usr/bin/systemctl", "enable", "--now", setup.C0_RESPONDER_UNIT],
         ["/usr/bin/systemctl", "stop", setup.CREDENTIAL_RENEW_UNIT],
+        ["/usr/bin/systemctl", "reset-failed", setup.CREDENTIAL_RENEW_UNIT],
+        ["/usr/bin/systemctl", "enable", "--now", setup.C0_RESPONDER_UNIT],
+        ["/usr/bin/systemctl", "enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.APPROVAL_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.CORE_UNIT],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.CREDENTIAL_RENEW_TIMER],
         ["/usr/bin/systemctl", "is-active", "--quiet", setup.C0_RESPONDER_UNIT],
+        [
+            "/usr/bin/systemctl",
+            "list-timers",
+            setup.CREDENTIAL_RENEW_TIMER,
+            "--no-pager",
+            "--no-legend",
+            "--plain",
+            "--output=json",
+        ],
     ]
     assert [url for url, _expected in health_requests] == [
         "http://127.0.0.1:8090/healthz",

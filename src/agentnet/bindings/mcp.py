@@ -98,6 +98,61 @@ def create_mcp_binding(dispatcher: CanonicalToolDispatcher) -> FastMCP:
             {"conversation_id": conversation_id, "limit": limit, "thread_id": thread_id},
         )
 
+    @server.tool(description="Create an authorized persistent room for this authenticated harness")
+    def agentnet_room_create(
+        classification: str = "C1",
+        persistent: bool = True,
+        expires_at: str | None = None,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return dispatcher.call(
+            "agentnet.room.create",
+            {
+                "classification": classification,
+                "expires_at": expires_at,
+                "persistent": persistent,
+                "policy": policy,
+            },
+        )
+
+    @server.tool(description="Add one ordinary member to an authorized room")
+    def agentnet_room_member_add(
+        room_id: str,
+        harness_id: str,
+        role: str = "member",
+    ) -> dict[str, Any]:
+        return dispatcher.call(
+            "agentnet.room.member.add",
+            {"harness_id": harness_id, "role": role, "room_id": room_id},
+        )
+
+    @server.tool(description="Describe one room visible to this authenticated harness")
+    def agentnet_room_get(room_id: str) -> dict[str, Any]:
+        return dispatcher.call("agentnet.room.get", {"room_id": room_id})
+
+    @server.tool(description="Send an artifact-free message to current members of an authorized room")
+    def agentnet_room_send(
+        room_id: str,
+        recipients: list[str],
+        payload: dict[str, Any],
+        idempotency_key: str,
+        expected_control_sequence: int,
+        classification: str = "C1",
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
+        return dispatcher.call(
+            "agentnet.room.send",
+            {
+                "classification": classification,
+                "conversation_id": conversation_id,
+                "expected_control_sequence": expected_control_sequence,
+                "idempotency_key": idempotency_key,
+                "payload": payload,
+                "recipients": recipients,
+                "room_id": room_id,
+            },
+        )
+
     @server.tool(description="Read content-free response-obligation attention counters")
     def agentnet_obligation_inbox() -> dict[str, int]:
         return dispatcher.call("agentnet.obligation.inbox", {})

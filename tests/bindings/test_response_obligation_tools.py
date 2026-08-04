@@ -8,15 +8,39 @@ from pydantic import ValidationError as PydanticValidationError
 
 from agentnet.bindings.mcp import create_mcp_binding
 from agentnet.bindings.tools import CANONICAL_TOOL_NAMES, CanonicalToolDispatcher
+from agentnet.security.signatures import canonical_digest
+
+
+class RecordingRooms:
+    def __init__(self, core: RecordingCore) -> None:
+        self.core = core
+
+    def create(self, **arguments: Any) -> dict[str, Any]:
+        return self.core._record("room.create", **arguments)
+
+    def add_member(self, **arguments: Any) -> dict[str, Any]:
+        return self.core._record("room.member.add", **arguments)
+
+    def describe(self, **arguments: Any) -> dict[str, Any]:
+        return self.core._record("room.get", **arguments)
+
 
 
 class RecordingCore:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.rooms = RecordingRooms(self)
 
     def _record(self, name: str, **arguments: Any) -> dict[str, Any]:
         self.calls.append((name, arguments))
         return {"operation": name}
+
+
+    def _require(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("require", **arguments)
+
+    def send_message(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("send", **arguments)
 
     def acknowledge_mailbox(self, **arguments: Any) -> dict[str, Any]:
         return self._record("inbox.acknowledge", **arguments)
@@ -127,6 +151,10 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
         "agentnet.conversation.create",
         "agentnet.conversation.action",
         "agentnet.conversation.thread",
+        "agentnet.room.create",
+        "agentnet.room.member.add",
+        "agentnet.room.get",
+        "agentnet.room.send",
         "agentnet.obligation.inbox",
         "agentnet.obligation.list",
         "agentnet.obligation.get",
@@ -142,6 +170,10 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
         "agentnet_conversation_create",
         "agentnet_conversation_action",
         "agentnet_conversation_thread",
+        "agentnet_room_create",
+        "agentnet_room_member_add",
+        "agentnet_room_get",
+        "agentnet_room_send",
         "agentnet_obligation_inbox",
         "agentnet_obligation_list",
         "agentnet_obligation_get",
@@ -196,6 +228,133 @@ def test_canonical_inbox_acknowledgement_has_no_identity_or_recipient_arguments(
                     **injected,
                 },
             )
+
+
+def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments() -> None:
+    actor = object()
+    core = RecordingCore()
+    dispatcher = CanonicalToolDispatcher(core, lambda: actor)  # type: ignore[arg-type]
+
+    dispatcher.call("agentnet.room.create", {})
+    dispatcher.call(
+        "agentnet.room.member.add",
+        {
+            "harness_id": "harness-member-0001",
+            "role": "moderator",
+            "room_id": "room:/owner",
+        },
+    )
+    dispatcher.call("agentnet.room.get", {"room_id": "room:/owner"})
+    dispatcher.call(
+        "agentnet.room.send",
+        {
+            "expected_control_sequence": 4,
+            "idempotency_key": "room-message-0001",
+            "payload": {"body": "room hello"},
+            "recipients": ["harness-member-0001"],
+            "room_id": "room:/owner",
+        },
+    )
+
+    assert [name for name, _arguments in core.calls] == [
+        "require",
+        "room.create",
+        "require",
+        "room.member.add",
+        "require",
+        "room.get",
+        "require",
+        "send",
+    ]
+    assert core.calls[0][1] == {
+        "action": "room.create",
+        "actor": actor,
+        "classification": core.calls[0][1]["classification"],
+        "context": {
+            "classification": "C1",
+            "expires_at": None,
+            "persistent": True,
+            "policy_digest": canonical_digest({}),
+        },
+        "resource": "room:new",
+    }
+    assert core.calls[1][1] == {
+        "actor": actor,
+        "classification": core.calls[0][1]["classification"],
+        "expires_at": None,
+        "persistent": True,
+        "policy": None,
+    }
+    assert core.calls[2][1]["action"] == "room.action"
+    assert core.calls[2][1]["context"] == {
+        "harness_id": "harness-member-0001",
+        "mls_key_package_digest": None,
+        "operation": "member.add",
+        "role": "moderator",
+    }
+    assert core.calls[3][1] == {
+        "actor": actor,
+        "harness_id": "harness-member-0001",
+        "mls_key_package": None,
+        "role": "moderator",
+        "room_id": "room:/owner",
+    }
+    assert core.calls[4][1] == {
+        "action": "room.read",
+        "actor": actor,
+        "resource": "room:/owner",
+    }
+    assert core.calls[5][1] == {"actor": actor, "room_id": "room:/owner"}
+    assert core.calls[6][1] == {
+        "action": "room.action",
+        "actor": actor,
+        "classification": core.calls[0][1]["classification"],
+        "context": {
+            "expected_control_sequence": 4,
+            "operation": "message.send",
+            "payload_digest": canonical_digest({"body": "room hello"}),
+            "recipient_harness_ids": ["harness-member-0001"],
+        },
+        "resource": "room:/owner",
+    }
+    assert core.calls[7][1] == {
+        "actor": actor,
+        "classification": core.calls[0][1]["classification"],
+        "conversation_id": None,
+        "expected_room_control_sequence": 4,
+        "idempotency_key": "room-message-0001",
+        "payload": {"body": "room hello"},
+        "recipients": ("harness-member-0001",),
+        "released_artifacts": (),
+        "room_id": "room:/owner",
+    }
+
+    valid_arguments = {
+        "agentnet.room.create": {},
+        "agentnet.room.member.add": {
+            "harness_id": "harness-member-0001",
+            "room_id": "room-1",
+        },
+        "agentnet.room.get": {"room_id": "room-1"},
+        "agentnet.room.send": {
+            "expected_control_sequence": 1,
+            "idempotency_key": "room-message-0002",
+            "payload": {"body": "safe"},
+            "recipients": ["harness-member-0001"],
+            "room_id": "room-1",
+        },
+    }
+    for method, arguments in valid_arguments.items():
+        with pytest.raises(PydanticValidationError):
+            dispatcher.call(method, {**arguments, "actor": {"harness_id": "attacker"}})  # type: ignore[arg-type]
+    with pytest.raises(PydanticValidationError):
+        dispatcher.call(
+            "agentnet.room.send",
+            {
+                **valid_arguments["agentnet.room.send"],
+                "released_artifacts": [{"artifact_id": "artifact-1"}],
+            },
+        )
 
 
 def test_pi_extension_exposes_the_same_canonical_journey_as_mcp() -> None:

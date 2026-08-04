@@ -85,17 +85,18 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_numbered_migration_catalog_preserves_prior_versions_and_adds_identity_lifecycle(
+def test_numbered_migration_catalog_preserves_prior_versions_and_adds_communication_scope(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 5
+    assert CURRENT_SCHEMA_VERSION == 6
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
         (2, "protected_task_payload_release"),
         (3, "guided_oidc_enrollment_continuation"),
         (4, "bounded_c0_bootstrap_plan"),
         (5, "identity_begin_idempotency_and_credential_renewal"),
+        (6, "persistent_same_principal_communication_scope"),
     ]
     assert (
         MIGRATIONS[0].checksum
@@ -242,6 +243,9 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
 
     v1 = sqlite3.connect(path)
     try:
+        _drop_v6_communication_scope_schema(v1)
+        _drop_v5_identity_lifecycle_schema(v1)
+        _drop_v4_bootstrap_plan_schema(v1)
         v1.execute("DROP INDEX idx_oidc_continuation_status_expiry")
         v1.execute("DROP TABLE oidc_enrollment_continuations")
         v1.execute("DROP INDEX idx_task_payload_releases_recipient")
@@ -254,6 +258,14 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
         v1.commit()
     finally:
         v1.close()
+
+
+def _drop_v6_communication_scope_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP INDEX idx_communication_scope_items_entitlement_harness")
+    connection.execute("DROP TABLE communication_scope_items")
+    connection.execute("DROP INDEX idx_communication_scopes_current")
+    connection.execute("DROP TABLE communication_scopes")
+    connection.execute("DELETE FROM installed_migration_catalog WHERE version=6")
 
 
 def _drop_v5_identity_lifecycle_schema(connection: sqlite3.Connection) -> None:
@@ -291,6 +303,7 @@ def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
 
     v2 = sqlite3.connect(path)
     try:
+        _drop_v6_communication_scope_schema(v2)
         _drop_v5_identity_lifecycle_schema(v2)
         _drop_v4_bootstrap_plan_schema(v2)
         v2.execute("DROP INDEX idx_oidc_continuation_status_expiry")
@@ -317,6 +330,7 @@ def _make_exact_v3_sqlite(path: Path, *, key: bytes) -> None:
 
     v3 = sqlite3.connect(path)
     try:
+        _drop_v6_communication_scope_schema(v3)
         _drop_v5_identity_lifecycle_schema(v3)
         _drop_v4_bootstrap_plan_schema(v3)
         v3.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
@@ -340,6 +354,7 @@ def _make_exact_v4_sqlite(path: Path, *, key: bytes) -> None:
 
     v4 = sqlite3.connect(path)
     try:
+        _drop_v6_communication_scope_schema(v4)
         _drop_v5_identity_lifecycle_schema(v4)
         v4.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
         v4.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
@@ -348,6 +363,28 @@ def _make_exact_v4_sqlite(path: Path, *, key: bytes) -> None:
         v4.commit()
     finally:
         v4.close()
+
+
+def _make_exact_v5_sqlite(path: Path, *, key: bytes) -> None:
+    store = SQLiteStore(path, LocalEnvelopeCipher(key))
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('preserved-sentinel','exact-v5-data')"
+            )
+    finally:
+        store.close()
+
+    v5 = sqlite3.connect(path)
+    try:
+        _drop_v6_communication_scope_schema(v5)
+        v5.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
+        v5.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
+        v5.execute("UPDATE metadata SET value='5' WHERE key='schema_version'")
+        v5.executescript(RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA)
+        v5.commit()
+    finally:
+        v5.close()
 
 
 def test_sqlite_exact_v2_database_is_outside_n_minus_one_window(tmp_path: Path) -> None:
@@ -370,21 +407,21 @@ def test_sqlite_exact_v3_database_is_outside_n_minus_one_window(tmp_path: Path) 
     assert _sqlite_logical_snapshot(path) == before
 
 
-def test_sqlite_exact_v4_database_upgrades_to_v5_without_data_loss(
+def test_sqlite_exact_v5_database_upgrades_to_v6_without_data_loss(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "v4-upgrade.sqlite3"
+    path = tmp_path / "v5-upgrade.sqlite3"
     key = b"u" * 32
-    _make_exact_v4_sqlite(path, key=key)
+    _make_exact_v5_sqlite(path, key=key)
 
     upgraded = SQLiteStore(path, LocalEnvelopeCipher(key))
     try:
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "5"
+        )["value"] == "6"
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='preserved-sentinel'"
-        )["value"] == "exact-v4-data"
+        )["value"] == "exact-v5-data"
         assert [tuple(row) for row in upgraded.fetch_all(
             "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
         )] == [
@@ -392,24 +429,24 @@ def test_sqlite_exact_v4_database_upgrades_to_v5_without_data_loss(
             for migration in MIGRATIONS
         ]
         assert upgraded.fetch_one(
-            "SELECT COUNT(*) AS count FROM oidc_enrollment_continuations"
+            "SELECT COUNT(*) AS count FROM communication_scopes"
         )["count"] == 0
     finally:
         upgraded.close()
 
 
-def test_sqlite_v4_to_v5_migration_failure_rolls_back_without_partial_schema(
+def test_sqlite_v5_to_v6_migration_failure_rolls_back_without_partial_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "v4-upgrade-rollback.sqlite3"
+    path = tmp_path / "v5-upgrade-rollback.sqlite3"
     key = b"v" * 32
-    _make_exact_v4_sqlite(path, key=key)
+    _make_exact_v5_sqlite(path, key=key)
     before = _sqlite_logical_snapshot(path)
     monkeypatch.setitem(
         __import__("agentnet.storage.sqlite", fromlist=["_SQLITE_MIGRATION_SQL"])
         ._SQLITE_MIGRATION_SQL,
-        5,
+        6,
         "CREATE TABLE migration_partial(value TEXT); SELECT missing_function();",
     )
 
@@ -424,10 +461,10 @@ def test_sqlite_v4_to_v5_migration_failure_rolls_back_without_partial_schema(
         ).fetchone() is None
         assert raw.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()[0] == "4"
+        ).fetchone()[0] == "5"
         assert raw.execute(
             "SELECT COUNT(*) FROM installed_migration_catalog"
-        ).fetchone()[0] == 4
+        ).fetchone()[0] == 5
     finally:
         raw.close()
 
@@ -684,10 +721,14 @@ def test_migration_history_rejects_gaps_future_and_checksum_tamper() -> None:
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS[:4]
     ]
-    for legacy in (applied_v1, applied_v2, applied_v3):
+    applied_v5 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:5]
+    ]
+    for legacy in (applied_v1, applied_v2, applied_v3, applied_v4):
         with pytest.raises(GateBlocked, match="N/N-1 migration window"):
             validate_applied_migrations(legacy)
-    assert validate_applied_migrations(applied_v4) == CURRENT_SCHEMA_VERSION - 1
+    assert validate_applied_migrations(applied_v5) == CURRENT_SCHEMA_VERSION - 1
     complete = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS
@@ -980,14 +1021,14 @@ def test_postgres_expected_catalog_marks_table_primary_key_columns_not_null() ->
     } >= {("synthetic", "left_id"), ("synthetic", "right_id")}
 
 
-def test_postgres_full_v5_catalog_checks_every_table_column_constraint_and_index() -> None:
-    spec_v4 = expected_catalog(MIGRATIONS[:4])
-    spec_v5 = expected_catalog(MIGRATIONS)
-    assert len(spec_v4.tables) == 100
+def test_postgres_full_v6_catalog_checks_every_table_column_constraint_and_index() -> None:
+    spec_v5 = expected_catalog(MIGRATIONS[:5])
+    spec_v6 = expected_catalog(MIGRATIONS)
     assert len(spec_v5.tables) == 101
-    assert len(spec_v5.columns) > len(spec_v4.columns)
-    assert len(spec_v5.constraints) > len(spec_v4.constraints)
-    assert len(spec_v5.indexes) > len(spec_v4.indexes)
+    assert len(spec_v6.tables) == 103
+    assert len(spec_v6.columns) > len(spec_v5.columns)
+    assert len(spec_v6.constraints) > len(spec_v5.constraints)
+    assert len(spec_v6.indexes) > len(spec_v5.indexes)
 
     require_exact_postgres_catalog(_ExactCatalogConnection(), migrations=MIGRATIONS)
     with pytest.raises(GateBlocked, match="column catalog"):
@@ -1228,20 +1269,20 @@ class _MigrationConnection:
         return _Cursor()
 
 
-def test_postgres_v4_rejects_partial_s5_catalog_before_migration() -> None:
-    applied_v4 = [
+def test_postgres_v5_rejects_partial_s6_catalog_before_migration() -> None:
+    applied_v5 = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
-        for migration in MIGRATIONS[:4]
+        for migration in MIGRATIONS[:5]
     ]
     connection = _MigrationConnection(
         relations=(
             {"name": "schema_migrations", "kind": "r"},
-            {"name": "credential_renewal_requests", "kind": "r"},
+            {"name": "communication_scopes", "kind": "r"},
         ),
-        applied=applied_v4,
+        applied=applied_v5,
     )
 
-    with pytest.raises(GateBlocked, match="partial S5"):
+    with pytest.raises(GateBlocked, match="partial S6"):
         apply_postgres_migrations(connection)
     assert not any(
         parameters and parameters[0] == CURRENT_SCHEMA_VERSION
@@ -1250,16 +1291,16 @@ def test_postgres_v4_rejects_partial_s5_catalog_before_migration() -> None:
     )
 
 
-def test_postgres_v4_catalog_is_verified_before_and_after_v5_migration(
+def test_postgres_v5_catalog_is_verified_before_and_after_v6_migration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    applied_v4 = [
+    applied_v5 = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
-        for migration in MIGRATIONS[:4]
+        for migration in MIGRATIONS[:5]
     ]
     connection = _MigrationConnection(
         relations=({"name": "schema_migrations", "kind": "r"},),
-        applied=applied_v4,
+        applied=applied_v5,
     )
     verified_versions: list[int] = []
     monkeypatch.setattr(
@@ -1272,12 +1313,12 @@ def test_postgres_v4_catalog_is_verified_before_and_after_v5_migration(
     )
 
     assert apply_postgres_migrations(connection) == CURRENT_SCHEMA_VERSION
-    assert verified_versions == [4, 5]
+    assert verified_versions == [5, 6]
     assert [
         parameters[0]
         for statement, parameters in connection.statements
         if statement.startswith("INSERT INTO schema_migrations")
-    ] == [5]
+    ] == [6]
 
 
 def test_migration_application_is_one_crash_atomic_transaction(

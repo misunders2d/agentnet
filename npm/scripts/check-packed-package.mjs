@@ -389,6 +389,7 @@ try {
         domain_id: "corp.example",
         allowed_purposes: [
           "authorization.bootstrap_plan.approve",
+          "authorization.communication_scope.approve",
           "authorization.elevation.approve",
           "identity.credential.recover.approve",
           "identity.enrollment.approve",

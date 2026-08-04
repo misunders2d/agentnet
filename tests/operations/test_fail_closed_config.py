@@ -434,6 +434,7 @@ def _confidential_oidc_config(
                 allowed_purposes=frozenset(
                     {
                         "authorization.bootstrap_plan.approve",
+                        "authorization.communication_scope.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
@@ -628,6 +629,7 @@ def test_same_ordinary_server_can_bootstrap_only_through_exact_oidc_and_independ
                 allowed_purposes=frozenset(
                     {
                         "authorization.bootstrap_plan.approve",
+                        "authorization.communication_scope.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
@@ -725,6 +727,7 @@ def test_private_oidc_config_requires_explicit_canonical_network_origin_and_jwk_
                 allowed_purposes=frozenset(
                     {
                         "authorization.bootstrap_plan.approve",
+                        "authorization.communication_scope.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",

@@ -13,6 +13,11 @@ from agentnet.authorization.bootstrap_plan import (
     BOOTSTRAP_PLAN_PROFILE,
 )
 from agentnet.errors import AuthenticationError
+from agentnet.authorization.communication_scope import (
+    COMMUNICATION_SCOPE_ACTIONS,
+    COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+    build_communication_scope_transaction,
+)
 from agentnet.security.signatures import canonical_json
 
 
@@ -573,6 +578,52 @@ def _validate_bootstrap(transaction: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_communication_scope(transaction: dict[str, Any]) -> dict[str, Any]:
+    preimage = transaction.get("canonical_scope_preimage")
+    if not isinstance(preimage, dict):
+        raise _denied()
+    try:
+        expected = build_communication_scope_transaction(preimage)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _denied() from exc
+    if transaction != expected:
+        raise _denied()
+    harnesses = preimage["harnesses"]
+    owner = harnesses["owner"]
+    fresh = harnesses["fresh"]
+    for harness in (owner, fresh):
+        for key in ("display_name", "kind"):
+            value = harness[key]
+            if (
+                not isinstance(value, str)
+                or not 1 <= len(value) <= 128
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            ):
+                raise _denied()
+    if transaction["item_count"] != len(COMMUNICATION_SCOPE_ACTIONS) * 2:
+        raise _denied()
+    return {
+        "title": "Approve persistent communication",
+        "statements": [
+            "Same verified person: one owner OMP laptop and one ordinary server agent",
+            f"Owner laptop: {owner['display_name']} ({owner['kind']})",
+            f"Server agent: {fresh['display_name']} ({fresh['kind']})",
+            (
+                "Communication: messages, mailbox delivery, conversations, rooms, "
+                "and response obligations"
+            ),
+            (
+                f"Authority: {len(COMMUNICATION_SCOPE_ACTIONS)} communication permissions "
+                "for each exact enrolled harness"
+            ),
+            "Expiry: this communication authority does not expire automatically",
+            "Revocation: either exact harness or any individual permission can be revoked",
+            "Excluded: files, artifacts, tools, business effects, federation, and public A2A",
+            "Independent approval boundary: not proven",
+        ],
+    }
+
+
 def validate_and_summarize_approval_transaction(
     purpose: str,
     canonical_transaction: bytes,
@@ -601,6 +652,8 @@ def validate_and_summarize_approval_transaction(
         )
     if purpose == BOOTSTRAP_PLAN_APPROVAL_PURPOSE:
         return _validate_bootstrap(transaction)
+    if purpose == COMMUNICATION_SCOPE_APPROVAL_PURPOSE:
+        return _validate_communication_scope(transaction)
     raise _denied()
 
 

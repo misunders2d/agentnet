@@ -295,7 +295,7 @@ class ResponseObligationService:
         *,
         actor: VerifiedActor,
         action: str,
-        conversation_id: str,
+        resource: str,
         revision: int,
         classification: Classification,
         context: dict[str, Any],
@@ -306,7 +306,7 @@ class ResponseObligationService:
             AuthorizationRequest(
                 actor=actor,
                 action=action,
-                resource=f"conversation:{conversation_id}",
+                resource=resource,
                 operation_class=OperationClass.BUSINESS,
                 policy_revision=revision,
                 context=context,
@@ -431,7 +431,7 @@ class ResponseObligationService:
             connection,
             actor=actor,
             action="conversation.response_obligation.create",
-            conversation_id=request_event.conversation_id,
+            resource=f"conversation:{request_event.conversation_id}",
             revision=policy_revision,
             classification=classification,
             context={
@@ -570,6 +570,36 @@ class ResponseObligationService:
         policy_decision_id: str,
         now: int,
     ) -> dict[str, Any]:
+        classification = self._classification(connection, row["conversation_id"])
+        authority_id, revision = self._require_current_actor(
+            connection,
+            actor,
+            now=now,
+            classification=classification,
+        )
+        if (
+            row["responsible_harness_id"] != actor.harness_id
+            or row["responsible_authority_id"] != authority_id
+            or row["domain_id"] != actor.domain_id
+        ):
+            raise AuthorizationError(
+                "response must come from the exact responsible recipient harness"
+            )
+        transition_decision = self._decide(
+            connection,
+            actor=actor,
+            action="conversation.response_obligation.transition",
+            resource=f"conversation:{row['conversation_id']}",
+            revision=revision,
+            classification=classification,
+            context={
+                "obligation_id": row["obligation_id"],
+                "to_state": outcome,
+                "response_event_id": response_event_id,
+                "response_payload_digest": response_payload_digest,
+            },
+            now=now,
+        )
         return self._record_transition(
             connection,
             row=row,
@@ -577,7 +607,8 @@ class ResponseObligationService:
             actor_view=actor.audit_view(),
             detail={
                 "kind": "typed_response",
-                "policy_decision_id": policy_decision_id,
+                "policy_decision_id": transition_decision.decision_id,
+                "conversation_policy_decision_id": policy_decision_id,
                 "request_event_id": row["request_event_id"],
                 "request_digest": row["request_payload_digest"],
             },
@@ -628,8 +659,8 @@ class ResponseObligationService:
             decision = self._decide(
                 connection,
                 actor=actor,
-                action="conversation.response_obligation.update",
-                conversation_id=row["conversation_id"],
+                action="conversation.response_obligation.transition",
+                resource=f"conversation:{row['conversation_id']}",
                 revision=revision,
                 classification=classification,
                 context={"obligation_id": obligation_id, "to_state": to_state},
@@ -683,6 +714,7 @@ class ResponseObligationService:
             )
             if (
                 row["requester_authority_id"] != authority_id
+                or row["requester_harness_id"] != actor.harness_id
                 or row["domain_id"] != actor.domain_id
             ):
                 raise AuthorizationError(
@@ -694,7 +726,7 @@ class ResponseObligationService:
                 connection,
                 actor=actor,
                 action="conversation.response_obligation.cancel",
-                conversation_id=row["conversation_id"],
+                resource=f"conversation:{row['conversation_id']}",
                 revision=revision,
                 classification=classification,
                 context={"obligation_id": obligation_id, "reason_code": reason_code},
@@ -733,8 +765,8 @@ class ResponseObligationService:
         - the requester's own overdue obligations move to ``expired`` exactly
           when the deadline bound at authorized creation has passed.
 
-        No new authority is created, so no fresh policy decision is consumed;
-        actor currency is still enforced and every mutation is audited.
+        Each derived mutation crosses the canonical transition PEP after actor
+        currency and exact requester/responsible harness ownership are revalidated.
         """
 
         if not 1 <= limit <= 1000:
@@ -757,9 +789,19 @@ class ResponseObligationService:
                       ON r.event_id=o.request_event_id
                      AND r.recipient_id=o.responsible_harness_id
                    WHERE o.domain_id=? AND o.state='created'
-                     AND (o.responsible_authority_id=? OR o.requester_authority_id=?)
+                     AND (
+                         (o.responsible_authority_id=? AND o.responsible_harness_id=?)
+                         OR (o.requester_authority_id=? AND o.requester_harness_id=?)
+                     )
                    ORDER BY o.created_at,o.obligation_id LIMIT ?""",
-                (actor.domain_id, authority_id, authority_id, limit),
+                (
+                    actor.domain_id,
+                    authority_id,
+                    actor.harness_id,
+                    authority_id,
+                    actor.harness_id,
+                    limit,
+                ),
             ).fetchall()
             for row in pending_commit:
                 delivery = connection.execute(
@@ -771,6 +813,27 @@ class ResponseObligationService:
                     or str(delivery["current_fact"]) not in _COMMITTED_DELIVERY_FACTS
                 ):
                     continue
+                classification = self._classification(connection, row["conversation_id"])
+                _current_authority_id, revision = self._require_current_actor(
+                    connection,
+                    actor,
+                    now=now,
+                    classification=classification,
+                )
+                decision = self._decide(
+                    connection,
+                    actor=actor,
+                    action="conversation.response_obligation.transition",
+                    resource=f"conversation:{row['conversation_id']}",
+                    revision=revision,
+                    classification=classification,
+                    context={
+                        "obligation_id": row["obligation_id"],
+                        "to_state": "recipient_committed",
+                        "source": "reconcile_delivery_fact",
+                    },
+                    now=now,
+                )
                 self._record_transition(
                     connection,
                     row=row,
@@ -779,6 +842,7 @@ class ResponseObligationService:
                     detail={
                         "kind": "derived_from_delivery_fact",
                         "delivery_fact": str(delivery["current_fact"]),
+                        "policy_decision_id": decision.decision_id,
                     },
                     now=now,
                     state_reason="delivery_fact_mirrored",
@@ -786,13 +850,34 @@ class ResponseObligationService:
                 committed.append(str(row["obligation_id"]))
             overdue = connection.execute(
                 """SELECT * FROM response_obligations
-                   WHERE domain_id=? AND requester_authority_id=?
+                   WHERE domain_id=? AND requester_authority_id=? AND requester_harness_id=?
                      AND deadline_at IS NOT NULL AND deadline_at<=?
                      AND state NOT IN ('completed','failed','canceled','expired')
                    ORDER BY deadline_at,obligation_id LIMIT ?""",
-                (actor.domain_id, authority_id, now, limit),
+                (actor.domain_id, authority_id, actor.harness_id, now, limit),
             ).fetchall()
             for row in overdue:
+                classification = self._classification(connection, row["conversation_id"])
+                _current_authority_id, revision = self._require_current_actor(
+                    connection,
+                    actor,
+                    now=now,
+                    classification=classification,
+                )
+                decision = self._decide(
+                    connection,
+                    actor=actor,
+                    action="conversation.response_obligation.transition",
+                    resource=f"conversation:{row['conversation_id']}",
+                    revision=revision,
+                    classification=classification,
+                    context={
+                        "obligation_id": row["obligation_id"],
+                        "to_state": "expired",
+                        "source": "reconcile_deadline",
+                    },
+                    now=now,
+                )
                 self._record_transition(
                     connection,
                     row=row,
@@ -802,6 +887,7 @@ class ResponseObligationService:
                         "kind": "deadline_expiry",
                         "deadline_at": int(row["deadline_at"]),
                         "authoritative_clock": now,
+                        "policy_decision_id": decision.decision_id,
                     },
                     now=now,
                     state_reason="deadline_expired",
@@ -822,9 +908,14 @@ class ResponseObligationService:
 
     # -- exact-fetch and inbox visibility -------------------------------------
 
-    def _require_party(self, connection: Any, actor: VerifiedActor, row: Any) -> str:
+    def _require_party(
+        self,
+        connection: Any,
+        actor: VerifiedActor,
+        row: Any,
+    ) -> tuple[str, int, Classification]:
         classification = self._classification(connection, row["conversation_id"])
-        authority_id, _revision = self._require_current_actor(
+        authority_id, revision = self._require_current_actor(
             connection,
             actor,
             now=int(time.time()),
@@ -832,10 +923,16 @@ class ResponseObligationService:
         )
         if row["domain_id"] != actor.domain_id:
             raise AuthorizationError("response obligation is unavailable")
-        if row["requester_authority_id"] == authority_id:
-            return "requester"
-        if row["responsible_authority_id"] == authority_id:
-            return "responsible"
+        if (
+            row["requester_authority_id"] == authority_id
+            and row["requester_harness_id"] == actor.harness_id
+        ):
+            return "requester", revision, classification
+        if (
+            row["responsible_authority_id"] == authority_id
+            and row["responsible_harness_id"] == actor.harness_id
+        ):
+            return "responsible", revision, classification
         raise AuthorizationError("response obligation is unavailable")
 
     def get(self, *, actor: VerifiedActor, obligation_id: str) -> dict[str, Any]:
@@ -846,7 +943,17 @@ class ResponseObligationService:
             ).fetchone()
             if row is None:
                 raise AuthorizationError("response obligation is unavailable")
-            role = self._require_party(connection, actor, row)
+            role, revision, classification = self._require_party(connection, actor, row)
+            self._decide(
+                connection,
+                actor=actor,
+                action="conversation.response_obligation.read",
+                resource=f"conversation:{row['conversation_id']}",
+                revision=revision,
+                classification=classification,
+                context={"obligation_id": obligation_id, "exposure": "get"},
+                now=int(time.time()),
+            )
             transitions = connection.execute(
                 """SELECT revision,from_state,to_state,detail_json,response_event_id,created_at
                      FROM response_obligation_transitions
@@ -891,14 +998,19 @@ class ResponseObligationService:
             clauses = ["domain_id=?"]
             parameters: list[Any] = [actor.domain_id]
             if role == "requester":
-                clauses.append("requester_authority_id=?")
-                parameters.append(authority_id)
+                clauses.extend(("requester_authority_id=?", "requester_harness_id=?"))
+                parameters.extend((authority_id, actor.harness_id))
             elif role == "responsible":
-                clauses.append("responsible_authority_id=?")
-                parameters.append(authority_id)
+                clauses.extend(("responsible_authority_id=?", "responsible_harness_id=?"))
+                parameters.extend((authority_id, actor.harness_id))
             else:
-                clauses.append("(requester_authority_id=? OR responsible_authority_id=?)")
-                parameters.extend((authority_id, authority_id))
+                clauses.append(
+                    "((requester_authority_id=? AND requester_harness_id=?) "
+                    "OR (responsible_authority_id=? AND responsible_harness_id=?))"
+                )
+                parameters.extend(
+                    (authority_id, actor.harness_id, authority_id, actor.harness_id)
+                )
             if states:
                 clauses.append(f"state IN ({','.join('?' for _ in states)})")
                 parameters.extend(states)
@@ -908,6 +1020,31 @@ class ResponseObligationService:
                     ORDER BY created_at,obligation_id LIMIT ?""",
                 tuple(parameters),
             ).fetchall()
+            for conversation_id in dict.fromkeys(
+                str(row["conversation_id"]) for row in rows
+            ):
+                classification = self._classification(connection, conversation_id)
+                _current_authority_id, revision = self._require_current_actor(
+                    connection,
+                    actor,
+                    now=int(time.time()),
+                    classification=classification,
+                )
+                self._decide(
+                    connection,
+                    actor=actor,
+                    action="conversation.response_obligation.read",
+                    resource=f"conversation:{conversation_id}",
+                    revision=revision,
+                    classification=classification,
+                    context={
+                        "exposure": "list",
+                        "role": role,
+                        "states": list(states),
+                        "limit": limit,
+                    },
+                    now=int(time.time()),
+                )
             return [_row_view(row) for row in rows]
 
     def inbox(self, *, actor: VerifiedActor, now: int | None = None) -> dict[str, int]:
@@ -927,6 +1064,41 @@ class ResponseObligationService:
                 now=now,
                 classification=Classification.C0_PUBLIC,
             )
+            obligation_conversations = connection.execute(
+                """SELECT DISTINCT conversation_id FROM response_obligations
+                    WHERE domain_id=?
+                      AND (
+                          (requester_authority_id=? AND requester_harness_id=?)
+                          OR (responsible_authority_id=? AND responsible_harness_id=?)
+                      )
+                    ORDER BY conversation_id""",
+                (
+                    actor.domain_id,
+                    authority_id,
+                    actor.harness_id,
+                    authority_id,
+                    actor.harness_id,
+                ),
+            ).fetchall()
+            for conversation_row in obligation_conversations:
+                conversation_id = str(conversation_row["conversation_id"])
+                classification = self._classification(connection, conversation_id)
+                _current_authority_id, revision = self._require_current_actor(
+                    connection,
+                    actor,
+                    now=now,
+                    classification=classification,
+                )
+                self._decide(
+                    connection,
+                    actor=actor,
+                    action="conversation.response_obligation.read",
+                    resource=f"conversation:{conversation_id}",
+                    revision=revision,
+                    classification=classification,
+                    context={"exposure": "inbox"},
+                    now=now,
+                )
             def count(sql: str, parameters: tuple[Any, ...]) -> int:
                 row = connection.execute(sql, parameters).fetchone()
                 return int(row["total"]) if row is not None else 0
@@ -953,29 +1125,50 @@ class ResponseObligationService:
             )
             awaiting_peer = count(
                 f"""SELECT COUNT(*) AS total FROM response_obligations
-                    WHERE domain_id=? AND requester_authority_id=?
+                    WHERE domain_id=? AND requester_authority_id=? AND requester_harness_id=?
                       AND response_required=1
                       AND state IN ({open_marks})""",
-                (actor.domain_id, authority_id, *open_states),
+                (actor.domain_id, authority_id, actor.harness_id, *open_states),
             )
             awaiting_human = count(
                 """SELECT COUNT(*) AS total FROM response_obligations
                    WHERE domain_id=? AND state='pending_human'
-                     AND (requester_authority_id=? OR responsible_authority_id=?)""",
-                (actor.domain_id, authority_id, authority_id),
+                     AND (
+                         (requester_authority_id=? AND requester_harness_id=?)
+                         OR (responsible_authority_id=? AND responsible_harness_id=?)
+                     )""",
+                (
+                    actor.domain_id,
+                    authority_id,
+                    actor.harness_id,
+                    authority_id,
+                    actor.harness_id,
+                ),
             )
             overdue = count(
                 f"""SELECT COUNT(*) AS total FROM response_obligations
                     WHERE domain_id=?
-                      AND (requester_authority_id=? OR responsible_authority_id=?)
+                      AND (
+                          (requester_authority_id=? AND requester_harness_id=?)
+                          OR (responsible_authority_id=? AND responsible_harness_id=?)
+                      )
                       AND deadline_at IS NOT NULL AND deadline_at<=?
                       AND state IN ({open_marks},'pending_human')""",
-                (actor.domain_id, authority_id, authority_id, now, *open_states),
+                (
+                    actor.domain_id,
+                    authority_id,
+                    actor.harness_id,
+                    authority_id,
+                    actor.harness_id,
+                    now,
+                    *open_states,
+                ),
             )
             failed = count(
                 """SELECT COUNT(*) AS total FROM response_obligations
-                   WHERE domain_id=? AND requester_authority_id=? AND state='failed'""",
-                (actor.domain_id, authority_id),
+                   WHERE domain_id=? AND requester_authority_id=? AND requester_harness_id=?
+                     AND state='failed'""",
+                (actor.domain_id, authority_id, actor.harness_id),
             )
         return {
             "unread_information": unread_information,

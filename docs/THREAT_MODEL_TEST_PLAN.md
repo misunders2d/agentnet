@@ -284,8 +284,18 @@ Planned tests:
 - `tests/integration/test_mcp_token_confinement.py`
 - `tests/integration/test_pi_direct_ipc.py`
 - `tests/fuzz/test_local_api_framing_fuzz.py`
+- `tests/bindings/test_remote_manager.py`
+- `tests/bindings/test_response_obligation_tools.py`
 
 Run one typed operation corpus through supervisor API, MCP bindings, and Pi direct IPC and compare canonical results. Spoofed identity arguments must not affect authenticated context. Corporate and A2A bearer tokens must never enter MCP. Fuzz JSON-RPC/framing, nested arguments, duplicate IDs, cancellation, partial writes, and reconnect. Replace an owner-only Unix bootstrap socket at the same path and generation under immediate inode reuse; the retained non-inheritable path descriptor must force re-registration, survive a retryable failed renewal without dropping the old pin, swap only after success, and close on stop, post-publication startup failure, or terminal restart exhaustion. Terminal renewal/restart failures must stop retry cycling, remove the locator, and expose a fixed content-free failure code.
+The interactive laptop Manager runner is part of this boundary. Verify that it
+passes only one non-inheritable/unlinked local binding descriptor, strips every
+AgentNet and A2A private-key environment variable, preserves terminal I/O, maps
+every canonical communication method to the existing signed HTTP contract,
+propagates remote denials exactly, returns child exit/signal status, and removes
+the process-bound socket/capability/session directory on every exit path.
+Canonical room and response-obligation tools must remain strict and parity-
+identical across MCP, Pi, and Manager rather than growing a privileged surface.
 
 ### Gate 6 — Identity and enrollment
 
@@ -343,6 +353,8 @@ Planned tests:
 - `tests/host/test_local_ipc_attribution.py`
 - `tests/security/test_signing_oracle_attacks.py`
 - `tests/fuzz/test_ipc_frame_fuzz.py`
+- `tests/bindings/test_remote_manager.py`
+- `tests/authorization/test_communication_scope_service.py`
 
 Reject arbitrary-byte signing, unknown critical fields, wrong purpose/audience/domain/session, stale capabilities, and raw caller identities. Attack wrong and sibling processes, same UID, capability copying, PID reuse, socket replacement/symlink, inherited file descriptors, ptrace/proc dump, replay, restart, and flood. If exact same-UID attribution is not proven, verify that the compromise-domain fallback allows only draft, explicit human viewing, and deterministic non-business control while every protected operation denies.
 
@@ -359,8 +371,21 @@ Planned tests:
 - `tests/integration/test_directional_assignment.py`
 - `tests/property/test_relationship_lifecycle.py`
 - `tests/fuzz/test_policy_input_fuzz.py`
+- `tests/authorization/test_communication_scope_contract.py`
+- `tests/authorization/test_communication_scope_service.py`
+- `tests/integration/test_persistent_communication_journey.py`
 
 Generate arbitrary humans, harnesses, grants, relationships, revisions, resources, and revocations. Only human entitlement may add authority; deny/revoke wins. Missing, stale, diagnostic, schema-invalid, or incoherent state denies. Verify one-use grant/reservation atomicity and next-decision revocation. Admin-to-subordinate matching assignments reach `accepted_queued`; expired, revoked, scope-mismatched, upward, and lateral assignments remain non-executable absent a separate exact directed edge. Test concurrent revoke/renew, multiple administrators, subject exit, fencing, incompatible commands, and legal/security override.
+For the persistent same-principal communication scope, attempt action-set,
+restriction, resource, harness, credential, principal, domain, expiry, and
+Approval-purpose substitution; duplicate and response-loss completion; crash
+before entitlement commit; partial-item persistence; stale policy/credential;
+and revocation or rotation during active use. Pending/rejected/expired state
+must create no entitlement. Completion must create exactly 26 permanently
+nonexpiring action/harness items or none, while every out-of-pair peer,
+artifact, task, effect, administration, federation, and A2A operation remains
+denied. Restart preserves the committed scope but never bypasses current-state
+checks.
 
 ### Gate 9 — Durability
 

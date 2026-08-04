@@ -9,6 +9,7 @@ binding without accepting replacement identity claims from tool arguments.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentnet.identity.actors import VerifiedActor
 from agentnet.messaging.conversation import ConversationAction
 from agentnet.protocol.models import Classification
+from agentnet.security.signatures import canonical_digest
 
 
 CanonicalToolName = Literal[
@@ -25,6 +27,10 @@ CanonicalToolName = Literal[
     "agentnet.conversation.create",
     "agentnet.conversation.action",
     "agentnet.conversation.thread",
+    "agentnet.room.create",
+    "agentnet.room.member.add",
+    "agentnet.room.get",
+    "agentnet.room.send",
     "agentnet.obligation.inbox",
     "agentnet.obligation.list",
     "agentnet.obligation.get",
@@ -39,6 +45,10 @@ CANONICAL_TOOL_NAMES: tuple[CanonicalToolName, ...] = (
     "agentnet.conversation.create",
     "agentnet.conversation.action",
     "agentnet.conversation.thread",
+    "agentnet.room.create",
+    "agentnet.room.member.add",
+    "agentnet.room.get",
+    "agentnet.room.send",
     "agentnet.obligation.inbox",
     "agentnet.obligation.list",
     "agentnet.obligation.get",
@@ -48,7 +58,43 @@ CANONICAL_TOOL_NAMES: tuple[CanonicalToolName, ...] = (
 )
 
 
+class BoundRoomService(Protocol):
+    def create(
+        self,
+        *,
+        actor: VerifiedActor,
+        classification: Classification,
+        persistent: bool,
+        expires_at: datetime | None,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+    def add_member(
+        self,
+        *,
+        actor: VerifiedActor,
+        room_id: str,
+        harness_id: str,
+        role: str = "member",
+        mls_key_package: bytes | None = None,
+    ) -> dict[str, Any]: ...
+
+    def describe(self, *, actor: VerifiedActor, room_id: str) -> dict[str, Any]: ...
+
+
 class BoundCore(Protocol):
+    rooms: BoundRoomService
+
+    def _require(
+        self,
+        *,
+        actor: VerifiedActor,
+        action: str,
+        resource: str,
+        classification: Classification | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Any: ...
+
     def send_message(
         self,
         *,
@@ -57,6 +103,10 @@ class BoundCore(Protocol):
         payload: dict[str, Any],
         idempotency_key: str,
         classification: Classification = Classification.C1_INTERNAL,
+        released_artifacts: tuple[Any, ...] = (),
+        conversation_id: str | None = None,
+        room_id: str | None = None,
+        expected_room_control_sequence: int | None = None,
     ) -> dict[str, Any]: ...
 
     def mailbox(
@@ -216,6 +266,38 @@ class ConversationThreadArguments(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 
+class RoomCreateArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    classification: Classification = Classification.C1_INTERNAL
+    persistent: bool = True
+    expires_at: datetime | None = None
+    policy: dict[str, Any] | None = None
+
+
+class RoomMemberAddArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    room_id: str = Field(min_length=1, max_length=256)
+    harness_id: str = Field(min_length=1, max_length=256)
+    role: Literal["member", "guest", "moderator"] = "member"
+
+
+class RoomGetArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    room_id: str = Field(min_length=1, max_length=256)
+
+
+class RoomSendArguments(RoomGetArguments):
+    recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
+    payload: dict[str, Any]
+    idempotency_key: str = Field(min_length=16, max_length=256)
+    classification: Classification = Classification.C1_INTERNAL
+    expected_control_sequence: int = Field(ge=1)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=256)
+
+
 class ObligationListArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -308,6 +390,76 @@ class CanonicalToolDispatcher:
                 thread_id=parsed.thread_id,
                 limit=parsed.limit,
             )
+        if request.method == "agentnet.room.create":
+            parsed = RoomCreateArguments.model_validate(request.arguments)
+            self.core._require(
+                actor=actor,
+                action="room.create",
+                resource="room:new",
+                classification=parsed.classification,
+                context={
+                    "classification": parsed.classification.value,
+                    "persistent": parsed.persistent,
+                    "expires_at": parsed.expires_at.isoformat() if parsed.expires_at else None,
+                    "policy_digest": canonical_digest(parsed.policy or {}),
+                },
+            )
+            return self.core.rooms.create(
+                actor=actor,
+                classification=parsed.classification,
+                persistent=parsed.persistent,
+                expires_at=parsed.expires_at,
+                policy=parsed.policy,
+            )
+        if request.method == "agentnet.room.member.add":
+            parsed = RoomMemberAddArguments.model_validate(request.arguments)
+            self.core._require(
+                actor=actor,
+                action="room.action",
+                resource=parsed.room_id,
+                context={
+                    "harness_id": parsed.harness_id,
+                    "role": parsed.role,
+                    "mls_key_package_digest": None,
+                    "operation": "member.add",
+                },
+            )
+            return self.core.rooms.add_member(
+                actor=actor,
+                room_id=parsed.room_id,
+                harness_id=parsed.harness_id,
+                role=parsed.role,
+                mls_key_package=None,
+            )
+        if request.method == "agentnet.room.get":
+            parsed = RoomGetArguments.model_validate(request.arguments)
+            self.core._require(actor=actor, action="room.read", resource=parsed.room_id)
+            return self.core.rooms.describe(actor=actor, room_id=parsed.room_id)
+        if request.method == "agentnet.room.send":
+            parsed = RoomSendArguments.model_validate(request.arguments)
+            self.core._require(
+                actor=actor,
+                action="room.action",
+                resource=parsed.room_id,
+                classification=parsed.classification,
+                context={
+                    "operation": "message.send",
+                    "recipient_harness_ids": sorted(parsed.recipients),
+                    "payload_digest": canonical_digest(parsed.payload),
+                    "expected_control_sequence": parsed.expected_control_sequence,
+                },
+            )
+            return self.core.send_message(
+                actor=actor,
+                recipients=parsed.recipients,
+                payload=parsed.payload,
+                idempotency_key=parsed.idempotency_key,
+                classification=parsed.classification,
+                released_artifacts=(),
+                conversation_id=parsed.conversation_id,
+                room_id=parsed.room_id,
+                expected_room_control_sequence=parsed.expected_control_sequence,
+            )
         if request.method == "agentnet.obligation.inbox":
             EmptyArguments.model_validate(request.arguments)
             return self.core.response_obligation_inbox(actor=actor)
@@ -347,9 +499,10 @@ class CanonicalToolDispatcher:
 
 
 __all__ = [
-    "CANONICAL_TOOL_NAMES",
     "ActorProvider",
     "BoundCore",
+    "BoundRoomService",
+    "CANONICAL_TOOL_NAMES",
     "CanonicalToolDispatcher",
     "CanonicalToolName",
     "CanonicalToolRequest",
@@ -358,6 +511,10 @@ __all__ = [
     "ConversationActionArguments",
     "ConversationCreateArguments",
     "ConversationThreadArguments",
+    "RoomCreateArguments",
+    "RoomGetArguments",
+    "RoomMemberAddArguments",
+    "RoomSendArguments",
     "EmptyArguments",
     "ObligationCancelArguments",
     "ObligationGetArguments",

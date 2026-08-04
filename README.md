@@ -322,6 +322,24 @@ identity-only completion, local save status,
 `approval_delivery=automatic_possession_bound_signed_broker`, zero authority,
 and the bounded-authority next step.
 
+After the exact C0 round trip completes, the server harness can run
+`agentnet communication-scope begin|status|complete`. One WebAuthn-UV approval
+then atomically gives the existing laptop harness and ordinary server harness
+the fixed permanent canonical message, mailbox, conversation, response-
+obligation, and room actions. The human selects no IDs or permissions. Every
+operation still revalidates the current exact harness, credential, human,
+domain-revocation epoch, and policy revision; revocation denies immediately.
+Artifacts, effects, federation, public A2A, tasks, administration, data, tools,
+and secrets remain excluded.
+
+The enrolled laptop launches an interactive agent through
+`agentnet manager-run --identity .agentnet/identity.json -- pi`. The child gets
+only a short-lived, exact-process local binding for canonical communication
+tools—not the laptop key or reusable remote credentials. The parent owns
+authentication, strict request parsing, and cleanup. Full commands and
+failure/recovery behavior are in the
+[implementation guide](docs/implementation-guide.md#ordinary-server-agent-activation).
+
 This software component is not proof of independence. Production enrollment,
 recovery, elevation, revocation, or relationship consent still requires a real
 passkey/authenticator and a service host/device/OS account/TLS/admin boundary

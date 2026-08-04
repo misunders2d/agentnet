@@ -25,6 +25,7 @@ from agentnet.errors import GateBlocked, IdempotencyConflict, ReplayError, Valid
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import canonical_json
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, Migration
+from agentnet.storage.communication_scope_schema import COMMUNICATION_SCOPE_SCHEMA_VERSION
 from agentnet.storage.postgres_catalog import require_exact_postgres_catalog
 
 
@@ -307,11 +308,10 @@ def validate_applied_migrations(
     return current
 
 
-_S5_RELATIONS = frozenset(
+_S6_RELATIONS = frozenset(
     {
-        "credential_renewal_requests",
-        "idx_oidc_enrollment_begin_idempotency",
-        "idx_credential_renewal_credential",
+        "communication_scopes",
+        "communication_scope_items",
     }
 )
 
@@ -472,10 +472,13 @@ def apply_postgres_migrations(connection: Any) -> int:
                     "schema_migration_history",
                     "an empty PostgreSQL migration catalog is not a released schema",
                 )
-            if current == CURRENT_SCHEMA_VERSION - 1 and relation_names & _S5_RELATIONS:
+            if (
+                current == COMMUNICATION_SCOPE_SCHEMA_VERSION - 1
+                and relation_names & _S6_RELATIONS
+            ):
                 raise GateBlocked(
-                    "schema_s5_partial",
-                    "PostgreSQL v4 contains unsupported partial S5 relations",
+                    "schema_s6_partial",
+                    "PostgreSQL v5 contains unsupported partial S6 relations",
                 )
             require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:current])
         else:

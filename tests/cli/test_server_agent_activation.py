@@ -27,6 +27,7 @@ from agentnet.security.signatures import P256KeyPair
 PURPOSES = frozenset(
     {
         "authorization.bootstrap_plan.approve",
+        "authorization.communication_scope.approve",
         "authorization.elevation.approve",
         "identity.credential.recover.approve",
         "identity.enrollment.approve",

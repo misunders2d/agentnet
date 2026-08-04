@@ -343,6 +343,7 @@ def test_renderer_supports_oidc_only_first_boot_and_public_scanner_trust(tmp_pat
                     "public_key_pem": approver.public_pem,
                     "allowed_purposes": [
                         "authorization.bootstrap_plan.approve",
+                        "authorization.communication_scope.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
@@ -426,6 +427,7 @@ def test_renderer_google_confidential_oidc_keeps_runtime_secret_out_of_outputs(
                     "public_key_pem": approver.public_pem,
                     "allowed_purposes": [
                         "authorization.bootstrap_plan.approve",
+                        "authorization.communication_scope.approve",
                         "authorization.elevation.approve",
                         "identity.credential.recover.approve",
                         "identity.enrollment.approve",
