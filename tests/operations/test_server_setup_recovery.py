@@ -836,6 +836,29 @@ def test_0140_upgrade_accepts_exact_0139_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_0141_upgrade_accepts_exact_0140_five_unit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.41")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.40",
+        artifact_mode=artifact_mode,
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode=artifact_mode,
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
 @pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])
 def test_0138_upgrade_rejects_other_release_sources(
     monkeypatch: pytest.MonkeyPatch,
