@@ -15,7 +15,7 @@ from agentnet.bindings.remote_manager import (
     RemoteManagerRequestError,
     run_manager_gateway,
 )
-from agentnet.errors import ValidationError
+from agentnet.errors import GateBlocked, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 
 
@@ -519,6 +519,35 @@ def test_room_gateway_rejects_unsafe_arguments_and_non_exact_success_shapes() ->
                 "recipients": ["peer-harness-0001"],
                 "released_artifacts": [{"artifact_id": "artifact-1"}],
                 "room_id": "room-1",
+            },
+        )
+    assert unsafe_client.calls == []
+
+    with pytest.raises(GateBlocked, match="artifact"):
+        unsafe.dispatch(
+            "agentnet.conversation.action",
+            {
+                "action": {
+                    "body": "unsafe",
+                    "kind": "post",
+                    "released_artifacts": [
+                        {
+                            "artifact_id": "00000000-0000-4000-8000-000000000001",
+                            "classification": "C1",
+                            "domain_id": "owner.example",
+                            "media_type": "text/plain",
+                            "object_version": "f" * 64,
+                            "release_intent_id": "00000000-0000-4000-8000-000000000002",
+                            "released_at": "2026-08-04T00:00:00Z",
+                            "schema_version": "1.0",
+                            "size": 1,
+                        }
+                    ],
+                },
+                "conversation_id": "conversation:1",
+                "idempotency_key": "conversation-action-unsafe-0001",
+                "recipients": ["peer-harness-0001"],
+                "thread_id": "thread:1",
             },
         )
     assert unsafe_client.calls == []

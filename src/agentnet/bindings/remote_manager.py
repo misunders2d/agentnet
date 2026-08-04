@@ -459,6 +459,11 @@ class RemoteManagerDispatcher:
         if request.method == "agentnet.conversation.action":
             parsed = self._arguments(ConversationActionArguments, request.arguments)
             assert isinstance(parsed, ConversationActionArguments)
+            if parsed.action.released_artifacts:
+                raise GateBlocked(
+                    "artifacts_disabled",
+                    "manager communication scope cannot release artifact bindings",
+                )
             conversation_id = quote(parsed.conversation_id, safe="")
             return self._typed_object(
                 _ConversationActionResult,
