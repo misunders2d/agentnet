@@ -556,12 +556,44 @@ class PolicyEngine:
         *,
         request: AuthorizationRequest,
         peer_harness_ids: frozenset[str],
+        now: int,
     ) -> bool:
         if (
             len(peer_harness_ids) != 2
             or request.actor.harness_id not in peer_harness_ids
         ):
             return False
+
+        def current_same_domain_harness(harness_id: Any) -> bool:
+            if not isinstance(harness_id, str) or not harness_id:
+                return False
+            return (
+                connection.execute(
+                    """
+                    SELECT 1
+                      FROM harnesses AS h
+                      JOIN principals AS p
+                        ON p.principal_id=h.principal_id AND p.domain_id=h.domain_id
+                      JOIN domains AS d ON d.domain_id=h.domain_id
+                      JOIN credentials AS c
+                        ON c.harness_id=h.harness_id AND c.epoch=h.credential_epoch
+                     WHERE h.harness_id=? AND h.domain_id=?
+                       AND h.status='active' AND p.status='active' AND d.status='active'
+                       AND d.policy_revision=?
+                       AND c.status='active' AND c.not_before<=? AND c.expires_at>?
+                     LIMIT 1
+                    """,
+                    (
+                        harness_id,
+                        request.actor.domain_id,
+                        request.policy_revision,
+                        now,
+                        now,
+                    ),
+                ).fetchone()
+                is not None
+            )
+
         for key in (
             "harness_id",
             "responsible_harness_id",
@@ -569,9 +601,7 @@ class PolicyEngine:
             "to_harness_id",
         ):
             target = request.context.get(key)
-            if target is not None and (
-                not isinstance(target, str) or target not in peer_harness_ids
-            ):
+            if target is not None and not current_same_domain_harness(target):
                 return False
         released_artifact_count = request.context.get("released_artifact_count", 0)
         if (
@@ -585,10 +615,7 @@ class PolicyEngine:
             return (
                 isinstance(recipients, list)
                 and bool(recipients)
-                and all(
-                    isinstance(recipient, str) and recipient in peer_harness_ids
-                    for recipient in recipients
-                )
+                and all(current_same_domain_harness(recipient) for recipient in recipients)
             )
         if request.action in {"mailbox.read", "mailbox.acknowledge", "room.create"}:
             return True
@@ -596,8 +623,8 @@ class PolicyEngine:
             members = request.context.get("member_harness_ids")
             return (
                 isinstance(members, list)
-                and all(isinstance(member, str) for member in members)
-                and frozenset(members) == peer_harness_ids
+                and bool(members)
+                and all(current_same_domain_harness(member) for member in members)
             )
         if request.action.startswith("conversation."):
             if request.action not in COMMUNICATION_SCOPE_ACTIONS:
@@ -613,7 +640,7 @@ class PolicyEngine:
                 (conversation_id,),
             ).fetchall()
             active = frozenset(str(row["harness_id"]) for row in members)
-            return bool(active) and active <= peer_harness_ids
+            return bool(active) and all(current_same_domain_harness(member) for member in active)
         if request.action in {"room.action", "room.read"}:
             members = connection.execute(
                 """
@@ -623,7 +650,7 @@ class PolicyEngine:
                 (request.resource,),
             ).fetchall()
             active = frozenset(str(row["harness_id"]) for row in members)
-            return bool(active) and active <= peer_harness_ids
+            return bool(active) and all(current_same_domain_harness(member) for member in active)
         return False
 
     def _record_c0_decision(
@@ -1038,6 +1065,7 @@ class PolicyEngine:
                 connection,
                 request=request,
                 peer_harness_ids=communication_scope_peers,
+                now=now,
             )
         ):
             denial = "communication_scope_request_mismatch"
