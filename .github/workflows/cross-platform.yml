@@ -59,7 +59,7 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           test -x /usr/bin/bwrap
           test "$(stat -c '%u:%a' /usr/bin/bwrap)" = "0:755"
-          bwrap --unshare-user --die-with-parent --ro-bind /usr /usr /usr/bin/true
+          bwrap --unshare-user --die-with-parent --ro-bind / / /usr/bin/true
 
       - name: Install locked test environment
         shell: bash
