@@ -47,6 +47,15 @@ jobs:
           python-version: "3.13.13"
           enable-cache: false
 
+      - name: Install Linux Manager sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          test -x /usr/bin/bwrap
+          test "$(stat -c '%u:%a' /usr/bin/bwrap)" = "0:755"
+
       - name: Install locked test environment
         shell: bash
         run: uv sync --frozen --extra test
