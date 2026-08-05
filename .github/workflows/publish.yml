@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable release tag to stage
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +32,7 @@ jobs:
         with:
           persist-credentials: false
 
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: Configure Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -46,10 +53,25 @@ jobs:
           python-version: "3.13.13"
           enable-cache: false
 
+      - name: Install Linux Manager sandbox
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-profiles apparmor-utils bubblewrap
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          test -x /usr/bin/bwrap
+          test "$(stat -c '%u:%a' /usr/bin/bwrap)" = "0:755"
+          bwrap --unshare-user --die-with-parent --ro-bind / / /usr/bin/true
+
       - name: Verify tag matches package version
+        shell: bash
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$PACKAGE_VERSION"
+          RELEASE_TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
 
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
