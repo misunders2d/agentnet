@@ -86,29 +86,30 @@ wait_for_public_health() {
   return 1
 }
 
-wait_for_renewal_request_after() {
+wait_for_renewal_completion_after() {
   local previous="$1"
-  local request_id=""
+  local completed=""
   for _ in $(seq 1 120); do
-    request_id="$(sudo jq -r '
-      select(.schema == "agentnet.credential-renewal-cli-state.v1")
-      | .request_id
-    ' /var/lib/agentnet/credential-renewal.json 2>/dev/null || true)"
-    if [[ "$request_id" =~ ^[0-9a-f-]{36}$ && "$request_id" != "$previous" ]]; then
-      printf '%s\n' "$request_id"
+    completed="$(sudo systemctl show agentnet-credential-renew.service \
+      --property=InactiveEnterTimestampMonotonic --value)"
+    if [[ "$completed" =~ ^[0-9]+$ && "$completed" != "$previous" ]] &&
+      [[ "$(sudo systemctl show agentnet-credential-renew.service --property=Result --value)" == "success" ]] &&
+      [[ "$(sudo systemctl show agentnet-credential-renew.service --property=ActiveState --value)" == "inactive" ]]; then
+      printf '%s\n' "$completed"
       return 0
     fi
     sleep 0.25
   done
-  echo "credential renewal did not complete another invocation" >&2
+  echo "credential renewal did not complete another successful activation" >&2
   return 1
 }
 
 assert_credential_renewal_recurs() {
   local test_timer="agentnet-credential-renew-e2e.timer"
   local test_path="/run/systemd/system/$test_timer"
-  local baseline_request first_request second_request first_next second_next
-  baseline_request="$(sudo jq -r '.request_id // ""' /var/lib/agentnet/credential-renewal.json 2>/dev/null || true)"
+  local baseline_completion first_completion second_completion first_next second_next
+  baseline_completion="$(sudo systemctl show agentnet-credential-renew.service \
+    --property=InactiveEnterTimestampMonotonic --value)"
   sudo systemctl stop agentnet-credential-renew.timer
   sudo sed \
     -e 's/^Description=.*/Description=Accelerated AgentNet credential renewal E2E/' \
@@ -120,13 +121,13 @@ assert_credential_renewal_recurs() {
   sudo systemctl daemon-reload
   sudo systemctl start "$test_timer"
 
-  first_request="$(wait_for_renewal_request_after "$baseline_request")"
+  first_completion="$(wait_for_renewal_completion_after "$baseline_completion")"
   first_next="$(sudo systemctl list-timers --all "$test_timer" --output=json |
     jq -er '.[0].next | select(type == "number" and . > 0)')"
-  second_request="$(wait_for_renewal_request_after "$first_request")"
+  second_completion="$(wait_for_renewal_completion_after "$first_completion")"
   second_next="$(sudo systemctl list-timers --all "$test_timer" --output=json |
     jq -er '.[0].next | select(type == "number" and . > 0)')"
-  [[ "$second_request" != "$first_request" ]]
+  [[ "$second_completion" != "$first_completion" ]]
   [[ "$second_next" -gt "$first_next" ]]
   [[ "$(sudo systemctl show agentnet-credential-renew.service --property=Result --value)" == "success" ]]
   [[ "$(sudo systemctl show agentnet-credential-renew.service --property=ExecMainStatus --value)" == "0" ]]
