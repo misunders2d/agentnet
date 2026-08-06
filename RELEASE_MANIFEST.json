@@ -199,11 +199,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "69fcf6bdf7187d480c5a9466e4c9f242cc9239534ca9173144d70526bf62f671"
+      "sha256": "4bbd9d34eb23fc62b5297f39628e94aec4e7eb6bf8d14c55030d1f2756c5ae11"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "bec8acd4c062e698731a83af9a1cee5a83010740c2db2ff97961c8eeb0015f93"
+      "sha256": "3e4818ab5dd87a4d22cfb3579a87f91ba103c6ee895ade755331ec4d953f2f15"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -223,7 +223,7 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "7bf031f527bc87681f95559b32fa3ec909b1aa594e452f1e12fd79322245cf22"
+      "sha256": "54d3bcc7c286e62e37d2227b53e2dfc4ab51a703aaf8127af768b099c7fbca43"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",

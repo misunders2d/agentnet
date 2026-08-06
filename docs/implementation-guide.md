@@ -291,8 +291,12 @@ explicit GET health request carrying `User-Agent: AgentNet/0.1.39` and
 redirect-rejecting stdlib opener. System trust, hostname verification, timeout,
 finite retries, response bounds, and exact payload checks remain unchanged.
 
-`0.1.45` adds exactly one rollback-capable server setup edge:
-`0.1.44→0.1.45`. The source must be the exact five-unit `0.1.44` marker, the
+`0.1.45` implements exactly one rollback-capable server setup edge:
+`0.1.44→0.1.45`. **That edge is not proven for this release: the packaged
+upgrade and rollback lane is not green, so operators must install `0.1.45`
+fresh and re-enroll rather than upgrade in place.** The description below is the
+implemented contract, not accepted upgrade evidence.
+The source must be the exact five-unit `0.1.44` marker, the
 exact schema-v6 PostgreSQL catalog, and the exact current enrolled server
 identity/credential. Before the first managed write, setup journals the source
 marker, both managed Core configuration files, every managed unit byte,

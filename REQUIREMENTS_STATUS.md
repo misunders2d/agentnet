@@ -280,32 +280,47 @@ published and historical release evidence:
   `OPS-003`, `OPS-004`, `OPS-006`, and `OPS-007`. No requirement or gate is
   promoted.
 - Candidate `0.1.45` adds the sole first-release Core schema v7, a derived exact
-  endpoint lifecycle, resumable user-level setup/update coordination, and one
-  exact rollback-capable ordinary-server transition from the `0.1.44`
-  five-unit/schema-v6 state. Endpoint identity is derived from the current
+  endpoint lifecycle, and resumable user-level setup/update coordination.
+  Endpoint identity is derived from the current
   verified human+harness credential; friendly routing freezes one exact
   endpoint and one current scope before canonical signed send. Missing,
   ambiguous, stale, revoked, cross-domain, or mismatched state fails closed,
   and activation remains `restart_required` until the user restarts and a new
-  measured process proves the expected generation. The successful supported
-  upgrade preserves existing identity, credential, scope/authority, message,
-  obligation, receipt, and mailbox-cursor state without re-enrollment.
-  A caught pre-target-commit failure restores only exact unchanged journaled
-  source bytes, schema v6, migration catalog, and systemd state; interruption
-  retains the journal for exact resume; drift blocks rollback and preserves
-  evidence; and target commit closes the downgrade path. This
-  entry records implemented lifecycle semantics only; it adds no new accepted
-  external, owner, deployment, production, signed-installer, or high-tier
-  evidence and promotes no requirement or gate.
-  Focused acceptance reports **170 passed and 5 expected dedicated-PostgreSQL
-  skips**. The package source corpus targets **2118 passed and 21 expected
-  platform/dedicated-PostgreSQL skips**. Browser invitation smoke passed the
+  measured process proves the expected generation. Endpoint binding is fenced
+  to the exact framed platform/account/pid/start-time/executable measurement;
+  an executable-only measurement never proves instance identity, a new process
+  instance rebinds only through the audited
+  `endpoint.lifecycle.process_reconnected` transition under its verified
+  harness actor, and an interrupted capability-root write is re-minted under
+  owner-private custody. Only a typed task assignment may wake a semantic
+  background worker; an ordinary request obligation stays durable and passively
+  counted until the responsible harness answers it from its own authorized
+  session.
+  **In-place upgrade from `0.1.44` is not proven for this release and is not a
+  supported path.** The transition code, its schema v6->v7 authority migration,
+  and its rollback invariants are implemented and covered hermetically, and two
+  defects found while exercising them were corrected at source: journal
+  validation rejected every upgrade, and rollback safety demanded empty v7
+  tables, which blocked any deployment that actually held committed v6
+  communication authority. The exact packaged upgrade/rollback lane on a clean
+  Ubuntu 24.04 runner remains non-green, so operators must perform a fresh
+  clean install and re-enrollment rather than an in-place upgrade.
+  This entry records implemented lifecycle semantics only; it adds no new
+  accepted external, owner, deployment, production, signed-installer, or
+  high-tier evidence and promotes no requirement or gate.
+  Focused acceptance reports **454 passed and 5 expected dedicated-PostgreSQL
+  skips**. The package source corpus reports **2102 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**, and source plus two clean recursive
+  npm generations each report **2129 passed and 21 expected skips**. Browser
+  invitation smoke passed the
   continuation and restart-safe completion paths. An isolated installed npm
   tarball proved exact endpoint processing, zero sibling reactions, endpoint-
   owned offline custody, no offline processing, complete endpoint/capability
-  cleanup, and no workspace import fallback. Recursive package, retained
-  reproducible archive, same-commit CI, staged upgrade/rollback, remote
-  deployment, and higher-tier evidence remain separately gated.
+  cleanup, and no workspace import fallback. Same-commit cross-platform package
+  conformance and the ordinary-server clean-install lane, including live
+  maintained-ClamAV readiness, are terminal-green on the pushed candidate. The
+  packaged upgrade/rollback lane, staged remote
+  deployment, publication, and higher-tier evidence remain separately gated.
   Affected IDs are `ARC-001`, `ARC-002`, `ARC-003`, `ID-004`, `ID-005`,
   `ID-006`, `ID-007`, `ID-008`, `ID-009`, `AUTH-001`, `AUTH-002`,
   `AUTH-003`, `AUTH-004`, `AUTH-006`, `AUTH-007`, `COM-001`, `COM-002`,

@@ -479,15 +479,16 @@ public HTTPS health identity, interruption recovery, redacted evidence, and
 bundled operator workflow. Setup grants neither identity nor authority.
 
 Candidate `0.1.45` adds the schema-v7 exact endpoint lifecycle, resumable
-user-level setup/update coordination, exact-endpoint recipient routing, and one
-rollback-capable ordinary-server transition from the exact `0.1.44` five-unit
-schema-v6 state. Existing identities, credentials, authorization, messages, and
-mailbox cursors are preserved on the supported path; activation still requires
-the user's explicit harness restart. Before target commit, the rollback journal
-supports only exact unchanged source recovery; an interruption resumes that same
-journal, and drift blocks recovery rather than guessing. This source-level
-lifecycle contract does not promote any requirement, production claim, or
-must-not-ship gate.
+user-level setup/update coordination, and exact-endpoint recipient routing.
+Activation still requires the user's explicit harness restart.
+
+**Upgrading in place from `0.1.44` is not supported in this release.** The
+`0.1.44`→`0.1.45` transition, its schema v6→v7 authority migration, and its
+rollback journal are implemented and covered by hermetic tests, but the packaged
+upgrade and rollback lane on a clean Ubuntu 24.04 runner is not green, so that
+path is unproven. Install `0.1.45` fresh and re-enroll the server and each
+harness instead. This source-level lifecycle contract does not promote any
+requirement, production claim, or must-not-ship gate.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
