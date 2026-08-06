@@ -16,13 +16,16 @@ permissions:
   id-token: write
 
 jobs:
-  released-upgrade-chain:
+  # v0.1.45 ships fresh-install-only: in-place upgrade from 0.1.44 is not a
+  # supported path, so publication is gated on the exact clean-install lane
+  # that operators actually follow, not on the unsupported upgrade chain.
+  clean-install-chain:
     if: github.repository == 'misunders2d/agentnet'
-    uses: ./.github/workflows/server-setup-upgrade-e2e.yml
+    uses: ./.github/workflows/server-setup-e2e.yml
 
   stage:
     if: github.repository == 'misunders2d/agentnet'
-    needs: released-upgrade-chain
+    needs: clean-install-chain
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
