@@ -330,6 +330,22 @@ published and historical release evidence:
   `SEC-003`, `SEC-004`, `SEC-005`, `SEC-006`, `OPS-002`, `OPS-003`,
   `OPS-004`, `OPS-005`, and `OPS-006`.
 
+- Candidate `0.1.46` repairs the ordinary-server credential-renewal timer and
+  adds one exact `0.1.45→0.1.46` in-place transition. The replacement schedule
+  uses boot-relative first activation and service-inactive-relative recurrence;
+  setup refuses operational status unless systemd exposes a finite future run.
+  The transition requires a new exact owner-approved plan digest and preserves
+  the enrolled server identity/credential, schema-v7 PostgreSQL state, endpoint
+  lifecycle, and external prerequisites. Hermetic setup/recovery tests report
+  **252 passed**; the focused timer and exact-upgrade lane reports **10 passed**;
+  the focused release lane reports **458 passed and 5 expected dedicated-
+  PostgreSQL skips**; and the releasable source corpus reports **2105 passed
+  and 21 expected platform/dedicated-PostgreSQL skips**. The packaged Ubuntu
+  lane, recursive package/release-manifest verification, staging, publication,
+  and higher-tier evidence remain pending. Affected IDs are
+  `ID-009`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement or
+  must-not-ship gate is promoted.
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,

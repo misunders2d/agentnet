@@ -27,6 +27,17 @@ clean-install lane, which is the exact path operators follow.
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
+## Corrective `0.1.46` candidate
+
+Candidate `0.1.46` repairs the released ordinary-server renewal schedule and
+adds one exact `0.1.45→0.1.46` in-place transition. It requires a fresh owner
+approval for the changed package and plan digest, preserves the enrolled server
+identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
+external prerequisites, and replaces only the package/config/unit provenance
+needed by the corrected runtime. Publication and the real packaged Ubuntu
+upgrade lane remain pending; this note does not promote any requirement or
+gate.
+
 ## Frozen release-input clarification
 
 The retained `0.1.28` wheel and sdist under

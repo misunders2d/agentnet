@@ -730,8 +730,8 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
         return
     normalized = re.sub(r"\s+", " ", readme_path.read_text(encoding="utf-8"))
     required_claims = (
-        "latest published package is `0.1.44`",
-        "Candidate `0.1.45`",
+        "latest published package is `0.1.45`",
+        "Candidate `0.1.46`",
         "two installed-harness pin failures remain non-green and are not waived",
         "provider error without token exchange",
         "fresh-laptop enrollment",
@@ -752,6 +752,7 @@ def _verify_public_readme(root: Path, failures: list[str]) -> None:
         "latest published package is `0.1.37`",
         "latest published package is `0.1.38`",
         "latest published package is `0.1.43`",
+        "latest published package is `0.1.44`",
         "Current unversioned communication-only changes",
     ):
         if stale_claim in normalized:

@@ -590,6 +590,37 @@ def _realized_0144_lifecycle_source(
     return harness
 
 
+def _realized_0145_timer_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> _Harness:
+    """One exact v0.1.45 server carrying the released non-recurring timer."""
+
+    harness = _harness(tmp_path, monkeypatch)
+    current_render_units = setup.render_units
+
+    def released_render_units(
+        node_executable: Path,
+        executable: Path,
+        uv_executable: Path,
+    ) -> dict[str, bytes]:
+        units = current_render_units(node_executable, executable, uv_executable)
+        units[setup.CREDENTIAL_RENEW_TIMER] = units[setup.CREDENTIAL_RENEW_TIMER].replace(
+            b"OnUnitInactiveSec=1h\n",
+            b"OnUnitActiveSec=1h\nPersistent=true\n",
+        )
+        return units
+
+    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    monkeypatch.setattr(setup, "render_units", released_render_units)
+    digest = harness.plan_digest()
+    harness.apply(digest)
+    monkeypatch.setattr(setup, "render_units", current_render_units)
+    assert harness.marker()["package_version"] == "0.1.45"
+    assert b"OnUnitActiveSec=1h" in harness.layout.unit(setup.CREDENTIAL_RENEW_TIMER).read_bytes()
+    return harness
+
+
 
 
 def _realized_public_0131_communication_deployment(
@@ -1028,6 +1059,58 @@ def test_0142_upgrade_accepts_exact_0141_five_unit_profile(
 
     assert marker is not None
     assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
+@pytest.mark.parametrize("artifact_mode", ["enabled", "disabled"])
+def test_0146_upgrade_accepts_exact_0145_five_unit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_mode: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.46")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.45",
+        artifact_mode=artifact_mode,
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode=artifact_mode,
+    )
+
+    assert marker is not None
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+
+
+def test_0146_replaces_released_timer_without_resetting_server_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _realized_0145_timer_source(tmp_path, monkeypatch)
+    before_marker = harness.marker_path.read_bytes()
+    before_database = copy.deepcopy(harness.database_state)
+    before_revision = harness.marker()["revision"]
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.46")
+    upgraded = harness.apply(harness.plan_digest())
+
+    assert {
+        "id": "package_upgrade",
+        "status": "validated_pre_upgrade_realized_state",
+    } in upgraded["steps"]
+    marker = harness.marker()
+    assert marker["package_version"] == "0.1.46"
+    assert marker["revision"] == before_revision + 1
+    assert marker["previous_marker_digest"] == hashlib.sha256(before_marker).hexdigest()
+    timer = harness.layout.unit(setup.CREDENTIAL_RENEW_TIMER).read_bytes()
+    assert b"OnUnitInactiveSec=1h" in timer
+    assert b"OnUnitActiveSec=" not in timer
+    assert b"Persistent=" not in timer
+    assert harness.database_state == before_database
+    assert not harness.journal_path.exists()
 
 
 @pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])

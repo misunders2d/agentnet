@@ -162,7 +162,7 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: the `0.1.45` package target
+Only non-EOL Node.js release lines are supported: the `0.1.46` package target
 retains Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are
 unsupported despite the broad npm engine floor. The minimum floor remains
 Node.js 22.19.0 with compatible npm 10.9.3; the deployed Hub compatibility
@@ -430,7 +430,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.44`. Its publication does not promote any requirement or gate.
+`0.1.45`. Its publication does not promote any requirement or gate.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -478,17 +478,21 @@ plan/apply/start convergence, Approval/Core separation, scanner trust, exact
 public HTTPS health identity, interruption recovery, redacted evidence, and
 bundled operator workflow. Setup grants neither identity nor authority.
 
-Candidate `0.1.45` adds the schema-v7 exact endpoint lifecycle, resumable
+Published `0.1.45` adds the schema-v7 exact endpoint lifecycle, resumable
 user-level setup/update coordination, and exact-endpoint recipient routing.
-Activation still requires the user's explicit harness restart.
+Activation still requires the user's explicit harness restart. It remains a
+fresh-install-only release because its `0.1.44→0.1.45` packaged upgrade lane
+did not pass.
 
-**Upgrading in place from `0.1.44` is not supported in this release.** The
-`0.1.44`→`0.1.45` transition, its schema v6→v7 authority migration, and its
-rollback journal are implemented and covered by hermetic tests, but the packaged
-upgrade and rollback lane on a clean Ubuntu 24.04 runner is not green, so that
-path is unproven. Install `0.1.45` fresh and re-enroll the server and each
-harness instead. This source-level lifecycle contract does not promote any
-requirement, production claim, or must-not-ship gate.
+Candidate `0.1.46` corrects the ordinary-server credential-renewal timer and
+adds one exact in-place `0.1.45→0.1.46` path. The new owner-approved package
+digest preserves the enrolled server identity and credential, PostgreSQL,
+endpoint lifecycle, and external prerequisites. The timer checks first after
+boot and then one hour after each completed renewal attempt; setup rejects an
+elapsed timer without a finite next activation. The candidate's packaged
+Ubuntu upgrade lane accelerates the installed timer and must observe two real
+successful activations with a later finite `NEXT`. No requirement,
+production claim, or must-not-ship gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
@@ -593,10 +597,11 @@ corroboration only, not retained reproducible release proof. Unpublished `0.1.39
 changed request identity to explicit GET, `User-Agent: AgentNet/0.1.39`, and
 `Accept: application/json`; it also adds the bounded synthetic installed-package
 communication gate without weakening the production policy engine. It adds no
-migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
-cross-platform, clean-setup, and exact released-marker rejection workflow
-evidence; post-push run IDs are not
-self-authored into source. Required runtime proof now targets exact staged `0.1.45`, clean five-unit readiness,
+migration edge and rejects existing release markers. Release still requires
+exact same-commit terminal-green cross-platform, clean-setup, and exact
+released-marker rejection workflow evidence; post-push run IDs are not
+self-authored into source. Required runtime proof now targets exact staged
+`0.1.46`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.

@@ -319,6 +319,17 @@ realized state commit, the journal is cleared and there is no supported
 automatic `0.1.45→0.1.44` downgrade. This narrow in-flight rollback is not a
 general database restore or permission to downgrade committed authority state.
 
+Corrective `0.1.46` adds the exact `0.1.45→0.1.46` edge. Install the released
+`0.1.46` package, create a new no-write plan, obtain owner approval for that
+exact new digest, then apply it. Setup preserves the current enrolled server
+identity, credential/key material, schema-v7 PostgreSQL state, endpoint
+lifecycle, and external prerequisites. It changes only the package/config/unit
+provenance and replaces the renewal schedule with
+`OnUnitInactiveSec=1h`; `OnUnitActiveSec` and `Persistent` are rejected. The
+packaged Ubuntu lane accelerates an installed copy of the timer, proves two
+successful real systemd activations with a later finite `NEXT`, and restores
+the package-owned hourly timer before completion.
+
 ### Communication-only request-v2
 
 Use

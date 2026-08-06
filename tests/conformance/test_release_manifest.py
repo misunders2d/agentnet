@@ -187,7 +187,7 @@ def test_attacker_consistent_stale_public_readme_is_rejected(tmp_path: Path) -> 
     readme_path = root / "README.md"
     readme_path.write_text(
         readme_path.read_text(encoding="utf-8").replace(
-            "latest published package is\n`0.1.44`",
+            "latest published package is\n`0.1.45`",
             "latest published package is\n`0.1.38`",
             1,
         ),

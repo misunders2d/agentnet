@@ -727,6 +727,14 @@ interruption retains the journal for exact resume; uncertainty returns
 `setup_upgrade_conflict`. Exact target-marker realization clears the journal,
 and there is no automatic committed-target downgrade.
 
+For `0.1.45→0.1.46`, the same v4 journal binds the exact source and target
+package state, but no database migration or endpoint transition is permitted.
+Setup must preserve schema v7 and all enrolled identity, credential,
+authorization, mailbox, and endpoint rows while replacing the exact managed
+renewal timer bytes. The target timer uses `OnUnitInactiveSec=1h`, forbids
+`OnUnitActiveSec` and `Persistent`, and must expose a finite future activation
+when setup reports operational.
+
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,
 HA/restore, production durability, and every other production/high-tier gate
