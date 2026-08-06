@@ -337,14 +337,22 @@ server {
   server_name core.agentnet.test;
   ssl_certificate /etc/ssl/certs/agentnet-upgrade-e2e.crt;
   ssl_certificate_key /etc/ssl/private/agentnet-upgrade-e2e.key;
-  location / { proxy_pass http://127.0.0.1:8080; }
+  location / {
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_pass http://127.0.0.1:8080;
+  }
 }
 server {
   listen 443 ssl;
   server_name approval.agentnet.test;
   ssl_certificate /etc/ssl/certs/agentnet-upgrade-e2e.crt;
   ssl_certificate_key /etc/ssl/private/agentnet-upgrade-e2e.key;
-  location / { proxy_pass http://127.0.0.1:8090; }
+  location / {
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_pass http://127.0.0.1:8090;
+  }
 }
 EOF
 sudo ln -s /etc/nginx/sites-available/agentnet-upgrade-e2e /etc/nginx/sites-enabled/agentnet-upgrade-e2e
