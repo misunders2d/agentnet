@@ -55,6 +55,18 @@ report_failure() {
       echo >&2
     fi
   done
+  local unit
+  for unit in agentnet-core.service agentnet-approval.service \
+    agentnet-c0-responder.service agentnet-credential-renew.timer \
+    agentnet-upgrade-e2e.timer; do
+    if sudo systemctl cat "$unit" >/dev/null 2>&1; then
+      echo "--- $unit ---" >&2
+      sudo systemctl show "$unit" \
+        --property=LoadState --property=UnitFileState --property=ActiveState \
+        --property=SubState --property=Result --property=ExecMainStatus >&2
+      sudo journalctl -u "$unit" --no-pager -n 12 >&2 || true
+    fi
+  done
   return "$status"
 }
 trap 'report_failure "$LINENO" "$BASH_COMMAND"' ERR
