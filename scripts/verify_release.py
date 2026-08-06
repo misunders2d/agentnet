@@ -1022,7 +1022,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         npm_result = command_results.get("npm run check", "")
         if (
             not npm_result.startswith("PASS:")
-            or "2132 passed and 21 expected" not in npm_result
+            or "2133 passed and 21 expected" not in npm_result
             or "source plus generations 1 and 2" not in npm_result
             or "exact-endpoint routing gate" not in npm_result
             or "packaged v0.1.45 user journey" not in npm_result

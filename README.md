@@ -493,10 +493,13 @@ generation-specific runtime owned by each service account before validation or
 restart; the released runtime remains available for bounded pre-commit
 rollback. The timer checks first five minutes after timer activation and then
 one hour after each completed renewal attempt; setup rejects an elapsed timer
-without a finite next activation. The candidate's packaged Ubuntu upgrade lane accelerates the
-installed timer and must observe two real successful activations with a later
-finite `NEXT`. No requirement,
-production claim, or must-not-ship gate is promoted.
+without a finite next activation. A disposable clean Ubuntu 24.04 VM proved
+the exact packaged `0.1.45→0.1.46` upgrade, operator-installed private TLS
+trust, exact unit-cgroup listener ownership, and two successful recurring
+renewals with a later finite `NEXT`. Source and two recursive packed
+generations each passed `2133` tests with `21` expected
+platform/dedicated-PostgreSQL skips. Publication remains pending. No
+requirement, production claim, or must-not-ship gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a

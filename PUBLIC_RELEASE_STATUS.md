@@ -40,8 +40,11 @@ runtime as each service account, and restarts only after runtime validation;
 the released runtime remains intact for bounded pre-commit rollback.
 The timer's first run is five minutes from timer activation, not host boot, and
 later runs are one hour after the renewal service becomes inactive.
-Publication and the real packaged Ubuntu upgrade lane remain pending; this note
-does not promote any requirement or gate.
+The real packaged Ubuntu upgrade lane passed on a disposable clean Ubuntu
+24.04 VM, and source plus two recursive packed generations each passed
+`2133` tests with `21` expected platform/dedicated-PostgreSQL skips.
+Publication remains pending; this note does not promote any requirement or
+gate.
 
 ## Frozen release-input clarification
 

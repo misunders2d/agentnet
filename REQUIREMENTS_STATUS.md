@@ -349,9 +349,14 @@ published and historical release evidence:
   the focused timer and exact-upgrade lane reports **10 passed**;
   the focused release lane reports **458 passed and 5 expected dedicated-
   PostgreSQL skips**; and the releasable source corpus reports **2106 passed
-  and 21 expected platform/dedicated-PostgreSQL skips**. The packaged Ubuntu
-  lane, recursive package/release-manifest verification, staging, publication,
-  and higher-tier evidence remain pending. Affected IDs are
+  and 21 expected platform/dedicated-PostgreSQL skips**. A disposable clean
+  Ubuntu 24.04 VM passed the exact packaged `0.1.45→0.1.46` upgrade, retained
+  state, private-root TLS, unit-cgroup listener ownership, and two recurring
+  renewal activations with a later finite `NEXT`. Source and two recursive
+  packed generations each report **2133 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**, including the packaged v0.1.45 user
+  journey. Staging, publication, and higher-tier evidence remain pending.
+  Affected IDs are
   `ID-009`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement or
   must-not-ship gate is promoted.
 
