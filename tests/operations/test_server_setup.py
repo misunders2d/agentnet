@@ -1303,6 +1303,20 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert "EnvironmentFile=/etc/agentnet-secrets/approval.env" in rendered
     assert 'Environment="AGENTNET_UV=/usr/local/bin/uv"' in rendered
     assert "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" in rendered
+    import agentnet.operations.server_setup as setup
+
+    assert (
+        f"Environment=AGENTNET_NPM_RUNTIME_DIR=/var/lib/agentnet/npm-runtimes/{setup.__version__}"
+        in rendered
+    )
+    assert (
+        f"Environment=AGENTNET_NPM_RUNTIME_DIR=/var/lib/agentnet-approval/npm-runtimes/{setup.__version__}"
+        in rendered
+    )
+    assert (
+        f"Environment=AGENTNET_NPM_RUNTIME_DIR=/var/lib/agentnet-c0/npm-runtimes/{setup.__version__}"
+        in rendered
+    )
     assert "SupplementaryGroups=" in rendered
     assert "UnsetEnvironment=NODE_OPTIONS NODE_PATH PYTHONPATH" in rendered
     for unit in (APPROVAL_UNIT, CORE_UNIT, C0_RESPONDER_UNIT, CREDENTIAL_RENEW_UNIT):

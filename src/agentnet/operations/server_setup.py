@@ -1326,11 +1326,20 @@ def _unit_arg(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _managed_service_runtime(data_root: Path) -> Path:
+    """Return the package-generation runtime root retained across rollback."""
+
+    return data_root / "npm-runtimes" / __version__
+
+
 def render_units(
     node_executable: Path,
     executable: Path,
     uv_executable: Path,
 ) -> dict[str, bytes]:
+    approval_runtime = _managed_service_runtime(APPROVAL_DATA)
+    core_runtime = _managed_service_runtime(CORE_DATA)
+    c0_responder_runtime = _managed_service_runtime(C0_RESPONDER_DATA)
     common = "\n".join(
         (
             "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -1366,7 +1375,7 @@ EnvironmentFile={APPROVAL_ENV}
 Environment=HOME={APPROVAL_DATA}
 Environment=XDG_STATE_HOME={APPROVAL_DATA}/.local/state
 Environment=XDG_CACHE_HOME={APPROVAL_DATA}/.cache
-Environment=AGENTNET_NPM_RUNTIME_DIR={APPROVAL_DATA}/npm-runtime
+Environment=AGENTNET_NPM_RUNTIME_DIR={approval_runtime}
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} approval serve --config {_unit_arg(str(APPROVAL_CONFIG))} --host 127.0.0.1 --port {APPROVAL_PORT}
 SuccessExitStatus=143 SIGTERM
@@ -1392,7 +1401,7 @@ EnvironmentFile={CORE_ENV}
 Environment=HOME={CORE_DATA}
 Environment=XDG_STATE_HOME={CORE_DATA}/.local/state
 Environment=XDG_CACHE_HOME={CORE_DATA}/.cache
-Environment=AGENTNET_NPM_RUNTIME_DIR={CORE_DATA}/npm-runtime
+Environment=AGENTNET_NPM_RUNTIME_DIR={core_runtime}
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} serve --config {_unit_arg(str(CORE_CONFIG))} --host 127.0.0.1 --port {CORE_PORT}
 SuccessExitStatus=143 SIGTERM
@@ -1420,7 +1429,7 @@ Group={C0_RESPONDER_USER}
 Environment=HOME={C0_RESPONDER_DATA}
 Environment=XDG_STATE_HOME={C0_RESPONDER_DATA}/.local/state
 Environment=XDG_CACHE_HOME={C0_RESPONDER_DATA}/.cache
-Environment=AGENTNET_NPM_RUNTIME_DIR={C0_RESPONDER_DATA}/npm-runtime
+Environment=AGENTNET_NPM_RUNTIME_DIR={c0_responder_runtime}
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 LoadCredential=signing-key.pem:{SERVER_AGENT_KEY}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} c0-pilot responder --run --config {_unit_arg(str(C0_RESPONDER_CONFIG))} --credential %d/signing-key.pem
@@ -1445,7 +1454,7 @@ Group={CORE_USER}
 Environment=HOME={CORE_DATA}
 Environment=XDG_STATE_HOME={CORE_DATA}/.local/state
 Environment=XDG_CACHE_HOME={CORE_DATA}/.cache
-Environment=AGENTNET_NPM_RUNTIME_DIR={CORE_DATA}/npm-runtime
+Environment=AGENTNET_NPM_RUNTIME_DIR={core_runtime}
 Environment={_unit_arg(f"AGENTNET_UV={uv_executable}")}
 ExecStart={_unit_arg(str(node_executable))} {_unit_arg(str(executable))} credential renew --identity {_unit_arg(str(SERVER_AGENT_IDENTITY))} --state {_unit_arg(str(CREDENTIAL_RENEW_STATE))}
 {common}
@@ -4074,6 +4083,57 @@ def _run_bounded_product_process(
         stderr_present=stderr_bytes > 0,
     )
 
+def _prepare_managed_service_runtime(
+    account: pwd.struct_passwd,
+    *,
+    data_root: Path,
+    node_executable: Path,
+    agentnet_executable: Path,
+    uv_executable: Path,
+    stage: str,
+) -> None:
+    """Materialize the exact package runtime before bounded service startup."""
+
+    runtime_root = _managed_service_runtime(data_root)
+    environment = {
+        "PATH": _SYSTEM_PATH,
+        "HOME": str(data_root),
+        "LANG": "C.UTF-8",
+        "XDG_STATE_HOME": str(data_root / ".local" / "state"),
+        "XDG_CACHE_HOME": str(data_root / ".cache"),
+        "AGENTNET_NPM_RUNTIME_DIR": str(runtime_root),
+        "AGENTNET_UV": str(uv_executable),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(runtime_root / "pycache"),
+        "UV_NO_MODIFY_PATH": "1",
+        "UV_PROJECT_ENVIRONMENT": str(runtime_root),
+    }
+    try:
+        completed = _run_bounded_product_process(
+            account,
+            [str(node_executable), str(agentnet_executable), "--version"],
+            environment=environment,
+            stage=stage,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ServerSetupError(
+            "service_runtime_prepare",
+            f"{stage} timed out",
+        ) from exc
+    if (
+        completed.returncode != 0
+        or completed.stdout != f"agentnet {__version__}\n".encode()
+    ):
+        raise ServerSetupError(
+            "service_runtime_prepare",
+            f"{stage} did not materialize the exact package runtime",
+        )
+    _require_private_directory(
+        runtime_root,
+        account,
+        blocker="service_runtime_prepare",
+    )
+
 
 def _run_as(
     account: pwd.struct_passwd,
@@ -6062,13 +6122,15 @@ def _apply_server_setup(
             approvers=approvers,
             approval_state=approval_state,
         )
+        deferred_approval_status = approval_preexisting and forward_only_transition
         if approval_preexisting:
-            _run_as(
-                approval_account,
-                [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
-                environment=approval_environment,
-                stage="approval_status",
-            )
+            if not deferred_approval_status:
+                _run_as(
+                    approval_account,
+                    [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
+                    environment=approval_environment,
+                    stage="approval_status",
+                )
             steps.append({"id": "approval_provision", "status": "already_satisfied"})
         oidc = _build_core_oidc_config(
             request,
@@ -6160,6 +6222,7 @@ def _apply_server_setup(
         elif forward_only_upgrade:
             unit_payloads = commit_setup_profile()
             profile_committed_early = True
+        c0_runtime_prepared = False
         if forward_only_transition:
             def verify_upgrade_quiescence() -> None:
                 expected_states = {
@@ -6203,6 +6266,38 @@ def _apply_server_setup(
                     "status": quiesce_status,
                 }
             )
+            runtime_accounts: list[
+                tuple[pwd.struct_passwd, Path, str]
+            ] = [
+                (approval_account, approval_data, "approval_runtime_prepare"),
+                (core_account, core_data, "core_runtime_prepare"),
+            ]
+            if c0_responder_account is not None:
+                runtime_accounts.append(
+                    (
+                        c0_responder_account,
+                        c0_responder_data,
+                        "c0_responder_runtime_prepare",
+                    )
+                )
+                c0_runtime_prepared = True
+            for account, data_root, runtime_stage in runtime_accounts:
+                _prepare_managed_service_runtime(
+                    account,
+                    data_root=data_root,
+                    node_executable=node_executable,
+                    agentnet_executable=executable,
+                    uv_executable=uv_executable,
+                    stage=runtime_stage,
+                )
+                steps.append({"id": runtime_stage, "status": "completed"})
+            if deferred_approval_status:
+                _run_as(
+                    approval_account,
+                    [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
+                    environment=approval_environment,
+                    stage="approval_status",
+                )
         if rollback_capable_upgrade:
             journal = _pending_upgrade.get("journal")
             if not isinstance(journal, Mapping):
@@ -6283,6 +6378,18 @@ def _apply_server_setup(
                         c0_responder_account,
                     ),
                 }
+            )
+        if forward_only_transition and not c0_runtime_prepared:
+            _prepare_managed_service_runtime(
+                c0_responder_account,
+                data_root=c0_responder_data,
+                node_executable=node_executable,
+                agentnet_executable=executable,
+                uv_executable=uv_executable,
+                stage="c0_responder_runtime_prepare",
+            )
+            steps.append(
+                {"id": "c0_responder_runtime_prepare", "status": "completed"}
             )
         identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
         c0_responder_required = False

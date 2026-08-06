@@ -161,6 +161,7 @@ class _Harness:
     disabled_units: set[str]
     loaded_units: set[str]
     systemctl_calls: list[list[str]]
+    operation_events: list[tuple[str, object]]
     database_state: dict[str, object]
 
     @property
@@ -214,6 +215,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     disabled_units: set[str] = set()
     loaded_units: set[str] = set()
     systemctl_calls: list[list[str]] = []
+    operation_events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/node"))
     monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/uv"))
@@ -258,6 +260,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         failure_message: str,
     ) -> None:
         systemctl_calls.append(list(arguments))
+        operation_events.append(("systemctl", tuple(arguments)))
         if arguments[:1] == ["daemon-reload"]:
             loaded_units.update(
                 unit for unit in setup.MANAGED_UNITS if layout.unit(unit).exists()
@@ -357,9 +360,30 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     monkeypatch.setattr(setup, "load_config_json", load_synthetic_config)
 
     product_calls: list[list[str]] = []
+    def fake_bounded_product_process(
+        account: object,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
+    ) -> setup._BoundedCommandResult:
+        del accepted_returncodes
+        runtime_root = Path(environment["AGENTNET_NPM_RUNTIME_DIR"])
+        runtime_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        runtime_root.chmod(0o700)
+        operation_events.append(("runtime", (getattr(account, "pw_name"), stage)))
+        assert argv[2:] == ["--version"]
+        return setup._BoundedCommandResult(
+            returncode=0,
+            stdout=f"agentnet {setup.__version__}\n".encode(),
+            stderr_present=False,
+        )
+
 
     def fake_run_as(_account, argv, *, environment, stage, accepted_returncodes=frozenset({0})):
         product_calls.append(list(argv))
+        operation_events.append(("product", stage))
         command = argv[2:]
         if command[:2] == ["approval", "provision"]:
             config_path = Path(argv[argv.index("--config") + 1])
@@ -506,6 +530,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         fake_database_operation,
     )
     monkeypatch.setattr(setup, "_run_as", fake_run_as)
+    monkeypatch.setattr(setup, "_run_bounded_product_process", fake_bounded_product_process)
     return _Harness(
         request=request,
         layout=layout,
@@ -515,6 +540,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         disabled_units=disabled_units,
         loaded_units=loaded_units,
         systemctl_calls=systemctl_calls,
+        operation_events=operation_events,
         database_state=database_state,
     )
 
@@ -609,6 +635,10 @@ def _realized_0145_timer_source(
             b"OnUnitInactiveSec=1h\n",
             b"OnUnitActiveSec=1h\nPersistent=true\n",
         )
+        units = {
+            name: payload.replace(b"/npm-runtimes/0.1.45", b"/npm-runtime")
+            for name, payload in units.items()
+        }
         return units
 
     monkeypatch.setattr(setup, "__version__", "0.1.45")
@@ -1092,6 +1122,7 @@ def test_0146_replaces_released_timer_without_resetting_server_state(
     before_marker = harness.marker_path.read_bytes()
     before_database = copy.deepcopy(harness.database_state)
     before_revision = harness.marker()["revision"]
+    upgrade_event_offset = len(harness.operation_events)
 
     harness.install_new_package_runtime()
     monkeypatch.setattr(setup, "__version__", "0.1.46")
@@ -1111,6 +1142,24 @@ def test_0146_replaces_released_timer_without_resetting_server_state(
     assert b"Persistent=" not in timer
     assert harness.database_state == before_database
     assert not harness.journal_path.exists()
+
+    upgrade_events = harness.operation_events[upgrade_event_offset:]
+    quiesced = upgrade_events.index(
+        ("systemctl", ("disable", "--now", setup.APPROVAL_UNIT))
+    )
+    runtime_events = [
+        (index, payload)
+        for index, (kind, payload) in enumerate(upgrade_events)
+        if kind == "runtime"
+    ]
+    assert [payload for _, payload in runtime_events] == [
+        (setup.APPROVAL_USER, "approval_runtime_prepare"),
+        (setup.CORE_USER, "core_runtime_prepare"),
+        (setup.C0_RESPONDER_USER, "c0_responder_runtime_prepare"),
+    ]
+    assert all(index > quiesced for index, _ in runtime_events)
+    approval_status = upgrade_events.index(("product", "approval_status"))
+    assert approval_status > max(index for index, _ in runtime_events)
 
 
 @pytest.mark.parametrize("package_version", ["0.1.33", "0.1.34", "0.1.35", "0.1.36"])
