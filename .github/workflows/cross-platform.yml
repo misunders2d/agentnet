@@ -78,8 +78,7 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/agentnet-pack"
           PREFIX="$RUNNER_TEMP/agentnet-prefix"
           UNRELATED="$RUNNER_TEMP/agentnet-unrelated"
-          PORTABLE_RUNTIME="$RUNNER_TEMP/agentnet-portable-runtime"
-          mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED" "$PORTABLE_RUNTIME"
+          mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
           PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
           umask 022
           npm install --prefix "$PREFIX" --umask=0022 --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
@@ -87,6 +86,22 @@ jobs:
           LAUNCHER="$PACKAGE_ROOT/npm/bin/agentnet.mjs"
           cd "$UNRELATED"
           node "$LAUNCHER" --version
+
+      # `agentnet verify` runs the complete suite, which includes Linux-only
+      # setup, POSIX ownership, and distribution-artifact contracts. macOS and
+      # Windows lifecycle qualification remains a separate blocked gate, so the
+      # installed-runtime journey stays on the host it is proven for.
+      - name: Verify the installed runtime and packaged journey
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PREFIX="$RUNNER_TEMP/agentnet-prefix"
+          UNRELATED="$RUNNER_TEMP/agentnet-unrelated"
+          PORTABLE_RUNTIME="$RUNNER_TEMP/agentnet-portable-runtime"
+          mkdir -p "$PORTABLE_RUNTIME"
+          PACKAGE_ROOT="$PREFIX/node_modules/@misunders2d/agentnet"
+          LAUNCHER="$PACKAGE_ROOT/npm/bin/agentnet.mjs"
+          cd "$UNRELATED"
           node "$LAUNCHER" verify
           UV_PROJECT_ENVIRONMENT="$PORTABLE_RUNTIME" uv run \
             --project "$PACKAGE_ROOT" --frozen --no-default-groups \

@@ -68,11 +68,12 @@ jobs:
           python-version: "3.13.13"
           enable-cache: false
 
-      - name: Install PostgreSQL 18 and local route dependencies
+      - name: Install PostgreSQL 18, ClamAV, and local route dependencies
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-common nginx jq openssl ca-certificates
+          sudo apt-get install -y clamav-daemon clamav-freshclam
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get update
           sudo apt-get install -y postgresql-18
@@ -81,6 +82,28 @@ jobs:
           done < <(pg_lsclusters --no-header)
           sudo pg_createcluster 18 main --port 5432 --start
           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
+
+      - name: Start the maintained ClamAV daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo systemctl stop clamav-freshclam.service
+          sudo freshclam --quiet
+          sudo systemctl start clamav-freshclam.service
+          printf 'TCPSocket 3310\nTCPAddr 127.0.0.1\n' \
+            | sudo tee /etc/clamav/clamd.conf.d/agentnet-e2e.conf >/dev/null \
+            || printf 'TCPSocket 3310\nTCPAddr 127.0.0.1\n' \
+              | sudo tee -a /etc/clamav/clamd.conf >/dev/null
+          sudo systemctl restart clamav-daemon.service
+          for _ in $(seq 1 120); do
+            if sudo ss -H -ltn '( sport = :3310 )' | grep -q 3310; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "clamd did not accept connections on 127.0.0.1:3310" >&2
+          sudo journalctl -u clamav-daemon.service --no-pager -n 40 >&2 || true
+          exit 1
 
       - name: Run clean installed-artifact setup lifecycle
         shell: bash

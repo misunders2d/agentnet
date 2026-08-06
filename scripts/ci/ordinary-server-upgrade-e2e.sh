@@ -337,13 +337,22 @@ sudo -u postgres createdb --owner=agentnet agentnet
 HBA_FILE="$(sudo -u postgres psql -Atq --dbname=postgres -c 'SHOW hba_file')"
 sudo sed -i '1ilocal agentnet agentnet peer # agentnet-upgrade-e2e' "$HBA_FILE"
 sudo -u postgres psql -Atq --dbname=postgres -c 'SELECT pg_reload_conf()' | grep -qx 't'
+# The agentnet OS account does not exist until the released package creates it,
+# so peer readiness is proven from the operator role, not by impersonation.
+CONFIG_LOADED=false
 for _ in $(seq 1 50); do
-  if sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT current_user' 2>/dev/null | grep -qx agentnet; then
+  if sudo -u postgres psql -Atq --dbname=postgres -c \
+    "SELECT pg_conf_load_time() >= (pg_stat_file(current_setting('hba_file'))).modification" \
+    | grep -qx 't'; then
+    CONFIG_LOADED=true
     break
   fi
-  sleep 0.1
+  sleep 0.2
 done
-[[ "$(sudo -u agentnet psql -Atq --dbname=agentnet -c 'SELECT current_user')" == "agentnet" ]]
+[[ "$CONFIG_LOADED" == "true" ]]
+sudo -u postgres psql -Atq --dbname=postgres -c \
+  "SELECT count(*) FROM pg_hba_file_rules WHERE type='local' AND database=ARRAY['agentnet'] AND user_name=ARRAY['agentnet'] AND auth_method='peer' AND error IS NULL" \
+  | grep -qx '1'
 
 # Realize exact public 0.1.44 bytes and its schema-v6 five-unit marker.
 PLAN_0144="$WORK/plan-0.1.44.json"

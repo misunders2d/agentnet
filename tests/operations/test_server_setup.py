@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import shutil
+import socket
+import threading
 import stat
 import subprocess
 import sys
@@ -25,7 +27,7 @@ from agentnet.approval.config import (
     ApprovalServiceApproverConfig,
     ApprovalServiceConfig,
 )
-from agentnet.operations.config import IndependentApproverConfig
+from agentnet.operations.config import IndependentApproverConfig, ScannerTrustConfig
 from agentnet.cli import build_parser, command_server_agent_setup
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
@@ -412,6 +414,108 @@ def test_scanner_setup_requires_live_signed_readiness(
     assert exc_info.value.blocker == "scanner_unready"
 
 
+def test_scanner_setup_accepts_one_exact_live_loopback_daemon(
+    tmp_path: Path,
+) -> None:
+    """The deployed lane's exact TCP configuration must satisfy apply readiness."""
+
+    import agentnet.operations.server_setup as setup
+
+    responses: list[bytes] = [b"stream: OK\x00"]
+    received: list[bytes] = []
+
+    stop = threading.Event()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    listener.settimeout(0.1)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                connection, _peer = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with connection:
+                payload = bytearray()
+                connection.settimeout(5)
+                while not payload.endswith(b"\x00\x00\x00\x00"):
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    payload.extend(chunk)
+                received.append(bytes(payload))
+                connection.sendall(responses[0])
+
+    server = threading.Thread(target=serve)
+    server.start()
+    try:
+        key = P256KeyPair.generate()
+        key_path = tmp_path / "scanner.key"
+        key_path.write_bytes(key.private_pem)
+        key_path.chmod(0o600)
+        scanner_id = "ordinary-server-e2e-scanner"
+        epoch = 1
+        engine_version = "1.0.7"
+        signature_version = "27000"
+        updated_at = int(time.time())
+        max_age = 86_400
+        endpoint_uri = f"tcp://127.0.0.1:{port}"
+        core_values = {
+            "AGENTNET_CLAMAV_ENDPOINT": endpoint_uri,
+            "AGENTNET_CLAMAV_SCANNER_ID": scanner_id,
+            "AGENTNET_CLAMAV_KEY_EPOCH": str(epoch),
+            "AGENTNET_CLAMAV_SIGNING_KEY_FILE": str(key_path),
+            "AGENTNET_CLAMAV_ENGINE_VERSION": engine_version,
+            "AGENTNET_CLAMAV_SIGNATURE_VERSION": signature_version,
+            "AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT": str(updated_at),
+            "AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS": str(max_age),
+        }
+        trust = ScannerTrustConfig.model_validate(
+            {
+                "trusted_public_keys": {f"{scanner_id}:{epoch}": key.public_pem},
+                "required_engine": "clamav",
+                "required_rules_digest": clamav_rules_digest(
+                    signature_version=signature_version,
+                    signature_updated_at=updated_at,
+                ),
+                "required_profile_digest": clamav_profile_digest(
+                    endpoint=ScannerEndpoint.from_uri(endpoint_uri),
+                    engine_version=engine_version,
+                    timeout_seconds=30.0,
+                    max_bytes=16_777_216,
+                    max_response_bytes=4_096,
+                    max_signature_age_seconds=max_age,
+                ),
+            }
+        )
+        spec = setup._resolve_scanner_setup(
+            load_server_setup_request(_artifact_enabled_v2_request(tmp_path)),
+            core_values=core_values,
+            scanner_trust=trust,
+        )
+        assert spec is not None
+
+        evidence = setup._require_scanner_readiness(spec)
+
+        assert evidence["status"] == "ready"
+        assert evidence["endpoint"] == endpoint_uri
+        assert evidence["scanner_id"] == scanner_id
+        assert received and received[0].startswith(b"zINSTREAM\x00")
+
+        responses[0] = b"stream: Eicar-Test-Signature FOUND\x00"
+        with pytest.raises(ServerSetupError) as exc_info:
+            setup._require_scanner_readiness(spec)
+        assert exc_info.value.blocker == "scanner_unready"
+    finally:
+        stop.set()
+        server.join(timeout=5)
+        listener.close()
+        assert not server.is_alive()
 
 
 def test_server_setup_is_one_fixed_public_cli_surface(tmp_path: Path) -> None:
