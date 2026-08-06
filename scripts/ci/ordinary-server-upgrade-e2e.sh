@@ -69,6 +69,22 @@ report_failure() {
   done
   return "$status"
 }
+
+wait_for_public_health() {
+  local url="$1"
+  local attempt
+  for attempt in $(seq 1 120); do
+    if env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+      curl --fail --silent --show-error "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "public origin $url never became healthy" >&2
+  env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+    curl --fail --silent --show-error "$url" >&2 || true
+  return 1
+}
 trap 'report_failure "$LINENO" "$BASH_COMMAND"' ERR
 
 cleanup() {
@@ -750,8 +766,10 @@ INJECT_PID=""
 jq -e '.schema == "agentnet.server-setup.evidence.v1" and .status == "blocked" and .blocker == "service_health" and .identity_enrolled == true and .authority_granted == false' "$APPLY_ROLLBACK" >/dev/null
 sudo systemctl start nginx
 assert_source_rollback
-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://core.agentnet.test/healthz >/dev/null
-env NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" curl --fail --silent --show-error https://approval.agentnet.test/healthz >/dev/null
+# The disposable route and both restored units come back independently, so the
+# public origin is proven by bounded polling rather than one instantaneous hit.
+wait_for_public_health https://core.agentnet.test/healthz
+wait_for_public_health https://approval.agentnet.test/healthz
 
 # Retry the same immutable candidate bytes and prove the exact successful
 # marker/catalog transition, preservation, and endpoint restart postcondition.
