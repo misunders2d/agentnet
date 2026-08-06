@@ -56,8 +56,9 @@ report_failure() {
   done
   local unit
   for unit in agentnet-core.service agentnet-approval.service \
-    agentnet-c0-responder.service agentnet-credential-renew.timer \
-    agentnet-credential-renew-e2e.timer agentnet-upgrade-e2e.timer; do
+    agentnet-c0-responder.service agentnet-credential-renew.service \
+    agentnet-credential-renew.timer agentnet-credential-renew-e2e.timer \
+    agentnet-upgrade-e2e.timer; do
     if sudo systemctl cat "$unit" >/dev/null 2>&1; then
       echo "--- $unit ---" >&2
       sudo systemctl show "$unit" \

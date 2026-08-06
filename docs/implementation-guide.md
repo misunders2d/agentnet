@@ -334,6 +334,9 @@ service-inactive-relative `OnUnitInactiveSec=1h`; `OnBootSec`,
 `OnUnitActiveSec`, and `Persistent` are rejected. The packaged Ubuntu lane accelerates an installed
 copy of the timer, proves two successful real systemd activations with a later
 finite `NEXT`, and restores the package-owned hourly timer before completion.
+Signed AgentNet clients build verification from the platform default trust
+store, so operator-installed private roots used by the self-hosted HTTPS
+topology are honored without allowing service-environment CA overrides.
 
 ### Communication-only request-v2
 

@@ -342,7 +342,10 @@ published and historical release evidence:
   runtime for bounded pre-commit rollback. The transition requires a new exact
   owner-approved plan digest and preserves the enrolled server
   identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
-  external prerequisites. Hermetic setup/recovery tests report **252 passed**;
+  external prerequisites. Signed clients use the platform default TLS trust
+  store so the hardened services honor operator-installed private roots without
+  accepting caller-controlled CA environment overrides. Hermetic setup/recovery
+  tests report **252 passed**;
   the focused timer and exact-upgrade lane reports **10 passed**;
   the focused release lane reports **458 passed and 5 expected dedicated-
   PostgreSQL skips**; and the releasable source corpus reports **2105 passed

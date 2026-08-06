@@ -3,13 +3,44 @@ from __future__ import annotations
 import hashlib
 import json
 
+import ssl
 import httpx
 import pytest
 
+import agentnet.client as client_module
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.errors import ValidationError
 from agentnet.security.dpop import proof_from_headers
 from agentnet.security.signatures import P256KeyPair, canonical_json
+
+
+def test_client_uses_platform_default_trust_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    captured: dict[str, object] = {}
+
+    class StubClient:
+        def close(self) -> None:
+            pass
+
+    def client_factory(**kwargs: object) -> StubClient:
+        captured.update(kwargs)
+        return StubClient()
+
+    monkeypatch.setattr(client_module.ssl, "create_default_context", lambda: context)
+    monkeypatch.setattr(client_module.httpx, "Client", client_factory)
+    client = AgentNetClient(
+        base_url="https://api.corp.example",
+        key=P256KeyPair.generate(),
+        domain_id="corp.example",
+        harness_id="harness-1",
+        credential_id="credential-1",
+        audience="urn:agentnet:corp.example:corporate-api",
+    )
+    client.close()
+
+    assert captured["verify"] is context
 
 
 def test_client_binds_configured_audience_and_canonical_full_target() -> None:

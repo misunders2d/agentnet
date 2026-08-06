@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -87,7 +88,12 @@ class AgentNetClient:
             raise ValidationError("AgentNet client base_url must use its canonical origin spelling")
         self._scheme = target.scheme
         self._authority = target.authority
-        self._client = httpx.Client(base_url=self.base_url, transport=transport, timeout=10)
+        self._client = httpx.Client(
+            base_url=self.base_url,
+            transport=transport,
+            timeout=10,
+            verify=ssl.create_default_context(),
+        )
 
     def _request_body(
         self,
