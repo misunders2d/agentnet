@@ -657,6 +657,23 @@ SCOPE_ID="$(jq -r '.communication_scope_id' "$WORK/released-fixture.json")"
 [[ "$SCOPE_ID" == "scope-upgrade-e2e-v6" ]]
 sudo systemctl stop agentnet-core.service
 [[ "$(sudo systemctl show agentnet-core.service --property=ActiveState --value)" == "inactive" ]]
+# The stopped Core holds the instance lease until it releases or the lease
+# expires; activation is a second holder of the same exact instance.
+LEASE_RELEASED=false
+for _ in $(seq 1 300); do
+  if [[ "$(sudo -u postgres psql -Atq --dbname=agentnet -c \
+    "SELECT COUNT(*) FROM runtime_leases WHERE lease_name='server-agent.instance:ordinary-server-upgrade-e2e' AND expires_at > EXTRACT(EPOCH FROM now())")" == "0" ]]; then
+    LEASE_RELEASED=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$LEASE_RELEASED" != "true" ]]; then
+  echo "runtime lease was never released after stopping Core" >&2
+  sudo -u postgres psql --dbname=agentnet -c \
+    "SELECT lease_name,owner_id,fence,acquired_at,heartbeat_at,expires_at FROM runtime_leases" >&2
+  exit 1
+fi
 run_as_core_service "$AGENTNET_0144" server-agent activate \
   --config /var/lib/agentnet/agentnet.json \
   --identity /var/lib/agentnet/server-agent-identity.json >"$WORK/activate-0.1.44.json"
