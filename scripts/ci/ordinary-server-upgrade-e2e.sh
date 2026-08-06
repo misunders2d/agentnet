@@ -270,6 +270,10 @@ identity_snapshot() {
   psql_agentnet -c "COPY (SELECT d.domain_id,d.status,d.policy_revision,d.revocation_epoch,d.created_at,p.principal_id,p.oidc_issuer,p.oidc_subject,p.verified_email,p.status,p.created_at,h.harness_id,h.kind,h.display_name,h.status,h.binding_assurance,h.capabilities_json,h.credential_epoch,h.created_at,c.credential_id,c.key_id,c.public_key_pem,c.status,c.epoch,c.not_before,c.expires_at,e.challenge_id,e.transaction_digest,e.approved_receipt,e.consumed_at FROM domains d JOIN principals p ON p.domain_id=d.domain_id JOIN harnesses h ON h.principal_id=p.principal_id JOIN credentials c ON c.harness_id=h.harness_id JOIN enrollment_challenges e ON e.domain_id=d.domain_id ORDER BY p.principal_id,h.harness_id,c.credential_id,e.challenge_id) TO STDOUT WITH (FORMAT csv, FORCE_QUOTE *)" | sha256sum | cut -d' ' -f1
 }
 
+endpoint_lifecycle_snapshot() {
+  psql_agentnet -c "COPY (SELECT * FROM endpoint_lifecycle ORDER BY domain_id,harness_id) TO STDOUT WITH (FORMAT csv, FORCE_QUOTE *)" | sha256sum | cut -d' ' -f1
+}
+
 
 assert_schema_seven_source() {
   [[ "$(schema_version)" == "7" ]]
@@ -609,6 +613,7 @@ sudo grep -Fxq 'Persistent=true' /etc/systemd/system/agentnet-credential-renew.t
 # identity material before the candidate changes any package-owned bytes.
 [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM enrollment_challenges WHERE consumed_at IS NOT NULL')" == "1" ]]
 IDENTITY_0144="$(identity_snapshot)"
+ENDPOINT_LIFECYCLE_0144="$(endpoint_lifecycle_snapshot)"
 CATALOG_0144="$(migration_catalog 7 | sha256sum | cut -d' ' -f1)"
 MARKER_0144="$(sudo sha256sum /var/lib/agentnet-setup/setup.json | cut -d' ' -f1)"
 REVISION_0144="$(sudo jq -r '.revision' /var/lib/agentnet-setup/setup.json)"
@@ -626,13 +631,11 @@ DIGEST_0145="$(jq -r '.request_digest' "$PLAN_0145")"
 [[ "$DIGEST_0145" =~ ^[a-f0-9]{64}$ ]]
 [[ "$DIGEST_0145" != "$DIGEST_0144" ]]
 apply_setup "$PREFIX_0145" "$DIGEST_0145" "$APPLY_0145"
-jq -e --arg endpoint "$HARNESS_ID" '
+jq -e '
   .status == "operational"
   and .identity_enrolled == true
   and .authority_granted == false
-  and .endpoint_lifecycle.endpoint_id == $endpoint
-  and .endpoint_lifecycle.public_url == "https://core.agentnet.test"
-  and .endpoint_lifecycle.identity_created == false
+  and .endpoint_lifecycle == null
 ' "$APPLY_0145" >/dev/null
 sudo jq -e --arg previous "$MARKER_0144" --argjson revision "$REVISION_0144" '
   .package_version == "0.1.46"
@@ -644,6 +647,7 @@ sudo jq -e --arg previous "$MARKER_0144" --argjson revision "$REVISION_0144" '
 assert_schema_seven_source
 [[ "$(migration_catalog 7 | sha256sum | cut -d' ' -f1)" == "$CATALOG_0144" ]]
 [[ "$(identity_snapshot)" == "$IDENTITY_0144" ]]
+[[ "$(endpoint_lifecycle_snapshot)" == "$ENDPOINT_LIFECYCLE_0144" ]]
 [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM principals')" == "1" ]]
 [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM harnesses')" == "1" ]]
 [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM credentials')" == "1" ]]
