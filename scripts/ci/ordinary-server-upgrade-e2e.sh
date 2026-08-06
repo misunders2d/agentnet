@@ -391,14 +391,16 @@ sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 # synthetic CI state, not production enrollment evidence.
 PACKAGE_ROOT_0144="$PREFIX_0144/lib/node_modules/@misunders2d/agentnet"
 INSTALL_ID_0144="$(printf '%s' "$PACKAGE_ROOT_0144" | sha256sum | cut -c1-12)"
-# The Core service builds its runtime under the Core data root on first launch,
-# and Core is intentionally still inactive here, so materialize exactly that
+# The Core unit points AGENTNET_NPM_RUNTIME_DIR at the Core data root's
+# npm-runtime directory, which the launcher uses verbatim as the environment
+# root. Core is intentionally still inactive here, so materialize exactly that
 # agentnet-owned runtime the same way the unit would.
-PYTHON_0144="/var/lib/agentnet/npm-runtime/0.1.44-$INSTALL_ID_0144/bin/python"
-AGENTNET_0144="/var/lib/agentnet/npm-runtime/0.1.44-$INSTALL_ID_0144/bin/agentnet"
+CORE_RUNTIME_0144="/var/lib/agentnet/npm-runtime"
+PYTHON_0144="$CORE_RUNTIME_0144/bin/python"
+AGENTNET_0144="$CORE_RUNTIME_0144/bin/agentnet"
 sudo -u agentnet env \
   PATH="$PREFIX_0144/bin:/usr/bin:/bin" \
-  AGENTNET_NPM_RUNTIME_DIR=/var/lib/agentnet/npm-runtime \
+  AGENTNET_NPM_RUNTIME_DIR="$CORE_RUNTIME_0144" \
   AGENTNET_UV="$PREFIX_0144/bin/uv" \
   NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
   "$PREFIX_0144/bin/node" "$(launcher "$PREFIX_0144")" --version >/dev/null
