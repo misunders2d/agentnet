@@ -1336,9 +1336,10 @@ def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Pa
     assert 'credential renew --identity "/var/lib/agentnet/server-agent-identity.json"' in units[CREDENTIAL_RENEW_UNIT].decode()
     assert f"Unit={CREDENTIAL_RENEW_UNIT}" in units[CREDENTIAL_RENEW_TIMER].decode()
     timer = units[CREDENTIAL_RENEW_TIMER].decode()
-    assert "OnBootSec=5min" in timer
+    assert "OnActiveSec=5min" in timer
     assert "OnUnitInactiveSec=1h" in timer
     assert "OnUnitActiveSec=" not in timer
+    assert "OnBootSec=" not in timer
     assert "Persistent=" not in timer
 
 

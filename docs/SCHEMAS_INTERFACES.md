@@ -731,8 +731,13 @@ For `0.1.45→0.1.46`, the same v4 journal binds the exact source and target
 package state, but no database migration or endpoint transition is permitted.
 Setup must preserve schema v7 and all enrolled identity, credential,
 authorization, mailbox, and endpoint rows while replacing the exact managed
-renewal timer bytes. The target timer uses `OnUnitInactiveSec=1h`, forbids
-`OnUnitActiveSec` and `Persistent`, and must expose a finite future activation
+renewal timer bytes. Before invoking candidate package code, setup quiesces all
+managed services. Each target unit binds a package-generation runtime beneath
+its service account's private data root; setup materializes and verifies that
+runtime as the exact account before Approval validation or service restart, so
+the released runtime remains intact for bounded pre-commit rollback. The target
+timer uses `OnActiveSec=5min` and `OnUnitInactiveSec=1h`, forbids `OnBootSec`,
+`OnUnitActiveSec`, and `Persistent`, and must expose a finite future activation
 when setup reports operational.
 
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed

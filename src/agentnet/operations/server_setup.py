@@ -1465,7 +1465,7 @@ ReadWritePaths={CORE_DATA}
 Description=Hourly AgentNet credential renewal
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=5min
 OnUnitInactiveSec=1h
 Unit={CREDENTIAL_RENEW_UNIT}
 

@@ -487,11 +487,15 @@ did not pass.
 Candidate `0.1.46` corrects the ordinary-server credential-renewal timer and
 adds one exact in-place `0.1.45→0.1.46` path. The new owner-approved package
 digest preserves the enrolled server identity and credential, PostgreSQL,
-endpoint lifecycle, and external prerequisites. The timer checks first after
-boot and then one hour after each completed renewal attempt; setup rejects an
-elapsed timer without a finite next activation. The candidate's packaged
-Ubuntu upgrade lane accelerates the installed timer and must observe two real
-successful activations with a later finite `NEXT`. No requirement,
+endpoint lifecycle, and external prerequisites. Upgrade setup first quiesces
+the managed services, then materializes the exact target package in a
+generation-specific runtime owned by each service account before validation or
+restart; the released runtime remains available for bounded pre-commit
+rollback. The timer checks first five minutes after timer activation and then
+one hour after each completed renewal attempt; setup rejects an elapsed timer
+without a finite next activation. The candidate's packaged Ubuntu upgrade lane accelerates the
+installed timer and must observe two real successful activations with a later
+finite `NEXT`. No requirement,
 production claim, or must-not-ship gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm

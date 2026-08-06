@@ -824,13 +824,20 @@ production deployment, HA/restore, signed-installer, or high-tier gate evidence.
 
 Corrective `0.1.46` accepts only the exact `0.1.45` five-unit marker and keeps
 the schema-v7 catalog unchanged. Its forward-only setup transition journals and
-compare-and-swaps the prior managed bytes, replaces the broken renewal timer
-with `OnUnitInactiveSec=1h`, and removes the ineffective monotonic
-`Persistent=true`. A new package digest requires a new owner approval, but the
-server identity, credential/key material, PostgreSQL state, endpoint lifecycle,
-and external prerequisites remain in place. The packaged Ubuntu upgrade lane
-accelerates a copy of the installed timer and requires two successful real
-systemd activations with a later finite `NEXT` before restoring the production
-hourly schedule.
+compare-and-swaps the prior managed bytes, quiesces every managed unit before
+candidate package execution, and prepares the exact target package as each
+service account in a package-generation runtime. The target unit files bind
+those private runtime roots, so startup performs no package build and the
+released runtime remains untouched for bounded pre-commit rollback. Only after
+preparation does setup validate Approval and permit restart. The transition
+replaces the broken renewal timer with `OnActiveSec=5min` and
+`OnUnitInactiveSec=1h`, avoiding an immediate upgrade-time trigger on hosts
+already running longer than five minutes, and removes the ineffective monotonic
+`Persistent=true`. A new package digest requires a new
+owner approval, but the server identity, credential/key material, PostgreSQL
+state, endpoint lifecycle, and external prerequisites remain in place. The
+packaged Ubuntu upgrade lane accelerates a copy of the installed timer and
+requires two successful real systemd activations with a later finite `NEXT`
+before restoring the production hourly schedule.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

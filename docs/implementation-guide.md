@@ -323,12 +323,17 @@ Corrective `0.1.46` adds the exact `0.1.45→0.1.46` edge. Install the released
 `0.1.46` package, create a new no-write plan, obtain owner approval for that
 exact new digest, then apply it. Setup preserves the current enrolled server
 identity, credential/key material, schema-v7 PostgreSQL state, endpoint
-lifecycle, and external prerequisites. It changes only the package/config/unit
-provenance and replaces the renewal schedule with
-`OnUnitInactiveSec=1h`; `OnUnitActiveSec` and `Persistent` are rejected. The
-packaged Ubuntu lane accelerates an installed copy of the timer, proves two
-successful real systemd activations with a later finite `NEXT`, and restores
-the package-owned hourly timer before completion.
+lifecycle, and external prerequisites. Before any candidate runtime command,
+the upgrade quiesces the five managed units. It then materializes the exact
+target package under each fixed service account in a generation-specific,
+owner-private runtime, validates the existing Approval state through that
+runtime, and only then permits managed-service restart. The released runtime
+path remains unchanged for bounded pre-commit rollback. The upgrade replaces
+the renewal schedule with activation-relative `OnActiveSec=5min` and
+service-inactive-relative `OnUnitInactiveSec=1h`; `OnBootSec`,
+`OnUnitActiveSec`, and `Persistent` are rejected. The packaged Ubuntu lane accelerates an installed
+copy of the timer, proves two successful real systemd activations with a later
+finite `NEXT`, and restores the package-owned hourly timer before completion.
 
 ### Communication-only request-v2
 

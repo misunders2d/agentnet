@@ -111,7 +111,7 @@ assert_credential_renewal_recurs() {
   sudo systemctl stop agentnet-credential-renew.timer
   sudo sed \
     -e 's/^Description=.*/Description=Accelerated AgentNet credential renewal E2E/' \
-    -e 's/^OnBootSec=.*/OnBootSec=1s/' \
+    -e 's/^OnActiveSec=.*/OnActiveSec=1s/' \
     -e 's/^OnUnitInactiveSec=1h$/OnUnitInactiveSec=5s/' \
     /etc/systemd/system/agentnet-credential-renew.timer |
     sudo tee "$test_path" >/dev/null
@@ -649,8 +649,10 @@ assert_schema_seven_source
 [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM credentials')" == "1" ]]
 [[ "$(sudo sha256sum /var/lib/agentnet/server-agent-identity.json | cut -d' ' -f1)" == "$IDENTITY_FILE_0144" ]]
 [[ "$(sudo sha256sum /var/lib/agentnet/guided-join.key.pem | cut -d' ' -f1)" == "$KEY_FILE_0144" ]]
+sudo grep -Fxq 'OnActiveSec=5min' /etc/systemd/system/agentnet-credential-renew.timer
 sudo grep -Fxq 'OnUnitInactiveSec=1h' /etc/systemd/system/agentnet-credential-renew.timer
 ! sudo grep -Fq 'OnUnitActiveSec=' /etc/systemd/system/agentnet-credential-renew.timer
+! sudo grep -Fq 'OnBootSec=' /etc/systemd/system/agentnet-credential-renew.timer
 ! sudo grep -Fq 'Persistent=' /etc/systemd/system/agentnet-credential-renew.timer
 assert_credential_renewal_recurs
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json

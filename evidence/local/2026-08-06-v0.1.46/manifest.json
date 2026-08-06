@@ -1,0 +1,49 @@
+{
+  "run_id": "2026-08-06-v0.1.46",
+  "evaluated_at": "2026-08-06T19:45:00Z",
+  "scope": "v0_1_46_credential_renewal_timer_corrective_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "feab2138a4464837192bbe941f5e9104ba0c09c805e66ee8e33a3973dfb745bf",
+  "supersedes_package_evidence": "evidence/local/2026-08-06-v0.1.45/manifest.json",
+  "change_boundary": "Candidate 0.1.46 repairs the released ordinary-server credential-renewal timer and adds the exact owner-reapproved 0.1.45 to 0.1.46 in-place upgrade edge. Upgrade setup quiesces all managed units before candidate package execution, materializes an exact package-generation runtime as each fixed service identity, preserves the released runtime for rollback, retains schema-v7 identity, credential, PostgreSQL, endpoint lifecycle, and communication state, and requires two successful real systemd timer activations with a later finite NEXT before reporting operational.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py",
+      "result": "PASS: 458 passed, 5 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2105 passed and 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 5258853cac60ae2fd6a47bc6aaa48584440709208f77b295cfb1acd98d214868; wheel sha256 54b852a1567f1a9df32a56c95dc3178dfcb058dfd2d75f245b362d5048c89309"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: fresh source plus generations 1 and 2 each report 2132 passed and 21 expected platform/dedicated-PostgreSQL skips; generation 2 passes the exact-endpoint routing gate and packaged v0.1.45 user journey; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, recursive installation, package-tree equality, and residue checks pass; two installed-harness pin failures remain non-green and were not rerun or waived"
+    }
+  ],
+  "execution_context": {
+    "source": "AgentNet v0.1.46 corrective release worktree on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "callback_incident": "GitHub Actions major outage left replacement workflow jobs queued with no active runner; no queued result is treated as evidence",
+    "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
+    "root_installed_external_host": "Disposable Ubuntu 24.04 VM exact 0.1.45 to 0.1.46 owner-approved upgrade gate remains separately recorded and must pass before publication"
+  },
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-06-v0.1.46/artifacts/agentnet-0.1.46.tar.gz",
+      "sha256": "5258853cac60ae2fd6a47bc6aaa48584440709208f77b295cfb1acd98d214868"
+    },
+    {
+      "path": "evidence/local/2026-08-06-v0.1.46/artifacts/agentnet-0.1.46-py3-none-any.whl",
+      "sha256": "54b852a1567f1a9df32a56c95dc3178dfcb058dfd2d75f245b362d5048c89309"
+    }
+  ]
+}

@@ -332,12 +332,18 @@ published and historical release evidence:
 
 - Candidate `0.1.46` repairs the ordinary-server credential-renewal timer and
   adds one exact `0.1.45→0.1.46` in-place transition. The replacement schedule
-  uses boot-relative first activation and service-inactive-relative recurrence;
-  setup refuses operational status unless systemd exposes a finite future run.
-  The transition requires a new exact owner-approved plan digest and preserves
-  the enrolled server identity/credential, schema-v7 PostgreSQL state, endpoint
-  lifecycle, and external prerequisites. Hermetic setup/recovery tests report
-  **252 passed**; the focused timer and exact-upgrade lane reports **10 passed**;
+  uses timer-activation-relative first activation and service-inactive-relative
+  recurrence, avoiding an immediate trigger when setup runs after five minutes
+  of host uptime; setup refuses operational status unless systemd exposes a
+  finite future run.
+  Upgrade setup quiesces the managed units before candidate package execution,
+  materializes an exact generation-specific runtime as each service account,
+  and validates/restarts only after those preparations, retaining the released
+  runtime for bounded pre-commit rollback. The transition requires a new exact
+  owner-approved plan digest and preserves the enrolled server
+  identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
+  external prerequisites. Hermetic setup/recovery tests report **252 passed**;
+  the focused timer and exact-upgrade lane reports **10 passed**;
   the focused release lane reports **458 passed and 5 expected dedicated-
   PostgreSQL skips**; and the releasable source corpus reports **2105 passed
   and 21 expected platform/dedicated-PostgreSQL skips**. The packaged Ubuntu

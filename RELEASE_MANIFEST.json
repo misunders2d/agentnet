@@ -4,8 +4,8 @@
   "snapshot_date": "2026-08-06",
   "release": {
     "name": "agentnet",
-    "version": "0.1.45",
-    "profile": "exact_endpoint_collaboration_lifecycle_candidate",
+    "version": "0.1.46",
+    "profile": "credential_renewal_timer_corrective_candidate",
     "status": "BLOCKED",
     "production_ready": false,
     "ship_eligible": false,
@@ -32,12 +32,12 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "56774c65eef4811b6f08ece2b760a9b0ed5a8a0641f92938a232ccbab930dd8c",
+    "sha256": "84d5e1d251fffe796f83b41a6e115e7ec52228a2eb27fd42177e604f577e5a93",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "e68412cfaf48509121be677e69c6e04793a02276c02d078b0c69ee7e6296ca62"
+      "sha256": "35d2aec99d7123711160830ad38f8a4a9b210e11ccfaff239d9c18908b16a876"
     },
     "direct_dependencies": {
       "build": {
@@ -199,11 +199,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "4bbd9d34eb23fc62b5297f39628e94aec4e7eb6bf8d14c55030d1f2756c5ae11"
+      "sha256": "470157296fe2cc84b89c3231660d22ad45a163f4769b30ed508ba2741b6c10ff"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "3e4818ab5dd87a4d22cfb3579a87f91ba103c6ee895ade755331ec4d953f2f15"
+      "sha256": "b774bd0e99ddc544e3981d3540b00caa096ce4e20b45d7e9234b3b34b3653ac3"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -223,11 +223,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "54d3bcc7c286e62e37d2227b53e2dfc4ab51a703aaf8127af768b099c7fbca43"
+      "sha256": "2a2c16526794227b02e2fe1517937918aae6773a0cff34d6840bfbc0a8cf96f2"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "6fa60cb2175d5df051de0dc8b5a7386d24cc8dcb31f09405753ac8d66d67a340"
+      "sha256": "3d0547cc794c3e3147840dc336b75bf79cf776ea0e666b499394fa45a0342193"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -263,13 +263,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "90a9696e0d2a932c5d3efd1ea8af36a3528c04b3d8c45a739c6b3070d77206eb"
+      "sha256": "b420b8de207a1d66edb531818c747b7d141213ddece2b12d056d248af97e3c4a"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "c6c52735cb5e61e4157d8982619b0413d9e56e17b78520d8f763ded742a8f9bc"
+    "sha256": "feab2138a4464837192bbe941f5e9104ba0c09c805e66ee8e33a3973dfb745bf"
   },
   "protocols": {
     "a2a": {

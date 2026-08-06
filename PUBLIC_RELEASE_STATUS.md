@@ -34,9 +34,14 @@ adds one exact `0.1.45→0.1.46` in-place transition. It requires a fresh owner
 approval for the changed package and plan digest, preserves the enrolled server
 identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
 external prerequisites, and replaces only the package/config/unit provenance
-needed by the corrected runtime. Publication and the real packaged Ubuntu
-upgrade lane remain pending; this note does not promote any requirement or
-gate.
+needed by the corrected runtime. Upgrade setup quiesces managed services before
+executing candidate package code, prepares an exact generation-specific
+runtime as each service account, and restarts only after runtime validation;
+the released runtime remains intact for bounded pre-commit rollback.
+The timer's first run is five minutes from timer activation, not host boot, and
+later runs are one hour after the renewal service becomes inactive.
+Publication and the real packaged Ubuntu upgrade lane remain pending; this note
+does not promote any requirement or gate.
 
 ## Frozen release-input clarification
 
