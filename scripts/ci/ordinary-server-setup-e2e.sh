@@ -296,7 +296,7 @@ SCANNER_ENGINE_VERSION="1.0.7"
 SCANNER_SIGNATURE_VERSION="27000"
 SCANNER_SIGNATURE_UPDATED_AT="$(date -u +%s)"
 SCANNER_SIGNATURE_MAX_AGE_SECONDS=86400
-SCANNER_ENDPOINT="tcp://127.0.0.1:3310"
+SCANNER_ENDPOINT="unix:///var/run/clamav/clamd.ctl"
 openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/scanner.key" >/dev/null 2>&1
 openssl ec -in "$WORK/scanner.key" -pubout -out "$WORK/scanner.pub" >/dev/null 2>&1
 cat >>"$INPUTS/core.env" <<EOF

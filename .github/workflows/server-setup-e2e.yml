@@ -90,18 +90,17 @@ jobs:
           sudo systemctl stop clamav-freshclam.service
           sudo freshclam --quiet
           sudo systemctl start clamav-freshclam.service
-          printf 'TCPSocket 3310\nTCPAddr 127.0.0.1\n' \
-            | sudo tee /etc/clamav/clamd.conf.d/agentnet-e2e.conf >/dev/null \
-            || printf 'TCPSocket 3310\nTCPAddr 127.0.0.1\n' \
-              | sudo tee -a /etc/clamav/clamd.conf >/dev/null
+          # Use the distribution's own local socket rather than reconfiguring
+          # the maintained daemon; the package has no clamd.conf.d directory.
           sudo systemctl restart clamav-daemon.service
-          for _ in $(seq 1 120); do
-            if sudo ss -H -ltn '( sport = :3310 )' | grep -q 3310; then
+          for _ in $(seq 1 180); do
+            if sudo clamdscan --ping 1 >/dev/null 2>&1; then
+              sudo test -S /var/run/clamav/clamd.ctl
               exit 0
             fi
             sleep 1
           done
-          echo "clamd did not accept connections on 127.0.0.1:3310" >&2
+          echo "clamd did not answer on /var/run/clamav/clamd.ctl" >&2
           sudo journalctl -u clamav-daemon.service --no-pager -n 40 >&2 || true
           exit 1
 
