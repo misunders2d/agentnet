@@ -630,7 +630,11 @@ finally:
     core.close()
 PY
 sudo install -o agentnet -g agentnet -m 0700 "$WORK/seed-released-state.py" /var/lib/agentnet/seed-released-state.py
-sudo -u agentnet env PYTHONDONTWRITEBYTECODE=1 "$PYTHON_0144" /var/lib/agentnet/seed-released-state.py >"$WORK/released-fixture.json"
+# Core resolves its DSN from the configured variable name, which the unit
+# supplies through its environment file; the seed runs outside the unit.
+sudo -u agentnet env PYTHONDONTWRITEBYTECODE=1 \
+  AGENTNET_DATABASE_URL="postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet" \
+  "$PYTHON_0144" /var/lib/agentnet/seed-released-state.py >"$WORK/released-fixture.json"
 sudo rm -f /var/lib/agentnet/seed-released-state.py
 HARNESS_ID="$(jq -r '.harness_id' "$WORK/released-fixture.json")"
 CREDENTIAL_ID="$(jq -r '.credential_id' "$WORK/released-fixture.json")"
