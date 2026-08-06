@@ -123,6 +123,15 @@ from agentnet.operations.server_setup import (
     load_server_setup_request,
     plan_server_setup,
 )
+from agentnet.operations.client_setup import (
+    ClientIdentityProfile,
+    ClientSetupContinuationStore,
+    ClientSetupCoordinator,
+    ClientSetupError,
+    ClientSetupResult,
+    EnrollmentProgress,
+    SetupNextAction,
+)
 from agentnet.operations.incident import (
     DomainIncidentService,
     IncidentMode,
@@ -4692,12 +4701,18 @@ def command_manager_run(args: argparse.Namespace) -> int:
         pi_extension = resolve_packaged_pi_extension()
     except (GateBlocked, ValidationError) as exc:
         raise SystemExit(str(exc)) from None
-    client, actor, _key = _load_identity_client(Path(args.identity))
+    identity_path = Path(args.identity).absolute()
+    client, _, _ = _load_identity_client(identity_path)
+
+    def current_signing_context() -> VerifiedActor:
+        _profile, actor, _current_key = _load_identity_profile(identity_path)
+        return actor
+
     try:
         return int(
             run_manager_gateway(
                 client,
-                actor,
+                current_signing_context,
                 command,
                 state_dir=Path(args.state_dir) if args.state_dir is not None else None,
                 pi_extension=pi_extension,
@@ -4911,7 +4926,7 @@ def command_demo(args: argparse.Namespace) -> int:
             payload={"synthetic": True, "text": "synthetic local conformance message"},
             idempotency_key=f"demo-message-{uuid4()}",
         )
-        inbox = core.mailboxes.reconcile(recipient.harness_id)
+        inbox = core.reconcile_synthetic_mailbox(actor=recipient)
         print(
             json.dumps(
                 {
@@ -4983,6 +4998,7 @@ def command_verify(args: argparse.Namespace) -> int:
         environment.update(
             {
                 "AGENTNET_PACKAGE_ROOT": str(verification_root),
+                "AGENTNET_VERIFICATION_INSTALL_ROOT": str(package_root),
                 "HYPOTHESIS_STORAGE_DIRECTORY": str(runtime_root / "hypothesis"),
                 "PYTEST_ADDOPTS": "",
                 "PYTHONDONTWRITEBYTECODE": "1",
@@ -5160,11 +5176,192 @@ def command_a2a_demo(_args: argparse.Namespace) -> int:
     return 0
 
 
+class _UnavailableGuidedClientEnrollment:
+    """Fail closed when a Core has no configured guided enrollment adapter."""
+
+    @staticmethod
+    def _deny() -> EnrollmentProgress:
+        raise ClientSetupError(
+            "fresh client setup requires the configured guided OIDC/passkey enrollment service"
+        )
+
+    def begin(
+        self,
+        *,
+        replace_expired_continuation: str | None = None,
+    ) -> EnrollmentProgress:
+        del replace_expired_continuation
+        return self._deny()
+
+    def status(self, *, continuation: str) -> EnrollmentProgress:
+        del continuation
+        return self._deny()
+
+    def continue_setup(self, *, continuation: str) -> EnrollmentProgress:
+        del continuation
+        return self._deny()
+
+
+def _client_setup_identity_profiles(args: argparse.Namespace) -> tuple[ClientIdentityProfile, ...]:
+    profiles: list[ClientIdentityProfile] = []
+    identity_paths = args.identity or [str(Path.home() / ".agentnet" / "identity.json")]
+    for raw_path in identity_paths:
+        path = Path(raw_path).expanduser().absolute()
+        if not os.path.lexists(path):
+            continue
+        _value, actor, _key = _load_identity_profile(path)
+        profiles.append(
+            ClientIdentityProfile(
+                actor=actor,
+                harness_kind=args.harness_kind,
+                profile_key=args.profile_key,
+            )
+        )
+    return tuple(profiles)
+
+
+def _build_client_setup_coordinator(args: argparse.Namespace) -> ClientSetupCoordinator:
+    """Compose setup against one package-owned Core without starting services."""
+
+    config = _load_config(Path(args.config).expanduser().absolute())
+    try:
+        core = CommunicationCore.open(config)
+    except Exception as exc:
+        raise SystemExit(f"AgentNet setup Core is unavailable: {type(exc).__name__}") from exc
+    try:
+        lifecycle = getattr(core, "endpoint_lifecycle", None)
+        if lifecycle is None:
+            raise SystemExit("AgentNet endpoint lifecycle is unavailable")
+        enrollment = getattr(core, "client_setup_enrollment", None)
+        if enrollment is None:
+            enrollment = _UnavailableGuidedClientEnrollment()
+        return ClientSetupCoordinator(
+            endpoint_lifecycle=lifecycle,
+            identity_profiles=lambda: _client_setup_identity_profiles(args),
+            enrollment=enrollment,
+            continuation_store=ClientSetupContinuationStore(
+                Path(args.state).expanduser().absolute()
+            ),
+            harness_kind=args.harness_kind,
+            profile_key=args.profile_key,
+            close=core.close,
+        )
+    except BaseException:
+        core.close()
+        raise
+
+
+def _print_client_setup_result(result: ClientSetupResult) -> None:
+    print(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
+    if result.next_action is SetupNextAction.RESTART_YOUR_AGENT:
+        print("Restart your agent to enable AgentNet")
+
+
+def _run_client_setup(
+    args: argparse.Namespace,
+    operation: str,
+) -> int:
+    try:
+        coordinator = _build_client_setup_coordinator(args)
+    except (ClientSetupError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+    try:
+        if operation == "setup":
+            result = coordinator.setup()
+        elif operation == "status":
+            result = coordinator.status()
+        elif operation == "continue":
+            result = coordinator.continue_setup()
+        else:
+            raise AssertionError("unknown client setup operation")
+    except ClientSetupError as exc:
+        raise SystemExit(str(exc)) from None
+    finally:
+        coordinator.close()
+    _print_client_setup_result(result)
+    return 0
+
+
+def command_client_setup(args: argparse.Namespace) -> int:
+    """Begin or resume package-owned user-level AgentNet setup."""
+
+    return _run_client_setup(args, "setup")
+
+
+def command_client_setup_status(args: argparse.Namespace) -> int:
+    """Report setup status without restarting or signaling the harness."""
+
+    return _run_client_setup(args, "status")
+
+
+def command_client_setup_continue(args: argparse.Namespace) -> int:
+    """Continue setup while leaving an explicit user restart pending."""
+
+    return _run_client_setup(args, "continue")
+
+
+def _configure_client_setup_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    defaults: bool = True,
+) -> None:
+    private_root = Path.home() / ".agentnet"
+    suppressed = argparse.SUPPRESS
+    parser.add_argument(
+        "--config",
+        default=str(private_root / "agentnet.json") if defaults else suppressed,
+    )
+    parser.add_argument(
+        "--identity",
+        action="append",
+        default=[] if defaults else suppressed,
+        help="repeat for exact current identity profiles; ambiguity is denied",
+    )
+    parser.add_argument(
+        "--state",
+        default=str(private_root / "setup-continuation.json") if defaults else suppressed,
+        help="owner-private opaque continuation custody",
+    )
+    parser.add_argument(
+        "--harness-kind",
+        choices=("omp", "pi", "claude", "codex", "antigravity", "server"),
+        default=(
+            os.environ.get("AGENTNET_HARNESS_KIND", "omp") if defaults else suppressed
+        ),
+    )
+    parser.add_argument(
+        "--profile-key",
+        default=(
+            os.environ.get("AGENTNET_PROFILE_KEY", "default") if defaults else suppressed
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentnet", description="AgentNet")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     configure_approval_parser(commands)
+    setup = commands.add_parser(
+        "setup",
+        help="begin or resume package-owned user-level AgentNet setup",
+    )
+    _configure_client_setup_arguments(setup)
+    setup.set_defaults(func=command_client_setup)
+    setup_commands = setup.add_subparsers(dest="setup_command", required=False)
+    setup_status = setup_commands.add_parser(
+        "status",
+        help="show the exact resumable setup state",
+    )
+    _configure_client_setup_arguments(setup_status, defaults=False)
+    setup_status.set_defaults(func=command_client_setup_status)
+    setup_continue = setup_commands.add_parser(
+        "continue",
+        help="continue enrollment or activation without restarting the harness",
+    )
+    _configure_client_setup_arguments(setup_continue, defaults=False)
+    setup_continue.set_defaults(func=command_client_setup_continue)
+
 
     network = commands.add_parser("network", help="create and operate one AgentNet namespace")
     network_commands = network.add_subparsers(dest="network_command", required=True)

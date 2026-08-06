@@ -43,7 +43,7 @@ ALLOWED_PURPOSES = frozenset(
         "agentnet.component.adoption.v1",
         "agentnet.component.bakeoff.review.v1",
         "agentnet.component.reviewer.root.v1",
-        "agentnet.server-relay.packet.v1",
+        "agentnet.server-relay.packet.v2",
         "agentnet.server-relay.receipt.v1",
         "agentnet.server-relay.key-rotation.v1",
         "agentnet.server-relay.key-revocation.v1",

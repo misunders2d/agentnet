@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -30,6 +29,14 @@ from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.identity.actors import VerifiedActor
 from agentnet.organization.conflicts import TaskExecutionIntent
 from agentnet.protocol.models import Classification, DeliveryFact, EventType, TaskGrant
+from agentnet.supervisor.http import (
+    BackgroundAuthorizationBody,
+    CustodyBody,
+    EligibilityBody,
+    LocalBindingChildBody,
+    PayloadReleaseBody,
+    ResultBody,
+)
 from agentnet.provenance import (
     ProvenanceObjectType,
     ProvenanceReferenceV1,
@@ -49,60 +56,6 @@ if TYPE_CHECKING:
 BodyAndActor = Callable[[Request, "CommunicationCore"], Awaitable[tuple[bytes, VerifiedActor]]]
 
 
-class EligibilityBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    event_id: str = Field(min_length=1, max_length=256)
-    cursor: int = Field(ge=1)
-    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
-
-
-class BackgroundAuthorizationBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    decision_id: str = Field(min_length=1, max_length=256)
-    harness_id: str = Field(min_length=1, max_length=256)
-    event_id: str = Field(min_length=1, max_length=256)
-    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
-    event_type: str = Field(min_length=1, max_length=64)
-    classification: str = Field(pattern=r"^C[0-3]$")
-    policy_revision: int = Field(ge=1)
-    expires_at: int = Field(gt=0)
-    task_grant_id: str = Field(min_length=1, max_length=256)
-
-class CustodyBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    authorization: BackgroundAuthorizationBody
-    cursor: int = Field(ge=1)
-    local_queue_id: str = Field(min_length=1, max_length=256)
-
-
-class PayloadReleaseBody(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    authorization: BackgroundAuthorizationBody
-    cursor: int = Field(ge=1)
-    local_queue_id: str = Field(min_length=1, max_length=256)
-
-
-class ResultBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    authorization: BackgroundAuthorizationBody
-    source_queue_id: str = Field(min_length=1, max_length=256)
-    native_result: dict[str, Any]
-
-
-class LocalBindingChildBody(BaseModel):
-    """Exact post-spawn child identity; corporate identity comes from the proof."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    pid: int = Field(gt=0)
-    session_id: str = Field(min_length=16, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
-    process_start_time: str = Field(pattern=r"^[0-9]{1,128}$")
-    process_measurement: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class SupervisorExecutionService:
@@ -138,27 +91,56 @@ class SupervisorExecutionService:
             raise AuthorizationError("supervisor execution requires exact recipient attribution")
         row = connection.execute(
             """
-            SELECT e.event_id,e.domain_id,e.event_type,e.classification,e.payload_digest,
-                   e.envelope_digest,e.policy_revision,e.delivery_expires_at,e.effect_deadline,
-                   e.retention_delete_at,r.cursor,r.current_fact,h.credential_epoch,
+            SELECT o.obligation_id,e.event_id,e.domain_id,e.event_type,e.classification,
+                   e.payload_digest,e.envelope_digest,e.policy_revision,
+                   e.delivery_expires_at,e.effect_deadline,e.retention_delete_at,
+                   r.cursor,r.current_fact,h.credential_epoch,
                    d.revocation_epoch,d.status AS domain_status
-              FROM events AS e
-              JOIN recipients AS r ON r.event_id=e.event_id
+              FROM response_obligations AS o
+              JOIN events AS e ON e.event_id=o.request_event_id
+              JOIN recipients AS r
+                ON r.event_id=e.event_id AND r.recipient_id=o.responsible_harness_id
               JOIN harnesses AS h ON h.harness_id=r.recipient_id
               JOIN domains AS d ON d.domain_id=e.domain_id
-             WHERE e.event_id=? AND r.recipient_id=?
+             WHERE o.obligation_id=? AND o.responsible_harness_id=?
             """,
-            (body.event_id, actor.harness_id),
+            (body.obligation_id, actor.harness_id),
         ).fetchone()
         if row is None:
             raise AuthorizationError("supervisor execution is not visible")
-        if (
-            str(row["domain_id"]) != actor.domain_id
-            or int(row["cursor"]) != body.cursor
-            or str(row["envelope_digest"]) != body.envelope_digest
-        ):
+        if str(row["domain_id"]) != actor.domain_id:
             raise AuthorizationError("supervisor execution binding is not visible")
         return row
+    def _require_obligation_execution_binding(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        obligation_id: str,
+        authorization: BackgroundAuthorizationBody,
+        now: int,
+    ) -> Any:
+        event = self._event_row(
+            connection,
+            actor=actor,
+            body=EligibilityBody(obligation_id=obligation_id),
+        )
+        if (
+            str(event["event_id"]) != authorization.event_id
+            or str(event["envelope_digest"]) != authorization.envelope_digest
+        ):
+            raise AuthorizationError("supervisor obligation binding is not visible")
+        obligation = self.core.response_obligations.require_background_wake_in_transaction(
+            connection,
+            actor=actor,
+            event_id=authorization.event_id,
+            envelope_digest_value=authorization.envelope_digest,
+            now=now,
+        )
+        if obligation.obligation_id != obligation_id:
+            raise AuthorizationError("supervisor obligation binding is not visible")
+        return event
+
 
     @staticmethod
     def _grant_matches(
@@ -318,9 +300,14 @@ class SupervisorExecutionService:
                 raw_reference,
                 strict=True,
             )
+            expected_object_type = (
+                ProvenanceObjectType.TASK
+                if str(row["event_type"]) == EventType.TASK_ASSIGNMENT.value
+                else ProvenanceObjectType.EVENT
+            )
             if (
                 str(link["provenance_digest"]) != reference.provenance_digest
-                or str(link["object_type"]) != ProvenanceObjectType.TASK.value
+                or str(link["object_type"]) != expected_object_type.value
                 or canonical_json(reference.model_dump(mode="json")).decode("utf-8")
                 != raw_reference
             ):
@@ -332,7 +319,7 @@ class SupervisorExecutionService:
             reference,
             expected_domain_id=actor.domain_id,
             expected_content_digest=str(row["payload_digest"]),
-            expected_object_type=ProvenanceObjectType.TASK,
+            expected_object_type=expected_object_type,
             expected_classification=Classification(str(row["classification"])),
             required_sinks=(str(actor.harness_id),),
             expected_policy_revision=int(row["policy_revision"]),
@@ -378,8 +365,23 @@ class SupervisorExecutionService:
             raise AuthorizationError("supervisor execution requires exact recipient attribution")
         with self.store.transaction() as connection:
             event = self._event_row(connection, actor=actor, body=body)
+            if str(event["event_type"]) != EventType.TASK_ASSIGNMENT.value:
+                raise AuthorizationError(
+                    "only typed task assignments may enter a semantic worker"
+                )
+            obligation = (
+                self.core.response_obligations.require_background_wake_in_transaction(
+                    connection,
+                    actor=actor,
+                    event_id=str(event["event_id"]),
+                    envelope_digest_value=str(event["envelope_digest"]),
+                    now=now,
+                )
+            )
             existing = self._execution_row(
-                connection, event_id=body.event_id, recipient_id=actor.harness_id
+                connection,
+                event_id=str(event["event_id"]),
+                recipient_id=actor.harness_id,
             )
             if existing is not None:
                 if (
@@ -393,17 +395,74 @@ class SupervisorExecutionService:
                     actor=actor,
                     row=existing,
                     now=now,
-                    require_unexpired_authorization=True,
+                    require_unexpired_authorization=False,
                 )
-                return self._authorization(existing)
-
-            if event["event_type"] != EventType.TASK_ASSIGNMENT.value:
-                raise AuthorizationError("only typed task assignments may enter a semantic worker")
+                if existing["state"] not in {"eligible", "local_custody"}:
+                    raise ConflictError(
+                        "supervisor execution is no longer launchable"
+                    )
+                if int(existing["authorization_expires_at"]) > now:
+                    return self._authorization(existing)
+                grant_row = connection.execute(
+                    "SELECT expires_at FROM task_grants WHERE grant_id=?",
+                    (existing["task_grant_id"],),
+                ).fetchone()
+                if grant_row is None:
+                    raise AuthorizationError(
+                        "supervisor execution authority is no longer current"
+                    )
+                expires_at = min(
+                    now + self.AUTHORIZATION_TTL_SECONDS,
+                    int(grant_row["expires_at"]),
+                )
+                for boundary in (
+                    event["delivery_expires_at"],
+                    event["effect_deadline"],
+                    event["retention_delete_at"],
+                ):
+                    if boundary is not None:
+                        expires_at = min(expires_at, int(boundary))
+                if expires_at <= now:
+                    raise AuthorizationError(
+                        "supervisor authorization has no executable lifetime"
+                    )
+                refreshed = self._authorization(existing) | {
+                    "expires_at": expires_at
+                }
+                authorization_digest = canonical_digest(refreshed)
+                connection.execute(
+                    """UPDATE supervisor_executions
+                          SET authorization_digest=?,authorization_expires_at=?,updated_at=?
+                        WHERE event_id=? AND recipient_harness_id=?""",
+                    (
+                        authorization_digest,
+                        expires_at,
+                        now,
+                        event["event_id"],
+                        actor.harness_id,
+                    ),
+                )
+                self.store.append_audit(
+                    connection,
+                    {
+                        "action": "supervisor.background.reauthorized",
+                        "authorization_digest": authorization_digest,
+                        "event_id": str(event["event_id"]),
+                        "obligation_id": obligation.obligation_id,
+                        "policy_decision_id": str(existing["policy_decision_id"]),
+                        "recipient_harness_id": actor.harness_id,
+                        "task_grant_id": str(existing["task_grant_id"]),
+                    },
+                )
+                return refreshed
             if event["current_fact"] not in {
                 DeliveryFact.ACCEPTED_LOCAL.value,
                 DeliveryFact.ACCEPTED_DURABLE.value,
                 DeliveryFact.ACCEPTED_QUEUED.value,
                 DeliveryFact.QUEUED.value,
+                DeliveryFact.RECIPIENT_COMMITTED.value,
+                DeliveryFact.PRESENTED.value,
+                DeliveryFact.PROCESSING.value,
             }:
                 raise AuthorizationError("mailbox custody is not eligible for background execution")
             for boundary in (
@@ -417,7 +476,7 @@ class SupervisorExecutionService:
             grant = self._select_grant(
                 connection,
                 actor=actor,
-                event_id=body.event_id,
+                event_id=str(event["event_id"]),
                 classification=classification,
                 now=now,
             )
@@ -426,14 +485,14 @@ class SupervisorExecutionService:
                 AuthorizationRequest(
                     actor=actor,
                     action=self.ACTION,
-                    resource=f"event:{body.event_id}",
+                    resource=f"event:{event['event_id']}",
                     operation_class=OperationClass.PROTECTED_READ,
                     classification=classification,
                     policy_revision=int(event["policy_revision"]),
                     grant_use=GrantUse(
                         grant_id=grant.grant_id,
                         action=self.ACTION,
-                        resource=f"event:{body.event_id}",
+                        resource=f"event:{event['event_id']}",
                         input_source=self.INPUT_SOURCE,
                         output_sink=self.OUTPUT_SINK,
                         data_class=classification,
@@ -442,7 +501,8 @@ class SupervisorExecutionService:
                         "schema": "agentnet.supervisor.eligibility.v1",
                         "cursor": int(event["cursor"]),
                         "envelope_digest": str(event["envelope_digest"]),
-                        "event_id": body.event_id,
+                        "event_id": str(event["event_id"]),
+                        "obligation_id": obligation.obligation_id,
                         "event_type": str(event["event_type"]),
                         "payload_digest": str(event["payload_digest"]),
                         "recipient_harness_id": actor.harness_id,
@@ -458,13 +518,17 @@ class SupervisorExecutionService:
             if domain is None:
                 raise AuthorizationError("supervisor execution domain is unavailable")
             expires_at = min(now + self.AUTHORIZATION_TTL_SECONDS, int(grant.expires_at.timestamp()))
-            for boundary in (event["delivery_expires_at"], event["effect_deadline"]):
+            for boundary in (
+                event["delivery_expires_at"],
+                event["effect_deadline"],
+                event["retention_delete_at"],
+            ):
                 if boundary is not None:
                     expires_at = min(expires_at, int(boundary))
             authorization = {
                 "decision_id": decision.decision_id,
                 "harness_id": actor.harness_id,
-                "event_id": body.event_id,
+                "event_id": str(event["event_id"]),
                 "envelope_digest": str(event["envelope_digest"]),
                 "event_type": str(event["event_type"]),
                 "classification": classification.value,
@@ -485,7 +549,7 @@ class SupervisorExecutionService:
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'eligible',?,?)
                 """,
                 (
-                    body.event_id,
+                    event["event_id"],
                     actor.harness_id,
                     event["envelope_digest"],
                     event["payload_digest"],
@@ -507,7 +571,8 @@ class SupervisorExecutionService:
                 {
                     "action": "supervisor.background.authorized",
                     "authorization_digest": authorization_digest,
-                    "event_id": body.event_id,
+                    "event_id": str(event["event_id"]),
+                    "obligation_id": obligation.obligation_id,
                     "policy_decision_id": decision.decision_id,
                     "recipient_harness_id": actor.harness_id,
                     "task_grant_id": grant.grant_id,
@@ -539,11 +604,18 @@ class SupervisorExecutionService:
         assertion = {
             "schema": "agentnet.supervisor.local-custody.v1",
             "authorization": authorization.model_dump(mode="json"),
-            "cursor": body.cursor,
+            "obligation_id": body.obligation_id,
             "local_queue_id": body.local_queue_id,
         }
         assertion_digest = canonical_digest(assertion)
         with self.store.transaction() as connection:
+            event = self._require_obligation_execution_binding(
+                connection,
+                actor=actor,
+                obligation_id=body.obligation_id,
+                authorization=authorization,
+                now=now,
+            )
             row = self._execution_row(
                 connection,
                 event_id=authorization.event_id,
@@ -559,18 +631,40 @@ class SupervisorExecutionService:
                 require_unexpired_authorization=True,
             )
             self._require_authorization_binding(row, authorization)
-            recipient = connection.execute(
-                "SELECT cursor FROM recipients WHERE event_id=? AND recipient_id=?",
-                (authorization.event_id, actor.harness_id),
-            ).fetchone()
-            if recipient is None or int(recipient["cursor"]) != body.cursor:
-                raise AuthorizationError("local custody cursor changed")
+            recipient_cursor = int(event["cursor"])
             if row["state"] in {"local_custody", "result_uploaded"}:
-                if (
-                    row["custody_assertion_digest"] != assertion_digest
-                    or row["local_queue_id"] != body.local_queue_id
-                ):
-                    raise ConflictError("local custody was already asserted with different bytes")
+                if row["local_queue_id"] != body.local_queue_id:
+                    raise ConflictError(
+                        "local custody was already asserted with different bytes"
+                    )
+                if row["custody_assertion_digest"] != assertion_digest:
+                    if row["state"] != "local_custody":
+                        raise ConflictError(
+                            "local custody was already asserted with different bytes"
+                        )
+                    connection.execute(
+                        """UPDATE supervisor_executions
+                              SET custody_assertion_digest=?,updated_at=?
+                            WHERE event_id=? AND recipient_harness_id=?
+                              AND state='local_custody'""",
+                        (
+                            assertion_digest,
+                            now,
+                            authorization.event_id,
+                            actor.harness_id,
+                        ),
+                    )
+                    self.store.append_audit(
+                        connection,
+                        {
+                            "action": "supervisor.local_custody.reasserted",
+                            "actor": actor.audit_view(),
+                            "authorization_digest": row["authorization_digest"],
+                            "event_id": authorization.event_id,
+                            "local_queue_id": body.local_queue_id,
+                            "obligation_id": body.obligation_id,
+                        },
+                    )
                 return {
                     "custody_receipt_id": row["custody_receipt_id"],
                     "duplicate": True,
@@ -600,8 +694,9 @@ class SupervisorExecutionService:
                     owner_actor=actor,
                     detail={
                         "authorization_digest": row["authorization_digest"],
-                        "cursor": body.cursor,
+                        "cursor": recipient_cursor,
                         "local_queue_id": body.local_queue_id,
+                        "obligation_id": body.obligation_id,
                         "schema": "agentnet.supervisor.local-custody.v1",
                     },
                     now=now,
@@ -635,6 +730,7 @@ class SupervisorExecutionService:
                     "custody_receipt_id": custody_receipt_id,
                     "delivery_receipt_id": delivery_receipt["receipt_id"],
                     "event_id": authorization.event_id,
+                    "obligation_id": body.obligation_id,
                 },
             )
             return {
@@ -667,12 +763,19 @@ class SupervisorExecutionService:
         assertion = {
             "schema": "agentnet.supervisor.task-payload-release.request.v1",
             "authorization": authorization.model_dump(mode="json"),
-            "cursor": body.cursor,
+            "obligation_id": body.obligation_id,
             "local_queue_id": body.local_queue_id,
         }
         request_digest = canonical_digest(assertion)
         response: dict[str, Any]
         with self.store.transaction() as connection:
+            obligation_event = self._require_obligation_execution_binding(
+                connection,
+                actor=actor,
+                obligation_id=body.obligation_id,
+                authorization=authorization,
+                now=now,
+            )
             execution = self._execution_row(
                 connection,
                 event_id=authorization.event_id,
@@ -715,7 +818,7 @@ class SupervisorExecutionService:
             if event_row is None:
                 raise AuthorizationError("task payload release is not visible")
             if (
-                int(event_row["cursor"]) != body.cursor
+                int(event_row["cursor"]) != int(obligation_event["cursor"])
                 or event_row["event_type"] != EventType.TASK_ASSIGNMENT.value
                 or event_row["current_fact"] != DeliveryFact.RECIPIENT_COMMITTED.value
                 or event_row["envelope_digest"] != execution["envelope_digest"]
@@ -1125,6 +1228,7 @@ def create_supervisor_routes(
             harness_id=actor.harness_id,
             pid=parsed.pid,
             session_id=parsed.session_id,
+            actor=actor,
             expected_process_start_time=parsed.process_start_time,
             expected_process_measurement=parsed.process_measurement,
         )

@@ -167,3 +167,99 @@ def test_directory_rejects_harness_scoped_visibility_and_remote_plain_http(store
         visible_to_principal_ids=(actor.principal_id,),
     )
     assert loopback.attributes["url"].startswith("http://127.0.0.1")
+
+
+def test_recipient_listing_returns_only_actor_visible_same_domain_exact_harness_rows(
+    store, identity_factory
+) -> None:
+    viewer, _ = identity_factory()
+    hidden_principal, _ = identity_factory()
+    partner, _ = identity_factory(domain="partner.example")
+    service = DirectoryService(store)
+    policy = LocalConformancePolicyEngine(store)
+    expires_at = int(time.time()) + 600
+    records = (
+        (
+            viewer,
+            DirectoryRecord(
+                record_id="agent:visible-recipient",
+                record_type="agent",
+                domain_id=viewer.domain_id,
+                epoch=1,
+                attributes={"harness_id": viewer.harness_id},
+                visible_to_principal_ids=(viewer.principal_id,),
+                expires_at=expires_at,
+            ),
+        ),
+        (
+            hidden_principal,
+            DirectoryRecord(
+                record_id="agent:hidden-recipient",
+                record_type="agent",
+                domain_id=hidden_principal.domain_id,
+                epoch=1,
+                attributes={"harness_id": hidden_principal.harness_id},
+                visible_to_principal_ids=(hidden_principal.principal_id,),
+                expires_at=expires_at,
+            ),
+        ),
+        (
+            partner,
+            DirectoryRecord(
+                record_id="agent:cross-domain-recipient",
+                record_type="agent",
+                domain_id=partner.domain_id,
+                epoch=1,
+                attributes={"harness_id": partner.harness_id},
+                visible_to_principal_ids=(viewer.principal_id,),
+                expires_at=expires_at,
+            ),
+        ),
+        (
+            viewer,
+            DirectoryRecord(
+                record_id="agent:missing-exact-harness",
+                record_type="agent",
+                domain_id=viewer.domain_id,
+                epoch=1,
+                attributes={"display_name": "Not an exact endpoint"},
+                visible_to_principal_ids=(viewer.principal_id,),
+                expires_at=expires_at,
+            ),
+        ),
+    )
+    for publisher, record in records:
+        service.publish(
+            record,
+            authority=publish_authority(policy, publisher, record),
+        )
+
+    assert service.list_recipient_records(viewer) == (records[0][1],)
+
+
+@pytest.mark.parametrize(
+    "aliases",
+    [
+        ["alias"] * 33,
+        ["Night queue", " night   QUEUE "],
+        ["safe", 7],
+        ["unsafe\nalias"],
+    ],
+)
+def test_directory_rejects_unbounded_or_noncanonical_approved_aliases(
+    identity_factory, aliases
+) -> None:
+    actor, _ = identity_factory()
+    with pytest.raises(ValueError, match="approved aliases"):
+        DirectoryRecord(
+            record_id="agent:invalid-aliases",
+            record_type="agent",
+            domain_id=actor.domain_id,
+            epoch=1,
+            attributes={
+                "harness_id": actor.harness_id,
+                "approved_aliases": aliases,
+            },
+            visible_to_principal_ids=(actor.principal_id,),
+            expires_at=int(time.time()) + 600,
+        )

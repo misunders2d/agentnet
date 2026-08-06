@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from importlib.metadata import version as package_version
@@ -30,6 +31,7 @@ from agentnet.authorization.bootstrap_plan_service import (
     ExactBootstrapHarnessResolver,
 )
 from agentnet.authorization.communication_scope_service import (
+    CollaborationScopeService,
     CommunicationScopeService,
     ExactCommunicationHarnessResolver,
 )
@@ -46,6 +48,7 @@ from agentnet.authorization.policy import (
 )
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.discovery.directory import DirectoryService
+from agentnet.discovery.recipient_resolver import AuthorizedRecipientResolver
 from agentnet.effects.reservations import (
     EffectExecutionEvidence,
     EffectReconciliationEvidence,
@@ -79,6 +82,7 @@ from agentnet.identity.domains import DomainRegistry
 from agentnet.identity.enrollment import BindingAssurance, EnrollmentService
 from agentnet.identity.invitation_oidc import InternalInvitationOIDCCoordinator
 from agentnet.identity.invitations import InternalInvitationService
+from agentnet.identity.invitation_links import InvitationLinkService
 from agentnet.identity.oidc import (
     OIDCEnrollmentCoordinator,
     OIDCProvider,
@@ -97,6 +101,7 @@ from agentnet.operations.config import (
     RuntimeProfile,
 )
 from agentnet.operations.authority_inspection import AuthorityInspectionService
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.operations.incident import DomainIncidentService
 from agentnet.operations.outage import HealthProvider, OutageGate
 from agentnet.operations.quotas import QuotaService
@@ -139,6 +144,63 @@ from agentnet.storage.backend import StoreBackend
 from agentnet.storage.postgres import PostgreSQLStore, is_verified_postgresql_store
 from agentnet.storage.recovery import probe_filesystem_artifact_recovery
 from agentnet.storage.sqlite import SQLiteStore
+
+
+_SYNTHETIC_C0_AUTHORIZATION_CONTEXT_SCHEMA = (
+    "agentnet.synthetic-c0.authorization-context.v1"
+)
+_SYNTHETIC_C0_LANE_MARKER = "local_conformance_deterministic_only"
+_SYNTHETIC_C0_RETENTION_CEILING_SECONDS = 86_400
+
+
+def _synthetic_c0_authorization_context(
+    *,
+    domain_id: str,
+    sender_harness_id: str,
+    recipient_harness_ids: tuple[str, ...],
+    policy_revision: int,
+    domain_revocation_epoch: int,
+) -> dict[str, Any]:
+    """Derive a non-authoritative reserved context for one synthetic lane."""
+
+    scope_id = (
+        "synthetic-c0:"
+        + str(
+            uuid5(
+                NAMESPACE_URL,
+                canonical_json(
+                    {
+                        "schema": "agentnet.synthetic-c0.scope-id.v1",
+                        "domain_id": domain_id,
+                        "sender_harness_id": sender_harness_id,
+                    }
+                ).decode("utf-8"),
+            )
+        )
+    )
+    revision = 1
+    recipients = sorted(recipient_harness_ids)
+    digest_preimage = {
+        "schema": _SYNTHETIC_C0_AUTHORIZATION_CONTEXT_SCHEMA,
+        "domain_id": domain_id,
+        "sender_harness_id": sender_harness_id,
+        "collaboration_scope_id": scope_id,
+        "collaboration_scope_revision": revision,
+        "collaboration_scope_policy_revision": policy_revision,
+        "collaboration_scope_domain_revocation_epoch": domain_revocation_epoch,
+        "collaboration_scope_member_harness_ids": recipients,
+        "classification": Classification.C0_PUBLIC.value,
+        "lane_marker": _SYNTHETIC_C0_LANE_MARKER,
+        "retention_ceiling_seconds": _SYNTHETIC_C0_RETENTION_CEILING_SECONDS,
+    }
+    return {
+        "collaboration_scope_id": scope_id,
+        "collaboration_scope_revision": revision,
+        "collaboration_scope_policy_revision": policy_revision,
+        "collaboration_scope_domain_revocation_epoch": domain_revocation_epoch,
+        "collaboration_scope_member_harness_ids": recipients,
+        "collaboration_scope_digest": canonical_digest(digest_preimage),
+    }
 
 
 class CommunicationCore:
@@ -231,8 +293,11 @@ class CommunicationCore:
             store,
             evidence_verifier=self.approval_verifier,
         )
+        self.collaboration_scopes = CollaborationScopeService(store)
+        self.endpoint_lifecycle = EndpointLifecycleService(store)
         self.mailboxes = MailboxService(
             store,
+            collaboration_scopes=self.collaboration_scopes,
             revocation_policy=config.policies.revocation,
             admission=self.quotas,
             provenance=self.provenance,
@@ -260,17 +325,23 @@ class CommunicationCore:
         self.grants = self.policy.grants
         self.assignments = AssignmentService(
             store,
+            collaboration_scopes=self.collaboration_scopes,
             mailbox=self.mailboxes,
             policy=self.policy,
             approval_verifier=self.approval_verifier,
             attenuation_policy=config.policies.attenuation,
             outage_gate=self.outage,
         )
-        self.response_obligations = ResponseObligationService(store, self.policy)
+        self.response_obligations = ResponseObligationService(
+            store,
+            self.policy,
+            self.collaboration_scopes,
+        )
         self.conversations = ConversationService(
             store,
             self.policy,
             self.mailboxes,
+            collaboration_scopes=self.collaboration_scopes,
             assignments=self.assignments,
             obligations=self.response_obligations,
             retention_days=config.policies.operations.retention_days,
@@ -286,6 +357,7 @@ class CommunicationCore:
             )
         self.rooms = RoomService(
             store,
+            collaboration_scopes=self.collaboration_scopes,
             mls_provider=mls_provider,
             mls_adoption=mls_adoption,
             governance_policy=config.policies.rooms,
@@ -295,6 +367,11 @@ class CommunicationCore:
         self.room_governance = RoomGovernance(store, policy=config.policies.rooms)
         self.presence = PresenceService(store)
         self.directory = DirectoryService(store)
+        self.recipient_resolver = AuthorizedRecipientResolver(
+            scopes=self.collaboration_scopes,
+            directory=self.directory,
+            store=store,
+        )
         federation_trust = config.federation_trust
         self.federation = FederationService(
             store,
@@ -516,10 +593,16 @@ class CommunicationCore:
         self.console_mutations: ConsoleMutationService | None = None
         self.console_approval_service_client: ApprovalServiceClient | None = None
         self.sponsored_enrollment: SponsoredEnrollmentService | None = None
+        self.invitation_links: InvitationLinkService | None = None
         if config.features.admin_console:
             console = config.admin_console
             if console is None or console.approval_service is None:  # pragma: no cover - config invariant
                 raise GateBlocked("admin_console", "admin console configuration is unavailable")
+            invitation_links = InvitationLinkService(
+                store,
+                public_base_url=f"{console.public_origin.rstrip('/')}/join",
+            )
+            self.invitation_links = invitation_links
             if self.approval_verifier is None:
                 raise GateBlocked(
                     "approval_trust",
@@ -610,6 +693,7 @@ class CommunicationCore:
             )
             self.console_mutations = ConsoleMutationService(
                 store=store,
+                invitation_links=invitation_links,
                 approval_client=console_approval,
                 require=self._require_console_authority,
                 harness_revocations=console_harness_revocations,
@@ -907,53 +991,410 @@ class CommunicationCore:
 
         This method cannot carry a corporate entitlement, C1/C2/C3 data, room
         action, task, grant, external sink, or effect. It is intentionally not
-        exposed by the HTTP/MCP bindings.
+        exposed by the HTTP/MCP bindings. The authorization context is a
+        reserved, non-authoritative local-lane binding derived only from current
+        store state; it is never persisted as a collaboration scope.
         """
         if self.config.profile is not RuntimeProfile.LOCAL_CONFORMANCE:
             raise GateBlocked("G06/G07", "synthetic message lane is local-conformance only")
-        if actor.binding_assurance != "lab" or actor.harness_id is None:
-            raise AuthorizationError("synthetic lane requires the lab actor profile")
-        actor_row = self.store.fetch_one(
-            """
-            SELECT h.status,d.status AS domain_status,d.policy_revision
-              FROM harnesses AS h
-              JOIN domains AS d ON d.domain_id=h.domain_id
-             WHERE h.harness_id=? AND h.domain_id=?
-            """,
-            (actor.harness_id, actor.domain_id),
-        )
         if (
-            actor_row is None
-            or actor_row["status"] != "deterministic_only"
-            or actor_row["domain_status"] != "active"
+            actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+            or actor.binding_assurance != "lab"
+            or actor.domain_id != self.config.domain_id
+            or actor.principal_id is None
+            or actor.harness_id is None
+            or actor.credential_id is None
         ):
-            raise AuthorizationError("synthetic lane requires deterministic-only harness state")
+            raise AuthorizationError("synthetic lane requires the exact lab actor profile")
+        if "authorization_context" in payload:
+            raise AuthorizationError(
+                "synthetic lane payload cannot supply authorization_context"
+            )
         if payload.get("synthetic") is not True:
             raise AuthorizationError("synthetic lane requires an explicit synthetic marker")
-        recipient_rows = self.store.fetch_all(
-            f"SELECT harness_id,status FROM harnesses WHERE harness_id IN ({','.join('?' for _ in recipients)})",
-            tuple(recipients),
-        ) if recipients else []
-        if len(recipient_rows) != len(recipients) or any(row["status"] != "deterministic_only" for row in recipient_rows):
-            raise AuthorizationError("synthetic lane recipients must be local deterministic-only harnesses")
-        synthetic_workload = VerifiedActor(
-            kind=ActorKind.WORKLOAD,
-            domain_id=actor.domain_id,
-            workload_id=f"synthetic-lab-mailbox:{actor.harness_id}",
-            binding_assurance="synthetic_lab",
-        )
-        event = new_event(
-            domain_id=actor.domain_id,
-            actor=synthetic_workload,
-            event_type=EventType.MESSAGE,
-            classification=Classification.C0_PUBLIC,
-            payload=payload,
-            idempotency_key=idempotency_key,
-            recipients=recipients,
-            retention_delete_at=datetime.now(UTC) + timedelta(days=1),
-            policy_revision=int(actor_row["policy_revision"]),
-        )
-        return self.mailboxes.accept(event)
+        if not recipients or len(set(recipients)) != len(recipients):
+            raise AuthorizationError(
+                "synthetic lane recipients must be exact unique harnesses"
+            )
+
+        now = int(time.time())
+        with self.store.transaction(immediate=True) as connection:
+            actor_row = connection.execute(
+                """
+                SELECT h.status AS harness_status,
+                       h.binding_assurance AS harness_binding_assurance,
+                       h.credential_epoch AS harness_credential_epoch,
+                       p.status AS principal_status,
+                       d.status AS domain_status,
+                       d.policy_revision,
+                       d.revocation_epoch AS domain_revocation_epoch,
+                       c.status AS credential_status,
+                       c.epoch AS credential_epoch,
+                       c.not_before AS credential_not_before,
+                       c.expires_at AS credential_expires_at
+                  FROM harnesses AS h
+                  JOIN principals AS p
+                    ON p.principal_id=h.principal_id
+                   AND p.domain_id=h.domain_id
+                  JOIN domains AS d ON d.domain_id=h.domain_id
+                  JOIN credentials AS c
+                    ON c.credential_id=?
+                   AND c.harness_id=h.harness_id
+                   AND c.epoch=h.credential_epoch
+                 WHERE h.harness_id=?
+                   AND h.domain_id=?
+                   AND h.principal_id=?
+                """,
+                (
+                    actor.credential_id,
+                    actor.harness_id,
+                    actor.domain_id,
+                    actor.principal_id,
+                ),
+            ).fetchone()
+            if (
+                actor_row is None
+                or actor_row["harness_status"] != "deterministic_only"
+                or actor_row["harness_binding_assurance"] != "lab"
+                or int(actor_row["harness_credential_epoch"])
+                != actor.credential_epoch
+                or actor_row["principal_status"] != "active"
+                or actor_row["domain_status"] != "active"
+                or actor_row["credential_status"] != "active"
+                or int(actor_row["credential_epoch"]) != actor.credential_epoch
+                or int(actor_row["credential_not_before"]) > now
+                or int(actor_row["credential_expires_at"]) <= now
+            ):
+                raise AuthorizationError(
+                    "synthetic lane requires current deterministic-only harness state"
+                )
+
+            placeholders = ",".join("?" for _ in recipients)
+            recipient_rows = connection.execute(
+                f"""
+                SELECT h.harness_id,h.status,h.binding_assurance,
+                       p.status AS principal_status
+                  FROM harnesses AS h
+                  JOIN principals AS p
+                    ON p.principal_id=h.principal_id
+                   AND p.domain_id=h.domain_id
+                 WHERE h.domain_id=?
+                   AND h.harness_id IN ({placeholders})
+                   AND EXISTS (
+                       SELECT 1
+                         FROM credentials AS c
+                        WHERE c.harness_id=h.harness_id
+                          AND c.epoch=h.credential_epoch
+                          AND c.status='active'
+                          AND c.not_before<=?
+                          AND c.expires_at>?
+                   )
+                 ORDER BY h.harness_id
+                """,
+                (actor.domain_id, *recipients, now, now),
+            ).fetchall()
+            if len(recipient_rows) != len(recipients) or any(
+                row["status"] != "deterministic_only"
+                or row["binding_assurance"] != "lab"
+                or row["principal_status"] != "active"
+                for row in recipient_rows
+            ):
+                raise AuthorizationError(
+                    "synthetic lane recipients must be current local "
+                    "deterministic-only lab harnesses"
+                )
+
+            authorization_context = _synthetic_c0_authorization_context(
+                domain_id=actor.domain_id,
+                sender_harness_id=actor.harness_id,
+                recipient_harness_ids=recipients,
+                policy_revision=int(actor_row["policy_revision"]),
+                domain_revocation_epoch=int(
+                    actor_row["domain_revocation_epoch"]
+                ),
+            )
+            synthetic_workload = VerifiedActor(
+                kind=ActorKind.WORKLOAD,
+                domain_id=actor.domain_id,
+                workload_id=f"synthetic-lab-mailbox:{actor.harness_id}",
+                binding_assurance="synthetic_lab",
+            )
+            event = new_event(
+                domain_id=actor.domain_id,
+                actor=synthetic_workload,
+                event_type=EventType.MESSAGE,
+                classification=Classification.C0_PUBLIC,
+                payload=payload
+                | {"authorization_context": authorization_context},
+                idempotency_key=idempotency_key,
+                recipients=recipients,
+                retention_delete_at=datetime.now(UTC)
+                + timedelta(
+                    seconds=_SYNTHETIC_C0_RETENTION_CEILING_SECONDS
+                ),
+                policy_revision=int(actor_row["policy_revision"]),
+            )
+            return self.mailboxes._accept_in_transaction(
+                connection,
+                event,
+                now=now,
+            )
+
+    def reconcile_synthetic_mailbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        after_cursor: int = 0,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Read only exact reserved synthetic C0 custody in local conformance."""
+
+        if self.config.profile is not RuntimeProfile.LOCAL_CONFORMANCE:
+            raise GateBlocked(
+                "G06/G07",
+                "synthetic mailbox reconciliation is local-conformance only",
+            )
+        if (
+            actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+            or actor.binding_assurance != "lab"
+            or actor.domain_id != self.config.domain_id
+            or actor.principal_id is None
+            or actor.harness_id is None
+            or actor.credential_id is None
+        ):
+            raise AuthorizationError(
+                "synthetic mailbox requires the exact lab recipient actor"
+            )
+        if after_cursor < 0 or limit < 1 or limit > 1_000:
+            raise ValidationError(
+                "synthetic mailbox cursor or limit is outside the supported profile"
+            )
+
+        result: list[dict[str, Any]] = []
+        now = int(time.time())
+        scan_cursor = after_cursor
+        batch_limit = max(100, min(4_000, limit * 4))
+        with self.store.transaction(immediate=True) as connection:
+            recipient_actor_row = connection.execute(
+                """
+                SELECT h.status AS harness_status,
+                       h.binding_assurance,
+                       h.credential_epoch AS harness_credential_epoch,
+                       p.status AS principal_status,
+                       d.status AS domain_status,
+                       c.status AS credential_status,
+                       c.epoch AS credential_epoch,
+                       c.not_before,
+                       c.expires_at
+                  FROM harnesses AS h
+                  JOIN principals AS p
+                    ON p.principal_id=h.principal_id
+                   AND p.domain_id=h.domain_id
+                  JOIN domains AS d ON d.domain_id=h.domain_id
+                  JOIN credentials AS c
+                    ON c.credential_id=?
+                   AND c.harness_id=h.harness_id
+                   AND c.epoch=h.credential_epoch
+                 WHERE h.harness_id=?
+                   AND h.domain_id=?
+                   AND h.principal_id=?
+                """,
+                (
+                    actor.credential_id,
+                    actor.harness_id,
+                    actor.domain_id,
+                    actor.principal_id,
+                ),
+            ).fetchone()
+            if (
+                recipient_actor_row is None
+                or recipient_actor_row["harness_status"]
+                != "deterministic_only"
+                or recipient_actor_row["binding_assurance"] != "lab"
+                or int(recipient_actor_row["harness_credential_epoch"])
+                != actor.credential_epoch
+                or recipient_actor_row["principal_status"] != "active"
+                or recipient_actor_row["domain_status"] != "active"
+                or recipient_actor_row["credential_status"] != "active"
+                or int(recipient_actor_row["credential_epoch"])
+                != actor.credential_epoch
+                or int(recipient_actor_row["not_before"]) > now
+                or int(recipient_actor_row["expires_at"]) <= now
+            ):
+                raise AuthorizationError(
+                    "synthetic mailbox requires a current deterministic-only "
+                    "lab recipient"
+                )
+            while len(result) < limit:
+                rows = connection.execute(
+                    """SELECT e.*,r.cursor,r.current_fact FROM recipients AS r
+                         JOIN events AS e ON e.event_id=r.event_id
+                        WHERE r.recipient_id=? AND r.cursor>?
+                        ORDER BY r.cursor LIMIT ?""",
+                    (actor.harness_id, scan_cursor, batch_limit),
+                ).fetchall()
+                if not rows:
+                    break
+                for row in rows:
+                    scan_cursor = int(row["cursor"])
+                    try:
+                        actor_metadata = json.loads(str(row["actor_json"]))
+                    except (TypeError, ValueError):
+                        continue
+                    if (
+                        not isinstance(actor_metadata, dict)
+                        or actor_metadata.get("kind") != ActorKind.WORKLOAD.value
+                        or actor_metadata.get("binding_assurance")
+                        != "synthetic_lab"
+                    ):
+                        continue
+                    event, stored_payload = (
+                        self.mailboxes._validated_event_and_payload(
+                            row,
+                            connection=connection,
+                        )
+                    )
+                    if (
+                        event.actor.kind is not ActorKind.WORKLOAD
+                        or event.actor.binding_assurance != "synthetic_lab"
+                    ):
+                        continue
+
+                    workload_id = event.actor.workload_id
+                    workload_prefix = "synthetic-lab-mailbox:"
+                    if (
+                        not isinstance(workload_id, str)
+                        or not workload_id.startswith(workload_prefix)
+                        or not workload_id.removeprefix(workload_prefix)
+                        or event.domain_id != actor.domain_id
+                        or actor.harness_id not in event.recipients
+                        or event.event_type is not EventType.MESSAGE
+                        or event.classification is not Classification.C0_PUBLIC
+                        or stored_payload.get("synthetic") is not True
+                        or event.room_id is not None
+                        or event.task_id is not None
+                        or event.effect_deadline is not None
+                        or event.released_artifacts
+                        or event.legal_hold
+                        or event.retention_delete_at is None
+                    ):
+                        raise AuthorizationError(
+                            "synthetic mailbox entry is not visible"
+                        )
+                    retention_seconds = (
+                        event.retention_delete_at - event.created_at
+                    ).total_seconds()
+                    if (
+                        retention_seconds < 0
+                        or retention_seconds
+                        > _SYNTHETIC_C0_RETENTION_CEILING_SECONDS
+                    ):
+                        raise AuthorizationError(
+                            "synthetic mailbox entry is not visible"
+                        )
+
+                    authorization_context = (
+                        self.mailboxes._collaboration_context(stored_payload)
+                    )
+                    sender_harness_id = workload_id.removeprefix(
+                        workload_prefix
+                    )
+                    expected_context = _synthetic_c0_authorization_context(
+                        domain_id=event.domain_id,
+                        sender_harness_id=sender_harness_id,
+                        recipient_harness_ids=event.recipients,
+                        policy_revision=event.policy_revision,
+                        domain_revocation_epoch=int(
+                            authorization_context[
+                                "collaboration_scope_domain_revocation_epoch"
+                            ]
+                        ),
+                    )
+                    if authorization_context != expected_context:
+                        raise AuthorizationError(
+                            "synthetic mailbox entry is not visible"
+                        )
+
+                    sender_row = connection.execute(
+                        """
+                        SELECT h.status AS harness_status,
+                               h.binding_assurance,
+                               p.status AS principal_status,
+                               d.status AS domain_status,
+                               d.policy_revision,
+                               d.revocation_epoch
+                          FROM harnesses AS h
+                          JOIN principals AS p
+                            ON p.principal_id=h.principal_id
+                           AND p.domain_id=h.domain_id
+                          JOIN domains AS d ON d.domain_id=h.domain_id
+                         WHERE h.harness_id=?
+                           AND h.domain_id=?
+                           AND EXISTS (
+                               SELECT 1 FROM credentials AS c
+                                WHERE c.harness_id=h.harness_id
+                                  AND c.epoch=h.credential_epoch
+                                  AND c.status='active'
+                                  AND c.not_before<=?
+                                  AND c.expires_at>?
+                           )
+                        """,
+                        (sender_harness_id, event.domain_id, now, now),
+                    ).fetchone()
+                    if (
+                        sender_row is None
+                        or sender_row["harness_status"] != "deterministic_only"
+                        or sender_row["binding_assurance"] != "lab"
+                        or sender_row["principal_status"] != "active"
+                        or sender_row["domain_status"] != "active"
+                        or int(sender_row["policy_revision"])
+                        != event.policy_revision
+                        or int(sender_row["revocation_epoch"])
+                        != authorization_context[
+                            "collaboration_scope_domain_revocation_epoch"
+                        ]
+                    ):
+                        raise AuthorizationError(
+                            "synthetic mailbox entry is not visible"
+                        )
+                    self.mailboxes._require_current_recipient(
+                        connection,
+                        actor=actor,
+                        recipient_id=actor.harness_id,
+                        event_domain_id=event.domain_id,
+                        policy_revision=event.policy_revision,
+                        now=now,
+                    )
+                    provenance = self.mailboxes._event_provenance_reference(
+                        event,
+                        connection=connection,
+                    )
+                    event_metadata = event.model_dump(
+                        mode="json",
+                        exclude={"payload"},
+                        exclude_none=True,
+                    )
+                    result.append(
+                        {
+                            "cursor": row["cursor"],
+                            "fact": row["current_fact"],
+                            "event": event_metadata,
+                            "envelope_digest": row["envelope_digest"],
+                            "response_obligation": None,
+                            **self.mailboxes._generic_payload_view(
+                                row,
+                                event=event,
+                                payload=stored_payload,
+                                provenance=provenance,
+                                now=now,
+                            ),
+                        }
+                    )
+                    if len(result) >= limit:
+                        break
+                if len(rows) < batch_limit:
+                    break
+        return result
 
     def grant_local_entitlement(self, actor: VerifiedActor, *, action: str, resource: str = "*") -> HumanEntitlement:
         if self.config.profile is not RuntimeProfile.LOCAL_CONFORMANCE or actor.principal_id is None:
@@ -1254,6 +1695,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         recipients: tuple[str, ...],
         payload: dict[str, Any],
         idempotency_key: str,
@@ -1268,10 +1710,26 @@ class CommunicationCore:
         try:
             if not recipients:
                 raise ValidationError("at least one recipient is required")
+            if "authorization_context" in payload:
+                raise ValidationError("message payload uses a reserved authorization context field")
             self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
             recipient_limit = self.config.policies.operations.per_message_recipient_limit
             if len(recipients) > recipient_limit:
                 raise AuthorizationError("recipient fanout exceeds the configured secure policy limit")
+            collaboration_action = "room.send" if room_id is not None else "message.send"
+            collaboration_resource = (
+                f"room:{room_id}"
+                if room_id is not None
+                else f"conversation:{conversation_id or 'direct'}"
+            )
+            collaboration_scope = self.collaboration_scopes.require(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action=collaboration_action,
+                resource=collaboration_resource,
+                target_harness_ids=recipients,
+                classification=classification,
+            )
             resource = room_id or conversation_id or "direct"
             decision = self._require(
                 actor=actor,
@@ -1285,6 +1743,8 @@ class CommunicationCore:
                     "released_artifact_count": len(released_artifacts),
                 },
             )
+            if decision.policy_revision != collaboration_scope.policy_revision:
+                raise AuthorizationError("message policy and collaboration scope revisions differ")
             if classification is Classification.C3_SEALED and (
                 room_id is None
                 or not self.config.features.sealed_rooms
@@ -1305,12 +1765,17 @@ class CommunicationCore:
                 )
 
             def build_event(room_snapshot: dict[str, Any] | None) -> Any:
+                authorization_context = (
+                    collaboration_scope.authorization_context()
+                    if room_snapshot is None
+                    else room_snapshot["authorization_context"]
+                )
                 return new_event(
                     domain_id=actor.domain_id,
                     actor=actor,
                     event_type=EventType.MESSAGE,
                     classification=classification,
-                    payload=payload,
+                    payload=payload | {"authorization_context": authorization_context},
                     idempotency_key=idempotency_key,
                     recipients=recipients,
                     released_artifacts=released_artifacts,
@@ -1330,7 +1795,9 @@ class CommunicationCore:
                     ),
                     retention_delete_at=datetime.now(UTC)
                     + timedelta(days=self.config.policies.operations.retention_days),
-                    policy_revision=decision.policy_revision,
+                    policy_revision=int(
+                        authorization_context["collaboration_scope_policy_revision"]
+                    ),
                 )
 
             if room_id is not None:
@@ -1340,6 +1807,7 @@ class CommunicationCore:
                     room_snapshot = self.rooms.authorize_send_in_transaction(
                         connection,
                         actor=actor,
+                        collaboration_scope_id=collaboration_scope_id,
                         room_id=room_id,
                         recipients=recipients,
                         classification=classification,
@@ -1372,6 +1840,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         conversation_id: str,
         member_harness_ids: tuple[str, ...],
         classification: Classification = Classification.C1_INTERNAL,
@@ -1387,6 +1856,7 @@ class CommunicationCore:
         )
         return self.conversations.create(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             conversation_id=conversation_id,
             member_harness_ids=member_harness_ids,
             classification=classification,
@@ -1396,6 +1866,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         recipients: tuple[str, ...],
         conversation_id: str,
         thread_id: str,
@@ -1413,6 +1884,7 @@ class CommunicationCore:
         )
         return self.conversations.post(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             recipients=recipients,
             conversation_id=conversation_id,
             thread_id=thread_id,
@@ -1424,6 +1896,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         conversation_id: str,
         thread_id: str,
         limit: int = 100,
@@ -1431,6 +1904,7 @@ class CommunicationCore:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
         return self.conversations.thread(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             conversation_id=conversation_id,
             thread_id=thread_id,
             limit=limit,
@@ -1448,6 +1922,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         obligation_id: str,
         to_state: str,
         reason: str = "recipient_update",
@@ -1457,6 +1932,7 @@ class CommunicationCore:
         self._consume_obligation_mutation_quota(actor)
         return self.response_obligations.transition(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             obligation_id=obligation_id,
             to_state=to_state,
             reason=reason,
@@ -1467,6 +1943,7 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         obligation_id: str,
         reason_code: str = "requester_canceled",
         expected_revision: int | None = None,
@@ -1475,6 +1952,7 @@ class CommunicationCore:
         self._consume_obligation_mutation_quota(actor)
         return self.response_obligations.cancel(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             obligation_id=obligation_id,
             reason_code=reason_code,
             expected_revision=expected_revision,
@@ -1484,25 +1962,36 @@ class CommunicationCore:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         limit: int = 100,
     ) -> dict[str, Any]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
         self._consume_obligation_mutation_quota(actor)
-        return self.response_obligations.reconcile(actor=actor, limit=limit)
+        return self.response_obligations.reconcile(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            limit=limit,
+        )
 
     def response_obligation(
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         obligation_id: str,
     ) -> dict[str, Any]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
-        return self.response_obligations.get(actor=actor, obligation_id=obligation_id)
+        return self.response_obligations.get(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            obligation_id=obligation_id,
+        )
 
     def response_obligation_list(
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         role: str = "any",
         states: tuple[str, ...] = (),
         limit: int = 100,
@@ -1512,16 +2001,32 @@ class CommunicationCore:
             raise ValidationError("obligation list role is invalid")
         return self.response_obligations.list_for(
             actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
             role=role,  # type: ignore[arg-type]
             states=states,
             limit=limit,
         )
 
-    def response_obligation_inbox(self, *, actor: VerifiedActor) -> dict[str, int]:
+    def response_obligation_inbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+    ) -> dict[str, int]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
-        return self.response_obligations.inbox(actor=actor)
+        return self.response_obligations.inbox(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+        )
 
-    def mailbox(self, *, actor: VerifiedActor, after_cursor: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+    def mailbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        after_cursor: int = 0,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
         if actor.harness_id is None:
             raise AuthorizationError("mailbox requires exact harness attribution")
@@ -1537,12 +2042,18 @@ class CommunicationCore:
             resource=actor.harness_id,
             classification=mailbox_classification,
         )
-        return self.mailboxes.reconcile(actor.harness_id, after_cursor=after_cursor, limit=limit)
+        return self.mailboxes.reconcile(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
 
     def acknowledge_mailbox(
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         event_id: str,
         envelope_digest: str,
     ) -> dict[str, Any]:
@@ -1577,6 +2088,7 @@ class CommunicationCore:
             classification=mailbox_classification,
         )
         return self.mailboxes.acknowledge(
+            collaboration_scope_id=collaboration_scope_id,
             event_id=event_id,
             recipient_id=actor.harness_id,
             envelope_digest_value=envelope_digest,
@@ -1594,6 +2106,8 @@ class CommunicationCore:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
         if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
             self._require_enrolled_server_agent_binding()
+        if "authorization_context" in payload:
+            raise ValidationError("task payload uses a reserved authorization context field")
         if released_artifacts and self.config.artifact_mode == "disabled":
             raise GateBlocked(
                 "artifacts_disabled",
@@ -1608,34 +2122,56 @@ class CommunicationCore:
                 f"agentnet:task:{request.actor.domain_id}:{request.actor.harness_id}:{idempotency_key}",
             )
         )
+        classification = max(request.data_classes, key=lambda item: item.value)
+        collaboration_scope = self.collaboration_scopes.require(
+            actor=request.actor,
+            scope_id=request.collaboration_scope_id,
+            action="task.propose",
+            resource=f"task:{event_id}",
+            target_harness_ids=(request.recipient_harness_id,),
+            classification=classification,
+        )
+        if request.policy_revision != collaboration_scope.policy_revision:
+            raise AuthorizationError("task policy and collaboration scope revisions differ")
         event = new_event(
             event_id=event_id,
             domain_id=request.actor.domain_id,
             actor=request.actor,
             event_type=EventType.TASK_ASSIGNMENT,
-            classification=max(request.data_classes, key=lambda item: item.value),
-            payload=payload,
+            classification=classification,
+            payload=payload
+            | {"authorization_context": collaboration_scope.authorization_context()},
             idempotency_key=idempotency_key,
             recipients=(request.recipient_harness_id,),
             released_artifacts=tuple(
                 self.artifacts.require_released_binding(
                     binding,
                     domain_id=request.actor.domain_id,
-                    event_classification=max(request.data_classes, key=lambda item: item.value),
+                    event_classification=classification,
                 )
                 for binding in released_artifacts
             ),
             task_id=str(uuid5(NAMESPACE_URL, f"agentnet:task-id:{event_id}")),
             effect_deadline=request.deadline,
-            policy_revision=request.policy_revision,
+            policy_revision=collaboration_scope.policy_revision,
             retention_delete_at=datetime.now(UTC)
             + timedelta(days=self.config.policies.operations.retention_days),
         )
         return self.assignments.submit_event(request, event)
 
-    def task_proposals(self, *, actor: VerifiedActor, limit: int = 100) -> list[dict[str, Any]]:
+    def task_proposals(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
         self._require_server_agent_capability(ServerAgentCapability.OFFLINE_CUSTODY)
-        return self.assignments.pending_for_owner(actor=actor, limit=limit)
+        return self.assignments.pending_for_owner(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            limit=limit,
+        )
 
     def approve_task_proposal(
         self,

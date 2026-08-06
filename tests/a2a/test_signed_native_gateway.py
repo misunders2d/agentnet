@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -18,7 +19,19 @@ from a2a.types import (
 from google.protobuf.json_format import MessageToDict
 from starlette.applications import Starlette
 
-from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    COLLABORATION_SCOPE_REVOKE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.client import proof_headers
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.gateways.a2a import (
@@ -68,6 +81,103 @@ def template_card() -> AgentCard:
         description="signed gateway test",
         version="1",
         capabilities=AgentCapabilities(streaming=True, push_notifications=True),
+    )
+
+
+def scope_authority(
+    store,
+    *,
+    actor,
+    action: str,
+    resource: str,
+    context: dict[str, object],
+) -> IssuanceAuthority:
+    policy = LocalConformancePolicyEngine(store)
+    revision = policy.current_policy_revision(actor)
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=actor.domain_id,
+            principal_id=actor.principal_id,
+            action=action,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=actor,
+            action=action,
+            resource=resource,
+            policy_revision=revision,
+            context=context,
+        )
+    )
+    return IssuanceAuthority(actor=actor, policy_decision_id=decision.decision_id)
+
+def issue_a2a_scope(
+    store,
+    *,
+    owner,
+    recipient,
+    actions: tuple[str, ...] = ("task.accept", "task.propose"),
+    resources: tuple[str, ...] = ("task:",),
+    scopes: CollaborationScopeService | None = None,
+) -> tuple[CollaborationScopeService, CollaborationScope]:
+    scopes = scopes or CollaborationScopeService(store)
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:a2a-signed:{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((owner.harness_id, recipient.harness_id))),
+        allowed_actions=tuple(sorted(actions)),
+        allowed_resource_prefixes=tuple(sorted(resources)),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    scope = scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=scope_authority(
+            store,
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            context=scopes.issuance_request(actor=owner, proposal=proposal),
+        ),
+    )
+    return scopes, scope
+
+
+def revoke_a2a_scope(
+    store,
+    *,
+    scopes: CollaborationScopeService,
+    owner,
+    scope: CollaborationScope,
+) -> None:
+    reason = "focused_test_revocation"
+    request = scopes.revocation_request(
+        scope=scope,
+        expected_revision=scope.revision,
+        reason=reason,
+    )
+    scopes.revoke(
+        actor=owner,
+        scope_id=scope.scope_id,
+        expected_revision=scope.revision,
+        reason=reason,
+        authority=scope_authority(
+            store,
+            actor=owner,
+            action=COLLABORATION_SCOPE_REVOKE_ACTION,
+            resource=f"scope:{scope.scope_id}",
+            context=request,
+        ),
     )
 
 
@@ -140,6 +250,19 @@ async def test_signed_enrolled_peer_is_exact_idempotent_replay_safe_and_revocabl
     sender = sender.model_copy(update={"binding_assurance": "os_bound"})
     recipient = recipient.model_copy(update={"binding_assurance": "os_bound"})
     task_grant = seed_task_authority(store, sender, recipient.harness_id)
+    scopes, scope = issue_a2a_scope(
+        store,
+        owner=sender,
+        recipient=recipient,
+    )
+    _, wrong_scope = issue_a2a_scope(
+        store,
+        owner=sender,
+        recipient=recipient,
+        actions=("message.send",),
+        resources=("conversation:",),
+        scopes=scopes,
+    )
     exported_card = build_exported_agent_card(
         template_card(),
         route=route(recipient.harness_id),
@@ -147,7 +270,12 @@ async def test_signed_enrolled_peer_is_exact_idempotent_replay_safe_and_revocabl
     )
     runtime = DurableA2ARuntime(
         store=store,
-        mailbox=MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL),
+        mailbox=MailboxService(
+            store,
+            collaboration_scopes=scopes,
+            acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        ),
+        collaboration_scopes=scopes,
         policy=LocalConformancePolicyEngine(store),
         agent_card=exported_card,
         recipient_id=recipient.harness_id,
@@ -217,13 +345,49 @@ async def test_signed_enrolled_peer_is_exact_idempotent_replay_safe_and_revocabl
             "agentnetIdempotencyKey": "signed-corporate-idempotency-0001",
             "agentnetTaskGrantId": task_grant.grant_id,
             "agentnetDataClass": "C1",
+            "agentnetCollaborationScopeId": scope.scope_id,
         },
     )
     body = canonical_json(MessageToDict(request))
     headers = signed_headers(sender_key, sender, method="POST", path=path, body=body)
+    missing_scope = SendMessageRequest()
+    missing_scope.CopyFrom(request)
+    del missing_scope.metadata.fields["agentnetCollaborationScopeId"]
+    missing_scope_body = canonical_json(MessageToDict(missing_scope))
+    wrong_scope_request = SendMessageRequest()
+    wrong_scope_request.CopyFrom(request)
+    wrong_scope_request.metadata["agentnetCollaborationScopeId"] = wrong_scope.scope_id
+    wrong_scope_body = canonical_json(MessageToDict(wrong_scope_request))
 
     transport = httpx.ASGITransport(app=Starlette(routes=routes), raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as client:
+        missing = await client.post(
+            path,
+            content=missing_scope_body,
+            headers=signed_headers(
+                sender_key,
+                sender,
+                method="POST",
+                path=path,
+                body=missing_scope_body,
+            ),
+        )
+        wrong = await client.post(
+            path,
+            content=wrong_scope_body,
+            headers=signed_headers(
+                sender_key,
+                sender,
+                method="POST",
+                path=path,
+                body=wrong_scope_body,
+            ),
+        )
+        assert missing.status_code == 400, missing.text
+        assert wrong.status_code == 400, wrong.text
+        assert wrong.json()["error"]["details"][0]["reason"] == "UNSUPPORTED_OPERATION"
+        assert runtime.policy.grants.uses_for_local_conformance(task_grant.grant_id) == 0
+        assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 0
         accepted = await client.post(path, content=body, headers=headers)
         replay = await client.post(path, content=body, headers=headers)
         duplicate = await client.post(
@@ -255,6 +419,28 @@ async def test_signed_enrolled_peer_is_exact_idempotent_replay_safe_and_revocabl
         actor = json.loads(event["actor_json"])
         assert actor["principal_id"] == sender.principal_id
         assert actor["harness_id"] == sender.harness_id
+        revoke_a2a_scope(store, scopes=scopes, owner=sender, scope=scope)
+        revoked_scope_request = SendMessageRequest()
+        revoked_scope_request.CopyFrom(request)
+        revoked_scope_request.message.message_id = "signed-corporate-message-revoked-scope"
+        revoked_scope_request.metadata["agentnetIdempotencyKey"] = (
+            "signed-corporate-idempotency-revoked-scope"
+        )
+        revoked_scope_body = canonical_json(MessageToDict(revoked_scope_request))
+        revoked_scope = await client.post(
+            path,
+            content=revoked_scope_body,
+            headers=signed_headers(
+                sender_key,
+                sender,
+                method="POST",
+                path=path,
+                body=revoked_scope_body,
+            ),
+        )
+        assert revoked_scope.status_code == 400, revoked_scope.text
+        assert revoked_scope.json()["error"]["details"][0]["reason"] == "UNSUPPORTED_OPERATION"
+        assert runtime.policy.grants.uses_for_local_conformance(task_grant.grant_id) == 1
 
         store.fetch_one("SELECT 1")
         with store.transaction() as connection:
@@ -276,6 +462,7 @@ async def test_unsigned_public_gateway_request_stays_a_tainted_non_executable_pr
     identity_factory,
 ) -> None:
     recipient, _recipient_key = identity_factory(kind="pi")
+    scopes = CollaborationScopeService(store)
     exported_card = build_exported_agent_card(
         template_card(),
         route=route(recipient.harness_id),
@@ -283,7 +470,12 @@ async def test_unsigned_public_gateway_request_stays_a_tainted_non_executable_pr
     )
     runtime = DurableA2ARuntime(
         store=store,
-        mailbox=MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL),
+        mailbox=MailboxService(
+            store,
+            collaboration_scopes=scopes,
+            acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        ),
+        collaboration_scopes=scopes,
         policy=LocalConformancePolicyEngine(store),
         agent_card=exported_card,
         recipient_id=recipient.harness_id,

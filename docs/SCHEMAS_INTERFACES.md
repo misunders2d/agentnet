@@ -31,6 +31,35 @@ expiry, effect deadline, retention deletion, and legal hold are separate.
 | `MLSProvider` | unavailable until maintained stack passes | room policy/membership and visible key holders remain explicit |
 | MCP/direct IPC | official MCP; Unix peer-credential framing on Linux/macOS; protected client-PID named pipes on Windows | arguments cannot establish caller identity |
 | A2A SDK routes | official SDK 1.1.0 | public identity remains external-low-trust |
+| `EndpointLifecycleService` | schema-v7 exact endpoint row plus derived reconciliation | locator/display state never creates identity or authority; restart requires the exact actor, generation, and new process measurement |
+| `ClientSetupCoordinator` | owner-private resumable user-level setup/update | current credential is authoritative; only an opaque continuation is setup-specific durable state |
+| recipient resolver | authenticated friendly selector to one exact endpoint and current scope | zero/multiple/stale/revoked/cross-domain results deny; no sibling or last-active fallback |
+
+Corporate native A2A `message:send` ingress requires the strict request-metadata
+strings `agentnetIntent`, `agentnetIdempotencyKey`, `agentnetTaskGrantId`,
+`agentnetDataClass`, and `agentnetCollaborationScopeId`. The last field is only
+a selector for one existing immutable scope ID. It supplies neither caller
+identity nor authority: transport proof supplies the actor, the mounted route
+supplies the exact recipient, and Core resolves the selected current scope
+against those facts, the declared classification, and the deterministic
+operation resource. There is no omitted-ID default, inferred scope, sibling
+selection, or allow-all path.
+
+For messages the collaboration operation is `message.send` on
+`conversation:<context_id>` (or `conversation:direct` when no context exists).
+For tasks it is `task.propose` on `task:<deterministic_event_id>`; immediate
+queueing and later recipient approval separately require `task.accept` on the
+same task resource. These checks do not replace the existing
+`a2a.message.submit` or `a2a.task.submit` business grant, and a business grant
+does not replace collaboration scope. Core binds the resolved scope's complete
+`authorization_context()` snapshot into the immutable event payload and binds
+the same scope ID into `AssignmentRequest`. Missing, mismatched, revoked,
+expired, ambiguous, cross-domain, wrong-recipient, wrong-action, wrong-resource,
+and unsupported-class selections fail before mailbox persistence. Exact replay
+rechecks current scope without consuming the business grant again; scope
+revocation also blocks mailbox reads. Unsigned public A2A requests remain
+tainted, non-executable proposals and do not acquire scope authority from
+metadata.
 
 ## Host-local session and replay contract
 
@@ -62,6 +91,54 @@ a read-only inherited pipe on macOS, and a one-time exact-process pipe on
 Windows. Interactive `manager-run` is Linux-only until equivalent process-tree
 and filesystem containment exists elsewhere. Missing delivery acknowledgement
 fails local-binding activation.
+
+## Schema-v7 endpoint lifecycle and user setup contract
+
+`EndpointLifecycleStatus` is strict and content-free. It carries the endpoint
+ID and canonical `agentnet:<domain>:<harness-kind>:<profile-key>` locator,
+domain/principal/harness/current-credential binding, harness kind/profile,
+state, adapter generation, mailbox cursor, optional capability-root digest and
+process measurement, state reason, revision, and timestamps. The locator is not
+caller identity or authority; the service resolves it to the unique durable row
+and rechecks the exact current verified-human harness credential.
+
+`endpoint_lifecycle` permits only
+`ready_to_connect`, `waiting_for_approval`, `enrolled`, `access_ready`,
+`restart_required`, `connected`, or `blocked`. `(domain_id,harness_id)` is the
+primary key and `(domain_id,harness_kind,profile_key)` is unique. Registration
+rejects kind/profile conflicts and creates `access_ready` only from a current
+`VerifiedActor`. Activation is revision-fenced and returns
+`restart_required`. Recording connection requires the same exact actor,
+expected adapter generation, and a new 64-hex process measurement; it never
+signals the harness. A connected endpoint presented by a different process
+instance is rebound only through the audited
+`endpoint.lifecycle.process_reconnected` transition under its own verified
+harness actor and expected generation; the measurement is the exact framed
+platform/account/pid/start-time/executable digest, and an executable-only
+measurement never proves instance identity. Reconciliation may only preserve
+current state or narrow it to `blocked`.
+
+`ClientSetupResult`, `ClientSetupState`, `ClientIdentityProfile`, and
+`EnrollmentProgress` are strict Pydantic models. Setup-specific persistence is
+only `agentnet.client-setup-continuation.v1`, containing one bounded opaque
+`SecretStr` under owner-private, no-follow, atomic file custody. Existing
+identity profiles are re-read from current credentials. Multiple matching
+profiles, a completed enrollment for another harness, lost pending
+continuation, stale generation/revision, or unavailable current authority fail
+closed. `agentnet setup`, `setup status`, and `setup continue` never grant
+scope, start a Manager, or restart a harness.
+
+Friendly resolution returns one strict `ResolvedEndpoint`: exact harness ID,
+safe display metadata, and the current scope ID. Zero, ambiguous, stale,
+revoked, unauthorized, and cross-domain results share a generic
+non-enumerating failure. Canonical send freezes that endpoint/scope; the
+dispatcher re-requires the scope against exact recipients and classification,
+and `/v1/messages` rechecks it at Core. Explicit harness IDs must infer exactly
+one unambiguous current scope. The signed actor provider, not payload, supplies
+caller identity. Public receipts accept only authoritative acceptance fields
+and add proof-derived exact recipient IDs/safe metadata; unknown internal or
+projection-owned fields are rejected. An allowed offline send remains queued
+for its original exact harness.
 
 ## Approval configuration, storage, and HTTP contract
 
@@ -512,6 +589,51 @@ argument models are strict and intentionally contain no caller identity; MCP
 and direct Unix IPC derive the actor from the current supervisor-bound harness
 session. Pi exposes the same complete canonical operation set as MCP.
 
+## Cross-domain server relay packet and target-scope interface
+
+`RelayPacket` is strict `agentnet.server-relay.packet.v2` and its signature
+purpose is exactly `agentnet.server-relay.packet.v2`. The signed fields require
+`target_collaboration_scope_id` in addition to the existing exact source event,
+endpoint, peer-key epoch, target recipient/grant, guest-pairwise subject,
+ciphertext, and lifetime bindings. The source staging authority request digest
+also includes that target scope ID. The sender carries it only as an opaque
+host-issued identifier: it does not resolve, infer, substitute, or widen target
+authority. Packet v1 and a v2 packet with an omitted scope ID fail strict
+validation; the v0.1.45 relay path has no upgrade, fallback, alias, or
+mixed-version signature mode.
+
+The target derives the local event ID as
+`UUIDv5(NAMESPACE_URL, "agentnet:server-relay:" + packet_id)`, resolves the
+transport-derived host-local guest, and requires the mailbox's current
+`CollaborationScopeService` under that guest and the packet's exact recipient
+and classification. A message resolves `message.send` on
+`conversation:<source-conversation-id-or-direct>`; a task resolves
+`task.propose` on `task:<derived-local-event-id>`. The separately mandatory
+target grant/business-policy decision remains `message.send` on
+`recipient:<target-recipient-id>` with the exact relay input and mailbox output
+sinks. Relay tasks pass the same target scope ID in `AssignmentRequest`; an
+automatic queue transition still requires `task.accept` on the exact local task
+resource.
+
+Source-domain `authorization_context` is tainted input at the target boundary.
+The target removes it, inserts only the resolved target scope's immutable
+`authorization_context()`, and recomputes both local payload and envelope
+digests. The signed source packet/event digests remain provenance facts, not
+local authority. Canonical packet JSON is persisted byte-for-byte in both
+outbox and inbox; an exact replay returns prior custody without another grant
+use, while the same packet ID with different bytes conflicts.
+
+## Public invitation browser continuation
+
+The public invitation page is rendered under an opaque-origin CSP sandbox.
+Its empty `POST /join/{opaque_token}/continue` therefore accepts only the exact
+configured HTTPS origin or the browser-generated `Origin: null`; every other
+origin, host mismatch, non-form encoding, or non-empty form fails with the same
+non-enumerating unavailable response. The high-entropy one-use token is never
+rendered as page text, and continuation still requires the verified work
+account, exact candidate credential, independent approval, and current scoped
+admission before returning `restart_required`.
+
 ## Schema evolution
 
 The handshake selects the highest mutually allowed protocol/schema profile.
@@ -522,21 +644,31 @@ intermediaries never strip unknown signed fields.
 
 AgentNet's immutable first-release baseline is migration 1 and already includes
 the response-obligation, relationship-governance, and policy-exception tables.
-The current Core schema is v5: migration 2 adds protected task-payload release,
-migration 3 adds guided OIDC enrollment continuation, migration 4 adds the
-bounded C0 bootstrap-plan contract, and migration 5 adds OIDC-begin replay
-recovery plus finite current-credential renewal custody. Fresh SQLite and
-PostgreSQL stores initialize the same complete v5 catalog. Startup fails closed
-on a missing or altered
+Migration 2 adds protected task-payload release, migration 3 adds guided OIDC
+enrollment continuation, migration 4 adds the bounded C0 bootstrap-plan
+contract, migration 5 adds OIDC-begin replay recovery plus finite
+current-credential renewal custody, and migration 6 adds persistent
+same-principal communication scope plus private administration. Migration 7,
+`communication_collaboration_release`, adds `endpoint_lifecycle`,
+`collaboration_scopes`, `collaboration_scope_members`, `artifact_transfers`,
+`artifact_transfer_recipients`, `invitation_links`, and
+`invitation_link_failures`. Fresh SQLite and PostgreSQL stores initialize the
+same complete v7 catalog. Startup fails closed on a missing or altered
 migration, table, index, trigger/constraint, noncontiguous history, future
-version, or unsupported older version.
+version, or unsupported older version. The only current N/N-1 Core migration is
+an exact catalog/checksum-verified v6→v7 transition.
 
 No pre-release or differently named database is accepted as an authority
 source, and no unilateral relationship can be converted into consent. Import
 requires a reviewed non-authority export into a fresh current store followed by
-fresh exact bilateral approval. Rollback may restore only an exact verified,
-current-compatible backup; it cannot downgrade schema metadata or infer,
-preserve, or reactivate authority from unsupported bytes.
+fresh exact bilateral approval. General rollback may restore only an exact
+verified, current-compatible backup; it cannot downgrade a committed schema or
+infer, preserve, or reactivate authority from unsupported bytes. The
+`0.1.44→0.1.45` ordinary-server journal is narrower: before target-marker commit
+it may restore its exact unchanged schema-v6 source after proving every
+journal-selected protected relation digest and candidate artifact still
+matches. Process interruption retains the journal for exact resume. Target
+commit closes that downgrade path.
 
 ## Provenance and conflict interfaces
 
@@ -575,3 +707,27 @@ After fixed Core account exists, apply requires two bounded read-only PostgreSQL
 `agentnet server-agent reset --retain-external-prerequisites --confirm-package-state-removal` is the explicit destructive recovery surface. Both flags are required. It creates/acquires and validates the permanent root-only setup lock before inventory; any managed deployment state without a pre-existing package lock fails custody; exact clean-host retry may create the lock/root. It requires exact owner/group/mode/type/link custody for managed roots and files; stops/disables the renewal timer, isolated C0 responder, static renewal oneshot, Core, and Approval in dependency order; proves all five managed units inactive; rejects unexpected secret-root entries; and requires symlink-attack-resistant recursive removal. It removes only allowlisted package deployment units/state while preserving coordination lock/root, then reloads systemd even on exact retry after prior response loss. It emits `agentnet.server-setup.reset-evidence.v1`; exact retry reports `already_absent` and proves deployment-path absence, not lock/root absence. PostgreSQL, runtimes, installed package, proxy/TLS/DNS/firewall, operator inputs, and locked `agentnet`, `agentnet-approval`, and `agentnet-c0` service identities are retained. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed. Reset grants no authority, enrolls no identity, proves no durability, cannot remove external prerequisites, and is not a secret-rotation path.
 
 Apply reruns bootstrap and validates realized Core/Approval state; marker never skips it. Request-v1 writes root-only marker-v2, retaining original meaning and same-request v1→v2 migration. Request-v2 writes marker-v3, which additionally binds exact `artifact_mode`; marker-v1/v2 cannot satisfy request-v2. Both bind request, package, units, non-secret Approval/Core config digests, revision, and previous-marker digest while excluding only offline-activation enrollment labels. Marker replacement uses exact prior-byte compare-and-swap under setup lock. Marker is provenance, not health/readiness/identity/authority/durability evidence. Existing Approval policy must match exact owner OIDC and complete approver set—extra trust anchors block. Start is valid only with apply. It converges five package units: Approval and Core; an isolated `agentnet-c0` responder using systemd credential delivery; a static selector-free credential-renewal oneshot; and its hourly persistent timer. Pre-enrollment start proves responder/timer disabled and renewal oneshot inactive. Activated start rejects duplicate/non-finite managed identity-profile JSON members, strictly validates the canonical managed identity actor and current binding labels plus private-key custody/readability; database credential-to-key binding remains activation-owned. Setup evidence `identity_enrolled=true` means only that this profile/label/key validation passed—it is not database binding, authority, or business-effect proof. It starts the timer and nonterminal responder only after Core, and never recreates responder config after a signed terminal status has produced the exact owner-only terminal marker. Core configured readiness also requires a signed non-mutating Approval broker-readiness request through the configured public origin; generic health cannot substitute. That request uses explicit trust visible to CPython `ssl.create_default_context()` with certificate and hostname verification, rejects ambient `SSL_CERT_FILE`/`SSL_CERT_DIR`/`SSLKEYLOGFILE` before setup, disables HTTPX environment routing, and maps TLS setup/transport failure to sanitized broker blockers. Core health/readiness bind exact artifact mode and capability set; Approval health returns `agentnet.approval.health.v1`. Setup validates exact service role, version, origin/domain/profile/runtime identity and rejects generic HTTP 200. `operational` requires exact enrolled binding, `credential_state=current|renewal_needed`, broker readiness, and public Core readiness; pre-enrollment start reports `waiting_owner_oidc_or_passkey`. A current-package owner-only attempt marker permits interruption recovery, while pre-existing package state without exact current attempt/marker custody fails `clean_state_required`; 0.1.31 state is not migrated in the first-C0 path.
+
+For `0.1.44→0.1.45` only, setup uses
+`agentnet.server-setup.upgrade-journal.v4`. It binds the exact source marker and
+request, destination request, source/target versions, all managed unit and Core
+configuration bytes, exact systemd state, schema-v6 migration catalog,
+active server identity/credential/profile, protected relation digests, the
+exact committed v6 communication-scope image the migration must reproduce, and
+mailbox cursor. Migration creates the exact schema-v7 catalog plus one
+`restart_required` endpoint row at adapter generation 1, preserves that cursor,
+and maps every committed v6 communication scope to one active v7 collaboration
+scope. Rollback safety therefore admits exactly that migrated authority — one
+`migrated_v6_communication_scope` scope per source scope with its exact owner
+and member harnesses — and still requires every other release table to be
+empty; an extra scope, missing scope, foreign member, changed role, or a
+journal without the migrated-authority expectation fails closed. A caught
+pre-commit failure rolls back only after proving unchanged candidate state;
+interruption retains the journal for exact resume; uncertainty returns
+`setup_upgrade_conflict`. Exact target-marker realization clears the journal,
+and there is no automatic committed-target downgrade.
+
+Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
+installer/update evidence, hostile-host qualification, independent approval,
+HA/restore, production durability, and every other production/high-tier gate
+remain blocked until their separate evidence is accepted.

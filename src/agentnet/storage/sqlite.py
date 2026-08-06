@@ -78,6 +78,11 @@ from agentnet.storage.relationship_governance_schema import (
 from agentnet.storage.response_obligation_schema import (
     RESPONSE_OBLIGATION_SCHEMA,
 )
+from agentnet.storage.release_v7_schema import (
+    RELEASE_V7_SCHEMA,
+    RELEASE_V7_SCHEMA_VERSION,
+    migrate_v6_communication_scopes,
+)
 from agentnet.storage.supervisor_schema import SUPERVISOR_SCHEMA, SUPERVISOR_SCHEMA_VERSION
 from agentnet.storage.task_custody_schema import (
     TASK_CUSTODY_SCHEMA,
@@ -559,7 +564,8 @@ SCHEMA_V3 = SCHEMA_V2 + GUIDED_ENROLLMENT_SCHEMA
 SCHEMA_V4 = SCHEMA_V3 + BOOTSTRAP_PLAN_SCHEMA
 SCHEMA_V5 = SCHEMA_V4 + IDENTITY_LIFECYCLE_SCHEMA
 SCHEMA_V6 = SCHEMA_V5 + COMMUNICATION_SCOPE_TABLE_DDL + ADMIN_CONSOLE_SCHEMA
-SCHEMA = SCHEMA_V6
+SCHEMA_V7 = SCHEMA_V6 + RELEASE_V7_SCHEMA
+SCHEMA = SCHEMA_V7
 _SQLITE_MIGRATION_SQL = {
     TASK_PAYLOAD_RELEASE_SCHEMA_VERSION: TASK_PAYLOAD_RELEASE_SCHEMA,
     GUIDED_ENROLLMENT_SCHEMA_VERSION: GUIDED_ENROLLMENT_SCHEMA,
@@ -568,6 +574,7 @@ _SQLITE_MIGRATION_SQL = {
     COMMUNICATION_SCOPE_SCHEMA_VERSION: (
         COMMUNICATION_SCOPE_TABLE_DDL + ADMIN_CONSOLE_SCHEMA
     ),
+    RELEASE_V7_SCHEMA_VERSION: RELEASE_V7_SCHEMA,
 }
 
 _SCHEMA_CATALOG_QUERY = (
@@ -584,9 +591,9 @@ def _schema_catalog(connection: sqlite3.Connection) -> tuple[tuple[str, str, str
     )
 
 
-@lru_cache(maxsize=6)
+@lru_cache(maxsize=7)
 def _expected_schema_catalog(
-    schema_version: int = ADMIN_CONSOLE_SCHEMA_VERSION,
+    schema_version: int = RELEASE_V7_SCHEMA_VERSION,
 ) -> tuple[tuple[str, str, str, str], ...]:
     schemas = {
         1: SCHEMA_V1,
@@ -595,6 +602,7 @@ def _expected_schema_catalog(
         BOOTSTRAP_PLAN_SCHEMA_VERSION: SCHEMA_V4,
         IDENTITY_LIFECYCLE_SCHEMA_VERSION: SCHEMA_V5,
         COMMUNICATION_SCOPE_SCHEMA_VERSION: SCHEMA_V6,
+        RELEASE_V7_SCHEMA_VERSION: SCHEMA_V7,
     }
     schema = schemas.get(schema_version)
     if schema is None:
@@ -940,6 +948,7 @@ class SQLiteStore:
                         "SQLite migration SQL is unavailable for the exact supported upgrade",
                     ) from exc
                 connection.executescript("BEGIN IMMEDIATE;\n" + migration_sql)
+                migrate_v6_communication_scopes(connection)
                 connection.execute(
                     "UPDATE metadata SET value=? WHERE key='schema_version'",
                     (str(CURRENT_SCHEMA_VERSION),),

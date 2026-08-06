@@ -48,7 +48,11 @@ def _initialize(proxy: subprocess.Popen[str]) -> None:
     proxy.stdin.flush()
 
 
-def _tool_call(proxy: subprocess.Popen[str]) -> dict[str, object]:
+def _tool_call(
+    proxy: subprocess.Popen[str],
+    *,
+    collaboration_scope_id: str,
+) -> dict[str, object]:
     return _send(
         proxy,
         {
@@ -56,7 +60,11 @@ def _tool_call(proxy: subprocess.Popen[str]) -> dict[str, object]:
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
-                "arguments": {"after_cursor": 0, "limit": 10},
+                "arguments": {
+                    "after_cursor": 0,
+                    "collaboration_scope_id": collaboration_scope_id,
+                    "limit": 10,
+                },
                 "name": "agentnet_inbox",
             },
         },
@@ -64,6 +72,7 @@ def _tool_call(proxy: subprocess.Popen[str]) -> dict[str, object]:
 
 
 def main() -> None:
+    collaboration_scope_id = sys.argv[1]
     proxy = _launch()
     try:
         try:
@@ -100,7 +109,14 @@ def main() -> None:
             command = raw_command.strip()
             if command == "call":
                 print(
-                    json.dumps(_tool_call(proxy), separators=(",", ":"), sort_keys=True),
+                    json.dumps(
+                        _tool_call(
+                            proxy,
+                            collaboration_scope_id=collaboration_scope_id,
+                        ),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
                     flush=True,
                 )
             elif command == "restart":

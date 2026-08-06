@@ -62,6 +62,103 @@ from agentnet.storage.sqlite import SQLiteStore
 from agentnet.supervisor.integration import BackgroundHarnessIntegration
 
 
+_COLLABORATION_SCOPE_ID = "scope:task-custody-contract"
+_COLLABORATION_SCOPE_MEMBERS = (
+    "admin-harness",
+    "peer-harness",
+    "peer-second-harness",
+    "sub-harness",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskScopeSnapshot:
+    domain_id: str
+    scope_id: str = _COLLABORATION_SCOPE_ID
+    member_harness_ids: tuple[str, ...] = _COLLABORATION_SCOPE_MEMBERS
+    revision: int = 1
+    policy_revision: int = 1
+    domain_revocation_epoch: int = 1
+    state: str = "active"
+    allowed_actions: tuple[str, ...] = (
+        "message.acknowledge",
+        "message.read",
+        "task.accept",
+        "task.propose",
+    )
+    allowed_resource_prefixes: tuple[str, ...] = ("task:",)
+    allowed_classifications: tuple[Classification, ...] = (
+        Classification.C1_INTERNAL,
+        Classification.C2_RESTRICTED,
+    )
+    scope_digest: str = "b" * 64
+
+    def authorization_context(self) -> dict[str, object]:
+        return {
+            "collaboration_scope_id": self.scope_id,
+            "collaboration_scope_revision": self.revision,
+            "collaboration_scope_policy_revision": self.policy_revision,
+            "collaboration_scope_domain_revocation_epoch": self.domain_revocation_epoch,
+            "collaboration_scope_member_harness_ids": list(self.member_harness_ids),
+            "collaboration_scope_digest": self.scope_digest,
+        }
+
+
+class _TaskScopes:
+    """Exact task-only scope double for custody tests."""
+
+    @staticmethod
+    def _snapshot(actor: VerifiedActor) -> _TaskScopeSnapshot:
+        return _TaskScopeSnapshot(domain_id=actor.domain_id)
+
+    def get_for_actor(
+        self,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+    ) -> _TaskScopeSnapshot:
+        snapshot = self._snapshot(actor)
+        if (
+            scope_id != snapshot.scope_id
+            or actor.domain_id != "domain-a"
+            or actor.harness_id not in snapshot.member_harness_ids
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return snapshot
+
+    def require_in_transaction(
+        self,
+        _connection: object,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+        action: str,
+        resource: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+    ) -> _TaskScopeSnapshot:
+        snapshot = self.get_for_actor(actor=actor, scope_id=scope_id)
+        if (
+            action not in snapshot.allowed_actions
+            or not resource.startswith(snapshot.allowed_resource_prefixes)
+            or not set(target_harness_ids).issubset(snapshot.member_harness_ids)
+            or classification not in snapshot.allowed_classifications
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return snapshot
+
+    def require(self, **values: object) -> _TaskScopeSnapshot:
+        return self.require_in_transaction(None, **values)
+
+
+def _authorization_context() -> dict[str, object]:
+    return _TaskScopeSnapshot(domain_id="domain-a").authorization_context()
+
+@pytest.fixture(autouse=True)
+def _mailbox_clock_within_actor_credential_validity(monkeypatch, now: datetime) -> None:
+    monkeypatch.setattr("agentnet.mailbox.service.time.time", lambda: now.timestamp())
+
+
 @dataclass(frozen=True, slots=True)
 class _RelationshipApprovalAuthority:
     signers: dict[str, P256KeyPair]
@@ -105,6 +202,7 @@ def _request(
 ) -> AssignmentRequest:
     return AssignmentRequest(
         actor=actor,
+        collaboration_scope_id=_COLLABORATION_SCOPE_ID,
         recipient_harness_id=recipient,
         task_type="research",
         resources=frozenset({"catalog:alpha"}),
@@ -131,7 +229,11 @@ def _event(
         actor=request.actor,
         event_type=EventType.TASK_ASSIGNMENT,
         classification=max(request.data_classes, key=lambda item: item.value),
-        payload={"instruction": secret, "protected_resource": "catalog:alpha"},
+        payload={
+            "instruction": secret,
+            "protected_resource": "catalog:alpha",
+            "authorization_context": _authorization_context(),
+        },
         idempotency_key=key,
         recipients=(request.recipient_harness_id,),
         task_id=str(uuid5(NAMESPACE_URL, f"test-task-id:{key}")),
@@ -145,11 +247,20 @@ def _service(
     store,
     approval_authority: _RelationshipApprovalAuthority,
 ) -> AssignmentService:
-    mailbox = MailboxService(store)
+    collaboration_scopes = _TaskScopes()
+    mailbox = MailboxService(store, collaboration_scopes=collaboration_scopes)
     return AssignmentService(
         store,
+        collaboration_scopes=collaboration_scopes,
         mailbox=mailbox,
         approval_verifier=approval_authority.verifier,
+    )
+
+
+def _reconcile(mailbox: MailboxService, actor: VerifiedActor) -> list[dict[str, object]]:
+    return mailbox.reconcile(
+        actor=actor,
+        collaboration_scope_id=_COLLABORATION_SCOPE_ID,
     )
 
 
@@ -330,15 +441,31 @@ def test_peer_task_is_invisible_until_exact_owner_approval_and_resumes_once(
     )
     assert "sealed work bytes" not in proposal["event_encrypted"]
     assert "catalog:alpha" not in proposal["event_encrypted"]
-    assert service.pending_for_owner(actor=peer_actor, when=now) == []
-    assert service.pending_for_owner(actor=admin_actor, when=now) == []
-    summaries = service.pending_for_owner(actor=subordinate_actor, when=now)
+    assert service.pending_for_owner(
+        actor=peer_actor,
+        collaboration_scope_id=_COLLABORATION_SCOPE_ID,
+        when=now,
+    ) == []
+    assert service.pending_for_owner(
+        actor=admin_actor,
+        collaboration_scope_id=_COLLABORATION_SCOPE_ID,
+        when=now,
+    ) == []
+    summaries = service.pending_for_owner(
+        actor=subordinate_actor,
+        collaboration_scope_id=_COLLABORATION_SCOPE_ID,
+        when=now,
+    )
     assert len(summaries) == 1
     assert "instruction" not in str(summaries[0])
     assert "catalog:alpha" not in str(summaries[0])
     substituted = event.model_copy(
         update={
-            "payload": {"instruction": "substituted", "protected_resource": "catalog:alpha"},
+            "payload": {
+                "instruction": "substituted",
+                "protected_resource": "catalog:alpha",
+                "authorization_context": event.payload["authorization_context"],
+            },
             "payload_digest": "0" * 64,
         }
     )
@@ -374,7 +501,7 @@ def test_peer_task_is_invisible_until_exact_owner_approval_and_resumes_once(
     )
     assert resumed.state is TaskProposalState.RESUMED
     assert resumed.fact is DeliveryFact.ACCEPTED_QUEUED
-    inbox = service.mailbox.reconcile("sub-harness")
+    inbox = _reconcile(service.mailbox, subordinate_actor)
     assert len(inbox) == 1
     assert inbox[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
     assert inbox[0]["payload"] is None
@@ -441,7 +568,7 @@ def test_denial_expiry_and_policy_drift_never_create_executable_mail(
         when=now,
     )
     assert invalid.state is TaskProposalState.INVALIDATED
-    assert service.mailbox.reconcile("sub-harness") == []
+    assert _reconcile(service.mailbox, subordinate_actor) == []
     assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 0
 
 
@@ -465,7 +592,7 @@ def test_new_exact_edge_requires_explicit_revision_reauthorization(
         when=now,
     )
     assert owner_attempt.state is TaskProposalState.INVALIDATED
-    assert service.mailbox.reconcile("sub-harness") == []
+    assert _reconcile(service.mailbox, subordinate_actor) == []
 
     second_request = _request(peer_actor)
     # Create another proposal first by using a relationship revision expectation
@@ -483,7 +610,7 @@ def test_new_exact_edge_requires_explicit_revision_reauthorization(
         when=now,
     )
     assert resumed.state is TaskProposalState.RESUMED
-    assert service.mailbox.reconcile("sub-harness")[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
+    assert _reconcile(service.mailbox, subordinate_actor)[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
 
 
 def test_approval_race_has_one_winner_and_one_event(
@@ -512,7 +639,7 @@ def test_approval_race_has_one_winner_and_one_event(
 
 
 def test_current_downward_edge_auto_queues_without_privilege_inheritance(
-    store, admin_actor, now, relationship_approval_authority
+    store, admin_actor, subordinate_actor, now, relationship_approval_authority
 ):
     _insert_edge(
         store,
@@ -533,12 +660,13 @@ def test_current_downward_edge_auto_queues_without_privilege_inheritance(
     assert result["data_access_authorized"] is False
     assert result["effect_authorized"] is False
     assert result.get("proposal_id") is None
-    assert service.mailbox.reconcile("sub-harness")[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
+    assert _reconcile(service.mailbox, subordinate_actor)[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
 
 
 def test_missing_deadline_is_server_derived_bound_persisted_and_retry_stable(
     store,
     admin_actor,
+    subordinate_actor,
     now,
     relationship_approval_authority,
 ):
@@ -586,7 +714,7 @@ def test_missing_deadline_is_server_derived_bound_persisted_and_retry_stable(
     assert duplicate["event_id"] == event.event_id
     assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 1
 
-    item = service.mailbox.reconcile("sub-harness")[0]
+    item = _reconcile(service.mailbox, subordinate_actor)[0]
     assert item["payload"] is None
     assert item["payload_available"] is False
     assert item["payload_withheld_reason"] == "exact_task_grant_required"
@@ -702,20 +830,27 @@ def test_legacy_task_without_marker_redacts_and_marker_tamper_fails_closed(
     monkeypatch,
 ):
     monkeypatch.setattr("agentnet.mailbox.service.time.time", lambda: now.timestamp())
-    legacy_mailbox = MailboxService(store)
+    collaboration_scopes = _TaskScopes()
+    legacy_mailbox = MailboxService(
+        store,
+        collaboration_scopes=collaboration_scopes,
+    )
     legacy = new_event(
         domain_id=admin_actor.domain_id,
         actor=admin_actor,
         event_type=EventType.TASK_ASSIGNMENT,
         classification=Classification.C2_RESTRICTED,
-        payload={"instruction": "legacy c2 canary"},
+        payload={
+            "instruction": "legacy c2 canary",
+            "authorization_context": _authorization_context(),
+        },
         idempotency_key="legacy-task-no-marker-0001",
         recipients=(subordinate_actor.harness_id,),
         task_id="legacy-task-no-marker",
         retention_delete_at=now + timedelta(hours=1),
     ).model_copy(update={"created_at": now})
     legacy_mailbox.accept(legacy)
-    legacy_item = legacy_mailbox.reconcile(subordinate_actor.harness_id)[0]
+    legacy_item = _reconcile(legacy_mailbox, subordinate_actor)[0]
     assert legacy_item["event"].get("payload_access") is None
     assert legacy_item["payload"] is None
     assert legacy_item["payload_access"] == "task_grant_required"
@@ -745,7 +880,7 @@ def test_legacy_task_without_marker_redacts_and_marker_tamper_fails_closed(
             (canonical_json(metadata).decode("utf-8"), protected.event_id),
         )
     with pytest.raises(ConflictError, match="immutable envelope"):
-        service.mailbox.reconcile("sub-harness")
+        _reconcile(service.mailbox, subordinate_actor)
 
 
 def test_self_approval_and_recipient_key_drift_fail_closed(
@@ -786,7 +921,7 @@ def test_self_approval_and_recipient_key_drift_fail_closed(
             expected_revision=1,
             when=now,
         )
-    assert service.mailbox.reconcile("peer-second-harness") == []
+    assert _reconcile(service.mailbox, same_owner) == []
 
     recipient_request = _request(peer_actor)
     recipient_pending = service.submit_event(
@@ -806,7 +941,7 @@ def test_self_approval_and_recipient_key_drift_fail_closed(
         when=now,
     )
     assert invalid.state is TaskProposalState.INVALIDATED
-    assert service.mailbox.reconcile("sub-harness") == []
+    assert _reconcile(service.mailbox, subordinate_actor) == []
 
 
 @pytest.mark.parametrize("arrival_order", [("admin", "peer"), ("peer", "admin")])
@@ -840,7 +975,7 @@ def test_incompatible_downward_intents_atomically_hold_both_and_owner_partitions
 
     assert accepted[arrival_order[0]]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
     assert accepted[arrival_order[1]]["fact"] == DeliveryFact.CONFLICT_PENDING.value
-    inbox = service.mailbox.reconcile("sub-harness")
+    inbox = _reconcile(service.mailbox, subordinate_actor)
     assert {item["fact"] for item in inbox} == {DeliveryFact.CONFLICT_PENDING.value}
     pending = service.pending_conflicts_for_owner(actor=subordinate_actor, when=now)
     assert len(pending) == 1

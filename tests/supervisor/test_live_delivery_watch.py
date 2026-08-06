@@ -6,7 +6,10 @@ import httpx
 import pytest
 
 from agentnet.errors import AuthorizationError, ValidationError
+from agentnet.protocol.models import MailboxWakeHint
 from agentnet.supervisor.client import AgentNetSupervisorCoreClient
+
+_SCOPE_ID = "scope-supervisor-live-watch"
 
 
 class StubSignedClient:
@@ -28,6 +31,35 @@ class StubSignedClient:
         return httpx.Response(
             self.status_code,
             json=self.value,
+            request=httpx.Request(method, f"https://agent.example{path}"),
+        )
+
+
+class ResponseLossSignedClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, float | None]] = []
+        self.response_lost = True
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> httpx.Response:
+        assert json_body is None
+        self.calls.append((method, path, timeout_seconds))
+        if self.response_lost:
+            self.response_lost = False
+            raise httpx.ReadError("synthetic response loss")
+        return httpx.Response(
+            200,
+            json={
+                "schema": "agentnet.mailbox-wake.v1",
+                "kind": "wake",
+                "cursor_hint": 8,
+            },
             request=httpx.Request(method, f"https://agent.example{path}"),
         )
 
@@ -62,11 +94,40 @@ def test_signed_watch_is_strict_content_free_and_only_a_reconciliation_hint() ->
             "cursor_hint": 8,
         }
     )
-    client = AgentNetSupervisorCoreClient(signed)  # type: ignore[arg-type]
+    client = AgentNetSupervisorCoreClient(signed, collaboration_scope_id=_SCOPE_ID)  # type: ignore[arg-type]
 
     assert client.watch(after_cursor=7, wait_seconds=1.25) is True
     assert signed.calls == [
-        ("GET", "/v1/mailbox/watch?after=7&wait_ms=1250", 3.25)
+        (
+            "GET",
+            "/v1/mailbox/watch?after=7&wait_ms=1250"
+            "&collaboration_scope_id=scope-supervisor-live-watch",
+            3.25,
+        )
+    ]
+
+
+def test_watch_response_loss_retries_from_same_exact_durable_cursor() -> None:
+    signed = ResponseLossSignedClient()
+    client = AgentNetSupervisorCoreClient(signed, collaboration_scope_id=_SCOPE_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(httpx.ReadError, match="response loss"):
+        client.watch(after_cursor=7, wait_seconds=1.25)
+
+    assert client.watch(after_cursor=7, wait_seconds=1.25) is True
+    assert signed.calls == [
+        (
+            "GET",
+            "/v1/mailbox/watch?after=7&wait_ms=1250"
+            "&collaboration_scope_id=scope-supervisor-live-watch",
+            3.25,
+        ),
+        (
+            "GET",
+            "/v1/mailbox/watch?after=7&wait_ms=1250"
+            "&collaboration_scope_id=scope-supervisor-live-watch",
+            3.25,
+        ),
     ]
 
 
@@ -99,15 +160,33 @@ def test_signed_watch_is_strict_content_free_and_only_a_reconciliation_hint() ->
 def test_watch_rejects_content_authority_and_cursor_schema_drift(
     value: dict[str, Any],
 ) -> None:
-    client = AgentNetSupervisorCoreClient(StubSignedClient(value))  # type: ignore[arg-type]
+    client = AgentNetSupervisorCoreClient(StubSignedClient(value), collaboration_scope_id=_SCOPE_ID)  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError, match="wake|idle"):
         client.watch(after_cursor=7, wait_seconds=1)
 
+def test_mailbox_wake_model_keeps_exact_schema_wire_alias() -> None:
+    parsed = MailboxWakeHint.model_validate(
+        {
+            "schema": "agentnet.mailbox-wake.v1",
+            "kind": "idle",
+            "cursor_hint": 7,
+        },
+        strict=True,
+    )
+
+    assert parsed.model_dump(mode="json", by_alias=True) == {
+        "schema": "agentnet.mailbox-wake.v1",
+        "kind": "idle",
+        "cursor_hint": 7,
+    }
+    assert "wire_schema" not in parsed.model_dump(mode="json", by_alias=True)
+
 
 def test_watch_fails_closed_on_authentication_or_unbounded_wait() -> None:
     unauthorized = AgentNetSupervisorCoreClient(
-        StubSignedClient({}, status_code=401)  # type: ignore[arg-type]
+        StubSignedClient({}, status_code=401),  # type: ignore[arg-type]
+        collaboration_scope_id=_SCOPE_ID,
     )
     with pytest.raises(AuthorizationError, match="not authorized"):
         unauthorized.watch(after_cursor=0, wait_seconds=1)
@@ -119,7 +198,8 @@ def test_watch_fails_closed_on_authentication_or_unbounded_wait() -> None:
                 "kind": "idle",
                 "cursor_hint": 0,
             }
-        )
+        ),
+        collaboration_scope_id=_SCOPE_ID,
     )
     with pytest.raises(ValidationError, match="bounds"):
         valid.watch(after_cursor=0, wait_seconds=31)
@@ -139,7 +219,7 @@ def test_signed_supervisor_obligation_reconciliation_and_counters_are_strict() -
             },
         ]
     )
-    client = AgentNetSupervisorCoreClient(signed)  # type: ignore[arg-type]
+    client = AgentNetSupervisorCoreClient(signed, collaboration_scope_id=_SCOPE_ID)  # type: ignore[arg-type]
 
     assert client.reconcile_obligations(limit=25) == {
         "recipient_committed": ["obligation-1"],
@@ -147,12 +227,25 @@ def test_signed_supervisor_obligation_reconciliation_and_counters_are_strict() -
     }
     assert client.obligation_inbox()["action_required"] == 2
     assert signed.calls == [
-        ("POST", "/v1/response-obligations/reconcile", {"limit": 25}),
-        ("GET", "/v1/response-obligations/inbox", None),
+        (
+            "POST",
+            "/v1/response-obligations/reconcile",
+            {
+                "collaboration_scope_id": _SCOPE_ID,
+                "limit": 25,
+            },
+        ),
+        (
+            "GET",
+            "/v1/response-obligations/inbox"
+            "?collaboration_scope_id=scope-supervisor-live-watch",
+            None,
+        ),
     ]
 
     malformed = AgentNetSupervisorCoreClient(
-        StubObligationClient([{"action_required": True}])  # type: ignore[arg-type]
+        StubObligationClient([{"action_required": True}]),  # type: ignore[arg-type]
+        collaboration_scope_id=_SCOPE_ID,
     )
     with pytest.raises(ValidationError, match="inbox response schema"):
         malformed.obligation_inbox()

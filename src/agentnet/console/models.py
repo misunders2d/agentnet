@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 from enum import StrEnum
+import re
+from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class VisibleState(StrEnum):
@@ -26,6 +30,141 @@ class VisibleState(StrEnum):
 
 class _ConsoleModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+_WORK_EMAIL = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}$"
+)
+INVITATION_PERMISSION_ACTIONS = frozenset(
+    {
+        "artifact.download",
+        "artifact.send",
+        "message.read",
+        "message.send",
+    }
+)
+
+
+class InvitationCreationForm(_ConsoleModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    email: str = Field(min_length=3, max_length=320)
+    scope_id: str = Field(min_length=1, max_length=256)
+    permissions: tuple[str, ...] = Field(min_length=1, max_length=4)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_work_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        local_part = normalized.partition("@")[0]
+        if (
+            normalized != value.strip().lower()
+            or not _WORK_EMAIL.fullmatch(normalized)
+            or local_part.startswith(".")
+            or local_part.endswith(".")
+            or ".." in local_part
+        ):
+            raise ValueError("Enter a valid work email")
+        return normalized
+
+    @field_validator("scope_id")
+    @classmethod
+    def validate_scope_id(cls, value: str) -> str:
+        if value != value.strip() or any(ord(character) < 33 for character in value):
+            raise ValueError("Choose an available space")
+        return value
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if (
+            len(set(value)) != len(value)
+            or not set(value).issubset(INVITATION_PERMISSION_ACTIONS)
+        ):
+            raise ValueError("Choose only the available message and file actions")
+        return tuple(sorted(value))
+
+
+class InvitationScopeChoice(_ConsoleModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    scope_id: str = Field(min_length=1, max_length=256)
+    display_name: str = Field(min_length=1, max_length=128)
+
+
+class InvitationDetail(_ConsoleModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    work_email: str = Field(min_length=3, max_length=320)
+    space: str = Field(min_length=1, max_length=128)
+    permissions: tuple[str, ...] = Field(min_length=1, max_length=4)
+    invitation_url: str = Field(max_length=4_096)
+    qr_svg: str = Field(max_length=2_000_000)
+    expires_at: int = Field(ge=1)
+    revoked: bool = False
+
+    @field_validator("invitation_url")
+    @classmethod
+    def require_https_url(cls, value: str) -> str:
+        if value:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("Invitation links must use canonical HTTPS")
+        return value
+
+
+class InvitationContinuationResult(_ConsoleModel):
+    """Safe browser transition returned by the package-owned invitation flow."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    state: Literal[
+        "authorization_required",
+        "waiting_approval",
+        "restart_required",
+        "active",
+    ]
+    authorization_url: str | None = Field(default=None, max_length=4_096)
+
+    @model_validator(mode="after")
+    def require_exact_transition(self) -> "InvitationContinuationResult":
+        if self.state == "authorization_required":
+            if self.authorization_url is None:
+                raise ValueError("Work-account authorization URL is required")
+            parsed = urlsplit(self.authorization_url)
+            try:
+                literal_address = ipaddress.ip_address(parsed.hostname or "")
+            except ValueError:
+                literal_address = None
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.fragment
+                or parsed.hostname.casefold() == "localhost"
+                or (
+                    literal_address is not None
+                    and (
+                        literal_address.is_loopback
+                        or literal_address.is_private
+                        or literal_address.is_unspecified
+                    )
+                )
+            ):
+                raise ValueError("Work-account authorization must use canonical public HTTPS")
+        elif self.authorization_url is not None:
+            raise ValueError("Terminal invitation state cannot carry an authorization URL")
+        return self
+
 
 
 class HomeSummary(_ConsoleModel):
@@ -146,6 +285,11 @@ __all__ = [
     "ActivitySummary",
     "ApprovalPage",
     "ApprovalSummary",
+    "INVITATION_PERMISSION_ACTIONS",
+    "InvitationCreationForm",
+    "InvitationDetail",
+    "InvitationContinuationResult",
+    "InvitationScopeChoice",
     "HarnessSummary",
     "HomeSummary",
     "PersonPage",

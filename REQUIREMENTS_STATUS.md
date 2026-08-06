@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-04. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-06. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -279,6 +279,42 @@ published and historical release evidence:
   `AVL-006`, `UX-001`, `UX-002`, `SEC-003`, `SEC-005`, `SEC-006`,
   `OPS-003`, `OPS-004`, `OPS-006`, and `OPS-007`. No requirement or gate is
   promoted.
+- Candidate `0.1.45` adds the sole first-release Core schema v7, a derived exact
+  endpoint lifecycle, resumable user-level setup/update coordination, and one
+  exact rollback-capable ordinary-server transition from the `0.1.44`
+  five-unit/schema-v6 state. Endpoint identity is derived from the current
+  verified human+harness credential; friendly routing freezes one exact
+  endpoint and one current scope before canonical signed send. Missing,
+  ambiguous, stale, revoked, cross-domain, or mismatched state fails closed,
+  and activation remains `restart_required` until the user restarts and a new
+  measured process proves the expected generation. The successful supported
+  upgrade preserves existing identity, credential, scope/authority, message,
+  obligation, receipt, and mailbox-cursor state without re-enrollment.
+  A caught pre-target-commit failure restores only exact unchanged journaled
+  source bytes, schema v6, migration catalog, and systemd state; interruption
+  retains the journal for exact resume; drift blocks rollback and preserves
+  evidence; and target commit closes the downgrade path. This
+  entry records implemented lifecycle semantics only; it adds no new accepted
+  external, owner, deployment, production, signed-installer, or high-tier
+  evidence and promotes no requirement or gate.
+  Focused acceptance reports **170 passed and 5 expected dedicated-PostgreSQL
+  skips**. The package source corpus targets **2118 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**. Browser invitation smoke passed the
+  continuation and restart-safe completion paths. An isolated installed npm
+  tarball proved exact endpoint processing, zero sibling reactions, endpoint-
+  owned offline custody, no offline processing, complete endpoint/capability
+  cleanup, and no workspace import fallback. Recursive package, retained
+  reproducible archive, same-commit CI, staged upgrade/rollback, remote
+  deployment, and higher-tier evidence remain separately gated.
+  Affected IDs are `ARC-001`, `ARC-002`, `ARC-003`, `ID-004`, `ID-005`,
+  `ID-006`, `ID-007`, `ID-008`, `ID-009`, `AUTH-001`, `AUTH-002`,
+  `AUTH-003`, `AUTH-004`, `AUTH-006`, `AUTH-007`, `COM-001`, `COM-002`,
+  `COM-003`, `COM-005`, `COM-006`, `COM-007`, `COM-009`, `COM-011`,
+  `AVL-001`, `AVL-002`, `AVL-003`, `AVL-004`, `AVL-005`, `AVL-006`,
+  `AVL-007`, `UX-001`, `UX-002`, `UX-003`, `UX-004`, `UX-006`,
+  `SEC-003`, `SEC-004`, `SEC-005`, `SEC-006`, `OPS-002`, `OPS-003`,
+  `OPS-004`, `OPS-005`, and `OPS-006`.
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,

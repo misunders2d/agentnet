@@ -9,12 +9,14 @@ remove state this package does not own.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -25,6 +27,11 @@ import pytest
 
 import agentnet.operations.server_reset as reset
 import agentnet.operations.server_setup as setup
+from agentnet.artifacts.clamav import (
+    ScannerEndpoint,
+    clamav_profile_digest,
+    clamav_rules_digest,
+)
 from agentnet.approval.config import MANDATORY_APPROVAL_PURPOSES
 from agentnet.operations.config import IndependentApproverConfig, OIDCEnrollmentConfig
 from agentnet.operations.server_reset import ServerSetupResetError, reset_server_setup
@@ -154,6 +161,7 @@ class _Harness:
     disabled_units: set[str]
     loaded_units: set[str]
     systemctl_calls: list[list[str]]
+    database_state: dict[str, object]
 
     @property
     def marker_path(self) -> Path:
@@ -268,6 +276,8 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
             active_units.add(arguments[1])
         elif arguments[:1] == ["stop"]:
             active_units.discard(arguments[1])
+        elif arguments[:1] == ["start"]:
+            active_units.add(arguments[1])
         elif arguments[:2] == ["is-active", "--quiet"]:
             if arguments[2] not in active_units:
                 raise ServerSetupError("systemd_start", failure_message)
@@ -317,10 +327,9 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         def __eq__(self, _other: object) -> bool:
             return True
 
-    monkeypatch.setattr(
-        setup,
-        "load_config_json",
-        lambda _text: SimpleNamespace(
+    def load_synthetic_config(text: str) -> SimpleNamespace:
+        document = json.loads(text)
+        return SimpleNamespace(
             profile=setup.RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
             domain_id=request.domain_id,
             data_dir=layout.host(setup.CORE_DATA) / "core",
@@ -340,11 +349,12 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
             relay=None,
             federation_trust=None,
             postgres_recovery_topology=False,
-            enrolled_harness_id=None,
-            enrolled_credential_id=None,
+            enrolled_harness_id=document.get("enrolled_harness_id"),
+            enrolled_credential_id=document.get("enrolled_credential_id"),
             model_dump=lambda **_kwargs: {"immutable": "fixed"},
-        ),
-    )
+        )
+
+    monkeypatch.setattr(setup, "load_config_json", load_synthetic_config)
 
     product_calls: list[list[str]] = []
 
@@ -386,6 +396,108 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
             return _bootstrap_evidence(request.domain_id)
         raise AssertionError(argv)
 
+    source_database = {
+        "schema_version": 6,
+        "migration_catalog": [
+            {
+                "version": migration.version,
+                "name": migration.name,
+                "checksum": migration.checksum,
+                "applied_at": migration.version,
+            }
+            for migration in setup.MIGRATIONS[:6]
+        ],
+        "endpoint_lifecycle_absent": True,
+        "endpoint_mailbox_cursor": 0,
+        "identity": {
+            "domain_id": request.domain_id,
+            "harness_id": "server-harness",
+            "principal_id": "server-principal",
+            "credential_id": "server-credential",
+            "source_harness_kind": "server",
+            "harness_kind": "server",
+            "profile_key": request.runtime_instance_id,
+        },
+        "preserved_relation_digests": {
+            relation: hashlib.sha256(relation.encode()).hexdigest()
+            for relation in setup._LIFECYCLE_PRESERVED_TABLES
+        },
+    }
+    database_state: dict[str, object] = {
+        "phase": "source",
+        "source": source_database,
+        "endpoint_lifecycle": None,
+    }
+
+    def fake_database_operation(
+        _account: object,
+        _database_url: str,
+        *,
+        operation: str,
+        source: dict[str, object] | None,
+        domain_id: str,
+        harness_id: str,
+        credential_id: str,
+        profile_key: str,
+    ) -> dict[str, object]:
+        expected = database_state["source"]
+        assert isinstance(expected, dict)
+        identity = expected["identity"]
+        assert isinstance(identity, dict)
+        assert (domain_id, harness_id, credential_id, profile_key) == (
+            identity["domain_id"],
+            identity["harness_id"],
+            identity["credential_id"],
+            identity["profile_key"],
+        )
+        if operation == "snapshot":
+            assert database_state["phase"] == "source"
+            return {"status": "source", "source": copy.deepcopy(expected)}
+        if operation == "migrate":
+            if database_state["phase"] != "source" or source != expected:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "database changed before migration",
+                )
+            endpoint = {
+                **identity,
+                "current_credential_id": identity["credential_id"],
+                "state": "restart_required",
+                "adapter_generation": 1,
+                "mailbox_cursor": expected["endpoint_mailbox_cursor"],
+                "capability_root_digest": None,
+                "process_measurement": None,
+                "state_reason": "explicit_user_restart_required",
+                "revision": 2,
+                "created_at": 1,
+                "updated_at": 1,
+            }
+            database_state["phase"] = "target"
+            database_state["endpoint_lifecycle"] = endpoint
+            return {
+                "status": "migrated",
+                "source": copy.deepcopy(expected),
+                "endpoint_lifecycle": copy.deepcopy(endpoint),
+            }
+        if operation == "rollback":
+            if database_state["phase"] == "concurrent":
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "database changed before rollback",
+                )
+            if database_state["phase"] == "target":
+                database_state["phase"] = "source"
+                database_state["endpoint_lifecycle"] = None
+                return {"status": "rolled_back", "source": copy.deepcopy(expected)}
+            if database_state["phase"] == "source":
+                return {"status": "already_restored", "source": copy.deepcopy(expected)}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(
+        setup,
+        "_run_v0145_database_operation_as",
+        fake_database_operation,
+    )
     monkeypatch.setattr(setup, "_run_as", fake_run_as)
     return _Harness(
         request=request,
@@ -396,6 +508,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         disabled_units=disabled_units,
         loaded_units=loaded_units,
         systemctl_calls=systemctl_calls,
+        database_state=database_state,
     )
 
 
@@ -442,6 +555,34 @@ def _realized_0137_deployment(
     assert harness.marker()["package_version"] == "0.1.37"
     assert harness.marker()["units"] == list(setup.MANAGED_UNITS)
     return harness, digest
+def _realized_0144_lifecycle_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> _Harness:
+    """One enrolled schema-v6 v0.1.44 server with preserved communication state."""
+
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.44")
+    digest = harness.plan_digest()
+    harness.apply(digest)
+    config_path = harness.layout.host(setup.CORE_CONFIG)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    identity = harness.database_state["source"]
+    assert isinstance(identity, dict)
+    identity_row = identity["identity"]
+    assert isinstance(identity_row, dict)
+    config["enrolled_harness_id"] = identity_row["harness_id"]
+    config["enrolled_credential_id"] = identity_row["credential_id"]
+    config_path.write_text(
+        json.dumps(config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    harness.loaded_units.update(setup.MANAGED_UNITS)
+    assert harness.marker()["package_version"] == "0.1.44"
+    return harness
+
+
 
 
 def _realized_public_0131_communication_deployment(
@@ -2017,14 +2158,48 @@ def test_request_semantic_drift_is_rejected_before_any_managed_write(
         owner_oidc["allowed_endpoint_origins"] = ["https://login.example"]
         approvers["approvers"][0]["oidc_issuer"] = "https://login.example"
     else:
+        endpoint = ScannerEndpoint.from_uri("unix:///run/clamav/clamd.sock")
+        key = P256KeyPair.generate()
+        key_path = tmp_path / "scanner-key.pem"
+        key_path.write_bytes(key.private_pem)
+        key_path.chmod(0o600)
+        signature_updated_at = int(time.time())
+        signature_max_age = 172_800
+        rules_digest = clamav_rules_digest(
+            signature_version="daily-1",
+            signature_updated_at=signature_updated_at,
+        )
+        profile_digest = clamav_profile_digest(
+            endpoint=endpoint,
+            engine_version="1.4.3",
+            timeout_seconds=30.0,
+            max_bytes=16_777_216,
+            max_response_bytes=4_096,
+            max_signature_age_seconds=signature_max_age,
+        )
         scanner_path = _private_json(
             tmp_path / "scanner-trust.json",
             {
-                "trusted_public_keys": {"scanner-key": P256KeyPair.generate().public_pem},
-                "required_engine": "synthetic-scanner",
-                "required_rules_digest": "a" * 64,
-                "required_profile_digest": "b" * 64,
+                "trusted_public_keys": {
+                    "maintained-scanner:1": key.public_pem,
+                },
+                "required_engine": "clamav",
+                "required_rules_digest": rules_digest,
+                "required_profile_digest": profile_digest,
             },
+        )
+        core_environment_path = Path(request_document["core_environment_file"])
+        core_environment_path.write_text(
+            core_environment_path.read_text(encoding="utf-8")
+            + f"AGENTNET_CLAMAV_ENDPOINT={endpoint.uri}\n"
+            + "AGENTNET_CLAMAV_SCANNER_ID=maintained-scanner\n"
+            + "AGENTNET_CLAMAV_KEY_EPOCH=1\n"
+            + f"AGENTNET_CLAMAV_SIGNING_KEY_FILE={key_path}\n"
+            + "AGENTNET_CLAMAV_ENGINE_VERSION=1.4.3\n"
+            + "AGENTNET_CLAMAV_SIGNATURE_VERSION=daily-1\n"
+            + f"AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT={signature_updated_at}\n"
+            + f"AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS={signature_max_age}\n",
+            encoding="utf-8",
         )
         request_document["artifact_mode"] = "enabled"
         request_document["scanner_trust_file"] = str(scanner_path)
@@ -2063,6 +2238,240 @@ def test_upgrade_refuses_a_realized_state_changed_outside_setup(
     assert core_unit.read_bytes() == tampered
     assert harness.marker()["package_version"] == "0.1.30"
     assert not harness.journal_path.exists()
+def _lifecycle_source_bytes(harness: _Harness) -> dict[str, object]:
+    return {
+        "marker": harness.marker_path.read_bytes(),
+        "units": {
+            unit: harness.layout.unit(unit).read_bytes()
+            for unit in setup.MANAGED_UNITS
+        },
+        "core_config": harness.layout.host(setup.CORE_CONFIG).read_bytes(),
+        "core_oidc_config": harness.layout.host(setup.CORE_OIDC_CONFIG).read_bytes(),
+        "database": copy.deepcopy(harness.database_state["source"]),
+    }
+
+
+def test_v0145_upgrade_preserves_enrollment_and_creates_restart_postcondition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
+    before = _lifecycle_source_bytes(harness)
+    product_calls = list(harness.product_calls)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.45")
+
+    result = harness.apply(harness.plan_digest())
+
+    assert harness.marker()["package_version"] == "0.1.45"
+    assert harness.marker()["revision"] == 2
+    assert result["identity_enrolled"] is True
+    assert result["endpoint_lifecycle"] == {
+        "endpoint_id": "server-harness",
+        "state": "restart_required",
+        "public_url": harness.request.core_public_origin,
+        "identity_created": False,
+    }
+    assert harness.database_state["phase"] == "target"
+    assert harness.database_state["source"] == before["database"]
+    endpoint = harness.database_state["endpoint_lifecycle"]
+    assert isinstance(endpoint, dict)
+    assert endpoint["harness_id"] == "server-harness"
+    assert endpoint["adapter_generation"] == 1
+    assert endpoint["state"] == "restart_required"
+    assert endpoint["state_reason"] == "explicit_user_restart_required"
+    assert endpoint["revision"] == 2
+    assert endpoint["capability_root_digest"] is None
+    assert endpoint["process_measurement"] is None
+    assert [
+        command[2:]
+        for command in harness.product_calls[len(product_calls) :]
+    ] == [
+        [
+            "approval",
+            "status",
+            "--config",
+            str(harness.layout.host(setup.APPROVAL_CONFIG)),
+        ]
+    ]
+    assert not harness.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "start"),
+    [
+        ("after_units", False),
+        ("after_migration", False),
+        ("after_core_restart", True),
+    ],
+)
+def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint: str,
+    start: bool,
+) -> None:
+    harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
+    before = _lifecycle_source_bytes(harness)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    if start:
+        monkeypatch.setattr(
+            setup,
+            "_validated_managed_identity_profile",
+            lambda *_args, **_kwargs: None,
+        )
+    if checkpoint == "after_units":
+        original_write_unit = setup._write_managed_unit
+        written = 0
+
+        def fail_after_units(*args: object, **kwargs: object) -> str:
+            nonlocal written
+            status = original_write_unit(*args, **kwargs)
+            written += 1
+            if written == len(setup.MANAGED_UNITS):
+                raise ServerSetupError("injected_failure", "after units")
+            return status
+
+        monkeypatch.setattr(setup, "_write_managed_unit", fail_after_units)
+    elif checkpoint == "after_migration":
+        original_database_operation = setup._run_v0145_database_operation_as
+
+        def fail_after_migration(*args: object, **kwargs: object) -> dict[str, object]:
+            evidence = original_database_operation(*args, **kwargs)
+            if kwargs.get("operation") == "migrate":
+                raise ServerSetupError("injected_failure", "after migration")
+            return evidence
+
+        monkeypatch.setattr(
+            setup,
+            "_run_v0145_database_operation_as",
+            fail_after_migration,
+        )
+    else:
+        original_systemctl = setup._run_systemctl
+
+        def fail_after_core_restart(
+            executable: Path,
+            arguments: list[str],
+            *,
+            failure_message: str,
+        ) -> None:
+            original_systemctl(
+                executable,
+                arguments,
+                failure_message=failure_message,
+            )
+            if arguments == ["restart", setup.CORE_UNIT]:
+                raise RuntimeError("injected after Core restart")
+
+        monkeypatch.setattr(setup, "_run_systemctl", fail_after_core_restart)
+
+    expected_error = RuntimeError if checkpoint == "after_core_restart" else ServerSetupError
+    with pytest.raises(expected_error) as exc_info:
+        harness.apply(harness.plan_digest(), start=start)
+
+    if isinstance(exc_info.value, ServerSetupError):
+        assert exc_info.value.blocker == "injected_failure"
+    assert harness.marker_path.read_bytes() == before["marker"]
+    assert {
+        unit: harness.layout.unit(unit).read_bytes()
+        for unit in setup.MANAGED_UNITS
+    } == before["units"]
+    assert harness.layout.host(setup.CORE_CONFIG).read_bytes() == before["core_config"]
+    assert (
+        harness.layout.host(setup.CORE_OIDC_CONFIG).read_bytes()
+        == before["core_oidc_config"]
+    )
+    assert harness.database_state["phase"] == "source"
+    assert harness.database_state["source"] == before["database"]
+    assert harness.database_state["endpoint_lifecycle"] is None
+    assert not harness.journal_path.exists()
+
+
+def test_v0145_upgrade_denies_rollback_after_concurrent_database_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
+    before_marker = harness.marker_path.read_bytes()
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.45")
+
+    original_database_operation = setup._run_v0145_database_operation_as
+
+    def mutate_then_fail(*args: object, **kwargs: object) -> dict[str, object]:
+        evidence = original_database_operation(*args, **kwargs)
+        if kwargs.get("operation") == "migrate":
+            harness.database_state["phase"] = "concurrent"
+            endpoint = harness.database_state["endpoint_lifecycle"]
+            assert isinstance(endpoint, dict)
+            endpoint["mailbox_cursor"] = 9
+            raise RuntimeError("injected concurrent mailbox delivery")
+        return evidence
+
+    monkeypatch.setattr(
+        setup,
+        "_run_v0145_database_operation_as",
+        mutate_then_fail,
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert harness.database_state["phase"] == "concurrent"
+    assert harness.marker_path.read_bytes() == before_marker
+    assert harness.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("source_version", "target_version"),
+    [
+        ("0.1.43", "0.1.45"),
+        ("0.1.44", "0.1.46"),
+    ],
+)
+def test_v0145_upgrade_rejects_wrong_exact_version_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_version: str,
+    target_version: str,
+) -> None:
+    harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
+    marker = harness.marker()
+    marker["package_version"] = source_version
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", target_version)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_marker_conflict"
+    assert not harness.journal_path.exists()
+
+
+def test_v0145_upgrade_rejects_non_v6_source_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
+    source = harness.database_state["source"]
+    assert isinstance(source, dict)
+    source["schema_version"] = 5
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.45")
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert not harness.journal_path.exists()
+
+
 
 
 def test_unsupported_source_version_still_blocks_the_upgrade(

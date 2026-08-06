@@ -45,11 +45,17 @@ installs the locked Hatchling backend first and then installs the project from
 the committed `uv.lock` with `uv sync --frozen --no-build-isolation`. A local
 image ID is not a registry manifest digest and must not be substituted.
 
-The demo creates two deterministic-only synthetic identities, stores explicitly
-marked C0 synthetic bytes through a non-networked test lane, and reconciles the
-offline recipient mailbox. It prints an explicit warning and only claims
-`accepted_local`; the lane cannot carry C1/C2/C3 data, tasks, grants, rooms, or
-effects and is not exposed over HTTP or MCP.
+The demo creates two deterministic-only synthetic identities and accepts
+explicitly marked C0 synthetic bytes through a non-networked test lane. Core
+rejects caller-supplied `authorization_context` and derives a reserved,
+non-authoritative binding from current local state; it does not issue a
+collaboration scope, and ordinary scoped mailbox access cannot use that reserved
+identifier. The local-only `reconcile_synthetic_mailbox` reader verifies the
+exact current deterministic-only lab recipient and the reserved context without
+falling back to ordinary collaboration-scope authorization. The demo prints an
+explicit warning and only claims `accepted_local`; the lane cannot carry
+C1/C2/C3 data, tasks, grants, rooms, or effects and is not exposed over HTTP or
+MCP.
 
 By default, `harness-probe` verifies all four exact Claude, Codex, Pi, and
 Antigravity binary pins for the G01 gate. `--harness pi` (or another single
@@ -118,6 +124,78 @@ credential refusal is not approved revocation. The gate is not evidence for
 OIDC/WebAuthn enrollment, `COMPLETED_C0_ROUND_TRIP`, ordinary server-agent
 `COM-002`/`COM-003`, five-power cleanup, PostgreSQL durability, or release
 certification.
+
+## User-level v0.1.45 install and update lifecycle
+
+Laptop installation and update use a user-owned npm prefix and the
+package-owned launcher; do not use `sudo`. The launcher materializes a
+version-and-installation-specific Python environment in owner-private platform
+state and does not modify the user's shell profile. Installing bytes is still
+code-only: it does not enroll a human or harness, activate a binding, grant a
+scope, or restart a running harness.
+
+After the exact package is available, the lifecycle surfaces are:
+
+```bash
+agentnet setup
+agentnet setup status
+agentnet setup continue
+```
+
+They use `~/.agentnet/agentnet.json`,
+`~/.agentnet/identity.json`, and the owner-private opaque
+`~/.agentnet/setup-continuation.json` by default. Harness kind and profile key
+come from the explicit arguments or `AGENTNET_HARNESS_KIND` and
+`AGENTNET_PROFILE_KEY`. Repeated `--identity` selects exact candidate profiles;
+more than one matching current profile is an error, never a newest/last-active
+choice.
+
+The coordinator first re-reads the exact current `VerifiedActor` from its
+credential. An already enrolled `0.1.44` harness is registered into the v7
+endpoint lifecycle without creating another identity, then moved from
+`access_ready` to `restart_required`. When enrollment is still pending, setup
+stores only the opaque continuation and delegates OIDC/passkey ownership to the
+existing guided coordinator. An expired continuation may be replaced only
+after that owner reports it terminal. Missing guided enrollment ownership,
+ambiguous profiles, mismatched completed identity, unavailable current
+credentials, or stale lifecycle revisions fail closed.
+
+The public presentation vocabulary is fixed:
+
+| Condition | User-facing state |
+|---|---|
+| setup can begin | `Ready to connect` |
+| fresh human confirmation required | `Approve with passkey` |
+| remote ceremony pending | `Waiting for approval` |
+| exact identity committed | `Agent enrolled` |
+| enrollment and local access reconciled | `Access ready` |
+| new process required | `Restart your agent to enable AgentNet` |
+| expected endpoint rebound | `Connected` |
+| terminal continuation expired | `Expired — start again` |
+| provider identity differs | `Wrong work account` |
+| bounded connection attempt failed | `Could not connect` |
+| authority, profile, or service cannot be resolved safely | `Needs administrator help` |
+
+The coordinator never starts, stops, signals, or restarts the harness. The user
+performs the restart. The endpoint becomes `connected` only when the newly
+measured process presents the expected adapter generation for the same exact
+domain, principal, harness, credential, harness kind, and profile. Until then,
+enrollment and queued mailbox custody remain durable, but tool availability is
+not claimed.
+
+Friendly send targets resolve only among recipients visible to the authenticated
+sender's current communication/collaboration authority. A successful friendly
+lookup returns one `ResolvedEndpoint` containing the exact harness, safe display
+metadata, and current scope ID. Unknown, ambiguous, stale, revoked,
+cross-domain, or unauthorized lookups return the same non-enumerating failure.
+The dispatcher re-requires the frozen scope against the exact recipients and
+classification before send. Explicit harness IDs likewise must infer exactly
+one current scope. Core requires that frozen scope again on `/v1/messages`.
+Actor identity comes only from the sealed actor/signing provider, and the public
+receipt accepts only authoritative acceptance fields before adding
+proof-derived exact recipient IDs and safe metadata. An offline exact recipient
+may remain queued when policy permits custody, but no sibling or “last active”
+endpoint is substituted.
 
 ## Product-owned ordinary Linux server setup
 
@@ -212,6 +290,30 @@ explicit GET health request carrying `User-Agent: AgentNet/0.1.39` and
 `Accept: application/json` through the unchanged proxy-disabled,
 redirect-rejecting stdlib opener. System trust, hostname verification, timeout,
 finite retries, response bounds, and exact payload checks remain unchanged.
+
+`0.1.45` adds exactly one rollback-capable server setup edge:
+`0.1.44→0.1.45`. The source must be the exact five-unit `0.1.44` marker, the
+exact schema-v6 PostgreSQL catalog, and the exact current enrolled server
+identity/credential. Before the first managed write, setup journals the source
+marker, both managed Core configuration files, every managed unit byte,
+systemd load/enable/active state, migration catalog, preserved
+identity/access/message relation digests, and mailbox cursor. It then applies
+only the contiguous v6→v7 migration and creates one exact
+`restart_required` endpoint row whose cursor matches the source.
+
+A caught failure before the target marker is committed attempts rollback only
+if every candidate file, v7 release table, journal-selected protected relation
+digest, migration row, endpoint row, and systemd fact still matches the
+journaled transition. Process interruption instead leaves the durable journal;
+the next invocation may resume only that exact transition. Rollback quiesces
+candidate services, restores schema v6 and the migration catalog, restores exact
+source configuration/unit bytes and prior systemd state, proves the source
+marker remained byte-exact, then clears the journal. Any concurrent or manual
+drift blocks rollback and retains the journal as evidence; setup never
+overwrites the drift or reports success. Once the exact target marker and
+realized state commit, the journal is cleared and there is no supported
+automatic `0.1.45→0.1.44` downgrade. This narrow in-flight rollback is not a
+general database restore or permission to downgrade committed authority state.
 
 ### Communication-only request-v2
 
@@ -809,7 +911,9 @@ required.
 - encrypted local supervisor queues, authenticated live watch plus cursor
   fallback, separate worker lifecycle, explicit-open inbox, automatic durable
   obligation-counter reconciliation, content-free status, and no foreground
-  message API;
+  message API; only a typed task assignment wakes a semantic worker, while an
+  ordinary request obligation stays durable and passively counted until the
+  responsible harness answers it from its own authorized session;
 - transactional per-recipient mailbox, at-least-once/idempotent submission,
   exact recipient-harness custody acknowledgement (`recipient_committed`) with
   one-write retry convergence, actor-owned receipts, expiry, cancellation, and
@@ -983,19 +1087,21 @@ reconciliation evidence tracked by the release gates.
 AgentNet has no supported prototype/pre-release database format. Immutable
 migration 1 is the complete first-release schema and retains checksum
 `c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f`.
-Current unreleased Core schema v6 adds durable protected payload-release
-receipts in migration 2, guided OIDC enrollment continuation in migration 3,
-the bounded C0 bootstrap-plan contract in migration 4, exact OIDC-begin
-response-loss recovery plus current-credential renewal custody in migration 5,
-and the persistent same-principal communication scope plus private administration
-state in migration 6. Fresh
-SQLite and PostgreSQL stores create schema v6. An existing SQLite store upgrades
-only when metadata, every migration record/checksum, and the entire N/N-1 v5
-object catalog match exactly; the v5→v6 change commits atomically or rolls back
+Current Core schema v7 adds durable protected payload-release receipts in
+migration 2, guided OIDC enrollment continuation in migration 3, the bounded
+C0 bootstrap-plan contract in migration 4, exact OIDC-begin response-loss
+recovery plus current-credential renewal custody in migration 5, persistent
+same-principal communication scope plus private administration state in
+migration 6, and the communication/collaboration release in migration 7.
+Migration 7 adds exact endpoint lifecycle, collaboration scopes/members,
+artifact transfers/recipients, and invitation links/failure budgets. Fresh
+SQLite and PostgreSQL stores create schema v7. An existing SQLite store upgrades
+only when metadata, every migration record/checksum, and the entire N/N-1 v6
+object catalog match exactly; the v6→v7 change commits atomically or rolls back
 without partial objects. PostgreSQL verifies contiguous checksums and the
 complete live table, column type/null/default, constraint-definition, and
-non-constraint-index catalog before v5 migration, after migration, and on every
-v6 open.
+non-constraint-index catalog before v6 migration, after migration, and on every
+v7 open.
 Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
 older state fails closed before use.
 

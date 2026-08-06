@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agentnet.errors import GateBlocked
+from agentnet.errors import AuthorizationError, GateBlocked
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
 from agentnet.operations.policy_defaults import OperationsPolicy
@@ -14,6 +14,62 @@ from agentnet.operations.quotas import QuotaService
 from agentnet.operations.telemetry import Telemetry
 from agentnet.protocol.models import Classification, EventType
 from agentnet.storage.sqlite import SQLiteStore
+
+
+class _AdmissionScopes:
+    """Exact scope double; this test isolates quota admission behavior."""
+
+    scope_id = "scope:mailbox-admission-controls"
+    revision = 1
+    policy_revision = 1
+    domain_revocation_epoch = 1
+    state = "active"
+    allowed_actions = ("message.read",)
+    allowed_resource_prefixes = ("conversation:",)
+    allowed_classifications = (Classification.C1_INTERNAL,)
+    scope_digest = "a" * 64
+
+    def __init__(self, member_harness_ids: tuple[str, ...]) -> None:
+        self.member_harness_ids = tuple(sorted(member_harness_ids))
+
+    def authorization_context(self) -> dict[str, object]:
+        return {
+            "collaboration_scope_id": self.scope_id,
+            "collaboration_scope_revision": self.revision,
+            "collaboration_scope_policy_revision": self.policy_revision,
+            "collaboration_scope_domain_revocation_epoch": self.domain_revocation_epoch,
+            "collaboration_scope_member_harness_ids": list(self.member_harness_ids),
+            "collaboration_scope_digest": self.scope_digest,
+        }
+
+    def get_for_actor(self, *, actor, scope_id: str):
+        if (
+            scope_id != self.scope_id
+            or actor.harness_id not in self.member_harness_ids
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return self
+
+    def require_in_transaction(
+        self,
+        _connection,
+        *,
+        actor,
+        scope_id: str,
+        action: str,
+        resource: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+    ):
+        self.get_for_actor(actor=actor, scope_id=scope_id)
+        if (
+            action not in self.allowed_actions
+            or not resource.startswith(self.allowed_resource_prefixes)
+            or not set(target_harness_ids).issubset(self.member_harness_ids)
+            or classification not in self.allowed_classifications
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return self
 
 
 def _policy(**overrides) -> OperationsPolicy:
@@ -153,14 +209,27 @@ def test_canonical_mailbox_accept_atomically_reserves_and_terminal_rows_release_
         global_requests_per_minute=1000,
     )
     admission = QuotaService(store, policy=policy, safety_reserve_fraction=0)
-    mailbox = MailboxService(store, admission=admission)
+    scopes = _AdmissionScopes(
+        tuple(
+            sorted(
+                {
+                    sender.harness_id,
+                    *(recipient.harness_id for recipient in recipients),
+                }
+            )
+        )
+    )
+    mailbox = MailboxService(store, admission=admission, collaboration_scopes=scopes)
 
     first = new_event(
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"kind": "pressure-fill"},
+        payload={
+            "kind": "pressure-fill",
+            "authorization_context": scopes.authorization_context(),
+        },
         idempotency_key="pressure-fill-event-0001",
         recipients=tuple(recipient.harness_id for recipient in recipients[:10]),
         retention_delete_at=datetime.now(UTC) + timedelta(days=1),
@@ -178,7 +247,10 @@ def test_canonical_mailbox_accept_atomically_reserves_and_terminal_rows_release_
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"kind": "pressure-blocked"},
+        payload={
+            "kind": "pressure-blocked",
+            "authorization_context": scopes.authorization_context(),
+        },
         idempotency_key="pressure-block-event-001",
         recipients=(recipients[10].harness_id,),
         retention_delete_at=datetime.now(UTC) + timedelta(days=1),

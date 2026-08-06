@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.components.bakeoff import adoption_ready
 from agentnet.components.registry import BASELINE_COMPONENTS
 from agentnet.core.app import CommunicationCore
@@ -33,6 +44,64 @@ from agentnet.protocol.models import (
     ReleasedArtifactBinding,
 )
 from agentnet.security.signatures import P256KeyPair
+
+
+def _issue_mailbox_scope(
+    core: CommunicationCore,
+    owner,
+    recipient,
+    *,
+    scope_id: str,
+) -> CollaborationScope:
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(
+            sorted((owner.harness_id, recipient.harness_id))
+        ),
+        allowed_actions=("message.read",),
+        allowed_resource_prefixes=("conversation:direct",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        canonical_references=(),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{scope_id}"
+    request = core.collaboration_scopes.issuance_request(
+        actor=owner,
+        proposal=proposal,
+    )
+    LocalConformancePolicyEngine(core.store).bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=proposal.policy_revision,
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=proposal.policy_revision,
+            context=request,
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
 
 
 def test_backup_trust_is_public_only_domain_bound_epoch_monotonic_and_revocation_safe() -> None:
@@ -298,6 +367,12 @@ def test_communication_only_unsupported_replay_rejects_artifact_bindings_before_
         ),
         store,
     )
+    scope = _issue_mailbox_scope(
+        core,
+        actor,
+        recipient,
+        scope_id="scope:fail-closed-config:artifact-replay",
+    )
     binding = ReleasedArtifactBinding(
         artifact_id=str(uuid4()),
         domain_id=actor.domain_id,
@@ -313,10 +388,14 @@ def test_communication_only_unsupported_replay_rejects_artifact_bindings_before_
         actor=actor,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"kind": "unsupported-artifact-bound-message"},
+        payload={
+            "kind": "unsupported-artifact-bound-message",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key="unsupported-artifact-replay-0001",
         recipients=(recipient.harness_id,),
         released_artifacts=(binding,),
+        policy_revision=scope.policy_revision,
     )
     monkeypatch.setattr(core, "_require", lambda **_kwargs: None)
 
@@ -335,7 +414,13 @@ def test_communication_only_unsupported_replay_rejects_artifact_bindings_before_
         )
 
     assert denied.value.gate == "artifacts_disabled"
-    assert core.mailboxes.reconcile(recipient.harness_id) == []
+    assert (
+        core.mailboxes.reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )
+        == []
+    )
 
 
 def test_communication_only_server_readiness_does_not_probe_artifacts(

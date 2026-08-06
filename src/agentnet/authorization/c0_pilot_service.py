@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import copy
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -40,6 +41,86 @@ def _canonical_object(value: str) -> dict[str, Any]:
         raise AuthorizationError("C0 pilot protected state is invalid")
     return parsed
 
+def _bootstrap_c0_authorization_context(row: Any) -> dict[str, Any]:
+    members = sorted((str(row["owner_harness_id"]), str(row["fresh_harness_id"])))
+    scope_id = f"bootstrap-c0:{row['plan_id']}:{row['guard_id']}"
+    revision = 1
+    policy_revision = int(row["policy_revision"])
+    revocation_epoch = int(row["domain_revocation_epoch"])
+    preimage = {
+        "schema": "agentnet.bootstrap-c0.authorization-context.v1",
+        "plan_id": str(row["plan_id"]),
+        "guard_id": str(row["guard_id"]),
+        "collaboration_scope_id": scope_id,
+        "collaboration_scope_revision": revision,
+        "collaboration_scope_policy_revision": policy_revision,
+        "collaboration_scope_domain_revocation_epoch": revocation_epoch,
+        "collaboration_scope_member_harness_ids": members,
+        "guard_expires_at": int(row["guard_expires_at"]),
+        "request_payload_digest": str(row["request_payload_digest"]),
+        "reply_payload_digest": str(row["reply_payload_digest"]),
+    }
+    return {
+        "collaboration_scope_id": scope_id,
+        "collaboration_scope_revision": revision,
+        "collaboration_scope_policy_revision": policy_revision,
+        "collaboration_scope_domain_revocation_epoch": revocation_epoch,
+        "collaboration_scope_member_harness_ids": members,
+        "collaboration_scope_digest": canonical_digest(preimage),
+    }
+
+
+def _bootstrap_c0_payload(row: Any, direction: str) -> dict[str, Any]:
+    if direction not in {"request", "reply"}:
+        raise ValueError("C0 pilot payload direction is invalid")
+    payload = _canonical_object(str(row[f"{direction}_payload_json"]))
+    if "authorization_context" in payload:
+        raise AuthorizationError("C0 pilot payload cannot supply authorization_context")
+    payload["authorization_context"] = _bootstrap_c0_authorization_context(row)
+    return payload
+
+
+def _bootstrap_c0_payload_digest(row: Any, direction: str) -> str:
+    return canonical_digest(_bootstrap_c0_payload(row, direction))
+
+class _BootstrapC0ScopeSnapshot:
+    def __init__(self, context: dict[str, Any]) -> None:
+        self._context = context
+
+    def authorization_context(self) -> dict[str, Any]:
+        return self._context
+
+
+class _BootstrapC0AcknowledgementScopes:
+    def __init__(self, context: dict[str, Any], actor: VerifiedActor) -> None:
+        self._scope = _BootstrapC0ScopeSnapshot(context)
+        self._actor = actor
+
+    def require_in_transaction(
+        self,
+        _connection: Any,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+        action: str,
+        resource: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+    ) -> _BootstrapC0ScopeSnapshot:
+        context = self._scope.authorization_context()
+        if (
+            actor != self._actor
+            or actor.harness_id is None
+            or scope_id != context["collaboration_scope_id"]
+            or action != "message.acknowledge"
+            or resource != "conversation:direct"
+            or target_harness_ids != (actor.harness_id,)
+            or classification is not Classification.C0_PUBLIC
+        ):
+            raise AuthorizationError("C0 pilot acknowledgement scope is invalid")
+        return self._scope
+
+
 
 class C0PilotService:
     """Compose existing policy and mailbox primitives into one fixed C0 proof."""
@@ -60,6 +141,32 @@ class C0PilotService:
         self.mailbox = mailbox
         self.clock = clock
         self.phase_hook = phase_hook
+
+    def _acknowledge_event(
+        self,
+        connection: Any,
+        *,
+        row: Any,
+        actor: VerifiedActor,
+        event_id: str,
+        recipient_id: str,
+        envelope_digest: str,
+        now: int,
+    ) -> dict[str, Any]:
+        context = _bootstrap_c0_authorization_context(row)
+        acknowledgement_mailbox = copy(self.mailbox)
+        acknowledgement_mailbox.collaboration_scopes = _BootstrapC0AcknowledgementScopes(
+            context, actor
+        )
+        return acknowledgement_mailbox._acknowledge_in_transaction(
+            connection,
+            event_id=event_id,
+            collaboration_scope_id=str(context["collaboration_scope_id"]),
+            recipient_id=recipient_id,
+            envelope_digest_value=envelope_digest,
+            owner_actor=actor,
+            now=now,
+        )
 
     def _phase(self, name: str) -> None:
         if self.phase_hook is not None:
@@ -367,7 +474,7 @@ class C0PilotService:
         )
 
     def _request_event(self, row: Any, actor: VerifiedActor, attempt_id: str, now: int) -> Any:
-        payload = _canonical_object(str(row["request_payload_json"]))
+        payload = _bootstrap_c0_payload(row, "request")
         event = new_event(
             event_id=self._event_id(attempt_id, "request"),
             domain_id=actor.domain_id,
@@ -393,7 +500,7 @@ class C0PilotService:
         request_fact: Any,
         now: int,
     ) -> Any:
-        payload = _canonical_object(str(row["reply_payload_json"]))
+        payload = _bootstrap_c0_payload(row, "reply")
         event = new_event(
             event_id=self._event_id(attempt_id, "reply"),
             domain_id=actor.domain_id,
@@ -439,11 +546,7 @@ class C0PilotService:
         direction = "request" if fact_kind.startswith("request_") else "reply"
         sender = row["fresh_harness_id"] if direction == "request" else row["owner_harness_id"]
         recipient = row["owner_harness_id"] if direction == "request" else row["fresh_harness_id"]
-        payload_digest = (
-            row["request_payload_digest"]
-            if direction == "request"
-            else row["reply_payload_digest"]
-        )
+        payload_digest = _bootstrap_c0_payload_digest(row, direction)
         fact = self._fact(connection, attempt_id=attempt_id, fact_kind=fact_kind)
         if (
             fact is None
@@ -585,7 +688,7 @@ class C0PilotService:
                     operation_scope="fresh_to_owner_send",
                     peer_harness_id=str(row["owner_harness_id"]),
                     classification=Classification.C0_PUBLIC,
-                    payload_digest=request_event.payload_digest,
+                    payload_digest=str(row["request_payload_digest"]),
                     event_id=request_event.event_id,
                 ),
                 when=datetime.fromtimestamp(now, UTC),
@@ -682,7 +785,7 @@ class C0PilotService:
                 request_event.actor.harness_id != row["fresh_harness_id"]
                 or request_event.recipients != (row["owner_harness_id"],)
                 or request_event.classification is not Classification.C0_PUBLIC
-                or request_event.payload_digest != row["request_payload_digest"]
+                or request_event.payload_digest != _bootstrap_c0_payload_digest(row, "request")
             ):
                 raise AuthorizationError("C0 pilot request event binding is invalid")
             self._insert_fact(
@@ -705,12 +808,13 @@ class C0PilotService:
                 ),
                 when=datetime.fromtimestamp(now, UTC),
             )
-            acknowledgement = self.mailbox._acknowledge_in_transaction(
+            acknowledgement = self._acknowledge_event(
                 connection,
+                row=row,
+                actor=actor,
                 event_id=request_event.event_id,
                 recipient_id=str(row["owner_harness_id"]),
-                envelope_digest_value=str(request_fact["envelope_digest"]),
-                owner_actor=actor,
+                envelope_digest=str(request_fact["envelope_digest"]),
                 now=now,
             )
             self._insert_fact(
@@ -732,7 +836,7 @@ class C0PilotService:
                     operation_scope="owner_to_fresh_send",
                     peer_harness_id=str(row["fresh_harness_id"]),
                     classification=Classification.C0_PUBLIC,
-                    payload_digest=reply_event.payload_digest,
+                    payload_digest=str(row["reply_payload_digest"]),
                     event_id=reply_event.event_id,
                     causal_parent_event_id=request_event.event_id,
                 ),
@@ -943,7 +1047,7 @@ class C0PilotService:
                 reply_event.actor.harness_id != row["owner_harness_id"]
                 or reply_event.recipients != (row["fresh_harness_id"],)
                 or reply_event.classification is not Classification.C0_PUBLIC
-                or reply_event.payload_digest != row["reply_payload_digest"]
+                or reply_event.payload_digest != _bootstrap_c0_payload_digest(row, "reply")
             ):
                 raise AuthorizationError("C0 pilot reply event binding is invalid")
             self._insert_fact(
@@ -965,11 +1069,14 @@ class C0PilotService:
                 ),
                 when=datetime.fromtimestamp(now, UTC),
             )
-            acknowledgement = self.mailbox._acknowledge_in_transaction(
-                connection, event_id=reply_event.event_id,
+            acknowledgement = self._acknowledge_event(
+                connection,
+                row=row,
+                actor=actor,
+                event_id=reply_event.event_id,
                 recipient_id=str(row["fresh_harness_id"]),
-                envelope_digest_value=str(reply_fact["envelope_digest"]),
-                owner_actor=actor, now=now,
+                envelope_digest=str(reply_fact["envelope_digest"]),
+                now=now,
             )
             self._insert_fact(
                 connection, attempt_id=attempt_id,

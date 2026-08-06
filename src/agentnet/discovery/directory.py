@@ -45,6 +45,23 @@ class DirectoryRecord(BaseModel):
     def bounded_attributes(self) -> "DirectoryRecord":
         if any(token in key.casefold() for key in self.attributes for token in ("secret", "password", "token", "private")):
             raise ValueError("directory attributes cannot contain secret-bearing fields")
+        approved_aliases = self.attributes.get("approved_aliases")
+        if approved_aliases is not None:
+            if not isinstance(approved_aliases, list) or not 1 <= len(approved_aliases) <= 32:
+                raise ValueError("directory approved aliases must be a bounded canonical list")
+            normalized_aliases: list[str] = []
+            for alias in approved_aliases:
+                if (
+                    not isinstance(alias, str)
+                    or any(ord(character) < 0x20 or ord(character) == 0x7F for character in alias)
+                ):
+                    raise ValueError("directory approved aliases contain an invalid value")
+                normalized = " ".join(alias.casefold().split())
+                if not 1 <= len(normalized) <= 256:
+                    raise ValueError("directory approved aliases contain an invalid value")
+                normalized_aliases.append(normalized)
+            if normalized_aliases != sorted(set(normalized_aliases)):
+                raise ValueError("directory approved aliases must be sorted and unique")
         if self.record_type == "endpoint":
             url = self.attributes.get("url")
             if not isinstance(url, str):
@@ -199,17 +216,65 @@ class DirectoryService:
         allowed_types = record_types or frozenset({"agent", "room", "domain", "endpoint"})
         if not allowed_types.issubset({"agent", "room", "domain", "endpoint"}):
             raise ValueError("directory record type filter is invalid")
+        ordered_types = tuple(sorted(allowed_types))
+        type_placeholders = ",".join("?" for _ in ordered_types)
+        if self.store.backend_name == "sqlite":
+            visibility_clause = """EXISTS (
+                SELECT 1
+                  FROM json_each(
+                      directory_records.record_json,
+                      '$.visible_to_principal_ids'
+                  ) AS visible
+                 WHERE visible.value=?
+            )"""
+        elif self.store.backend_name == "postgresql":
+            visibility_clause = """EXISTS (
+                SELECT 1
+                  FROM jsonb_array_elements_text(
+                      directory_records.record_json::jsonb
+                      -> 'visible_to_principal_ids'
+                  ) AS visible(principal_id)
+                 WHERE visible.principal_id=?
+            )"""
+        else:
+            raise AuthorizationError("directory backend cannot enforce bounded visibility")
         with self.store.transaction(immediate=False) as connection:
             self._require_viewer(connection, actor, now=now)
             rows = connection.execute(
-                "SELECT record_json FROM directory_records WHERE status='active' AND expires_at>? ORDER BY record_id",
-                (now,),
+                f"""SELECT record_json FROM directory_records
+                     WHERE domain_id=? AND status='active' AND expires_at>?
+                       AND record_type IN ({type_placeholders})
+                       AND {visibility_clause}
+                     ORDER BY record_id LIMIT ?""",
+                (actor.domain_id, now, *ordered_types, actor.principal_id, limit),
             ).fetchall()
             visible = []
             for row in rows:
                 record = DirectoryRecord.model_validate_json(row["record_json"])
-                if record.record_type in allowed_types and self._is_visible_to_principal(actor, record):
+                if self._is_visible_to_principal(actor, record):
                     visible.append(record)
                 if len(visible) >= limit:
                     break
             return visible
+
+    def list_recipient_records(
+        self,
+        actor: VerifiedActor,
+        *,
+        limit: int = 100,
+        now: int | None = None,
+    ) -> tuple[DirectoryRecord, ...]:
+        """Return only bounded actor-visible rows that name an exact harness."""
+
+        records = self.list_records(
+            actor,
+            record_types=frozenset({"agent", "endpoint"}),
+            limit=limit,
+            now=now,
+        )
+        return tuple(
+            record
+            for record in records
+            if isinstance(record.attributes.get("harness_id"), str)
+            and 1 <= len(record.attributes["harness_id"]) <= 256
+        )

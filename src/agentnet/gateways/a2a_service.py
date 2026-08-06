@@ -254,6 +254,7 @@ def create_persistent_a2a_service(core: CommunicationCore) -> PersistentA2AServi
     runtime = DurableA2ARuntime(
         store=core.store,
         mailbox=core.mailboxes,
+        collaboration_scopes=core.mailboxes.collaboration_scopes,
         policy=core.policy,
         assignments=core.assignments,
         agent_card=card,

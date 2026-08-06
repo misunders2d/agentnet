@@ -84,6 +84,7 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     dispatcher.call(
         "agentnet.conversation.create",
         {
+            "collaboration_scope_id": "scope-1",
             "classification": "C1",
             "conversation_id": "conversation:binding",
             "member_harness_ids": ["harness-responder"],
@@ -92,6 +93,7 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     dispatcher.call(
         "agentnet.conversation.action",
         {
+            "collaboration_scope_id": "scope-1",
             "action": {
                 "kind": "structured_request",
                 "arguments": {"sku": "ABC-123"},
@@ -114,10 +116,14 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
             "thread_id": "thread:binding",
         },
     )
-    dispatcher.call("agentnet.obligation.inbox", {})
+    dispatcher.call(
+        "agentnet.obligation.inbox",
+        {"collaboration_scope_id": "scope-1"},
+    )
     dispatcher.call(
         "agentnet.obligation.transition",
         {
+            "collaboration_scope_id": "scope-1",
             "expected_revision": 1,
             "obligation_id": "obligation-1",
             "reason": "accepted",
@@ -127,6 +133,7 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
     dispatcher.call(
         "agentnet.conversation.action",
         {
+            "collaboration_scope_id": "scope-1",
             "action": {
                 "body": "four units",
                 "kind": "obligation_response",
@@ -161,9 +168,17 @@ def test_canonical_binding_exposes_complete_response_obligation_journey() -> Non
         "agentnet.obligation.transition",
         "agentnet.obligation.cancel",
         "agentnet.obligation.reconcile",
+        "agentnet.recipient.resolve",
+        "agentnet.file.send",
+        "agentnet.file.status",
+        "agentnet.file.download",
     )
     mcp = create_mcp_binding(dispatcher)
     assert [tool.name for tool in mcp._tool_manager.list_tools()] == [
+        "agentnet_recipient_resolve",
+        "agentnet_file_send",
+        "agentnet_file_status",
+        "agentnet_file_download",
         "agentnet_send",
         "agentnet_inbox",
         "agentnet_inbox_acknowledge",
@@ -201,13 +216,18 @@ def test_canonical_inbox_acknowledgement_has_no_identity_or_recipient_arguments(
 
     result = dispatcher.call(
         "agentnet.inbox.acknowledge",
-        {"event_id": "event-1", "envelope_digest": "a" * 64},
+        {
+            "collaboration_scope_id": "scope-1",
+            "event_id": "event-1",
+            "envelope_digest": "a" * 64,
+        },
     )
     assert result == {"operation": "inbox.acknowledge"}
     assert core.calls == [
         (
             "inbox.acknowledge",
             {
+                "collaboration_scope_id": "scope-1",
                 "actor": actor,
                 "event_id": "event-1",
                 "envelope_digest": "a" * 64,
@@ -223,6 +243,7 @@ def test_canonical_inbox_acknowledgement_has_no_identity_or_recipient_arguments(
             dispatcher.call(
                 "agentnet.inbox.acknowledge",
                 {
+                    "collaboration_scope_id": "scope-1",
                     "event_id": "event-1",
                     "envelope_digest": "a" * 64,
                     **injected,
@@ -235,19 +256,27 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
     core = RecordingCore()
     dispatcher = CanonicalToolDispatcher(core, lambda: actor)  # type: ignore[arg-type]
 
-    dispatcher.call("agentnet.room.create", {})
+    dispatcher.call(
+        "agentnet.room.create",
+        {"collaboration_scope_id": "scope-1"},
+    )
     dispatcher.call(
         "agentnet.room.member.add",
         {
+            "collaboration_scope_id": "scope-1",
             "harness_id": "harness-member-0001",
             "role": "moderator",
             "room_id": "room:/owner",
         },
     )
-    dispatcher.call("agentnet.room.get", {"room_id": "room:/owner"})
+    dispatcher.call(
+        "agentnet.room.get",
+        {"collaboration_scope_id": "scope-1", "room_id": "room:/owner"},
+    )
     dispatcher.call(
         "agentnet.room.send",
         {
+            "collaboration_scope_id": "scope-1",
             "expected_control_sequence": 4,
             "idempotency_key": "room-message-0001",
             "payload": {"body": "room hello"},
@@ -280,6 +309,7 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
     }
     assert core.calls[1][1] == {
         "actor": actor,
+        "collaboration_scope_id": "scope-1",
         "classification": core.calls[0][1]["classification"],
         "expires_at": None,
         "persistent": True,
@@ -294,6 +324,7 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
     }
     assert core.calls[3][1] == {
         "actor": actor,
+        "collaboration_scope_id": "scope-1",
         "harness_id": "harness-member-0001",
         "mls_key_package": None,
         "role": "moderator",
@@ -304,7 +335,11 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
         "actor": actor,
         "resource": "room:/owner",
     }
-    assert core.calls[5][1] == {"actor": actor, "room_id": "room:/owner"}
+    assert core.calls[5][1] == {
+        "actor": actor,
+        "collaboration_scope_id": "scope-1",
+        "room_id": "room:/owner",
+    }
     assert core.calls[6][1] == {
         "action": "room.action",
         "actor": actor,
@@ -319,6 +354,7 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
     }
     assert core.calls[7][1] == {
         "actor": actor,
+        "collaboration_scope_id": "scope-1",
         "classification": core.calls[0][1]["classification"],
         "conversation_id": None,
         "expected_room_control_sequence": 4,
@@ -330,13 +366,18 @@ def test_canonical_room_tools_call_production_surfaces_without_unsafe_arguments(
     }
 
     valid_arguments = {
-        "agentnet.room.create": {},
+        "agentnet.room.create": {"collaboration_scope_id": "scope-1"},
         "agentnet.room.member.add": {
+            "collaboration_scope_id": "scope-1",
             "harness_id": "harness-member-0001",
             "room_id": "room-1",
         },
-        "agentnet.room.get": {"room_id": "room-1"},
+        "agentnet.room.get": {
+            "collaboration_scope_id": "scope-1",
+            "room_id": "room-1",
+        },
         "agentnet.room.send": {
+            "collaboration_scope_id": "scope-1",
             "expected_control_sequence": 1,
             "idempotency_key": "room-message-0002",
             "payload": {"body": "safe"},
@@ -367,6 +408,7 @@ def test_pi_extension_exposes_the_same_canonical_journey_as_mcp() -> None:
 def test_canonical_binding_rejects_identity_injection_and_non_obligation_marker() -> None:
     dispatcher = CanonicalToolDispatcher(RecordingCore(), object)  # type: ignore[arg-type]
     base = {
+        "collaboration_scope_id": "scope-1",
         "action": {"body": "answer this", "kind": "post", "response_obligation": {}},
         "conversation_id": "conversation:binding",
         "idempotency_key": "binding-request-0002",

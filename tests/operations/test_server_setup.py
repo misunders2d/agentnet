@@ -14,6 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from agentnet.artifacts.clamav import (
+    ScannerEndpoint,
+    clamav_profile_digest,
+    clamav_rules_digest,
+)
 from agentnet.approval.config import (
     MANDATORY_APPROVAL_PURPOSES,
     ApprovalOwnerOIDCConfig,
@@ -71,6 +76,33 @@ def _stable_synthetic_runtime_hashes(
             "_sha256_stable_tree",
             lambda path: hashlib.sha256(f"tree:{path}".encode()).hexdigest(),
         )
+    if request.node.name.startswith("test_scanner_setup_"):
+        monkeypatch.setattr(
+            setup,
+            "_resolve_node_executable",
+            lambda: Path("/opt/agentnet-test/bin/node"),
+        )
+        monkeypatch.setattr(
+            setup,
+            "_resolve_uv_executable",
+            lambda: Path("/opt/agentnet-test/bin/uv"),
+        )
+        monkeypatch.setattr(
+            setup,
+            "_resolve_executable",
+            lambda *_args, **_kwargs: Path(
+                "/opt/agentnet-test/npm/bin/agentnet.mjs"
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            setup,
+            "_require_scanner_readiness",
+            lambda spec: {
+                "scanner_id": spec.scanner_id,
+                "status": "ready",
+            },
+        )
 
 
 def test_setup_layout_keeps_runtime_lock_and_marker_in_persistent_setup_custody(
@@ -110,11 +142,38 @@ def _private_json(path: Path, value: object) -> Path:
 
 
 def _request(tmp_path: Path) -> Path:
+    scanner_endpoint = ScannerEndpoint.from_uri("unix:///run/clamav/clamd.sock")
+    scanner_key = P256KeyPair.generate()
+    scanner_key_path = tmp_path / "scanner-key.pem"
+    scanner_key_path.write_bytes(scanner_key.private_pem)
+    scanner_key_path.chmod(0o600)
+    signature_updated_at = int(time.time())
+    signature_max_age = 172_800
+    rules_digest = clamav_rules_digest(
+        signature_version="daily-1",
+        signature_updated_at=signature_updated_at,
+    )
+    profile_digest = clamav_profile_digest(
+        endpoint=scanner_endpoint,
+        engine_version="1.4.3",
+        timeout_seconds=30.0,
+        max_bytes=16_777_216,
+        max_response_bytes=4_096,
+        max_signature_age_seconds=signature_max_age,
+    )
     core_env = tmp_path / "core.env"
     core_env.write_text(
         f"AGENTNET_DATABASE_URL={ORDINARY_SERVER_POSTGRES_DSN}\n"
         "AGENTNET_CORE_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
+        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n"
+        f"AGENTNET_CLAMAV_ENDPOINT={scanner_endpoint.uri}\n"
+        "AGENTNET_CLAMAV_SCANNER_ID=maintained-scanner\n"
+        "AGENTNET_CLAMAV_KEY_EPOCH=1\n"
+        f"AGENTNET_CLAMAV_SIGNING_KEY_FILE={scanner_key_path}\n"
+        "AGENTNET_CLAMAV_ENGINE_VERSION=1.4.3\n"
+        "AGENTNET_CLAMAV_SIGNATURE_VERSION=daily-1\n"
+        f"AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT={signature_updated_at}\n"
+        f"AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS={signature_max_age}\n",
         encoding="utf-8",
     )
     core_env.chmod(0o600)
@@ -168,10 +227,12 @@ def _request(tmp_path: Path) -> Path:
     scanner_trust = _private_json(
         tmp_path / "scanner-trust.json",
         {
-            "trusted_public_keys": {"scanner-key": P256KeyPair.generate().public_pem},
-            "required_engine": "synthetic-scanner",
-            "required_rules_digest": "a" * 64,
-            "required_profile_digest": "b" * 64,
+            "trusted_public_keys": {
+                "maintained-scanner:1": scanner_key.public_pem,
+            },
+            "required_engine": "clamav",
+            "required_rules_digest": rules_digest,
+            "required_profile_digest": profile_digest,
         },
     )
     return _private_json(
@@ -212,7 +273,145 @@ def _communication_only_request(tmp_path: Path) -> Path:
     value["schema"] = "agentnet.server-setup.request.v2"
     value["artifact_mode"] = "disabled"
     value.pop("scanner_trust_file")
+    core_environment = Path(value["core_environment_file"])
+    core_environment.write_text(
+        "".join(
+            line
+            for line in core_environment.read_text(encoding="utf-8").splitlines(
+                keepends=True
+            )
+            if not line.startswith("AGENTNET_CLAMAV_")
+        ),
+        encoding="utf-8",
+    )
     return _private_json(request_path, value)
+def _replace_environment_value(path: Path, name: str, value: str) -> None:
+    values = {
+        key: current
+        for key, current in (
+            line.split("=", 1)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    }
+    values[name] = value
+    path.write_text(
+        "".join(f"{key}={current}\n" for key, current in values.items()),
+        encoding="utf-8",
+    )
+
+
+def test_scanner_setup_requires_one_local_endpoint(tmp_path: Path) -> None:
+    request_path = _artifact_enabled_v2_request(tmp_path)
+    request_value = json.loads(request_path.read_text(encoding="utf-8"))
+    core_environment = Path(request_value["core_environment_file"])
+    _replace_environment_value(
+        core_environment,
+        "AGENTNET_CLAMAV_ENDPOINT",
+        "tcp://scanner.example:3310",
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        plan_server_setup(load_server_setup_request(request_path), layout=SetupLayout(tmp_path / "host"))
+
+    assert exc_info.value.blocker == "scanner_configuration"
+
+
+def test_scanner_setup_rejects_stale_signature_database(tmp_path: Path) -> None:
+    request_path = _artifact_enabled_v2_request(tmp_path)
+    request_value = json.loads(request_path.read_text(encoding="utf-8"))
+    core_environment = Path(request_value["core_environment_file"])
+    _replace_environment_value(
+        core_environment,
+        "AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT",
+        str(int(time.time()) - 700_000),
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        plan_server_setup(load_server_setup_request(request_path), layout=SetupLayout(tmp_path / "host"))
+
+    assert exc_info.value.blocker == "scanner_signatures_stale"
+
+
+def test_scanner_setup_rejects_key_outside_private_custody(tmp_path: Path) -> None:
+    request_path = _artifact_enabled_v2_request(tmp_path)
+    request_value = json.loads(request_path.read_text(encoding="utf-8"))
+    core_values = {
+        key: value
+        for key, value in (
+            line.split("=", 1)
+            for line in Path(request_value["core_environment_file"])
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    }
+    Path(core_values["AGENTNET_CLAMAV_SIGNING_KEY_FILE"]).chmod(0o644)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        plan_server_setup(load_server_setup_request(request_path), layout=SetupLayout(tmp_path / "host"))
+
+    assert exc_info.value.blocker == "scanner_key_custody"
+
+
+def test_scanner_setup_rejects_unpinned_signing_key(tmp_path: Path) -> None:
+    request_path = _artifact_enabled_v2_request(tmp_path)
+    request_value = json.loads(request_path.read_text(encoding="utf-8"))
+    trust_path = Path(request_value["scanner_trust_file"])
+    trust = json.loads(trust_path.read_text(encoding="utf-8"))
+    trust["trusted_public_keys"]["maintained-scanner:1"] = (
+        P256KeyPair.generate().public_pem
+    )
+    _private_json(trust_path, trust)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        plan_server_setup(load_server_setup_request(request_path), layout=SetupLayout(tmp_path / "host"))
+
+    assert exc_info.value.blocker == "scanner_trust_mismatch"
+
+
+def test_scanner_setup_requires_live_signed_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    request_path = _artifact_enabled_v2_request(tmp_path)
+    request = load_server_setup_request(request_path)
+    spec = setup._server_setup_preflight(
+        request,
+        layout=SetupLayout(tmp_path / "host"),
+    ).scanner_setup
+    assert spec is not None
+
+    class ReadyScanner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def scan(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                profile_digest=spec.profile_digest,
+                result="allow",
+                rules_digest=spec.rules_digest,
+                scanner_engine="clamav",
+                scanner_id=spec.scanner_id,
+                scanner_key_epoch=spec.scanner_key_epoch,
+                signature="test-signature",
+                signed_fields=lambda: {},
+            )
+
+    monkeypatch.setattr(setup, "verify_signature", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(setup, "ClamAVScanner", ReadyScanner)
+    assert setup._require_scanner_readiness(spec)["status"] == "ready"
+
+    monkeypatch.setattr(
+        setup,
+        "ClamAVScanner",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("down")),
+    )
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._require_scanner_readiness(spec)
+    assert exc_info.value.blocker == "scanner_unready"
+
+
 
 
 def test_server_setup_is_one_fixed_public_cli_surface(tmp_path: Path) -> None:
@@ -1594,11 +1793,10 @@ def test_plan_rejects_database_reference_drift(
     request_path = _request(tmp_path)
     value = json.loads(request_path.read_text(encoding="utf-8"))
     core_env = Path(value["core_environment_file"])
-    core_env.write_text(
-        "AGENTNET_DATABASE_URL=postgresql://other@%2Fvar%2Frun%2Fpostgresql/agentnet\n"
-        "AGENTNET_CORE_OIDC_CLIENT_SECRET=synthetic-test-secret\n"
-        "AGENTNET_APPROVAL_CORE_TOKEN=synthetic-shared-test-token-0123456789abcdef0123456789\n",
-        encoding="utf-8",
+    _replace_environment_value(
+        core_env,
+        "AGENTNET_DATABASE_URL",
+        "postgresql://other@%2Fvar%2Frun%2Fpostgresql/agentnet",
     )
     core_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
@@ -2139,17 +2337,16 @@ def test_plan_rejects_invalid_broker_credential_before_managed_writes(
 ) -> None:
     request_path = _request(tmp_path)
     value = json.loads(request_path.read_text(encoding="utf-8"))
-    for field, oidc_name in (
-        ("core_environment_file", "AGENTNET_CORE_OIDC_CLIENT_SECRET"),
-        ("approval_environment_file", "AGENTNET_APPROVAL_OIDC_CLIENT_SECRET"),
+    for field in (
+        "core_environment_file",
+        "approval_environment_file",
     ):
         environment = Path(value[field])
-        lines = [f"{oidc_name}=synthetic-test-secret"]
-        if field == "core_environment_file":
-            lines.insert(0, f"AGENTNET_DATABASE_URL={ORDINARY_SERVER_POSTGRES_DSN}")
-        lines.append(f"AGENTNET_APPROVAL_CORE_TOKEN={broker_value}")
-        environment.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        environment.chmod(0o600)
+        _replace_environment_value(
+            environment,
+            "AGENTNET_APPROVAL_CORE_TOKEN",
+            broker_value,
+        )
     import agentnet.operations.server_setup as setup
 
     monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))

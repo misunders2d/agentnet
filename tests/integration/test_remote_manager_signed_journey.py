@@ -20,7 +20,11 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeCompleteRequest,
     CommunicationScopeStatusRequest,
 )
-from agentnet.authorization.communication_scope_service import CommunicationScopeService
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+    CommunicationScopeService,
+)
 from agentnet.authorization.evidence import AUTHORITY_COMMAND_PURPOSE, IssuanceAuthority, SignedAuthorityCommand
 from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement, LocalConformancePolicyEngine
 from agentnet.bindings.remote_manager import RemoteManagerDispatcher, RemoteManagerRequestError
@@ -30,7 +34,7 @@ from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.http_api import create_app
 from agentnet.identity.actors import VerifiedActor
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
-from agentnet.protocol.models import DeliveryFact
+from agentnet.protocol.models import Classification, DeliveryFact
 from agentnet.security.dpop import canonical_request_target, create_request_proof
 from agentnet.security.signatures import P256KeyPair, canonical_digest, canonical_json
 
@@ -198,6 +202,97 @@ def _issue_manager_authority(core: CommunicationCore, *, administrator: Verified
     )
 
 
+def _issue_manager_collaboration_scope(
+    core: CommunicationCore,
+    *,
+    administrator: VerifiedActor,
+    administrator_key: P256KeyPair,
+    manager: VerifiedActor,
+) -> str:
+    revision = core.policy.current_policy_revision(administrator)
+    scope_id = f"scope:remote-manager:{uuid4()}"
+    entitlement = HumanEntitlement(
+        entitlement_id="manager-a-collaboration-scope-issuer",
+        domain_id=administrator.domain_id,
+        principal_id=administrator.principal_id,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource_pattern=f"scope:{scope_id}",
+        revision=revision,
+        expires_at=None,
+    )
+    reason = "grant Manager A authority to issue the exact Manager collaboration scope"
+    resource, mutation = core.policy.entitlement_issuance_binding(
+        entitlement,
+        reason=reason,
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=administrator,
+            action="authorization.entitlement.issue",
+            resource=resource,
+            policy_revision=revision,
+            context={"request_digest": canonical_digest(mutation)},
+        )
+    )
+    core.policy.add_entitlement(
+        entitlement,
+        command=_authority_command(
+            administrator_key,
+            administrator,
+            resource=resource,
+            mutation=mutation,
+            reason=reason,
+            revision=revision,
+        ),
+        authority=IssuanceAuthority(
+            actor=administrator,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (administrator.domain_id,),
+    )
+    assert domain is not None
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(
+            sorted((administrator.harness_id, manager.harness_id))
+        ),
+        allowed_actions=(
+            "message.acknowledge",
+            "message.read",
+            "message.send",
+        ),
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    scope_request = core.collaboration_scopes.issuance_request(
+        actor=administrator,
+        proposal=proposal,
+    )
+    scope_decision = core.policy.require(
+        AuthorizationRequest(
+            actor=administrator,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=f"scope:{scope_id}",
+            policy_revision=revision,
+            context=scope_request,
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=administrator,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=administrator,
+            policy_decision_id=scope_decision.decision_id,
+        ),
+    ).scope_id
+
+
 class _SignedInProcessClient:
     """Test-local transport with the same purpose-bound proof as AgentNetClient."""
 
@@ -251,6 +346,16 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
     )
     core = CommunicationCore(config, store)
     _issue_manager_authority(core, administrator=person_a_manager, administrator_key=person_a_key, manager=person_b_manager)
+    collaboration_scope_id = _issue_manager_collaboration_scope(
+        core,
+        administrator=person_a_manager,
+        administrator_key=person_a_key,
+        manager=person_b_manager,
+    )
+    collaboration_scope_context = core.collaboration_scopes.get_for_actor(
+        actor=person_a_manager,
+        scope_id=collaboration_scope_id,
+    ).authorization_context()
     manager_b_actions = store.fetch_all("SELECT action,expires_at FROM entitlements WHERE principal_id=? AND entitlement_id LIKE 'manager-b-%'", (person_b_manager.principal_id,))
     assert {row["action"] for row in manager_b_actions} == set(COMMUNICATION_SCOPE_ACTIONS)
     assert all(row["expires_at"] is None for row in manager_b_actions)
@@ -266,9 +371,9 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
         client_a = _SignedInProcessClient(http, actor=person_a_manager, key=person_a_key)
         client_b = _SignedInProcessClient(http, actor=person_b_manager, key=person_b_key)
         client_unscoped = _SignedInProcessClient(http, actor=unscoped_manager, key=unscoped_manager_key)
-        manager_a = RemoteManagerDispatcher(client_a, person_a_manager)  # type: ignore[arg-type]
-        manager_b = RemoteManagerDispatcher(client_b, person_b_manager)  # type: ignore[arg-type]
-        unscoped = RemoteManagerDispatcher(client_unscoped, unscoped_manager)  # type: ignore[arg-type]
+        manager_a = RemoteManagerDispatcher(client_a, lambda: person_a_manager)  # type: ignore[arg-type]
+        manager_b = RemoteManagerDispatcher(client_b, lambda: person_b_manager)  # type: ignore[arg-type]
+        unscoped = RemoteManagerDispatcher(client_unscoped, lambda: unscoped_manager)  # type: ignore[arg-type]
 
         with pytest.raises(RemoteManagerRequestError) as denied:
             invoke(unscoped, "agentnet.send", {"recipients": [person_b_manager.harness_id], "payload": {"text": "unscoped manager must not inherit Manager A authority"}, "idempotency_key": "unscoped-manager-send-0001", "classification": "C1"})
@@ -277,24 +382,27 @@ def test_remote_managers_cross_principals_over_signed_http_with_exact_scope_and_
 
         sent = invoke(manager_a, "agentnet.send", {"recipients": [person_b_manager.harness_id], "payload": {"text": "signed Manager A to Manager B"}, "idempotency_key": "manager-a-to-manager-b-0001", "classification": "C1"})
         assert sent["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
-        inbox_b = invoke(manager_b, "agentnet.inbox", {"after_cursor": 0, "limit": 25})
+        inbox_b = invoke(manager_b, "agentnet.inbox", {"collaboration_scope_id": collaboration_scope_id, "after_cursor": 0, "limit": 25})
         received_b = next(item for item in inbox_b if item["event"]["event_id"] == sent["event_id"])
-        assert received_b["payload"] == {"text": "signed Manager A to Manager B"}
+        assert received_b["payload"] == {
+            "authorization_context": collaboration_scope_context,
+            "text": "signed Manager A to Manager B",
+        }
         assert received_b["event"]["actor"]["principal_id"] == person_a_manager.principal_id
         assert received_b["event"]["actor"]["harness_id"] == person_a_manager.harness_id
         assert received_b["event"]["recipients"] == [person_b_manager.harness_id]
-        ack_b = invoke(manager_b, "agentnet.inbox.acknowledge", {"event_id": sent["event_id"], "envelope_digest": sent["envelope_digest"]})
+        ack_b = invoke(manager_b, "agentnet.inbox.acknowledge", {"collaboration_scope_id": collaboration_scope_id, "event_id": sent["event_id"], "envelope_digest": sent["envelope_digest"]})
         assert ack_b["fact"] == DeliveryFact.RECIPIENT_COMMITTED.value
         assert ack_b["recipient_id"] == person_b_manager.harness_id
 
         reply = invoke(manager_b, "agentnet.send", {"recipients": [person_a_manager.harness_id], "payload": {"text": "signed Manager B acknowledgement", "in_reply_to": sent["event_id"]}, "idempotency_key": "manager-b-to-manager-a-reply-0001", "classification": "C1"})
-        inbox_a = invoke(manager_a, "agentnet.inbox", {"after_cursor": 0, "limit": 25})
+        inbox_a = invoke(manager_a, "agentnet.inbox", {"collaboration_scope_id": collaboration_scope_id, "after_cursor": 0, "limit": 25})
         received_a = next(item for item in inbox_a if item["event"]["event_id"] == reply["event_id"])
         assert received_a["payload"]["in_reply_to"] == sent["event_id"]
         assert received_a["event"]["actor"]["principal_id"] == person_b_manager.principal_id
         assert received_a["event"]["actor"]["harness_id"] == person_b_manager.harness_id
         assert received_a["event"]["recipients"] == [person_a_manager.harness_id]
-        ack_a = invoke(manager_a, "agentnet.inbox.acknowledge", {"event_id": reply["event_id"], "envelope_digest": reply["envelope_digest"]})
+        ack_a = invoke(manager_a, "agentnet.inbox.acknowledge", {"collaboration_scope_id": collaboration_scope_id, "event_id": reply["event_id"], "envelope_digest": reply["envelope_digest"]})
         assert ack_a["fact"] == DeliveryFact.RECIPIENT_COMMITTED.value
         assert ack_a["recipient_id"] == person_a_manager.harness_id
 

@@ -1,6 +1,6 @@
 {
   "name": "@misunders2d/agentnet",
-  "version": "0.1.44",
+  "version": "0.1.45",
   "description": "Self-hosted, agent-agnostic secure communication network for Claude, Codex, Pi, Antigravity, and A2A agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -48,6 +48,7 @@
   "scripts": {
     "check:package": "node npm/scripts/check-package.mjs",
     "check:packed": "node npm/scripts/check-packed-package.mjs",
+    "check:exact-endpoint-routing": "UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/ci/exact_endpoint_routing_e2e.py",
     "check": "npm run check:package && UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py && UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py && npm run check:packed",
     "test": "npm run check",
     "prepack": "npm run check:package",
@@ -102,6 +103,9 @@
     "evidence/local/2026-08-04-v0.1.44/artifacts/RETENTION.md",
     "evidence/local/2026-08-04-v0.1.44/artifacts/agentnet-0.1.44-py3-none-any.whl",
     "evidence/local/2026-08-04-v0.1.44/artifacts/agentnet-0.1.44.tar.gz",
+    "evidence/local/2026-08-06-v0.1.45/artifacts/RETENTION.md",
+    "evidence/local/2026-08-06-v0.1.45/artifacts/agentnet-0.1.45-py3-none-any.whl",
+    "evidence/local/2026-08-06-v0.1.45/artifacts/agentnet-0.1.45.tar.gz",
     "evidence/**/*.json",
     "npm/**/*.mjs",
     "npm/**/*.ps1",

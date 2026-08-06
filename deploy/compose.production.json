@@ -26,6 +26,32 @@
       "restart": "unless-stopped",
       "security_opt": ["no-new-privileges:true"]
     },
+    "clamav": {
+      "profiles": ["artifact-scanning"],
+      "image": "${AGENTNET_CLAMAV_IMAGE_REPOSITORY:-local.invalid/agentnet/clamav}@sha256:${AGENTNET_CLAMAV_IMAGE_DIGEST:-0000000000000000000000000000000000000000000000000000000000000000}",
+      "environment": {
+        "CLAMD_CONF_LocalSocket": "/run/agentnet-clamav/clamd.sock",
+        "CLAMD_CONF_LocalSocketMode": "666",
+        "CLAMD_CONF_StreamMaxLength": "16M"
+      },
+      "volumes": [
+        "agentnet-clamav-signatures:/var/lib/clamav",
+        "agentnet-clamav-socket:/run/agentnet-clamav"
+      ],
+      "networks": ["agentnet-clamav-updates"],
+      "healthcheck": {
+        "test": ["CMD", "clamdscan", "--ping=1", "--wait=5"],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 10,
+        "start_period": "60s"
+      },
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "init": true,
+      "restart": "unless-stopped",
+      "stop_grace_period": "30s"
+    },
     "agentnet-bootstrap": {
       "image": "${AGENTNET_SERVER_AGENT_IMAGE_REPOSITORY:?owner-supplied AgentNet image repository is required}@sha256:${AGENTNET_SERVER_AGENT_IMAGE_DIGEST:?owner-supplied AgentNet image digest is required}",
       "environment": {
@@ -36,8 +62,15 @@
         "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_A_OIDC_ENROLLMENT_CONFIG_FILE:-}",
         "AGENTNET_OIDC_CLIENT_SECRET": "${AGENTNET_AGENT_A_OIDC_CLIENT_SECRET:-}",
         "AGENTNET_APPROVAL_CORE_TOKEN": "${AGENTNET_AGENT_A_APPROVAL_CORE_TOKEN:-}",
-        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:?agent A scanner trust public config path is required}",
-        "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_A_CAPABILITIES:-offline_custody,artifact_storage}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:-}",
+        "AGENTNET_CLAMAV_ENDPOINT": "${AGENTNET_CLAMAV_ENDPOINT:-unix:///run/agentnet-clamav/clamd.sock}",
+        "AGENTNET_CLAMAV_TIMEOUT_SECONDS": "${AGENTNET_CLAMAV_TIMEOUT_SECONDS:-30}",
+        "AGENTNET_CLAMAV_MAX_RESPONSE_BYTES": "${AGENTNET_CLAMAV_MAX_RESPONSE_BYTES:-4096}",
+        "AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS": "${AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS:-86400}",
+        "AGENTNET_CLAMAV_SCANNER_ID": "${AGENTNET_CLAMAV_SCANNER_ID:-maintained-scanner}",
+        "AGENTNET_CLAMAV_SCANNER_KEY_EPOCH": "${AGENTNET_CLAMAV_SCANNER_KEY_EPOCH:-1}",
+        "AGENTNET_CLAMAV_PRIVATE_KEY_FILE": "/run/agentnet-private/clamav-scanner-signing.pem",
+        "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_A_CAPABILITIES:-offline_custody}",
         "AGENTNET_FEATURES": "${AGENTNET_AGENT_A_FEATURES:-}",
         "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_A_COMPONENT_EVIDENCE:-}",
         "AGENTNET_DATABASE_HOST": "postgres",
@@ -75,6 +108,7 @@
       "secrets": ["postgres_password"],
       "volumes": [
         "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-clamav-socket:/run/agentnet-clamav:ro",
         "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
         "${AGENTNET_AGENT_A_PRIVATE_CONFIG_DIR:-./private/agent-a}:/run/agentnet-private:ro",
         "${AGENTNET_AGENT_A_PUBLIC_CONFIG_DIR:-./config/agent-a}:/run/agentnet-public:ro"
@@ -98,7 +132,14 @@
         "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_A_OIDC_ENROLLMENT_CONFIG_FILE:-}",
         "AGENTNET_OIDC_CLIENT_SECRET": "${AGENTNET_AGENT_A_OIDC_CLIENT_SECRET:-}",
         "AGENTNET_APPROVAL_CORE_TOKEN": "${AGENTNET_AGENT_A_APPROVAL_CORE_TOKEN:-}",
-        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:?agent A scanner trust public config path is required}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_A_SCANNER_TRUST_CONFIG_FILE:-}",
+        "AGENTNET_CLAMAV_ENDPOINT": "${AGENTNET_CLAMAV_ENDPOINT:-unix:///run/agentnet-clamav/clamd.sock}",
+        "AGENTNET_CLAMAV_TIMEOUT_SECONDS": "${AGENTNET_CLAMAV_TIMEOUT_SECONDS:-30}",
+        "AGENTNET_CLAMAV_MAX_RESPONSE_BYTES": "${AGENTNET_CLAMAV_MAX_RESPONSE_BYTES:-4096}",
+        "AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS": "${AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS:-86400}",
+        "AGENTNET_CLAMAV_SCANNER_ID": "${AGENTNET_CLAMAV_SCANNER_ID:-maintained-scanner}",
+        "AGENTNET_CLAMAV_SCANNER_KEY_EPOCH": "${AGENTNET_CLAMAV_SCANNER_KEY_EPOCH:-1}",
+        "AGENTNET_CLAMAV_PRIVATE_KEY_FILE": "/run/agentnet-private/clamav-scanner-signing.pem",
         "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_A_CAPABILITIES:-offline_custody,artifact_storage}",
         "AGENTNET_FEATURES": "${AGENTNET_AGENT_A_FEATURES:-}",
         "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_A_COMPONENT_EVIDENCE:-}",
@@ -139,6 +180,7 @@
       "secrets": ["postgres_password"],
       "volumes": [
         "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-clamav-socket:/run/agentnet-clamav:ro",
         "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
         "${AGENTNET_AGENT_A_PRIVATE_CONFIG_DIR:-./private/agent-a}:/run/agentnet-private:ro",
         "${AGENTNET_AGENT_A_PUBLIC_CONFIG_DIR:-./config/agent-a}:/run/agentnet-public:ro"
@@ -173,7 +215,14 @@
         "AGENTNET_OIDC_ENROLLMENT_CONFIG_FILE": "${AGENTNET_AGENT_B_OIDC_ENROLLMENT_CONFIG_FILE:-}",
         "AGENTNET_OIDC_CLIENT_SECRET": "${AGENTNET_AGENT_B_OIDC_CLIENT_SECRET:-}",
         "AGENTNET_APPROVAL_CORE_TOKEN": "${AGENTNET_AGENT_B_APPROVAL_CORE_TOKEN:-}",
-        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_B_SCANNER_TRUST_CONFIG_FILE:?agent B scanner trust public config path is required}",
+        "AGENTNET_SCANNER_TRUST_CONFIG_FILE": "${AGENTNET_AGENT_B_SCANNER_TRUST_CONFIG_FILE:-}",
+        "AGENTNET_CLAMAV_ENDPOINT": "${AGENTNET_CLAMAV_ENDPOINT:-unix:///run/agentnet-clamav/clamd.sock}",
+        "AGENTNET_CLAMAV_TIMEOUT_SECONDS": "${AGENTNET_CLAMAV_TIMEOUT_SECONDS:-30}",
+        "AGENTNET_CLAMAV_MAX_RESPONSE_BYTES": "${AGENTNET_CLAMAV_MAX_RESPONSE_BYTES:-4096}",
+        "AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS": "${AGENTNET_CLAMAV_MAX_SIGNATURE_AGE_SECONDS:-86400}",
+        "AGENTNET_CLAMAV_SCANNER_ID": "${AGENTNET_CLAMAV_SCANNER_ID:-maintained-scanner}",
+        "AGENTNET_CLAMAV_SCANNER_KEY_EPOCH": "${AGENTNET_CLAMAV_SCANNER_KEY_EPOCH:-1}",
+        "AGENTNET_CLAMAV_PRIVATE_KEY_FILE": "/run/agentnet-private/clamav-scanner-signing.pem",
         "AGENTNET_SERVER_AGENT_CAPABILITIES": "${AGENTNET_AGENT_B_CAPABILITIES:-offline_custody,artifact_storage}",
         "AGENTNET_FEATURES": "${AGENTNET_AGENT_B_FEATURES:-}",
         "AGENTNET_COMPONENT_EVIDENCE": "${AGENTNET_AGENT_B_COMPONENT_EVIDENCE:-}",
@@ -214,6 +263,7 @@
       "secrets": ["postgres_password"],
       "volumes": [
         "agentnet-artifacts:/var/lib/agentnet/artifacts",
+        "agentnet-clamav-socket:/run/agentnet-clamav:ro",
         "agentnet-runtime-secrets:/var/lib/agentnet/secrets",
         "${AGENTNET_AGENT_B_PRIVATE_CONFIG_DIR:-./private/agent-b}:/run/agentnet-private:ro",
         "${AGENTNET_AGENT_B_PUBLIC_CONFIG_DIR:-./config/agent-b}:/run/agentnet-public:ro"
@@ -299,11 +349,14 @@
   "volumes": {
     "agentnet-postgres-data": {},
     "agentnet-artifacts": {},
-    "agentnet-runtime-secrets": {}
+    "agentnet-runtime-secrets": {},
+    "agentnet-clamav-signatures": {},
+    "agentnet-clamav-socket": {}
   },
   "networks": {
     "agentnet-backplane": {
       "internal": true
-    }
+    },
+    "agentnet-clamav-updates": {}
   }
 }

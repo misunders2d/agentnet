@@ -1,0 +1,79 @@
+{
+  "run_id": "2026-08-06-v0.1.45",
+  "evaluated_at": "2026-08-06T14:35:00Z",
+  "scope": "v0_1_45_exact_endpoint_collaboration_lifecycle_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "5aa49f85cff9dc78814f2f6faa2996740153d5e9585d41616165ad2f0e285d91",
+  "prior_runtime_evidence": "evidence/local/2026-08-04-v0.1.42-c0-live/manifest.json",
+  "supersedes_package_evidence": "evidence/local/2026-08-04-v0.1.44/manifest.json",
+  "change_boundary": "Candidate 0.1.45 cleanly replaces the pre-release schema catalog with sole schema v7; binds endpoint lifecycle and exact routing to the current verified actor, credential, policy, revocation, and collaboration scope; completes all five harness adapters, conversations, rooms, tasks, response obligations, file transfer, safe downloads, opaque invitation continuation, resumable user-level update, and the exact rollback-capable 0.1.44 ordinary-server transition. It creates no fallback scope, privileged Hub identity, implicit authority, production claim, owner decision, or gate promotion.",
+  "execution_context": {
+    "source": "ordinary local user in the AgentNet repository; browser smoke used a synthetic loopback server and isolated Chromium; installed routing used a fresh npm tarball, unrelated prefix, package-owned runtime, and empty workspace",
+    "focused_source": "PASS: 336 passed and 5 expected dedicated-PostgreSQL skips across endpoint lifecycle, client setup, endpoint binding, local binding composition, signed supervisor composition, all harness adapters, collaboration scope, recipient resolution, obligation wakeup, schema-v7 migration and upgrade rollback safety, artifact transfer/safety, invitations, browser continuation, and ordinary-server setup recovery.",
+    "broad_source": "PASS: package source corpus reports 2101 passed and 21 expected platform/dedicated-PostgreSQL skips; installed-live-inference, subprocess-lifecycle, and bake-off-evidence remain separate gates.",
+    "packed_generations": "PASS: source plus two clean recursive npm installation generations each report 2128 passed and 21 expected skips; generation 2 passes exact-endpoint routing and the packaged v0.1.45 user journey with package-tree equality and no residue.",
+    "root_installed_external_host": "NOT RUN: same-commit CI, staged package, remote deployment, and public publication remain separate externally visible actions; no production or shared host was mutated.",
+    "callback_incident": "No prior callback, invitation continuation, browser session, mutation token, collaboration scope, endpoint capability, setup journal, or runtime state is reused by the candidate package; fresh exact external evidence remains required."
+  },
+  "candidate_posture": {
+    "latest_published": "0.1.44",
+    "candidate": "0.1.45",
+    "status": "BLOCKED",
+    "production_ready": false,
+    "ship_eligible": false,
+    "external_first_message": "NOT RUN for candidate 0.1.45; retained earlier live results remain historical and do not prove this source"
+  },
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py",
+      "result": "PASS: 336 passed, 5 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2101 passed, 21 expected platform/dedicated-PostgreSQL skips, 1 upstream Starlette deprecation warning; release-manifest tests were deferred until exact evidence assembly"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: fresh source plus generations 1 and 2 each report 2128 passed and 21 expected platform/dedicated-PostgreSQL skips; generation 2 passes the exact-endpoint routing gate and packaged v0.1.45 user journey; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; package check, release verifier, recursive installation, package-tree equality, and residue checks pass; two installed-harness pin failures remain non-green and were not rerun or waived"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/integration/test_invitation_browser_journey.py; isolated Chromium exercises the public invitation continuation",
+      "result": "PASS: 2 tests; opaque continuation reached restart-safe completion without credential or authority disclosure"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation --out-dir <two-independent-output-directories>",
+      "result": "PASS: two independent builds are byte-identical and match retained candidate artifacts; source-tree digest 5aa49f85cff9dc78814f2f6faa2996740153d5e9585d41616165ad2f0e285d91; sdist f666a92555c5f7224119d02f9960d107273c644b42cd8f42677766a1336a647e; wheel 69686899816a3135aa7529bd7855faa16f6d9b0fbc67b68a74907a6eaf083d6f"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL=<dedicated-test-database> AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 pytest",
+      "result": "NOT RUN: no explicitly mutation-authorized dedicated PostgreSQL test database was provided; affected tests remain explicit skips and no production or shared database was touched"
+    },
+    {
+      "command": "GitHub cross-platform, ordinary-server clean-setup, exact public-0.1.44 upgrade/rollback, staged-package, remote deployment, and publication workflows",
+      "result": "EXTERNAL POST-PUSH GATE: exact same-commit terminal-green workflows and separately approved staging are required; terminal run IDs are retained by GitHub and npm and intentionally not self-authored into candidate source"
+    }
+  ],
+  "review_results": [
+    {
+      "review": "Integrated collaboration, schema-v7, lifecycle, invitation, and exact-routing review",
+      "model": "independent implementation and release-review agents",
+      "result": "REMEDIATED: fallback/default scopes, stale fixture authority, mailbox scope omission, room HTTP scope omission, task custody actor freshness, relay v1 purpose, guest authority mapping, subprocess binding, clean-worker state, offline obligation scope, deployment capability defaults, browser origin handling, unauthorized endpoint restart activation, post-restart capability-root custody, non-completable semantic-worker wake admission, executable-only endpoint process fencing, interrupted capability-root materialization, and the empty-v7-table upgrade rollback invariant that blocked any deployment holding committed v6 communication authority were corrected at source without weakening fail-closed checks."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-06-v0.1.45/artifacts/agentnet-0.1.45.tar.gz",
+      "sha256": "f666a92555c5f7224119d02f9960d107273c644b42cd8f42677766a1336a647e"
+    },
+    {
+      "path": "evidence/local/2026-08-06-v0.1.45/artifacts/agentnet-0.1.45-py3-none-any.whl",
+      "sha256": "69686899816a3135aa7529bd7855faa16f6d9b0fbc67b68a74907a6eaf083d6f"
+    }
+  ]
+}

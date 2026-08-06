@@ -3,9 +3,10 @@
 from agentnet.adapters.antigravity import CAPABILITIES as ANTIGRAVITY
 from agentnet.adapters.claude import CAPABILITIES as CLAUDE
 from agentnet.adapters.codex import CAPABILITIES as CODEX
+from agentnet.adapters.omp import CAPABILITIES as OMP
 from agentnet.adapters.pi import CAPABILITIES as PI
 
-ALL = {item.harness: item for item in (CLAUDE, CODEX, PI, ANTIGRAVITY)}
+ALL = {item.harness: item for item in (OMP, CLAUDE, CODEX, PI, ANTIGRAVITY)}
 
 for _capability in ALL.values():
     _capability.validate()

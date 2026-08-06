@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
 
-from agentnet.authorization.policy import HumanEntitlement
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
 from agentnet.http_api import create_app
 from agentnet.operations.config import ExtensionConfig
+from agentnet.protocol.models import Classification
 from agentnet.security.dpop import create_request_proof
 from agentnet.security.signatures import canonical_json
 
@@ -31,6 +38,63 @@ def signed(key, actor, method: str, path: str, body: bytes, *, query: str = "") 
         )
     )
 
+def _collaboration_scope(
+    core: CommunicationCore,
+    *,
+    owner,
+    members,
+    actions: tuple[str, ...],
+    resources: tuple[str, ...],
+    classifications: tuple[Classification, ...],
+) -> str:
+    revision = core.policy.current_policy_revision(owner)
+    domain = core.store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope-obligation-http-{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=tuple(sorted(actions)),
+        allowed_resource_prefixes=tuple(sorted(resources)),
+        allowed_classifications=tuple(
+            sorted(classifications, key=lambda value: value.value)
+        ),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=owner,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    ).scope_id
+
 
 @pytest.mark.anyio
 async def test_signed_http_response_obligation_lifecycle(
@@ -38,8 +102,8 @@ async def test_signed_http_response_obligation_lifecycle(
     identity_factory,
     tmp_path: Path,
 ) -> None:
-    requester, requester_key = identity_factory()
-    responder, responder_key = identity_factory(kind="pi")
+    requester, requester_key = identity_factory(binding_assurance="os_bound")
+    responder, responder_key = identity_factory(kind="pi", binding_assurance="os_bound")
     conversation_id = "conversation:obligation-http"
     config = ExtensionConfig(
         domain_id=requester.domain_id,
@@ -70,11 +134,25 @@ async def test_signed_http_response_obligation_lifecycle(
                     revision=1,
                 )
             )
+    scope_id = _collaboration_scope(
+        core,
+        owner=requester,
+        members=(requester, responder),
+        actions=(
+            "message.read",
+            "message.send",
+            "obligation.create",
+            "obligation.respond",
+        ),
+        resources=(f"conversation:{conversation_id}",),
+        classifications=(Classification.C0_PUBLIC,),
+    )
     app = create_app(core)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:19102") as client:
         create_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "conversation_id": conversation_id,
                 "member_harness_ids": [responder.harness_id],
                 "classification": "C0",
@@ -93,6 +171,7 @@ async def test_signed_http_response_obligation_lifecycle(
         action_path = f"/v1/conversations/{conversation_id}/actions"
         request_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "recipients": [responder.harness_id],
                 "thread_id": "thread:obligation-http",
                 "action": {
@@ -117,25 +196,44 @@ async def test_signed_http_response_obligation_lifecycle(
         request_event_id = posted.json()["event_id"]
         assert obligation["state"] == "created"
 
+        inbox_query = f"collaboration_scope_id={scope_id}"
         inbox = await client.get(
-            "/v1/response-obligations/inbox",
+            f"/v1/response-obligations/inbox?{inbox_query}",
             headers=signed(
-                responder_key, responder, "GET", "/v1/response-obligations/inbox", b""
+                responder_key,
+                responder,
+                "GET",
+                "/v1/response-obligations/inbox",
+                b"",
+                query=inbox_query,
             ),
         )
         assert inbox.status_code == 200
         assert inbox.json()["action_required"] == 1
 
         show_path = f"/v1/response-obligations/{obligation_id}"
+        show_query = f"collaboration_scope_id={scope_id}"
         shown = await client.get(
-            show_path,
-            headers=signed(requester_key, requester, "GET", show_path, b""),
+            f"{show_path}?{show_query}",
+            headers=signed(
+                requester_key,
+                requester,
+                "GET",
+                show_path,
+                b"",
+                query=show_query,
+            ),
         )
         assert shown.status_code == 200
         request_digest = shown.json()["request_payload_digest"]
 
         transition_path = f"/v1/response-obligations/{obligation_id}/transition"
-        transition_body = canonical_json({"to_state": "acknowledged"})
+        transition_body = canonical_json(
+            {
+                "collaboration_scope_id": scope_id,
+                "to_state": "acknowledged",
+            }
+        )
         acked = await client.post(
             transition_path,
             content=transition_body,
@@ -161,6 +259,7 @@ async def test_signed_http_response_obligation_lifecycle(
 
         response_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "recipients": [requester.harness_id],
                 "thread_id": "thread:obligation-http",
                 "action": {
@@ -185,15 +284,18 @@ async def test_signed_http_response_obligation_lifecycle(
         assert closed.status_code == 202
         assert closed.json()["response_obligation"]["state"] == "completed"
 
+        list_query = (
+            f"role=requester&limit=10&collaboration_scope_id={scope_id}"
+        )
         listed = await client.get(
-            "/v1/response-obligations?role=requester&limit=10",
+            f"/v1/response-obligations?{list_query}",
             headers=signed(
                 requester_key,
                 requester,
                 "GET",
                 "/v1/response-obligations",
                 b"",
-                query="role=requester&limit=10",
+                query=list_query,
             ),
         )
         assert listed.status_code == 200

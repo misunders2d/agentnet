@@ -304,6 +304,17 @@ fallback interval. It stores the content-free counter snapshot encrypted in the
 local WAL queue, so attention survives a supervisor restart without injecting
 message content into the foreground. Wake events still carry no authority.
 
+Only a typed task assignment may wake a semantic background worker. The
+corporate service issues no `task.process` execution grant for an ordinary
+request obligation and accepts no worker result without a committed task
+payload release, so waking a model worker for one would spend tokens on work
+the service must refuse. An ordinary request obligation therefore stays
+durable and passively counted, and its answer is produced from the responsible
+harness's own authorized session through the canonical conversation
+`obligation_response` action. Both the wake gate and the corporate
+`/v1/supervisor/executions/authorize` route enforce this boundary
+independently.
+
 ## Persistent same-principal communication activation
 
 After the ordinary server harness is enrolled, it may request one independent
@@ -349,6 +360,44 @@ descendant before private session state is removed. The child receives no
 reusable AgentNet credential, and session state is removed after normal exit,
 signal termination, or launch failure.
 
+## Exact endpoint lifecycle and routing
+
+Schema v7 gives each local installation/profile one durable endpoint row keyed
+by exact domain and harness. The public locator
+`agentnet:<domain>:<harness-kind>:<profile-key>` resolves through that row to
+one verified human principal, exact enrolled harness, current credential,
+adapter generation, mailbox cursor, and optional measured process/capability
+root. The locator and display labels are selectors only; authenticated proof
+and current durable bindings construct identity.
+
+`EndpointLifecycleService` owns
+`ready_to_connect→waiting_for_approval→enrolled→access_ready→restart_required→connected`,
+with `blocked` as the fail-closed narrowing state. Existing verified enrollment
+registers directly as `access_ready`; activation moves it to
+`restart_required`. Every mutation is revision-fenced. `reconcile` may keep a
+current state or narrow stale/revoked/mismatched authority to `blocked`; it
+cannot create positive identity, enrollment, scope, or authorization. A blocked
+endpoint does not recover by inference. A fresh approved flow must re-establish
+the exact current facts.
+
+AgentNet never restarts an active harness. `connected` is recorded only after
+the user restarts and a new process measurement proves the expected generation
+for the same exact actor and endpoint. The durable harness identity and mailbox
+cursor survive process and conversation restart; a new or ambiguous profile
+does not inherit them.
+
+Friendly recipient resolution is authenticated and non-enumerating. It searches
+only targets visible under the sender's current domain, exact harness
+eligibility, policy, and communication/collaboration scope. Success returns one
+`ResolvedEndpoint` with exact harness, safe display metadata, and current
+scope ID; zero, multiple, stale, revoked, cross-domain, or unauthorized matches
+share one generic denial. The dispatcher freezes and re-requires that scope
+against the exact recipients and classification. Explicit harness IDs must
+infer exactly one current scope. Core requires the frozen scope again on the
+signed request, while actor and receipt recipient attribution remain
+proof-derived rather than payload-selected. Offline custody stays attached to
+the original harness; no sibling, wildcard, or last-active endpoint is selected.
+
 ## Versioned storage authority boundary
 
 Immutable Core schema migration 1 is the complete first-release authority
@@ -358,14 +407,16 @@ adds protected task-payload disclosure receipts. Migration 3 adds
 challenge/completion state, approval-request binding, bounded polling, and
 response-loss idempotency. Migration 4 adds the bounded same-principal C0
 bootstrap-plan, exact ten-item plan/guard mapping, pilot-attempt, and seven-fact
-evidence tables. Migration 5 adds recoverable OIDC-begin idempotency
-and exact finite current-credential renewal request custody. Migration 6 adds
-the durable persistent communication scope and its exact-harness entitlement
-mapping. Fresh SQLite and PostgreSQL stores create v6; the tested N/N-1 Core
-path accepts only an exact catalog/checksum-verified v5 store for atomic
-v5→v6 upgrade. PostgreSQL verifies the complete live v5/v6 table, column type,
+evidence tables. Migration 5 adds recoverable OIDC-begin idempotency and exact
+finite current-credential renewal request custody. Migration 6 adds the durable
+persistent communication scope, private administration state, and exact-harness
+entitlement mapping. Migration 7 adds the endpoint lifecycle,
+collaboration-scope/member, artifact-transfer/recipient, and invitation-link
+catalogs. Fresh SQLite and PostgreSQL stores create v7; the tested N/N-1 Core
+path accepts only an exact catalog/checksum-verified v6 store for atomic
+v6→v7 upgrade. PostgreSQL verifies the complete live v6/v7 table, column type,
 nullability/default, constraint-definition, and non-constraint-index catalog in
-addition to the contiguous migration checksums; any mismatch fails before use.
+addition to contiguous migration checksums; any mismatch fails before use.
 
 Approval owns a separate exact SQLite catalog and is not Core authority
 storage. Its v2 migration adds guided handoff custody, v3 adds signed-broker
@@ -381,11 +432,15 @@ indexes, constraints, and security triggers and fail closed on missing,
 altered, prototype, noncontiguous, future, or unsupported older state.
 
 There is no conversion from a pre-release/differently named database and no
-rule inferring consent from a unilateral edge. Operator exports only reviewed
-non-authority data, initializes a fresh current store, and obtains fresh exact
-bilateral consent. Rollback may restore only an exact signed, verified,
-compatible backup and may never downgrade metadata or synthesize/reactivate
-relationship authority.
+rule inferring consent from a unilateral edge. Operator imports use only
+reviewed non-authority data in a fresh current store followed by fresh exact
+bilateral consent. A committed current store is never downgraded or used to
+synthesize/reactivate authority. The sole `0.1.44→0.1.45` server transition may
+restore schema v6 only as an in-flight rollback before target-marker commit,
+under its exact source journal and only while every journal-selected protected
+relation digest and candidate artifact is unchanged. A process interruption
+retains that journal for exact resume; once v7 target state commits, the
+rollback path is closed.
 
 ## Causal and artifact provenance
 
@@ -395,9 +450,28 @@ transaction, records a derived provenance version with no invented
 transformation, preserves taint, and limits sinks to the authenticated actor and
 the conversation/room/recipient set already authorized by current state. A
 missing parent, lower-class output, widened sink, replay mismatch, or policy
-drift aborts the event transaction. A cross-domain relay retains its signed
-packet/audit binding rather than pretending a remote event is a local ledger
-parent.
+drift aborts the event transaction. A cross-domain relay retains its signed v2
+packet and source-event digest as audit/provenance facts rather than pretending
+a remote event is a local ledger parent. The source host signs the required
+opaque `target_collaboration_scope_id` into
+`agentnet.server-relay.packet.v2`; packet v1 is unsupported and cannot be
+silently upgraded.
+
+The destination derives one deterministic local event ID from the packet ID,
+resolves the transport-bound host-local guest, and uses the mailbox's exact
+`CollaborationScopeService` to require the signed target scope against the
+current target-domain policy/revocation epoch, exact recipient, classification,
+action, and resource. Messages require `message.send` on the exact source
+conversation or `conversation:direct`; tasks require `task.propose` on the
+derived `task:<local-event-id>`, and automatic task custody separately requires
+`task.accept`. The existing exact target grant/business-policy check remains a
+second mandatory boundary.
+
+Remote `authorization_context` is never target authority. Relay reconstruction
+removes it, inserts only the target scope's immutable authorization context,
+and recomputes the local payload and envelope digests. Both stores retain the
+same canonical signed packet bytes, so replay returns only the already accepted
+custody fact; byte drift conflicts and consumes neither scope nor grant.
 
 Artifact promotion may bind a strict derivation containing complete parent
 provenance references and one or more canonical transformation steps. The
@@ -729,5 +803,23 @@ verification, bounded attempts and timeout, response bounds, exact JSON
 identity/readiness, authority, and auxiliary-unit ordering remain unchanged.
 The candidate adds no migration edge: clean-state setup is allowed, while every
 existing release marker or journal fails closed.
+
+Candidate `0.1.45` adds one server upgrade edge from the exact `0.1.44`
+five-unit marker and schema-v6 PostgreSQL catalog. Before mutation it journals
+the exact source marker, Core configuration bytes, managed unit bytes, systemd
+state, migration catalog, active identity/credential, protected relation
+digests, and mailbox cursor. The candidate migrates only v6→v7 and creates one
+exact server endpoint in `restart_required`; it preserves the enrolled identity,
+credential, authorization/message state, and cursor.
+
+Before target-marker commit, a caught failure invokes exact rollback: candidate
+services are quiesced; unchanged v7-only state and migration 7 are removed;
+schema metadata, source files, and systemd state are restored while the source
+marker must remain byte-exact. A process interruption retains the journal and
+the next run resumes only that transition. If any journal-selected protected
+relation digest, file, unit, marker, or service fact drifted, rollback stops and
+retains the journal rather than overwriting uncertain state. Exact target
+commit clears the journal and closes the downgrade path. This mechanism is not
+production deployment, HA/restore, signed-installer, or high-tier gate evidence.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

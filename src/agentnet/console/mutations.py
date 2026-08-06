@@ -5,18 +5,33 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from agentnet.errors import AuthenticationError, AuthorizationError, IdempotencyConflict, ValidationError
+from agentnet.authorization.communication_scope_service import CollaborationScopeProposal
 from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.console.models import (
+    INVITATION_PERMISSION_ACTIONS,
+    InvitationCreationForm,
+    InvitationDetail,
+    InvitationScopeChoice,
+)
+from agentnet.errors import AuthenticationError, AuthorizationError, IdempotencyConflict, ValidationError
+from agentnet.identity.invitation_links import (
+    INVITATION_LINK_ISSUE_ACTION,
+    INVITATION_LINK_REVOKE_ACTION,
+    INVITATION_LINK_TTL_SECONDS,
+    InvitationLinkService,
+    InvitationOffer,
+)
 from agentnet.identity.revocation import (
     HarnessRevocationRequest,
     HarnessRevocationService,
 )
-from agentnet.identity.actors import VerifiedActor
+from agentnet.protocol.models import Classification
 from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 
@@ -57,6 +72,16 @@ class EnrollmentReview:
     consequence: str
     expires_at: int
 
+@dataclass(frozen=True, slots=True)
+class _CachedInvitation:
+    actor_principal_id: str
+    actor_harness_id: str
+    scope_id: str
+    offer: InvitationOffer
+    detail: InvitationDetail
+
+
+
 
 class ConsoleMutationService:
     def __init__(
@@ -64,6 +89,7 @@ class ConsoleMutationService:
         *,
         store: StoreBackend,
         approval_client: ApprovalRequestClient,
+        invitation_links: InvitationLinkService,
         require: Callable[..., Any],
         harness_revocations: HarnessRevocationService | None = None,
         approval_public_origin: str = "/approvals",
@@ -73,10 +99,13 @@ class ConsoleMutationService:
         self.store = store
         self.approval_client = approval_client
         self.require = require
+        self.invitation_links = invitation_links
         self.harness_revocations = harness_revocations
         self.approval_public_origin = approval_public_origin
         self.enrollment_review_ttl_seconds = enrollment_review_ttl_seconds
         self.clock = clock or (lambda: int(time.time()))
+        self._invitation_cache: dict[str, _CachedInvitation] = {}
+        self._invitation_cache_lock = threading.RLock()
 
     def request_harness_revocation(
         self,
@@ -789,6 +818,349 @@ class ConsoleMutationService:
             if consumed.rowcount != 1:
                 raise IdempotencyConflict("enrollment review changed before commit")
         return result
+
+    @staticmethod
+    def _require_invitation_actor(actor: VerifiedActor) -> tuple[str, str]:
+        if actor.principal_id is None or actor.harness_id is None or actor.credential_id is None:
+            raise AuthenticationError("console invitation denied")
+        return actor.principal_id, actor.harness_id
+
+    @staticmethod
+    def _json_string_tuple(row: Any, field: str) -> tuple[str, ...]:
+        try:
+            value = json.loads(str(row[field]))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AuthorizationError("console invitation denied") from exc
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or tuple(sorted(set(value))) != tuple(value)
+        ):
+            raise AuthorizationError("console invitation denied")
+        return tuple(value)
+
+    @staticmethod
+    def _scope_display_name(
+        _canonical_references: tuple[str, ...],
+        scope_kind: str,
+    ) -> str:
+        return {
+            "personal": "Personal space",
+            "direct": "Direct space",
+            "shared": "Shared space",
+        }.get(scope_kind, "Collaboration space")
+
+    def _current_invitation_scope(
+        self,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+    ) -> tuple[Any, tuple[str, ...]]:
+        principal_id, harness_id = self._require_invitation_actor(actor)
+        now = self.clock()
+        with self.store.transaction(immediate=False) as connection:
+            row = connection.execute(
+                """SELECT s.*,d.policy_revision AS current_policy_revision,
+                          d.revocation_epoch AS current_domain_revocation_epoch
+                     FROM collaboration_scopes s
+                     JOIN collaboration_scope_members m
+                       ON m.scope_id=s.scope_id
+                     JOIN domains d ON d.domain_id=s.domain_id
+                    WHERE s.scope_id=? AND s.domain_id=?
+                      AND s.state='active'
+                      AND (s.expires_at IS NULL OR s.expires_at>?)
+                      AND s.policy_revision=d.policy_revision
+                      AND s.domain_revocation_epoch=d.revocation_epoch
+                      AND m.authority_kind='principal' AND m.authority_id=?
+                      AND m.harness_id=? AND m.role IN ('owner','administrator')
+                      AND m.state='active'""",
+                (scope_id, actor.domain_id, now, principal_id, harness_id),
+            ).fetchone()
+            if row is None:
+                raise AuthorizationError("console invitation denied")
+            members = connection.execute(
+                """SELECT harness_id FROM collaboration_scope_members
+                    WHERE scope_id=? AND state='active'
+                    ORDER BY harness_id""",
+                (scope_id,),
+            ).fetchall()
+        member_harness_ids = tuple(str(member["harness_id"]) for member in members)
+        if not member_harness_ids or len(member_harness_ids) != len(set(member_harness_ids)):
+            raise AuthorizationError("console invitation denied")
+        return row, member_harness_ids
+
+    def invitation_scopes(self, *, actor: VerifiedActor) -> tuple[InvitationScopeChoice, ...]:
+        principal_id, harness_id = self._require_invitation_actor(actor)
+        now = self.clock()
+        rows = self.store.fetch_all(
+            """SELECT s.scope_id,s.scope_kind,s.canonical_references_json,
+                      s.allowed_actions_json
+                 FROM collaboration_scopes s
+                 JOIN collaboration_scope_members m ON m.scope_id=s.scope_id
+                 JOIN domains d ON d.domain_id=s.domain_id
+                WHERE s.domain_id=? AND s.state='active'
+                  AND (s.expires_at IS NULL OR s.expires_at>?)
+                  AND s.policy_revision=d.policy_revision
+                  AND s.domain_revocation_epoch=d.revocation_epoch
+                  AND m.authority_kind='principal' AND m.authority_id=?
+                  AND m.harness_id=? AND m.role IN ('owner','administrator')
+                  AND m.state='active'
+                ORDER BY s.updated_at DESC,s.scope_id""",
+            (actor.domain_id, now, principal_id, harness_id),
+        )
+        result: list[InvitationScopeChoice] = []
+        used_names: dict[str, int] = {}
+        for row in rows:
+            references = self._json_string_tuple(row, "canonical_references_json")
+            allowed_actions = self._json_string_tuple(row, "allowed_actions_json")
+            if (
+                not allowed_actions
+                or not set(allowed_actions).issubset(INVITATION_PERMISSION_ACTIONS)
+            ):
+                continue
+            base_name = self._scope_display_name(references, str(row["scope_kind"]))
+            used_names[base_name] = used_names.get(base_name, 0) + 1
+            suffix = used_names[base_name]
+            display_name = (
+                base_name if suffix == 1 else f"{base_name[:120]} ({suffix})"
+            )
+            result.append(
+                InvitationScopeChoice(
+                    scope_id=str(row["scope_id"]),
+                    display_name=display_name,
+                )
+            )
+        if not result:
+            raise AuthorizationError("console invitation denied")
+        return tuple(result)
+
+    def issue_invitation(
+        self,
+        *,
+        actor: VerifiedActor,
+        form: InvitationCreationForm,
+        submission_id: str,
+    ) -> tuple[str, InvitationDetail]:
+        principal_id, harness_id = self._require_invitation_actor(actor)
+        if not submission_id or len(submission_id) > 256:
+            raise AuthenticationError("console invitation denied")
+        email_domain = form.email.rsplit("@", 1)[-1]
+        if email_domain != actor.domain_id.casefold():
+            raise ValidationError("Enter a work email in this network")
+        row, member_harness_ids = self._current_invitation_scope(
+            actor=actor,
+            scope_id=form.scope_id,
+        )
+        allowed_actions = self._json_string_tuple(row, "allowed_actions_json")
+        if form.permissions != allowed_actions:
+            raise ValidationError(
+                "Choose exactly the message and file actions available in this space"
+            )
+        classifications = self._json_string_tuple(row, "allowed_classifications_json")
+        try:
+            proposal = CollaborationScopeProposal(
+                scope_id=form.scope_id,
+                scope_kind=str(row["scope_kind"]),
+                member_harness_ids=member_harness_ids,
+                allowed_actions=allowed_actions,
+                allowed_resource_prefixes=self._json_string_tuple(
+                    row, "allowed_resource_prefixes_json"
+                ),
+                allowed_classifications=tuple(
+                    Classification(value) for value in classifications
+                ),
+                canonical_references=self._json_string_tuple(
+                    row, "canonical_references_json"
+                ),
+                policy_revision=int(row["policy_revision"]),
+                domain_revocation_epoch=int(row["domain_revocation_epoch"]),
+                expires_at=int(row["expires_at"]) if row["expires_at"] is not None else None,
+            )
+        except (TypeError, ValueError) as exc:
+            raise AuthorizationError("console invitation denied") from exc
+        issued_at = int(self.invitation_links.clock())
+        invitation_id = "console-" + canonical_digest(
+            {
+                "schema": "agentnet.console-invitation-submission.v1",
+                "session_id": submission_id,
+                "actor_principal_id": principal_id,
+                "actor_harness_id": harness_id,
+                "email": form.email,
+                "scope_id": form.scope_id,
+                "permissions": list(form.permissions),
+            }
+        )
+        offer = InvitationOffer(
+            invitation_id=invitation_id,
+            invited_verified_email=form.email,
+            domain_id=actor.domain_id,
+            collaboration_scope_template=proposal,
+            permission_actions=form.permissions,
+            expires_at=issued_at + INVITATION_LINK_TTL_SECONDS,
+        )
+        resource, context = self.invitation_links.authority_binding(
+            offer,
+            action=INVITATION_LINK_ISSUE_ACTION,
+            expected_revision=1,
+        )
+        decision = self.require(
+            actor=actor,
+            action=INVITATION_LINK_ISSUE_ACTION,
+            resource=resource,
+            context=context,
+        )
+        decision_id = getattr(decision, "decision_id", None)
+        if not isinstance(decision_id, str) or not decision_id:
+            raise AuthorizationError("console invitation denied")
+        issued = self.invitation_links.issue(
+            actor=actor,
+            offer=offer,
+            authority=IssuanceAuthority(
+                actor=actor,
+                policy_decision_id=decision_id,
+            ),
+        )
+        public_url = str(issued.public_url)
+        if not public_url.startswith("https://"):
+            raise AuthorizationError("console invitation denied")
+        detail = InvitationDetail(
+            work_email=form.email,
+            space=self._scope_display_name(
+                tuple(proposal.canonical_references),
+                proposal.scope_kind,
+            ),
+            permissions=form.permissions,
+            invitation_url=public_url,
+            qr_svg=issued.qr_svg,
+            expires_at=issued.expires_at,
+        )
+        with self._invitation_cache_lock:
+            if invitation_id in self._invitation_cache:
+                raise IdempotencyConflict("invitation submission was already used")
+            self._invitation_cache[invitation_id] = _CachedInvitation(
+                actor_principal_id=principal_id,
+                actor_harness_id=harness_id,
+                scope_id=form.scope_id,
+                offer=offer,
+                detail=detail,
+            )
+        return invitation_id, detail
+
+    def invitation_detail(
+        self,
+        *,
+        actor: VerifiedActor,
+        invitation_id: str,
+    ) -> InvitationDetail:
+        principal_id, harness_id = self._require_invitation_actor(actor)
+        with self._invitation_cache_lock:
+            cached = self._invitation_cache.get(invitation_id)
+        if (
+            cached is None
+            or cached.actor_principal_id != principal_id
+            or cached.actor_harness_id != harness_id
+            or cached.offer.domain_id != actor.domain_id
+        ):
+            raise AuthenticationError("console invitation denied")
+        row = self.store.fetch_one(
+            """SELECT state,sponsor_principal_id,sponsor_harness_id
+                 FROM invitation_links
+                WHERE invitation_id=? AND domain_id=?""",
+            (invitation_id, actor.domain_id),
+        )
+        if (
+            row is None
+            or row["sponsor_principal_id"] != principal_id
+            or row["sponsor_harness_id"] != harness_id
+        ):
+            raise AuthenticationError("console invitation denied")
+        state = str(row["state"])
+        scope_current = True
+        try:
+            self._current_invitation_scope(actor=actor, scope_id=cached.scope_id)
+        except AuthorizationError:
+            scope_current = False
+        unavailable = (
+            state not in {"issued", "reserved"}
+            or not scope_current
+            or cached.detail.expires_at <= self.clock()
+        )
+        if unavailable:
+            return cached.detail.model_copy(
+                update={
+                    "invitation_url": "",
+                    "qr_svg": "",
+                    "revoked": state in {"revoked", "consumed"} or not scope_current,
+                }
+            )
+        return cached.detail
+
+    def revoke_invitation(
+        self,
+        *,
+        actor: VerifiedActor,
+        invitation_id: str,
+    ) -> InvitationDetail:
+        principal_id, harness_id = self._require_invitation_actor(actor)
+        with self._invitation_cache_lock:
+            cached = self._invitation_cache.get(invitation_id)
+        if (
+            cached is None
+            or cached.actor_principal_id != principal_id
+            or cached.actor_harness_id != harness_id
+            or cached.offer.domain_id != actor.domain_id
+        ):
+            raise AuthenticationError("console invitation denied")
+        row = self.store.fetch_one(
+            """SELECT state,revision,sponsor_principal_id,sponsor_harness_id
+                 FROM invitation_links
+                WHERE invitation_id=? AND domain_id=?""",
+            (invitation_id, actor.domain_id),
+        )
+        if (
+            row is None
+            or row["sponsor_principal_id"] != principal_id
+            or row["sponsor_harness_id"] != harness_id
+        ):
+            raise AuthenticationError("console invitation denied")
+        if row["state"] not in {"issued", "reserved"}:
+            raise ValidationError("This invitation is no longer available")
+        expected_revision = int(row["revision"])
+        resource, context = self.invitation_links.authority_binding(
+            cached.offer,
+            action=INVITATION_LINK_REVOKE_ACTION,
+            expected_revision=expected_revision,
+        )
+        decision = self.require(
+            actor=actor,
+            action=INVITATION_LINK_REVOKE_ACTION,
+            resource=resource,
+            context=context,
+        )
+        decision_id = getattr(decision, "decision_id", None)
+        if not isinstance(decision_id, str) or not decision_id:
+            raise AuthorizationError("console invitation denied")
+        self.invitation_links.revoke(
+            actor=actor,
+            invitation_id=invitation_id,
+            expected_revision=expected_revision,
+            authority=IssuanceAuthority(
+                actor=actor,
+                policy_decision_id=decision_id,
+            ),
+        )
+        detail = cached.detail.model_copy(
+            update={"invitation_url": "", "qr_svg": "", "revoked": True}
+        )
+        with self._invitation_cache_lock:
+            self._invitation_cache[invitation_id] = _CachedInvitation(
+                actor_principal_id=cached.actor_principal_id,
+                actor_harness_id=cached.actor_harness_id,
+                scope_id=cached.scope_id,
+                offer=cached.offer,
+                detail=detail,
+            )
+        return detail
 
 
 __all__ = [

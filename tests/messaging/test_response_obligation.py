@@ -6,7 +6,17 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.conversation import ConversationService, StructuredRequestAction
@@ -49,28 +59,137 @@ def grant_actions(policy, actor, conversation_id: str) -> None:
             )
         )
 
+class ScopeBound:
+    def __init__(self, inner, collaboration_scope_id: str, methods: set[str]) -> None:
+        self.inner = inner
+        self.collaboration_scope_id = collaboration_scope_id
+        self.methods = methods
+
+    def __getattr__(self, name):
+        value = getattr(self.inner, name)
+        if name not in self.methods:
+            return value
+
+        def scoped(*args, **kwargs):
+            return value(
+                *args,
+                collaboration_scope_id=self.collaboration_scope_id,
+                **kwargs,
+            )
+
+        return scoped
+
+
+def issue_obligation_scope(
+    store,
+    policy,
+    scopes: CollaborationScopeService,
+    *,
+    owner,
+    members,
+):
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:obligation-{uuid4().hex}",
+        scope_kind="shared",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=(
+            "message.acknowledge",
+            "message.read",
+            "message.send",
+            "obligation.create",
+            "obligation.respond",
+        ),
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C0_PUBLIC,),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=f"scope:{proposal.scope_id}",
+            revision=int(domain["policy_revision"]),
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=f"scope:{proposal.scope_id}",
+            policy_revision=int(domain["policy_revision"]),
+            context=scopes.issuance_request(actor=owner, proposal=proposal),
+        )
+    )
+    return scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+
+
 
 @pytest.fixture
 def stack(store, identity_factory):
-    requester, _ = identity_factory()
-    responder, _ = identity_factory(kind="pi")
+    requester, _ = identity_factory(binding_assurance="os_bound")
+    responder, _ = identity_factory(
+        kind="pi",
+        domain=requester.domain_id,
+        binding_assurance="os_bound",
+    )
     responder_sibling, _ = identity_factory(
         kind="codex",
+        domain=requester.domain_id,
         principal_id=responder.principal_id,
+        binding_assurance="os_bound",
     )
     requester_sibling, _ = identity_factory(
         kind="claude",
+        domain=requester.domain_id,
         principal_id=requester.principal_id,
+        binding_assurance="os_bound",
     )
-    observer, _ = identity_factory(kind="claude")
+    observer, _ = identity_factory(
+        kind="claude",
+        domain=requester.domain_id,
+        binding_assurance="os_bound",
+    )
     policy = LocalConformancePolicyEngine(store)
-    mailbox = MailboxService(store)
-    service = ConversationService(store, policy, mailbox)
+    scopes = CollaborationScopeService(store)
+    scope = issue_obligation_scope(
+        store,
+        policy,
+        scopes,
+        owner=requester,
+        members=(
+            requester,
+            requester_sibling,
+            responder,
+            responder_sibling,
+            observer,
+        ),
+    )
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    service = ConversationService(
+        store,
+        policy,
+        mailbox,
+        collaboration_scopes=scopes,
+    )
     conversation_id = f"conversation:obligation-{uuid4().hex[:8]}"
     for actor in (requester, requester_sibling, responder, responder_sibling, observer):
         grant_actions(policy, actor, conversation_id)
     service.create(
         actor=requester,
+        collaboration_scope_id=scope.scope_id,
         conversation_id=conversation_id,
         member_harness_ids=(responder.harness_id, observer.harness_id),
         classification=Classification.C0_PUBLIC,
@@ -78,9 +197,15 @@ def stack(store, identity_factory):
     return {
         "store": store,
         "policy": policy,
+        "scopes": scopes,
+        "scope_id": scope.scope_id,
         "mailbox": mailbox,
-        "service": service,
-        "obligations": service.obligations,
+        "service": ScopeBound(service, scope.scope_id, {"post"}),
+        "obligations": ScopeBound(
+            service.obligations,
+            scope.scope_id,
+            {"cancel", "get", "inbox", "list_for", "reconcile", "transition"},
+        ),
         "conversation_id": conversation_id,
         "requester": requester,
         "requester_sibling": requester_sibling,
@@ -218,6 +343,7 @@ def test_mailbox_acknowledgement_does_not_claim_obligation_progress(stack) -> No
         recipient_id=stack["responder"].harness_id,
         envelope_digest_value=result["envelope_digest"],
         owner_actor=stack["responder"],
+        collaboration_scope_id=stack["scope_id"],
     )
 
     assert acknowledgement["fact"] == "recipient_committed"
@@ -655,7 +781,15 @@ def test_reconcile_mirrors_durable_commitment_after_restart(stack) -> None:
     )
     # A freshly constructed service over the same store must see identical
     # durable state and reconcile idempotently (crash/restart safety).
-    restarted = ResponseObligationService(stack["store"], stack["policy"])
+    restarted = ScopeBound(
+        ResponseObligationService(
+            stack["store"],
+            stack["policy"],
+            stack["scopes"],
+        ),
+        stack["scope_id"],
+        {"get", "reconcile"},
+    )
     outcome = restarted.reconcile(actor=stack["responder"])
     assert outcome["recipient_committed"] == [obligation_id]
     assert (

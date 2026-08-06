@@ -14,6 +14,17 @@ import pytest
 import httpx
 import psycopg
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.artifacts.service import ArtifactService, FilesystemArtifactStore
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, GateBlocked, ValidationError
@@ -85,11 +96,11 @@ def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> 
     )
 
 
-def test_numbered_migration_catalog_preserves_public_v5_and_adds_candidate_schema(
+def test_numbered_migration_catalog_preserves_public_v6_and_adds_release_v7(
     tmp_path: Path,
 ) -> None:
     validate_migration_catalog()
-    assert CURRENT_SCHEMA_VERSION == 6
+    assert CURRENT_SCHEMA_VERSION == 7
     assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
         (1, "agentnet_first_release_schema"),
         (2, "protected_task_payload_release"),
@@ -97,6 +108,7 @@ def test_numbered_migration_catalog_preserves_public_v5_and_adds_candidate_schem
         (4, "bounded_c0_bootstrap_plan"),
         (5, "identity_begin_idempotency_and_credential_renewal"),
         (6, "communication_scope_and_private_administration"),
+        (7, "communication_collaboration_release"),
     ]
     assert (
         MIGRATIONS[0].checksum
@@ -243,6 +255,7 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
 
     v1 = sqlite3.connect(path)
     try:
+        _drop_v7_release_schema(v1)
         _drop_v6_admin_console_schema(v1)
         _drop_v6_communication_scope_schema(v1)
         _drop_v5_identity_lifecycle_schema(v1)
@@ -259,6 +272,20 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
         v1.commit()
     finally:
         v1.close()
+
+
+def _drop_v7_release_schema(connection: sqlite3.Connection) -> None:
+    for table in (
+        "artifact_transfer_recipients",
+        "invitation_link_failures",
+        "collaboration_scope_members",
+        "invitation_links",
+        "artifact_transfers",
+        "collaboration_scopes",
+        "endpoint_lifecycle",
+    ):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("DELETE FROM installed_migration_catalog WHERE version=7")
 
 
 def _drop_v6_admin_console_schema(connection: sqlite3.Connection) -> None:
@@ -320,6 +347,7 @@ def _make_exact_v2_sqlite(path: Path, *, key: bytes) -> None:
 
     v2 = sqlite3.connect(path)
     try:
+        _drop_v7_release_schema(v2)
         _drop_v6_admin_console_schema(v2)
         _drop_v6_communication_scope_schema(v2)
         _drop_v5_identity_lifecycle_schema(v2)
@@ -348,6 +376,7 @@ def _make_exact_v3_sqlite(path: Path, *, key: bytes) -> None:
 
     v3 = sqlite3.connect(path)
     try:
+        _drop_v7_release_schema(v3)
         _drop_v6_admin_console_schema(v3)
         _drop_v6_communication_scope_schema(v3)
         _drop_v5_identity_lifecycle_schema(v3)
@@ -373,6 +402,7 @@ def _make_exact_v4_sqlite(path: Path, *, key: bytes) -> None:
 
     v4 = sqlite3.connect(path)
     try:
+        _drop_v7_release_schema(v4)
         _drop_v6_admin_console_schema(v4)
         _drop_v6_communication_scope_schema(v4)
         _drop_v5_identity_lifecycle_schema(v4)
@@ -397,6 +427,7 @@ def _make_exact_v5_sqlite(path: Path, *, key: bytes) -> None:
 
     v5 = sqlite3.connect(path)
     try:
+        _drop_v7_release_schema(v5)
         _drop_v6_admin_console_schema(v5)
         _drop_v6_communication_scope_schema(v5)
         v5.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
@@ -415,6 +446,17 @@ def _make_exact_v6_sqlite(path: Path, *, key: bytes) -> None:
             )
     finally:
         store.close()
+
+    v6 = sqlite3.connect(path)
+    try:
+        _drop_v7_release_schema(v6)
+        v6.execute("DROP TRIGGER trg_relationship_governance_schema_floor_update")
+        v6.execute("DROP TRIGGER trg_relationship_governance_schema_floor_insert")
+        v6.execute("UPDATE metadata SET value='6' WHERE key='schema_version'")
+        v6.executescript(RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA)
+        v6.commit()
+    finally:
+        v6.close()
 
 
 
@@ -439,74 +481,59 @@ def test_sqlite_exact_v3_database_is_outside_n_minus_one_window(tmp_path: Path) 
     assert _sqlite_logical_snapshot(path) == before
 
 
-def test_sqlite_exact_v5_database_upgrades_to_v6_without_data_loss(
+def test_sqlite_exact_v5_database_is_outside_n_minus_one_window(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "v5-upgrade.sqlite3"
+    path = tmp_path / "v5-rejected.sqlite3"
     key = b"u" * 32
     _make_exact_v5_sqlite(path, key=key)
+    before = _sqlite_logical_snapshot(path)
+
+    with pytest.raises(GateBlocked, match="N/N-1 migration window"):
+        SQLiteStore(path, LocalEnvelopeCipher(key))
+    assert _sqlite_logical_snapshot(path) == before
+
+
+def test_sqlite_exact_v6_database_upgrades_to_v7_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v6-upgrade.sqlite3"
+    key = b"u" * 32
+    _make_exact_v6_sqlite(path, key=key)
 
     upgraded = SQLiteStore(path, LocalEnvelopeCipher(key))
     try:
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "6"
+        )["value"] == "7"
         assert upgraded.fetch_one(
             "SELECT value FROM metadata WHERE key='preserved-sentinel'"
-        )["value"] == "exact-v5-data"
+        )["value"] == "exact-v6-data"
+        assert upgraded.fetch_one(
+            "SELECT COUNT(*) AS count FROM endpoint_lifecycle"
+        )["count"] == 0
         assert [tuple(row) for row in upgraded.fetch_all(
             "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
         )] == [
             (migration.version, migration.name, migration.checksum)
             for migration in MIGRATIONS
         ]
-        assert upgraded.fetch_one(
-            "SELECT COUNT(*) AS count FROM communication_scopes"
-        )["count"] == 0
-        assert upgraded.fetch_one(
-            "SELECT COUNT(*) AS count FROM console_browser_sessions"
-        )["count"] == 0
     finally:
         upgraded.close()
 
 
-def test_sqlite_exact_v6_database_reopens_without_data_loss(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "v6-current.sqlite3"
-    key = b"u" * 32
-    _make_exact_v6_sqlite(path, key=key)
-
-    reopened = SQLiteStore(path, LocalEnvelopeCipher(key))
-    try:
-        assert reopened.fetch_one(
-            "SELECT value FROM metadata WHERE key='schema_version'"
-        )["value"] == "6"
-        assert reopened.fetch_one(
-            "SELECT value FROM metadata WHERE key='preserved-sentinel'"
-        )["value"] == "exact-v6-data"
-        assert [tuple(row) for row in reopened.fetch_all(
-            "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
-        )] == [
-            (migration.version, migration.name, migration.checksum)
-            for migration in MIGRATIONS
-        ]
-    finally:
-        reopened.close()
-
-
-def test_sqlite_v5_to_v6_migration_failure_rolls_back_without_partial_schema(
+def test_sqlite_v6_to_v7_migration_failure_rolls_back_without_partial_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "v5-upgrade-rollback.sqlite3"
+    path = tmp_path / "v6-upgrade-rollback.sqlite3"
     key = b"v" * 32
-    _make_exact_v5_sqlite(path, key=key)
+    _make_exact_v6_sqlite(path, key=key)
     before = _sqlite_logical_snapshot(path)
     monkeypatch.setitem(
         __import__("agentnet.storage.sqlite", fromlist=["_SQLITE_MIGRATION_SQL"])
         ._SQLITE_MIGRATION_SQL,
-        6,
+        7,
         "CREATE TABLE migration_partial(value TEXT); SELECT missing_function();",
     )
 
@@ -521,10 +548,10 @@ def test_sqlite_v5_to_v6_migration_failure_rolls_back_without_partial_schema(
         ).fetchone() is None
         assert raw.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()[0] == "5"
+        ).fetchone()[0] == "6"
         assert raw.execute(
             "SELECT COUNT(*) FROM installed_migration_catalog"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
     finally:
         raw.close()
 
@@ -785,10 +812,14 @@ def test_migration_history_rejects_gaps_future_and_checksum_tamper() -> None:
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS[:5]
     ]
-    for legacy in (applied_v1, applied_v2, applied_v3, applied_v4):
+    applied_v6 = [
+        {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
+        for migration in MIGRATIONS[:6]
+    ]
+    for legacy in (applied_v1, applied_v2, applied_v3, applied_v4, applied_v5):
         with pytest.raises(GateBlocked, match="N/N-1 migration window"):
             validate_applied_migrations(legacy)
-    assert validate_applied_migrations(applied_v5) == CURRENT_SCHEMA_VERSION - 1
+    assert validate_applied_migrations(applied_v6) == CURRENT_SCHEMA_VERSION - 1
     complete = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
         for migration in MIGRATIONS
@@ -1091,21 +1122,23 @@ def test_postgres_expected_catalog_marks_table_primary_key_columns_not_null() ->
     } >= {("synthetic", "left_id"), ("synthetic", "right_id")}
 
 
-def test_postgres_full_v6_catalog_checks_every_table_column_constraint_and_index() -> None:
+def test_postgres_full_v7_catalog_checks_every_table_column_constraint_and_index() -> None:
     spec_v5 = expected_catalog(MIGRATIONS[:5])
-    spec_v6 = expected_catalog(MIGRATIONS)
+    spec_v6 = expected_catalog(MIGRATIONS[:6])
+    spec_v7 = expected_catalog(MIGRATIONS)
     assert len(spec_v5.tables) == 101
     assert len(spec_v6.tables) == 112
+    assert len(spec_v7.tables) == 119
     assert any(
         constraint.table_name == "console_enrollment_candidates"
         and constraint.constraint_type == "c"
         and constraint.definition
         == normalize_catalog_sql("CHECK (length(candidate_key_id) = 43)")
-        for constraint in spec_v6.constraints
+        for constraint in spec_v7.constraints
     )
-    assert len(spec_v6.columns) > len(spec_v5.columns)
-    assert len(spec_v6.constraints) > len(spec_v5.constraints)
-    assert len(spec_v6.indexes) > len(spec_v5.indexes)
+    assert len(spec_v7.columns) > len(spec_v6.columns) > len(spec_v5.columns)
+    assert len(spec_v7.constraints) > len(spec_v6.constraints) > len(spec_v5.constraints)
+    assert len(spec_v7.indexes) > len(spec_v6.indexes) > len(spec_v5.indexes)
 
     require_exact_postgres_catalog(_ExactCatalogConnection(), migrations=MIGRATIONS)
     with pytest.raises(GateBlocked, match="column catalog"):
@@ -1346,23 +1379,23 @@ class _MigrationConnection:
         return _Cursor()
 
 
-@pytest.mark.parametrize("partial_relation", ["communication_scopes", "console_browser_sessions"])
-def test_postgres_v5_rejects_partial_v6_candidate_catalog_before_migration(
+@pytest.mark.parametrize("partial_relation", ["endpoint_lifecycle", "invitation_links"])
+def test_postgres_v6_rejects_partial_v7_catalog_before_migration(
     partial_relation: str,
 ) -> None:
-    applied_v5 = [
+    applied_v6 = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
-        for migration in MIGRATIONS[:5]
+        for migration in MIGRATIONS[:6]
     ]
     connection = _MigrationConnection(
         relations=(
             {"name": "schema_migrations", "kind": "r"},
             {"name": partial_relation, "kind": "r"},
         ),
-        applied=applied_v5,
+        applied=applied_v6,
     )
 
-    with pytest.raises(GateBlocked, match="partial S6"):
+    with pytest.raises(GateBlocked, match="partial S7"):
         apply_postgres_migrations(connection)
     assert not any(
         parameters and parameters[0] == CURRENT_SCHEMA_VERSION
@@ -1371,16 +1404,16 @@ def test_postgres_v5_rejects_partial_v6_candidate_catalog_before_migration(
     )
 
 
-def test_postgres_v5_catalog_is_verified_before_and_after_v6_migration(
+def test_postgres_v6_catalog_is_verified_before_and_after_v7_migration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    applied_v5 = [
+    applied_v6 = [
         {"version": migration.version, "name": migration.name, "checksum": migration.checksum}
-        for migration in MIGRATIONS[:5]
+        for migration in MIGRATIONS[:6]
     ]
     connection = _MigrationConnection(
         relations=({"name": "schema_migrations", "kind": "r"},),
-        applied=applied_v5,
+        applied=applied_v6,
     )
     verified_versions: list[int] = []
     monkeypatch.setattr(
@@ -1393,12 +1426,12 @@ def test_postgres_v5_catalog_is_verified_before_and_after_v6_migration(
     )
 
     assert apply_postgres_migrations(connection) == CURRENT_SCHEMA_VERSION
-    assert verified_versions == [5, 6]
+    assert verified_versions == [6, 7]
     assert [
         parameters[0]
         for statement, parameters in connection.statements
         if statement.startswith("INSERT INTO schema_migrations")
-    ] == [6]
+    ] == [7]
 
 
 def test_migration_application_is_one_crash_atomic_transaction(
@@ -1805,10 +1838,18 @@ def test_caller_declared_or_constructor_selected_durability_is_rejected(tmp_path
     try:
         with pytest.raises(GateBlocked, match="durable-commit"):
             CommunicationCore(server_config(tmp_path), store)
+        collaboration_scopes = CollaborationScopeService(store)
         with pytest.raises(ValueError, match="verified storage boundary"):
-            MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_DURABLE)
+            MailboxService(
+                store,
+                collaboration_scopes=collaboration_scopes,
+                acceptance_fact=DeliveryFact.ACCEPTED_DURABLE,
+            )
         with pytest.raises(GateBlocked, match="post-audit backend is unsupported"):
-            MailboxService(store)
+            MailboxService(
+                store,
+                collaboration_scopes=collaboration_scopes,
+            )
     finally:
         store.close()
 
@@ -2165,61 +2206,159 @@ def test_two_server_agent_instances_share_durable_mailbox(tmp_path: Path, monkey
         from agentnet.identity.domains import DomainRegistry
         domain = f"test-{uuid4().hex}.example"
         DomainRegistry(first).register(domain)
+        sender_key = P256KeyPair.generate()
         recipient_key = P256KeyPair.generate()
+        sender_id = f"online-sender-{uuid4().hex}"
         recipient_id = f"offline-recipient-{uuid4().hex}"
+        sender_principal_id = f"principal-{sender_id}"
         recipient_principal_id = f"principal-{recipient_id}"
+        sender_credential_id = f"credential-{sender_id}"
         recipient_credential_id = f"credential-{recipient_id}"
         now = int(time.time())
+        identities = (
+            (
+                sender_id,
+                sender_principal_id,
+                sender_credential_id,
+                sender_key,
+                "online-sender",
+            ),
+            (
+                recipient_id,
+                recipient_principal_id,
+                recipient_credential_id,
+                recipient_key,
+                "offline-recipient",
+            ),
+        )
         with first.transaction() as connection:
-            connection.execute(
-                "INSERT INTO principals(principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at) "
-                "VALUES(?,?,?,?,?,'active',?)",
-                (
-                    recipient_principal_id,
-                    domain,
-                    "https://idp.postgres-test.example",
-                    f"subject-{uuid4().hex}",
-                    f"{uuid4().hex}@postgres-test.example",
-                    now,
-                ),
-            )
-            connection.execute(
-                "INSERT INTO harnesses(harness_id,domain_id,principal_id,kind,display_name,status,"
-                "binding_assurance,capabilities_json,credential_epoch,created_at) "
-                "VALUES(?,?,?,'codex','offline-recipient','active','hardware_bound','[]',1,?)",
-                (recipient_id, domain, recipient_principal_id, now),
-            )
-            connection.execute(
-                "INSERT INTO credentials(credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at) "
-                "VALUES(?,?,?,?,'active',1,?,?)",
-                (
-                    recipient_credential_id,
-                    recipient_id,
-                    recipient_key.thumbprint,
-                    recipient_key.public_pem,
-                    now - 1,
-                    now + 3600,
-                ),
-            )
+            for harness_id, principal_id, credential_id, key, display_name in identities:
+                connection.execute(
+                    "INSERT INTO principals(principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at) "
+                    "VALUES(?,?,?,?,?,'active',?)",
+                    (
+                        principal_id,
+                        domain,
+                        "https://idp.postgres-test.example",
+                        f"subject-{uuid4().hex}",
+                        f"{uuid4().hex}@postgres-test.example",
+                        now,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO harnesses(harness_id,domain_id,principal_id,kind,display_name,status,"
+                    "binding_assurance,capabilities_json,credential_epoch,created_at) "
+                    "VALUES(?,?,?,'codex',?,'active','hardware_bound','[]',1,?)",
+                    (harness_id, domain, principal_id, display_name, now),
+                )
+                connection.execute(
+                    "INSERT INTO credentials(credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at) "
+                    "VALUES(?,?,?,?,'active',1,?,?)",
+                    (
+                        credential_id,
+                        harness_id,
+                        key.thumbprint,
+                        key.public_pem,
+                        now - 1,
+                        now + 3600,
+                    ),
+                )
+        sender = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain,
+            principal_id=sender_principal_id,
+            harness_id=sender_id,
+            credential_id=sender_credential_id,
+            credential_epoch=1,
+            binding_assurance="hardware_bound",
+        )
+        recipient = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain,
+            principal_id=recipient_principal_id,
+            harness_id=recipient_id,
+            credential_id=recipient_credential_id,
+            credential_epoch=1,
+            binding_assurance="hardware_bound",
+        )
+        domain_state = first.fetch_one(
+            "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+            (domain,),
+        )
+        scope_id = f"scope:postgres-durable-mailbox:{uuid4().hex}"
+        scope_service = CollaborationScopeService(first, clock=lambda: now)
+        proposal = CollaborationScopeProposal(
+            scope_id=scope_id,
+            scope_kind="direct",
+            member_harness_ids=tuple(sorted((sender_id, recipient_id))),
+            allowed_actions=("message.read", "message.send"),
+            allowed_resource_prefixes=("conversation:direct",),
+            allowed_classifications=(Classification.C0_PUBLIC,),
+            policy_revision=int(domain_state["policy_revision"]),
+            domain_revocation_epoch=int(domain_state["revocation_epoch"]),
+            expires_at=now + 3600,
+        )
+        issuance_resource = f"scope:{scope_id}"
+        issuance_policy = LocalConformancePolicyEngine(first)
+        issuance_policy.bootstrap_entitlement_for_local_conformance(
+            HumanEntitlement(
+                domain_id=domain,
+                principal_id=sender_principal_id,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource_pattern=issuance_resource,
+                revision=int(domain_state["policy_revision"]),
+                expires_at=datetime.fromtimestamp(now + 3600, UTC),
+            ),
+            when=datetime.fromtimestamp(now, UTC),
+        )
+        issuance_request = scope_service.issuance_request(
+            actor=sender,
+            proposal=proposal,
+        )
+        issuance_decision = issuance_policy.require(
+            AuthorizationRequest(
+                actor=sender,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource=issuance_resource,
+                policy_revision=int(domain_state["policy_revision"]),
+                context=issuance_request,
+            ),
+            when=datetime.fromtimestamp(now, UTC),
+        )
+        scope = scope_service.issue(
+            actor=sender,
+            proposal=proposal,
+            authority=IssuanceAuthority(
+                actor=sender,
+                policy_decision_id=issuance_decision.decision_id,
+            ),
+            when=datetime.fromtimestamp(now, UTC),
+        )
+        payload = {
+            "durable": True,
+            "authorization_context": scope.authorization_context(),
+        }
         event = new_event(
             domain_id=domain,
-            actor=VerifiedActor(
-                kind=ActorKind.EXTERNAL_A2A,
-                domain_id=domain,
-                external_peer_id="conditional-postgres-durable-mailbox-peer",
-                binding_assurance="external",
-            ),
+            actor=sender,
             event_type=EventType.MESSAGE,
             classification=Classification.C0_PUBLIC,
-            payload={"durable": True},
+            payload=payload,
             idempotency_key=f"postgres-live-{uuid4()}",
             recipients=(recipient_id,),
         )
-        accepted = MailboxService(first).accept(event)
+        accepted = MailboxService(
+            first,
+            collaboration_scopes=scope_service,
+        ).accept(event)
         assert accepted["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
-        assert MailboxService(second).reconcile(recipient_id)[0][
-            "payload"
-        ] == {"durable": True}
+        assert MailboxService(
+            second,
+            collaboration_scopes=CollaborationScopeService(second),
+        ).reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )[0]["payload"] == payload
         assert first.readiness()["ready"] is True
         assert second.readiness()["ready"] is True
         assert first.readiness()["accepted_durable_enabled"] is False
@@ -2586,7 +2725,16 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
             for index, sender in enumerate(senders)
         )
         stores = (first, second)
-        mailboxes = (MailboxService(first), MailboxService(second))
+        mailboxes = (
+            MailboxService(
+                first,
+                collaboration_scopes=CollaborationScopeService(first),
+            ),
+            MailboxService(
+                second,
+                collaboration_scopes=CollaborationScopeService(second),
+            ),
+        )
         conflicts = (TaskConflictService(first), TaskConflictService(second))
         admission_barrier = threading.Barrier(2)
 

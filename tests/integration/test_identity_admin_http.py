@@ -11,7 +11,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
-from agentnet.authorization.evidence import AUTHORITY_COMMAND_PURPOSE, SignedAuthorityCommand
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import (
+    AUTHORITY_COMMAND_PURPOSE,
+    IssuanceAuthority,
+    SignedAuthorityCommand,
+)
 from agentnet.authorization.policy import HumanEntitlement
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
@@ -82,6 +91,60 @@ def _admin_app(core: CommunicationCore, verifier: IndependentApprovalVerifier) -
     return Starlette(
         routes=create_identity_admin_routes(core, _body_and_actor, verifier),
         exception_handlers={Exception: handle},
+    )
+
+
+def _issue_mailbox_scope(
+    core: CommunicationCore,
+    owner,
+    recipient,
+    *,
+    scope_id: str,
+) -> CollaborationScope:
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(
+            sorted((owner.harness_id, recipient.harness_id))
+        ),
+        allowed_actions=("message.read",),
+        allowed_resource_prefixes=("conversation:direct",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        canonical_references=(),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{scope_id}"
+    request = core.collaboration_scopes.issuance_request(
+        actor=owner,
+        proposal=proposal,
+    )
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=proposal.policy_revision,
+        )
+    )
+    decision = core._require(
+        actor=owner,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource=resource,
+        context=request,
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
     )
 
 
@@ -469,17 +532,27 @@ async def test_registered_dispatcher_http_expires_due_mail_atomically_with_serve
         ),
         store,
     )
+    scope = _issue_mailbox_scope(
+        core,
+        sender,
+        recipient,
+        scope_id="scope:identity-admin-http:expiry",
+    )
     event_clock = datetime.now(UTC)
     event = new_event(
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"text": "already expired"},
+        payload={
+            "text": "already expired",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key=f"expiry-http-{uuid4()}",
         recipients=(recipient.harness_id,),
         delivery_expires_at=event_clock + timedelta(minutes=1),
         retention_delete_at=event_clock + timedelta(days=1),
+        policy_revision=scope.policy_revision,
     ).model_copy(
         update={
             "created_at": event_clock - timedelta(seconds=10),
@@ -542,7 +615,13 @@ async def test_registered_dispatcher_http_expires_due_mail_atomically_with_serve
         )
     assert response.status_code == 200, response.text
     assert response.json() == {"expired": 1}
-    assert core.mailboxes.reconcile(recipient.harness_id)[0]["fact"] == DeliveryFact.EXPIRED.value
+    assert (
+        core.mailboxes.reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )[0]["fact"]
+        == DeliveryFact.EXPIRED.value
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=base_app, raise_app_exceptions=False),

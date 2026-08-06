@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from agentnet.bindings.ipc import AcceptedProcessPeer, accepted_unix_socket_peer
+from agentnet.bindings.tools import CANONICAL_TOOL_NAMES
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.security.signatures import canonical_json
 
@@ -26,6 +27,23 @@ MCP_BOOTSTRAP_ASSURANCE = "server_derived_account_process_parent_module"
 
 PeerBinder = Callable[[UnixProcessPeer], Any]
 BoundHandler = Callable[[Any, UnixProcessPeer, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def _require_exact_bound_peer(bound: Any) -> Any:
+    if bound is None or isinstance(bound, (frozenset, list, set, tuple)):
+        raise AuthenticationError("MCP bootstrap profile selection is ambiguous")
+    return bound
+
+
+def _require_canonical_tool_request(value: dict[str, Any]) -> dict[str, Any]:
+    if (
+        set(value) != {"arguments", "method"}
+        or value.get("method") not in CANONICAL_TOOL_NAMES
+        or not isinstance(value.get("arguments"), dict)
+    ):
+        raise ValidationError("MCP bootstrap canonical tool request is invalid")
+    return value
+
 
 
 class UnixMCPBootstrapServer:
@@ -51,6 +69,16 @@ class UnixMCPBootstrapServer:
         self._socket_identity: tuple[int, int] | None = None
         self._clients: set[asyncio.StreamWriter] = set()
         self.last_request_fields: frozenset[str] | None = None
+
+    @property
+    def canonical_tool_names(self) -> tuple[str, ...]:
+        return CANONICAL_TOOL_NAMES
+
+    @staticmethod
+    def refresh_status() -> dict[str, str]:
+        """Report unsupported live refresh without mutating or restarting a harness."""
+
+        return {"state": "restart_required"}
 
     async def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -93,7 +121,7 @@ class UnixMCPBootstrapServer:
             raise ValidationError("MCP bootstrap frame is invalid") from exc
         if not isinstance(value, dict) or canonical_json(value) != raw:
             raise ValidationError("MCP bootstrap frame must use exact canonical JSON")
-        return value
+        return _require_canonical_tool_request(value)
 
     @staticmethod
     async def _write_frame(writer: asyncio.StreamWriter, value: dict[str, Any]) -> None:
@@ -108,7 +136,7 @@ class UnixMCPBootstrapServer:
             if sock is None:
                 raise AuthenticationError("platform peer credentials unavailable")
             peer = accepted_unix_socket_peer(sock)
-            bound = self.bind_peer(peer)
+            bound = _require_exact_bound_peer(self.bind_peer(peer))
             await self._write_frame(
                 writer,
                 {

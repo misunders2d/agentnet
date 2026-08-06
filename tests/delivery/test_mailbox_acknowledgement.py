@@ -7,22 +7,85 @@ from uuid import uuid4
 
 import pytest
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
 from agentnet.protocol.models import Classification, DeliveryFact, EventType
 
 
-def _event(sender, recipient, *, delivery_expires_at=None):
+def _mailbox_scope(store, *, owner, recipient) -> tuple[CollaborationScopeService, CollaborationScope]:
+    scopes = CollaborationScopeService(store)
+    policy = LocalConformancePolicyEngine(store)
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:delivery-acknowledgement:{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((owner.harness_id, recipient.harness_id))),
+        allowed_actions=("message.acknowledge", "message.read", "message.send"),
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=proposal.policy_revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=proposal.policy_revision,
+            context=scopes.issuance_request(actor=owner, proposal=proposal),
+        )
+    )
+    scope = scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+    return scopes, scope
+
+
+def _event(sender, recipient, scope, *, delivery_expires_at=None):
     return new_event(
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"text": "acknowledge exact custody"},
+        payload={
+            "text": "acknowledge exact custody",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key=f"mailbox-ack-{uuid4()}",
         recipients=(recipient.harness_id,),
         delivery_expires_at=delivery_expires_at,
+        policy_revision=scope.policy_revision,
     )
 
 
@@ -36,12 +99,14 @@ def test_exact_recipient_acknowledgement_is_single_write_and_never_downgrades(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store)
-    event = _event(sender, recipient)
+    scopes, scope = _mailbox_scope(store, owner=sender, recipient=recipient)
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    event = _event(sender, recipient, scope)
     accepted = mailbox.accept(event)
 
     first = mailbox.acknowledge(
         event_id=event.event_id,
+        collaboration_scope_id=scope.scope_id,
         recipient_id=recipient.harness_id,
         envelope_digest_value=accepted["envelope_digest"],
         owner_actor=recipient,
@@ -69,8 +134,12 @@ def test_exact_recipient_acknowledgement_is_single_write_and_never_downgrades(
     }
     assert json.loads(receipt["owner_actor_json"])["harness_id"] == recipient.harness_id
 
-    duplicate = MailboxService(store).acknowledge(
+    duplicate = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+    ).acknowledge(
         event_id=event.event_id,
+        collaboration_scope_id=scope.scope_id,
         recipient_id=recipient.harness_id,
         envelope_digest_value=accepted["envelope_digest"],
         owner_actor=recipient,
@@ -89,6 +158,7 @@ def test_exact_recipient_acknowledgement_is_single_write_and_never_downgrades(
     )
     advanced_retry = mailbox.acknowledge(
         event_id=event.event_id,
+        collaboration_scope_id=scope.scope_id,
         recipient_id=recipient.harness_id,
         envelope_digest_value=accepted["envelope_digest"],
         owner_actor=recipient,
@@ -108,8 +178,9 @@ def test_concurrent_acknowledgements_converge_on_one_receipt(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store)
-    event = _event(sender, recipient)
+    scopes, scope = _mailbox_scope(store, owner=sender, recipient=recipient)
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    event = _event(sender, recipient, scope)
     accepted = mailbox.accept(event)
     baseline_receipts = _count(store, "receipts")
     barrier = threading.Barrier(8)
@@ -120,8 +191,12 @@ def test_concurrent_acknowledgements_converge_on_one_receipt(
         try:
             barrier.wait(timeout=5)
             results.append(
-                MailboxService(store).acknowledge(
+                MailboxService(
+                    store,
+                    collaboration_scopes=scopes,
+                ).acknowledge(
                     event_id=event.event_id,
+                    collaboration_scope_id=scope.scope_id,
                     recipient_id=recipient.harness_id,
                     envelope_digest_value=accepted["envelope_digest"],
                     owner_actor=recipient,
@@ -150,13 +225,15 @@ def test_acknowledgement_rejects_wrong_recipient_digest_and_revoked_credential(
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
     outsider, _ = identity_factory(kind="claude")
-    mailbox = MailboxService(store)
-    event = _event(sender, recipient)
+    scopes, scope = _mailbox_scope(store, owner=sender, recipient=recipient)
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    event = _event(sender, recipient, scope)
     accepted = mailbox.accept(event)
 
     with pytest.raises(AuthorizationError, match="exact authenticated recipient"):
         mailbox.acknowledge(
             event_id=event.event_id,
+            collaboration_scope_id=scope.scope_id,
             recipient_id=recipient.harness_id,
             envelope_digest_value=accepted["envelope_digest"],
             owner_actor=outsider,
@@ -164,6 +241,7 @@ def test_acknowledgement_rejects_wrong_recipient_digest_and_revoked_credential(
     with pytest.raises(AuthorizationError, match="not visible"):
         mailbox.acknowledge(
             event_id=event.event_id,
+            collaboration_scope_id=scope.scope_id,
             recipient_id=recipient.harness_id,
             envelope_digest_value="0" * 64,
             owner_actor=recipient,
@@ -177,6 +255,7 @@ def test_acknowledgement_rejects_wrong_recipient_digest_and_revoked_credential(
     with pytest.raises(AuthorizationError, match="credential_not_active"):
         mailbox.acknowledge(
             event_id=event.event_id,
+            collaboration_scope_id=scope.scope_id,
             recipient_id=recipient.harness_id,
             envelope_digest_value=accepted["envelope_digest"],
             owner_actor=recipient,
@@ -193,11 +272,13 @@ def test_existing_receipt_with_backward_state_fails_closed_as_inconsistent(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store)
-    event = _event(sender, recipient)
+    scopes, scope = _mailbox_scope(store, owner=sender, recipient=recipient)
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    event = _event(sender, recipient, scope)
     accepted = mailbox.accept(event)
     mailbox.acknowledge(
         event_id=event.event_id,
+        collaboration_scope_id=scope.scope_id,
         recipient_id=recipient.harness_id,
         envelope_digest_value=accepted["envelope_digest"],
         owner_actor=recipient,
@@ -211,6 +292,7 @@ def test_existing_receipt_with_backward_state_fails_closed_as_inconsistent(
     with pytest.raises(ConflictError, match="history is inconsistent"):
         mailbox.acknowledge(
             event_id=event.event_id,
+            collaboration_scope_id=scope.scope_id,
             recipient_id=recipient.harness_id,
             envelope_digest_value=accepted["envelope_digest"],
             owner_actor=recipient,
@@ -225,14 +307,16 @@ def test_late_acknowledgement_cannot_reopen_expired_delivery(
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
     expiry = datetime.now(UTC) + timedelta(minutes=1)
-    mailbox = MailboxService(store)
-    event = _event(sender, recipient, delivery_expires_at=expiry)
+    scopes, scope = _mailbox_scope(store, owner=sender, recipient=recipient)
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    event = _event(sender, recipient, scope, delivery_expires_at=expiry)
     accepted = mailbox.accept(event)
     monkeypatch.setattr("agentnet.mailbox.service.time.time", lambda: expiry.timestamp())
 
     with pytest.raises(ConflictError, match="no longer legal"):
         mailbox.acknowledge(
             event_id=event.event_id,
+            collaboration_scope_id=scope.scope_id,
             recipient_id=recipient.harness_id,
             envelope_digest_value=accepted["envelope_digest"],
             owner_actor=recipient,

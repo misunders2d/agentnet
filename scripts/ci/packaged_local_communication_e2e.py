@@ -23,15 +23,23 @@ from pathlib import Path
 from typing import Any
 
 import agentnet
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import AuthorizationRequest
 from agentnet.adapters.windows_job import WindowsJobGuard
 from agentnet.client import AgentNetClient
 from agentnet.core.app import CommunicationCore
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
+from agentnet.protocol.models import Classification
 from agentnet.security.signatures import P256KeyPair
 
 
 CONVERSATION_ID = "conversation:packaged-local-conformance"
+COLLABORATION_SCOPE_ID = "scope:packaged-local-conformance"
 THREAD_ID = "thread:packaged-local-conformance"
 REQUEST_KEY = "packaged-local-obligation-request-0001"
 RESPONSE_KEY = "packaged-local-obligation-response-0001"
@@ -122,6 +130,7 @@ def _seed(config_path: Path, origin: str, root: Path) -> dict[str, Any]:
     core = CommunicationCore.open(config)
     try:
         core.bootstrap_domain()
+        verified_actors: list[VerifiedActor] = []
         actors: list[dict[str, Any]] = []
         for harness_kind, name in (("pi", "laptop"), ("codex", "server-recipient")):
             actor, key = core.bootstrap_synthetic_identity(
@@ -133,6 +142,29 @@ def _seed(config_path: Path, origin: str, root: Path) -> dict[str, Any]:
                 or actor.binding_assurance != "lab"
             ):
                 raise RuntimeError("synthetic identity escaped the local lab boundary")
+            with core.store.transaction(immediate=True) as connection:
+                updated = connection.execute(
+                    """UPDATE harnesses
+                          SET status='active',binding_assurance='os_bound'
+                        WHERE harness_id=?
+                          AND status='deterministic_only'
+                          AND binding_assurance='lab'""",
+                    (actor.harness_id,),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeError(
+                        "synthetic communication fixture activation did not converge"
+                    )
+                core.store.append_audit(
+                    connection,
+                    {
+                        "action": "synthetic_identity.communication_fixture_activated",
+                        "harness_id": actor.harness_id,
+                        "warning": "temporary non-production C0 integration fixture",
+                    },
+                )
+            actor = actor.model_copy(update={"binding_assurance": "os_bound"})
+            verified_actors.append(actor)
             key_path = root / f"{name}.key.pem"
             identity_path = root / f"{name}.identity.json"
             _private_write(key_path, key.private_pem)
@@ -164,7 +196,66 @@ def _seed(config_path: Path, origin: str, root: Path) -> dict[str, Any]:
                     "identity": str(identity_path),
                 }
             )
-        return {"actors": actors, "non_production": True}
+        owner_actor, recipient_actor = verified_actors
+        domain = core.store.fetch_one(
+            "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+            (owner_actor.domain_id,),
+        )
+        if domain is None:
+            raise RuntimeError("synthetic collaboration domain is unavailable")
+        proposal = CollaborationScopeProposal(
+            scope_id=COLLABORATION_SCOPE_ID,
+            scope_kind="direct",
+            member_harness_ids=tuple(
+                sorted((str(owner_actor.harness_id), str(recipient_actor.harness_id)))
+            ),
+            allowed_actions=(
+                "message.acknowledge",
+                "message.read",
+                "message.send",
+                "obligation.create",
+                "obligation.respond",
+            ),
+            allowed_resource_prefixes=(f"conversation:{CONVERSATION_ID}",),
+            allowed_classifications=(Classification.C0_PUBLIC,),
+            canonical_references=("test:packaged-local-communication",),
+            policy_revision=int(domain["policy_revision"]),
+            domain_revocation_epoch=int(domain["revocation_epoch"]),
+            expires_at=None,
+        )
+        issuance_request = core.collaboration_scopes.issuance_request(
+            actor=owner_actor,
+            proposal=proposal,
+        )
+        core.grant_local_entitlement(
+            owner_actor,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=f"scope:{proposal.scope_id}",
+        )
+        decision = core.policy.require(
+            AuthorizationRequest(
+                actor=owner_actor,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource=f"scope:{proposal.scope_id}",
+                policy_revision=int(domain["policy_revision"]),
+                context=issuance_request,
+            )
+        )
+        issued = core.collaboration_scopes.issue(
+            actor=owner_actor,
+            proposal=proposal,
+            authority=IssuanceAuthority(
+                actor=owner_actor,
+                policy_decision_id=decision.decision_id,
+            ),
+        )
+        if issued.scope_id != COLLABORATION_SCOPE_ID:
+            raise RuntimeError("synthetic collaboration scope issuance did not converge")
+        return {
+            "actors": actors,
+            "collaboration_scope_id": issued.scope_id,
+            "non_production": True,
+        }
     finally:
         core.close()
 
@@ -177,11 +268,13 @@ def _fixture_disable_credential(config_path: Path, actor_value: dict[str, Any]) 
     if (
         config.profile is not RuntimeProfile.LOCAL_CONFORMANCE
         or actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
-        or actor.binding_assurance != "lab"
+        or actor.binding_assurance != "os_bound"
         or not actor.credential_id
         or not actor.harness_id
     ):
-        raise RuntimeError("credential refusal fixture is restricted to an exact lab actor")
+        raise RuntimeError(
+            "credential refusal fixture requires an exact synthetic integration actor"
+        )
     core = CommunicationCore.open(config)
     try:
         with core.store.transaction(immediate=True) as connection:
@@ -195,8 +288,8 @@ def _fixture_disable_credential(config_path: Path, actor_value: dict[str, Any]) 
             if (
                 row is None
                 or row["credential_status"] != "active"
-                or row["harness_status"] != "deterministic_only"
-                or row["binding_assurance"] != "lab"
+                or row["harness_status"] != "active"
+                or row["binding_assurance"] != "os_bound"
                 or row["domain_id"] != actor.domain_id
             ):
                 raise RuntimeError("credential refusal fixture actor state is not exact")
@@ -206,6 +299,18 @@ def _fixture_disable_credential(config_path: Path, actor_value: dict[str, Any]) 
             )
             if changed.rowcount != 1:
                 raise RuntimeError("credential refusal fixture did not change exactly one row")
+            harness_changed = connection.execute(
+                """UPDATE harnesses
+                      SET status='deterministic_only',binding_assurance='lab'
+                    WHERE harness_id=?
+                      AND status='active'
+                      AND binding_assurance='os_bound'""",
+                (actor.harness_id,),
+            )
+            if harness_changed.rowcount != 1:
+                raise RuntimeError(
+                    "credential refusal fixture did not restore exactly one lab harness"
+                )
             core.store.append_audit(
                 connection,
                 {
@@ -473,6 +578,7 @@ def _run(args: argparse.Namespace) -> int:
         seed = _seed(config_path, origin, root)
         laptop = seed["actors"][0]
         recipient = seed["actors"][1]
+        collaboration_scope_id = seed["collaboration_scope_id"]
         laptop_actor = VerifiedActor.model_validate(laptop["actor"])
         recipient_actor = VerifiedActor.model_validate(recipient["actor"])
 
@@ -486,6 +592,7 @@ def _run(args: argparse.Namespace) -> int:
                 method="POST",
                 path="/v1/conversations",
                 json_body={
+                    "collaboration_scope_id": collaboration_scope_id,
                     "conversation_id": CONVERSATION_ID,
                     "member_harness_ids": [recipient_actor.harness_id],
                     "classification": "C0",
@@ -498,6 +605,7 @@ def _run(args: argparse.Namespace) -> int:
 
         action_path = f"/v1/conversations/{CONVERSATION_ID}/actions"
         request_body = {
+            "collaboration_scope_id": collaboration_scope_id,
             "recipients": [recipient_actor.harness_id],
             "thread_id": THREAD_ID,
             "action": {
@@ -556,7 +664,7 @@ def _run(args: argparse.Namespace) -> int:
                 environment=environment,
                 identity=recipient["identity"],
                 method="GET",
-                path="/v1/mailbox",
+                path=f"/v1/mailbox?collaboration_scope_id={collaboration_scope_id}",
             ),
             200,
         )
@@ -571,7 +679,10 @@ def _run(args: argparse.Namespace) -> int:
             raise RuntimeError("request event lost exact proof-derived sender attribution")
 
         ack_path = f"/v1/mailbox/{requested['event_id']}/acknowledge"
-        ack_body = {"envelope_digest": requested["envelope_digest"]}
+        ack_body = {
+            "collaboration_scope_id": collaboration_scope_id,
+            "envelope_digest": requested["envelope_digest"],
+        }
         acknowledged = _expect(
             _run_client(
                 package_root=package_root,
@@ -612,7 +723,7 @@ def _run(args: argparse.Namespace) -> int:
                 identity=recipient["identity"],
                 method="POST",
                 path="/v1/response-obligations/reconcile",
-                json_body={"limit": 100},
+                json_body={"collaboration_scope_id": collaboration_scope_id, "limit": 100},
             ),
             200,
         )
@@ -625,7 +736,9 @@ def _run(args: argparse.Namespace) -> int:
                 environment=environment,
                 identity=recipient["identity"],
                 method="GET",
-                path=obligation_path,
+                path=(
+                    f"{obligation_path}?collaboration_scope_id={collaboration_scope_id}"
+                ),
             ),
             200,
         )
@@ -639,7 +752,10 @@ def _run(args: argparse.Namespace) -> int:
                 identity=recipient["identity"],
                 method="POST",
                 path=f"{obligation_path}/transition",
-                json_body={"to_state": "acknowledged"},
+                json_body={
+                    "collaboration_scope_id": collaboration_scope_id,
+                    "to_state": "acknowledged",
+                },
             ),
             200,
         )
@@ -647,6 +763,7 @@ def _run(args: argparse.Namespace) -> int:
             raise RuntimeError("responsible harness did not own obligation progress")
 
         response_body = {
+            "collaboration_scope_id": collaboration_scope_id,
             "recipients": [laptop_actor.harness_id],
             "thread_id": THREAD_ID,
             "action": {
@@ -683,7 +800,7 @@ def _run(args: argparse.Namespace) -> int:
                 environment=environment,
                 identity=laptop["identity"],
                 method="GET",
-                path="/v1/mailbox",
+                path=f"/v1/mailbox?collaboration_scope_id={collaboration_scope_id}",
             ),
             200,
         )
@@ -704,7 +821,10 @@ def _run(args: argparse.Namespace) -> int:
                 identity=laptop["identity"],
                 method="POST",
                 path=f"/v1/mailbox/{completed['event_id']}/acknowledge",
-                json_body={"envelope_digest": completed["envelope_digest"]},
+                json_body={
+                    "collaboration_scope_id": collaboration_scope_id,
+                    "envelope_digest": completed["envelope_digest"],
+                },
             ),
             200,
         )
@@ -715,7 +835,9 @@ def _run(args: argparse.Namespace) -> int:
                 environment=environment,
                 identity=laptop["identity"],
                 method="GET",
-                path=obligation_path,
+                path=(
+                    f"{obligation_path}?collaboration_scope_id={collaboration_scope_id}"
+                ),
             ),
             200,
         )
@@ -726,7 +848,10 @@ def _run(args: argparse.Namespace) -> int:
                 environment=environment,
                 identity=laptop["identity"],
                 method="GET",
-                path="/v1/response-obligations?role=requester&limit=10",
+                path=(
+                    "/v1/response-obligations?role=requester&limit=10"
+                    f"&collaboration_scope_id={collaboration_scope_id}"
+                ),
             ),
             200,
         )
@@ -748,7 +873,7 @@ def _run(args: argparse.Namespace) -> int:
             environment=environment,
             identity=laptop["identity"],
             method="GET",
-            path="/v1/mailbox",
+            path=f"/v1/mailbox?collaboration_scope_id={collaboration_scope_id}",
         )
         if (
             refused.get("status") != 401

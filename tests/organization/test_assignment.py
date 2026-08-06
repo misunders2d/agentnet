@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -19,6 +20,9 @@ from agentnet.authorization import (
     OperationClass,
     PolicyEngine,
 )
+from agentnet.errors import AuthorizationError
+from agentnet.mailbox.service import MailboxService
+from agentnet.messaging.events import new_event
 from agentnet.organization import (
     AssignmentRequest,
     AssignmentScope,
@@ -26,12 +30,106 @@ from agentnet.organization import (
     RelationshipService,
 )
 from agentnet.organization.relationships import RELATIONSHIP_CONSENT_PURPOSE
-from agentnet.protocol.models import Classification, DeliveryFact, Relationship
+from agentnet.protocol.models import Classification, DeliveryFact, EventType, Relationship
 from agentnet.security.signatures import (
     P256KeyPair,
     canonical_digest,
     canonical_json,
 )
+
+_SCOPE_ID = "scope-assignment-authority"
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopeSnapshot:
+    scope_id: str
+    domain_id: str
+    member_harness_ids: tuple[str, ...]
+    revision: int = 5
+    policy_revision: int = 1
+    domain_revocation_epoch: int = 1
+    state: str = "active"
+    allowed_actions: tuple[str, ...] = (
+        "message.acknowledge",
+        "message.read",
+        "task.accept",
+        "task.propose",
+    )
+    allowed_resource_prefixes: tuple[str, ...] = ("task:",)
+    allowed_classifications: tuple[Classification, ...] = (
+        Classification.C1_INTERNAL,
+    )
+    scope_digest: str = "b" * 64
+
+    def authorization_context(self) -> dict[str, object]:
+        return {
+            "collaboration_scope_id": self.scope_id,
+            "collaboration_scope_revision": self.revision,
+            "collaboration_scope_policy_revision": self.policy_revision,
+            "collaboration_scope_domain_revocation_epoch": self.domain_revocation_epoch,
+            "collaboration_scope_member_harness_ids": list(self.member_harness_ids),
+            "collaboration_scope_digest": self.scope_digest,
+        }
+
+
+class _AssignmentScopes:
+    def __init__(self) -> None:
+        self.revoked = False
+        self.member_harness_ids: tuple[str, ...] | None = None
+        self.calls: list[dict[str, Any]] = []
+
+    def require(self, **values: Any) -> _ScopeSnapshot:
+        return self.require_in_transaction(None, **values)
+
+    def get_for_actor(
+        self,
+        *,
+        actor: Any,
+        scope_id: str,
+        **_values: Any,
+    ) -> _ScopeSnapshot:
+        members = self.member_harness_ids
+        if (
+            scope_id != _SCOPE_ID
+            or members is None
+            or actor.harness_id not in members
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return _ScopeSnapshot(
+            scope_id=_SCOPE_ID,
+            domain_id=actor.domain_id,
+            member_harness_ids=members,
+            state="revoked" if self.revoked else "active",
+        )
+
+    def require_in_transaction(
+        self,
+        _connection: object,
+        **values: Any,
+    ) -> _ScopeSnapshot:
+        actor = values["actor"]
+        actor_harness_id = actor.harness_id
+        if not actor_harness_id:
+            raise AuthorizationError("collaboration scope authorization failed")
+        targets = tuple(values["target_harness_ids"])
+        candidate_members = tuple(sorted({actor_harness_id, *targets}))
+        if self.member_harness_ids is None:
+            self.member_harness_ids = candidate_members
+        members = self.member_harness_ids
+        self.calls.append(dict(values))
+        if (
+            self.revoked
+            or values["scope_id"] != _SCOPE_ID
+            or actor.domain_id != "domain-a"
+            or actor_harness_id not in members
+            or not set(targets).issubset(members)
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return _ScopeSnapshot(
+            scope_id=_SCOPE_ID,
+            domain_id=actor.domain_id,
+            member_harness_ids=members,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,13 +269,15 @@ def issue_edge(
         when=now,
     )
 
-
 def assignment_service(
     store,
     approval_authority: _RelationshipApprovalAuthority,
+    *,
+    collaboration_scopes: _AssignmentScopes | None = None,
 ) -> AssignmentService:
     return AssignmentService(
         store,
+        collaboration_scopes=collaboration_scopes or _AssignmentScopes(),
         approval_verifier=approval_authority.verifier,
     )
 
@@ -190,6 +290,7 @@ def assignment(actor, recipient: str = "sub-harness", **updates) -> AssignmentRe
         "resources": frozenset({"catalog:alpha"}),
         "data_classes": frozenset({Classification.C1_INTERNAL}),
         "tools": frozenset({"search"}),
+        "collaboration_scope_id": _SCOPE_ID,
         "budget": 50,
         "concurrency": 1,
         "policy_revision": 1,
@@ -327,7 +428,10 @@ def test_active_owner_consent_without_configured_verifier_fails_closed(
         approval_authority=relationship_approval_authority,
     )
 
-    decision = AssignmentService(store).decide(assignment(admin_actor), when=now)
+    decision = AssignmentService(
+        store,
+        collaboration_scopes=_AssignmentScopes(),
+    ).decide(assignment(admin_actor), when=now)
 
     assert decision.fact is DeliveryFact.PENDING_HUMAN
     assert decision.reason == "missing_relationship_acceptance"
@@ -695,3 +799,113 @@ def test_current_subordinate_owner_and_credential_drift_deny_automatic_custody(
     assert decision.reason == "stale_relationship_authority_binding"
     assert decision.data_access_authorized is False
     assert decision.effect_authorized is False
+
+
+def test_scoped_task_custody_rechecks_revocation_and_never_moves_to_sibling(
+    store,
+    admin_actor,
+    subordinate_actor,
+    now,
+    identity_factory,
+    monkeypatch,
+    relationship_approval_authority,
+) -> None:
+    monkeypatch.setattr(
+        "agentnet.mailbox.service.time.time",
+        lambda: now.timestamp(),
+    )
+    issue_edge(
+        store,
+        now,
+        actor=admin_actor,
+        approval_authority=relationship_approval_authority,
+    )
+    sibling_actor, _ = identity_factory(
+        domain=admin_actor.domain_id,
+        principal_id=subordinate_actor.principal_id,
+    )
+    scopes = _AssignmentScopes()
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    service = AssignmentService(
+        store,
+        collaboration_scopes=scopes,
+        mailbox=mailbox,
+        approval_verifier=relationship_approval_authority.verifier,
+    )
+    request = assignment(admin_actor, deadline=now + timedelta(minutes=30))
+    scope_context = _ScopeSnapshot(
+        scope_id=_SCOPE_ID,
+        domain_id=admin_actor.domain_id,
+        member_harness_ids=tuple(
+            sorted((admin_actor.harness_id, subordinate_actor.harness_id))
+        ),
+    ).authorization_context()
+    event = new_event(
+        domain_id=admin_actor.domain_id,
+        actor=admin_actor,
+        event_type=EventType.TASK_ASSIGNMENT,
+        classification=Classification.C1_INTERNAL,
+        payload={
+            "task": "research",
+            "authorization_context": scope_context,
+        },
+        idempotency_key="scoped-task-custody-0001",
+        recipients=(subordinate_actor.harness_id,),
+        task_id="task-scoped-custody-0001",
+        effect_deadline=request.deadline,
+        policy_revision=1,
+    )
+
+    accepted = service.submit_event(request, event, when=now)
+
+    assert accepted["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
+    assert [call["action"] for call in scopes.calls] == [
+        "task.propose",
+        "task.accept",
+    ]
+    assert {call["resource"] for call in scopes.calls} == {f"task:{event.event_id}"}
+    recorded = service.recorder.get(accepted["policy_decision_id"])
+    assert recorded.context["authorization_context"] == scope_context
+    assert recorded.context["data_access_authorized"] is False
+    assert recorded.context["effect_authorized"] is False
+    visible = mailbox.reconcile(
+        actor=subordinate_actor,
+        collaboration_scope_id=_SCOPE_ID,
+    )
+    assert [entry["event"]["event_id"] for entry in visible] == [event.event_id]
+    with pytest.raises(AuthorizationError):
+        mailbox.reconcile(
+            actor=sibling_actor,
+            collaboration_scope_id=_SCOPE_ID,
+        )
+    with pytest.raises(AuthorizationError):
+        mailbox.acknowledge(
+            event_id=event.event_id,
+            collaboration_scope_id=_SCOPE_ID,
+            recipient_id=subordinate_actor.harness_id,
+            envelope_digest_value=accepted["envelope_digest"],
+            owner_actor=sibling_actor,
+        )
+    acknowledgement = mailbox.acknowledge(
+        event_id=event.event_id,
+        collaboration_scope_id=_SCOPE_ID,
+        recipient_id=subordinate_actor.harness_id,
+        envelope_digest_value=accepted["envelope_digest"],
+        owner_actor=subordinate_actor,
+    )
+    assert acknowledgement["fact"] == DeliveryFact.RECIPIENT_COMMITTED.value
+
+    scopes.revoked = True
+    with pytest.raises(AuthorizationError):
+        mailbox.reconcile(
+            actor=subordinate_actor,
+            collaboration_scope_id=_SCOPE_ID,
+        )
+    with pytest.raises(AuthorizationError):
+        mailbox.acknowledge(
+            event_id=event.event_id,
+            collaboration_scope_id=_SCOPE_ID,
+            recipient_id=subordinate_actor.harness_id,
+            envelope_digest_value=accepted["envelope_digest"],
+            owner_actor=subordinate_actor,
+        )

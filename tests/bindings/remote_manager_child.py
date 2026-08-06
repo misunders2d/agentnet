@@ -25,7 +25,14 @@ def _canonical(value: Any) -> bytes:
 
 
 def _request(binding: dict[str, Any], *, nonce: str) -> dict[str, Any]:
-    request = {"arguments": {"after_cursor": 0, "limit": 1}, "method": "agentnet.inbox"}
+    request = {
+        "arguments": {
+            "after_cursor": 0,
+            "collaboration_scope_id": "scope-1",
+            "limit": 1,
+        },
+        "method": "agentnet.inbox",
+    }
     authenticated = {
         "nonce": nonce,
         "request": request,

@@ -162,11 +162,11 @@ controls.
 AgentNet package installation, local SQLite state, signed HTTP clients, and
 host-local binding adapters support Linux, macOS, and Windows. Node.js 22.19 or
 newer and [`uv`](https://docs.astral.sh/uv/) 0.11.28 or newer must be on `PATH`.
-Only non-EOL Node.js release lines are supported: current `0.1.44` coverage targets
-Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are unsupported despite
-the broad npm engine floor. Minimum-floor CI uses Node.js 22.19.0 with its
-compatible npm 10.9.3; the deployed Hub compatibility target is reported
-separately as Node.js 22.23.2 with npm 11.18.0.
+Only non-EOL Node.js release lines are supported: the `0.1.45` package target
+retains Node.js 22 LTS, 24 LTS, and 26 Current; Node.js 23 and 25 are
+unsupported despite the broad npm engine floor. The minimum floor remains
+Node.js 22.19.0 with compatible npm 10.9.3; the deployed Hub compatibility
+target is reported separately as Node.js 22.23.2 with npm 11.18.0.
 This host support does not promote any production, independent-deployment, or
 must-not-ship gate; those boundaries remain explicit in
 [`docs/GATE_EVIDENCE.md`](docs/GATE_EVIDENCE.md).
@@ -194,6 +194,48 @@ agentnet --help
 Installation adds code only. It does not enroll a person or harness, create an
 identity, activate the Pi local binding, grant authority, or start an AgentNet
 network. Those operations use explicit enrollment and supervisor workflows.
+
+### Resumable user-level setup and update
+
+The `0.1.45` client lifecycle runs from a user-owned npm installation and
+package-owned Python runtime. Install and update in a user-owned npm prefix;
+never use `sudo` for this laptop path. The launcher keeps each version and
+installation identity in owner-private platform state and does not edit shell
+profiles. Package installation remains code-only and grants no identity or
+authority.
+
+`agentnet setup`, `agentnet setup status`, and `agentnet setup continue` expose
+the resumable coordinator used for one local harness profile. It derives the
+actor from the exact current verified-human harness credential, rejects
+multiple matching profiles instead of choosing the newest or last active one,
+and persists only an owner-private opaque enrollment continuation. A current
+`0.1.44` identity is reused during update; successful reconciliation does not
+create a second identity or require re-enrollment.
+
+The ordinary lifecycle vocabulary is `Ready to connect`, `Approve with
+passkey`, `Waiting for approval`, `Agent enrolled`, `Access ready`, `Restart
+your agent to enable AgentNet`, `Connected`, `Expired — start again`, `Wrong
+work account`, `Could not connect`, and `Needs administrator help`. At
+`restart_required`, AgentNet never signals, terminates, or restarts the active
+harness. The user restarts it explicitly; connection is recorded only after a
+new measured process proves the expected adapter generation and exact enrolled
+harness binding.
+
+Friendly recipient input is not an address or authority claim. The authenticated,
+non-enumerating resolver returns one `ResolvedEndpoint`: exact harness, safe
+display metadata, and current scope ID. Zero, multiple, stale, revoked, or
+cross-domain matches return the same generic failure. Before send, the
+dispatcher re-requires that frozen scope against the exact recipients and
+classification; explicit harness IDs must also infer exactly one current scope.
+Core requires the frozen scope again on the signed HTTP request. The public
+receipt contains only authoritative acceptance fields plus proof-derived exact
+recipient IDs and safe metadata. Neither request nor receipt payload can choose
+the actor, and offline custody never redirects to a sibling or “last active”
+agent.
+
+These lifecycle and routing mechanisms do not satisfy signed-installer,
+independent-deployment, hostile-host, production-durability, or other
+high-tier gates. Those gates remain blocked.
 
 The Pi package also bundles the `agentnet-operator` skill. It gives target
 coding agents safe installation, fixed ordinary-server setup, Pi-binding, and
@@ -388,7 +430,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.43` at commit `a4a1f589a3741a07e43f151826d80652dbfa46ad`.
+`0.1.44`. Its publication does not promote any requirement or gate.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -422,19 +464,30 @@ credential with `O_NONBLOCK` before regular-file custody validation so a FIFO or
 device fails closed without stalling startup. The historical live run remains
 bound to `d8884b6c03a0dd38baab03386982aae8ad11dd58`; publication does not replace
 fresh staged-package and remote deployment evidence.
-Candidate `0.1.44` adds a loopback-only private administration dashboard,
+Published `0.1.44` adds a loopback-only private administration dashboard,
 one-approval durable communication activation for an exact same-principal
 harness pair, and a parent-owned Manager gateway that gives sandbox children
 only measured short-lived local capabilities. Dashboard requests revalidate the
 current credential and authority, mutation tokens bind method/path/body, and
 credentials never enter browser URLs. Manager tools cross the canonical signed
 HTTP boundary rather than treating prompt text or child arguments as identity.
-No requirement or must-not-ship gate is promoted by the narrow prior run. The
+Publication promotes no requirement or must-not-ship gate. The
 earlier `0.1.24`
 release introduced product-owned ordinary Linux server setup: fixed
 plan/apply/start convergence, Approval/Core separation, scanner trust, exact
 public HTTPS health identity, interruption recovery, redacted evidence, and
 bundled operator workflow. Setup grants neither identity nor authority.
+
+Candidate `0.1.45` adds the schema-v7 exact endpoint lifecycle, resumable
+user-level setup/update coordination, exact-endpoint recipient routing, and one
+rollback-capable ordinary-server transition from the exact `0.1.44` five-unit
+schema-v6 state. Existing identities, credentials, authorization, messages, and
+mailbox cursors are preserved on the supported path; activation still requires
+the user's explicit harness restart. Before target commit, the rollback journal
+supports only exact unchanged source recovery; an interruption resumes that same
+journal, and drift blocks recovery rather than guessing. This source-level
+lifecycle contract does not promote any requirement, production claim, or
+must-not-ship gate.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
@@ -542,7 +595,7 @@ communication gate without weakening the production policy engine. It adds no
 migration edge and rejects existing release markers. Release still requires exact same-commit terminal-green
 cross-platform, clean-setup, and exact released-marker rejection workflow
 evidence; post-push run IDs are not
-self-authored into source. Required runtime proof now targets exact staged `0.1.44`, clean five-unit readiness,
+self-authored into source. Required runtime proof now targets exact staged `0.1.45`, clean five-unit readiness,
 fresh enrollment, one native
 signed message, recipient `recipient_committed`, exact
 `COMPLETED_C0_ROUND_TRIP`, then five-power revocation and post-revocation refusal.

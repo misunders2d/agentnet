@@ -94,7 +94,7 @@ def test_driver_start_cancellation_propagates_and_leaves_runtime_offline(
     assert runtime.status().generation == 0
 
 
-def contract_auth(foreground: Path, harness: str):
+def contract_auth(foreground: Path, harness: str, spec=None):
     if harness == "claude":
         values = {
             "ANTHROPIC_API_KEY": "fixture-broker-secret-claude",
@@ -121,11 +121,14 @@ def contract_auth(foreground: Path, harness: str):
             broker_origin="http://127.0.0.1:18090",
         )
     else:
+        if spec is None:
+            raise AssertionError("Antigravity contract auth requires its exact launch spec")
         source = foreground / "antigravity-private-auth"
         source.mkdir(mode=0o700)
         auth_file = source / "fixture-auth.json"
         auth_file.write_text('{"broker":"private-fixture"}\n', encoding="utf-8")
         os.chmod(auth_file, 0o600)
+        (spec.home_dir / ".gemini").rename(source / ".gemini")
         return PreprovisionedPrivateAuth(
             "antigravity",
             source,
@@ -156,14 +159,14 @@ def test_native_contract_fixture_runs_in_private_sanitized_background_session(
     sentinel = foreground / "foreground-session.json"
     sentinel.write_text('{"active":"must-not-change"}\n', encoding="utf-8")
     os.chmod(sentinel, 0o600)
-    auth = contract_auth(foreground, harness)
-    before_foreground = directory_snapshot(foreground)
     production_spec = build_launch_spec(
         harness,
         harness_id=f"native-contract-{harness}",
         root=tmp_path / "runtime",
         executable=fake_harnesses[harness],
     )
+    auth = contract_auth(foreground, harness, production_spec)
+    before_foreground = directory_snapshot(foreground)
     runtime = contract_clean_runtime_factory(
         production_spec,
         auth,
@@ -244,6 +247,7 @@ def test_native_contract_fixture_runs_in_private_sanitized_background_session(
             assert native["value"] == {"prompt": "fixture prompt"}
             assert native["argv"][-1] == "fixture prompt"
             assert native["argv"][native["argv"].index("--conversation") + 1] == spec.session_id
+            assert (spec.home_dir / ".gemini" / "settings.json").is_file()
             assert result["terminal_event"] == "process_exit:0"
 
         status_text = json.dumps(runtime.content_free_status(), sort_keys=True)
@@ -401,6 +405,7 @@ def test_native_persistent_process_recovers_same_private_session_after_sigkill(
 def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_without_fd(
     tmp_path: Path,
     fake_harnesses,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -408,6 +413,9 @@ def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_withou
         root=tmp_path / "runtime",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="post-spawn-local-binding-codex"
+        ),
     )
     issued_pids: list[int] = []
     bootstrap_path = Path("/tmp") / f"agentnet-mcp-{os.getpid()}-{time.time_ns()}.sock"
@@ -499,6 +507,7 @@ def test_runtime_registers_mcp_parent_after_spawn_and_again_after_restart_withou
 def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
     tmp_path: Path,
     fake_harnesses,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -506,6 +515,9 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
         root=tmp_path / "runtime-renewal",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="renewal-failure-local-binding-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-renew-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -586,6 +598,7 @@ def test_mcp_renewal_failure_degrades_then_recovers_or_restarts_boundedly(
 def test_mcp_detection_failure_invalidates_existing_locator_and_pin(
     tmp_path: Path,
     monkeypatch,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -593,6 +606,9 @@ def test_mcp_detection_failure_invalidates_existing_locator_and_pin(
         root=tmp_path / "runtime-detection-failure",
         executable="/unused/codex",
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="detection-failure-local-binding-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-detect-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -639,6 +655,7 @@ def test_mcp_prestart_state_persistence_failure_preserves_error_and_cleans_pin(
     tmp_path: Path,
     fake_harnesses,
     monkeypatch,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -646,6 +663,9 @@ def test_mcp_prestart_state_persistence_failure_preserves_error_and_cleans_pin(
         root=tmp_path / "runtime-persistence-failure",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="persistence-failure-local-binding-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-persist-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -691,6 +711,7 @@ def test_mcp_prestart_state_persistence_failure_preserves_error_and_cleans_pin(
 def test_mcp_terminal_renewal_failure_invalidates_locator_and_stops_retrying(
     tmp_path: Path,
     fake_harnesses,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -698,6 +719,9 @@ def test_mcp_terminal_renewal_failure_invalidates_locator_and_stops_retrying(
         root=tmp_path / "runtime-terminal-renewal",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="terminal-renewal-local-binding-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-terminal-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -762,6 +786,7 @@ def test_mcp_renewal_driver_stop_failure_is_terminal_and_cleans_pin(
     tmp_path: Path,
     fake_harnesses,
     monkeypatch,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -769,6 +794,9 @@ def test_mcp_renewal_driver_stop_failure_is_terminal_and_cleans_pin(
         root=tmp_path / "runtime-stop-failure",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="stop-failure-local-binding-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-stop-failure-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -835,6 +863,7 @@ def test_mcp_post_publication_start_failure_closes_pin_and_locator(
     tmp_path: Path,
     fake_harnesses,
     monkeypatch,
+    enrolled_endpoint_binding_factory,
 ) -> None:
     spec = build_launch_spec(
         "codex",
@@ -842,6 +871,9 @@ def test_mcp_post_publication_start_failure_closes_pin_and_locator(
         root=tmp_path / "runtime-post-publication-failure",
         executable=fake_harnesses["codex"],
         local_bindings=True,
+        endpoint_binding=enrolled_endpoint_binding_factory(
+            harness_id="post-publication-failure-codex"
+        ),
     )
     bootstrap_path = Path("/tmp") / f"agentnet-post-publish-{os.getpid()}-{time.time_ns()}.sock"
     bootstrap_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -951,13 +983,13 @@ def test_antigravity_native_print_failure_requires_explicit_lifecycle_restart(
 ) -> None:
     foreground = tmp_path / "foreground-auth"
     foreground.mkdir(mode=0o700)
-    auth = contract_auth(foreground, "antigravity")
     spec = build_launch_spec(
         "antigravity",
         harness_id="native-failure-antigravity",
         root=tmp_path / "runtime",
         executable=fake_harnesses["antigravity"],
     )
+    auth = contract_auth(foreground, "antigravity", spec)
     runtime = contract_clean_runtime_factory(
         spec,
         auth,
@@ -984,14 +1016,15 @@ def test_antigravity_timeout_terminates_the_one_shot_process_group(
 ) -> None:
     foreground = tmp_path / "foreground-auth"
     foreground.mkdir(mode=0o700)
+    spec = build_launch_spec(
+        "antigravity",
+        harness_id="native-timeout-antigravity",
+        root=tmp_path / "runtime",
+        executable=fake_harnesses["antigravity"],
+    )
     runtime = contract_clean_runtime_factory(
-        build_launch_spec(
-            "antigravity",
-            harness_id="native-timeout-antigravity",
-            root=tmp_path / "runtime",
-            executable=fake_harnesses["antigravity"],
-        ),
-        contract_auth(foreground, "antigravity"),
+        spec,
+        contract_auth(foreground, "antigravity", spec),
         request_timeout_seconds=0.1,
         heartbeat_interval_seconds=0.05,
     )

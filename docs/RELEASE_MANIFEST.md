@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-08-04
-Candidate: `agentnet 0.1.44`
-Latest published package: `agentnet 0.1.43`
-Evidence profile: private administration, durable communication activation, and Manager binding candidate
+Snapshot: 2026-08-06
+Candidate: `agentnet 0.1.45`
+Latest published package: `agentnet 0.1.44`
+Evidence profile: exact endpoint routing, schema-v7 lifecycle, resumable client update, and rollback-capable ordinary-server transition candidate
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `2af940ff41b5b01fdc858fa6abc1f9052dc64d7007a6416e85f3c001ab053f91` |
-| `pyproject.toml` | SHA-256 `ecab8e57b29f52f80f4f5112978c74febb2e3986f5cb6c8413eeb1f2713e611b` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `56774c65eef4811b6f08ece2b760a9b0ed5a8a0641f92938a232ccbab930dd8c` |
+| `pyproject.toml` | SHA-256 `e68412cfaf48509121be677e69c6e04793a02276c02d078b0c69ee7e6296ca62` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs
@@ -392,7 +392,7 @@ Package `0.1.43` was subsequently published from immutable commit
 `a4a1f589a3741a07e43f151826d80652dbfa46ad`; its publication does not promote
 any requirement or gate.
 
-Candidate `0.1.44` adds three linked operator paths without creating a
+Published `0.1.44` added three linked operator paths without creating a
 privileged Hub identity. First, a loopback-only private administration
 dashboard opens through a one-time browser handoff, revalidates the exact
 harness credential and current `console.session.open` authority on every
@@ -403,16 +403,34 @@ owner/server harness pair; human entitlements remain current-policy and
 current-credential scoped. Third, the Manager gateway keeps the laptop
 credential in its parent process, measures each sandbox child, gives it only a
 short-lived local capability, and dispatches canonical tools as signed
-AgentNet HTTP requests.
+AgentNet HTTP requests. Publication promotes no requirement or gate.
 
-The affected release lane reports 322 passed with seven expected
-dedicated-PostgreSQL skips. The broad source lane reports 1754 passed with 16
-expected platform/dedicated-PostgreSQL skips. Authenticated browser smoke
-exercised the Home and People routes plus both enrollment targets; Lighthouse
-reported accessibility 100 with no accessibility failures. Recursive
-installed-package verification, same-commit CI, staged remote deployment, and
-all higher-tier owner/privileged/external evidence remain separately required.
-No requirement or gate is promoted.
+Candidate `0.1.45` cleanly replaces schema v6 with the sole first-release
+schema-v7 catalog. It derives endpoint lifecycle from the current verified
+human, harness, and credential; resolves friendly recipients to one exact
+authorized endpoint and one current collaboration scope; and leaves every
+missing, ambiguous, stale, revoked, cross-domain, or mismatched request
+fail-closed. Activation remains `restart_required` until a newly measured
+process proves the expected generation.
+
+The supported `0.1.44` ordinary-server transition preserves exact identities,
+credentials, authorities, messages, obligations, receipts, and mailbox
+cursors. Before target commit, only unchanged journaled source bytes, schema
+v6, migration catalog, and five-unit state may roll back; interruptions retain
+the journal for exact resume, drift blocks recovery, and target commit closes
+the downgrade path. The user-level client update is likewise resumable and
+never restarts an active harness automatically.
+
+The focused acceptance lane reports 170 passed and five expected dedicated-
+PostgreSQL skips. The package source corpus reports 2118 passed and 21 expected
+platform/dedicated-PostgreSQL skips. Browser smoke passed the real public
+invitation continuation and restart-safe completion paths. Exact packaged
+routing proves only the addressed endpoint processes each message, offline
+custody stays bound to that endpoint, sibling reactions remain zero, and all
+endpoint processes and capability roots are cleaned up. Recursive package,
+reproducible archive, same-commit CI, upgrade/rollback, staging, remote
+deployment, and higher-tier owner/privileged/external evidence remain
+separately gated. No requirement or must-not-ship gate is promoted.
 
 ## Verification boundary
 

@@ -26,6 +26,8 @@ from agentnet.adapters.auth import (
 from agentnet.adapters.base import HarnessKind
 from agentnet.adapters.specs import build_launch_spec, detect_installed_harnesses
 from agentnet.errors import GateBlocked
+from agentnet.messaging.obligation import MailboxResponseObligation
+from agentnet.protocol.models import EventType
 from agentnet.supervisor.runtime import BackgroundTurnAuthorization
 from agentnet.supervisor.workers import CleanWorkerLauncher
 
@@ -105,6 +107,38 @@ def assert_installed_probe_report(report: Mapping[str, Mapping[str, Any]]) -> No
             "G01",
             "installed harnesses are absent or version-mismatched: " + ",".join(sorted(failures)),
         )
+
+
+def should_wake(
+    item: Mapping[str, Any],
+    *,
+    endpoint_harness_id: str,
+) -> bool:
+    """Select only exact obligation work a background worker can complete.
+
+    A non-task obligation has no semantic-worker authority: the corporate
+    service issues no `task.process` grant for it and accepts no worker
+    result without a committed task payload release.  Waking a model worker
+    for one would burn tokens on work the service must refuse, so it stays
+    durable, passively counted, and answered from the recipient's own
+    authorized session.
+    """
+
+    reference = item.get("response_obligation")
+    if reference is None:
+        return False
+    event = item.get("event")
+    if not isinstance(event, Mapping) or not isinstance(event.get("event_type"), str):
+        raise GateBlocked("G03", "mailbox obligation wake binding is invalid")
+    try:
+        obligation = MailboxResponseObligation.model_validate(reference, strict=True)
+    except Exception as exc:
+        raise GateBlocked("G03", "mailbox obligation wake binding is invalid") from exc
+    return (
+        event["event_type"] == EventType.TASK_ASSIGNMENT.value
+        and obligation.responsible_harness_id == endpoint_harness_id
+        and obligation.actionable_for_background_wake
+    )
 
 
 def run_live_harness_gate(
@@ -188,4 +222,5 @@ __all__ = [
     "installed_probe_report",
     "require_live_opt_in",
     "run_live_harness_gate",
+    "should_wake",
 ]

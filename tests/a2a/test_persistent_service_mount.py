@@ -12,7 +12,12 @@ from a2a.types import Message, Part, Role, SendMessageRequest
 from google.protobuf.json_format import MessageToDict
 from pydantic import ValidationError as PydanticValidationError
 
-from agentnet.authorization.policy import HumanEntitlement
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
 from agentnet.client import proof_headers
 from agentnet.cli import _require_safe_serve_binding
 from agentnet.core.app import CommunicationCore
@@ -157,6 +162,55 @@ def _seed_task_authority(core: CommunicationCore, sender, recipient_id: str) -> 
         )
 
 
+def _issue_persistent_scope(core: CommunicationCore, sender, recipient) -> str:
+    revision = core.policy.current_policy_revision(sender)
+    domain = core.store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (sender.domain_id,),
+    )
+    assert domain is not None
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:persistent-a2a:{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((sender.harness_id, recipient.harness_id))),
+        allowed_actions=("message.send", "task.accept", "task.propose"),
+        allowed_resource_prefixes=("conversation:", "task:"),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=sender.domain_id,
+            principal_id=sender.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=sender,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=sender,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=sender,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=sender,
+            policy_decision_id=decision.decision_id,
+        ),
+    ).scope_id
+
+
 @pytest.mark.anyio
 async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
     store,
@@ -182,6 +236,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
     )
     assert "PRIVATE KEY" not in str(config.redacted_export())
     core = CommunicationCore(config, store)
+    collaboration_scope_id = _issue_persistent_scope(core, sender, recipient)
     grant = _seed_task_authority(core, sender, recipient.harness_id)
     core.policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
@@ -207,6 +262,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
             "agentnetIdempotencyKey": "persistent-a2a-idempotency-0001",
             "agentnetTaskGrantId": grant.grant_id,
             "agentnetDataClass": "C1",
+            "agentnetCollaborationScopeId": collaboration_scope_id,
         },
     )
     a2a_body = canonical_json(MessageToDict(a2a_request))
@@ -296,6 +352,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
                 "agentnetIdempotencyKey": "persistent-jsonrpc-idempotency-0003",
                 "agentnetTaskGrantId": grant.grant_id,
                 "agentnetDataClass": "C1",
+                "agentnetCollaborationScopeId": collaboration_scope_id,
             },
         )
         idempotent_rpc_params = MessageToDict(idempotent_rpc_request)
@@ -347,6 +404,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
         )
 
         core_request = {
+            "collaboration_scope_id": collaboration_scope_id,
             "recipients": [recipient.harness_id],
             "payload": {"text": "same core and mailbox"},
             "idempotency_key": "persistent-core-idempotency-0001",
@@ -404,6 +462,7 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
             "agentnetIdempotencyKey": "persistent-native-idempotency-0002",
             "agentnetTaskGrantId": grant.grant_id,
             "agentnetDataClass": "C1",
+            "agentnetCollaborationScopeId": collaboration_scope_id,
         },
     )
     try:
@@ -412,7 +471,10 @@ async def test_persistent_app_mounts_native_a2a_alongside_core_routes(
     finally:
         await native.close()
 
-    proposals = core.task_proposals(actor=recipient)
+    proposals = core.task_proposals(
+        actor=recipient,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     assert len(proposals) == 3
     for proposal in proposals:
         core.approve_task_proposal(

@@ -131,43 +131,52 @@ _OBLIGATION_COUNTS = {
     "overdue": 0,
     "unread_information": 0,
 }
+_RESOLVED_ENDPOINT = {
+    "availability": "online",
+    "display_name": "The enrolled server",
+    "harness_id": "server-harness-0001",
+    "harness_kind": "server",
+    "scope_id": "scope-1",
+}
+_TRANSFER_RESULT = {
+    "artifact_id": "artifact:/one",
+    "digest": "d" * 64,
+    "event_id": "event:/one",
+    "media_type": "text/plain",
+    "size": 12,
+    "state": "recipient_committed",
+    "transfer_id": "transfer:/one",
+}
+_DOWNLOAD_RESULT = {
+    "artifact_id": "artifact:/one",
+    "destination_path": "/safe/destination/report.txt",
+    "digest": "d" * 64,
+    "size": 12,
+    "state": "materialized",
+}
+
 
 
 _ROUTE_CASES = (
     (
-        "agentnet.send",
-        {
-            "recipients": ["peer-harness-0001"],
-            "payload": {"body": "hello"},
-            "idempotency_key": "message-idempotency-0001",
-            "classification": "C1",
-        },
-        "POST",
-        "/v1/messages",
-        {
-            "classification": "C1",
-            "idempotency_key": "message-idempotency-0001",
-            "payload": {"body": "hello"},
-            "recipients": ["peer-harness-0001"],
-        },
-        _ACCEPTED,
-        _ACCEPTED,
-    ),
-    (
         "agentnet.inbox",
-        {"after_cursor": 4, "limit": 9},
+        {"after_cursor": 4, "collaboration_scope_id": "scope-1", "limit": 9},
         "GET",
-        "/v1/mailbox?after=4&limit=9",
+        "/v1/mailbox?after=4&limit=9&collaboration_scope_id=scope-1",
         None,
         {"items": []},
         [],
     ),
     (
         "agentnet.inbox.acknowledge",
-        {"event_id": "event:1", "envelope_digest": "a" * 64},
+        {
+            "collaboration_scope_id": "scope-1",
+            "event_id": "event:1",
+            "envelope_digest": "a" * 64,
+        },
         "POST",
         "/v1/mailbox/event%3A1/acknowledge",
-        {"envelope_digest": "a" * 64},
+        {"collaboration_scope_id": "scope-1", "envelope_digest": "a" * 64},
         {
             "current_fact": "recipient_committed",
             "duplicate": False,
@@ -192,6 +201,7 @@ _ROUTE_CASES = (
     (
         "agentnet.conversation.create",
         {
+            "collaboration_scope_id": "scope-1",
             "conversation_id": "conversation:1",
             "member_harness_ids": ["peer-harness-0001"],
             "classification": "C1",
@@ -199,6 +209,7 @@ _ROUTE_CASES = (
         "POST",
         "/v1/conversations",
         {
+            "collaboration_scope_id": "scope-1",
             "classification": "C1",
             "conversation_id": "conversation:1",
             "member_harness_ids": ["peer-harness-0001"],
@@ -217,6 +228,7 @@ _ROUTE_CASES = (
     (
         "agentnet.conversation.action",
         {
+            "collaboration_scope_id": "scope-1",
             "recipients": ["peer-harness-0001"],
             "conversation_id": "conversation:1",
             "thread_id": "thread:1",
@@ -226,6 +238,7 @@ _ROUTE_CASES = (
         "POST",
         "/v1/conversations/conversation%3A1/actions",
         {
+            "collaboration_scope_id": "scope-1",
             "action": {
                 "body": "hello",
                 "kind": "post",
@@ -251,19 +264,28 @@ _ROUTE_CASES = (
     ),
     (
         "agentnet.conversation.thread",
-        {"conversation_id": "conversation:1", "thread_id": "thread:1", "limit": 11},
+        {
+            "collaboration_scope_id": "scope-1",
+            "conversation_id": "conversation:1",
+            "thread_id": "thread:1",
+            "limit": 11,
+        },
         "GET",
-        "/v1/conversations/conversation%3A1/threads/thread%3A1?limit=11",
+        (
+            "/v1/conversations/conversation%3A1/threads/thread%3A1"
+            "?limit=11&collaboration_scope_id=scope-1"
+        ),
         None,
         {"items": []},
         [],
     ),
     (
         "agentnet.room.create",
-        {},
+        {"collaboration_scope_id": "scope-1"},
         "POST",
         "/v1/rooms",
         {
+            "collaboration_scope_id": "scope-1",
             "classification": "C1",
             "expires_at": None,
             "persistent": True,
@@ -289,13 +311,18 @@ _ROUTE_CASES = (
     (
         "agentnet.room.member.add",
         {
+            "collaboration_scope_id": "scope-1",
             "harness_id": "peer-harness-0001",
             "role": "guest",
             "room_id": "room:/owner",
         },
         "POST",
         "/v1/rooms/room%3A%2Fowner/members",
-        {"harness_id": "peer-harness-0001", "role": "guest"},
+        {
+            "collaboration_scope_id": "scope-1",
+            "harness_id": "peer-harness-0001",
+            "role": "guest",
+        },
         {
             "audit_hash": "b" * 64,
             "control_sequence": 2,
@@ -311,10 +338,10 @@ _ROUTE_CASES = (
     ),
     (
         "agentnet.room.get",
-        {"room_id": "room:/owner"},
-        "GET",
+        {"collaboration_scope_id": "scope-1", "room_id": "room:/owner"},
+        "POST",
         "/v1/rooms/room%3A%2Fowner",
-        None,
+        {"collaboration_scope_id": "scope-1"},
         {
             "application_epoch": 1,
             "classification": "C1",
@@ -377,6 +404,7 @@ _ROUTE_CASES = (
     (
         "agentnet.room.send",
         {
+            "collaboration_scope_id": "scope-1",
             "expected_control_sequence": 2,
             "idempotency_key": "room-message-0001",
             "payload": {"body": "hello room"},
@@ -386,6 +414,7 @@ _ROUTE_CASES = (
         "POST",
         "/v1/rooms/room%3A%2Fowner/messages",
         {
+            "collaboration_scope_id": "scope-1",
             "classification": "C1",
             "conversation_id": None,
             "expected_control_sequence": 2,
@@ -411,27 +440,35 @@ _ROUTE_CASES = (
     ),
     (
         "agentnet.obligation.inbox",
-        {},
+        {"collaboration_scope_id": "scope-1"},
         "GET",
-        "/v1/response-obligations/inbox",
+        "/v1/response-obligations/inbox?collaboration_scope_id=scope-1",
         None,
         _OBLIGATION_COUNTS,
         _OBLIGATION_COUNTS,
     ),
     (
         "agentnet.obligation.list",
-        {"role": "responsible", "states": ["in_progress", "blocked"], "limit": 12},
+        {
+            "collaboration_scope_id": "scope-1",
+            "role": "responsible",
+            "states": ["in_progress", "blocked"],
+            "limit": 12,
+        },
         "GET",
-        "/v1/response-obligations?role=responsible&limit=12&state=in_progress&state=blocked",
+        (
+            "/v1/response-obligations?role=responsible&limit=12"
+            "&state=in_progress&state=blocked&collaboration_scope_id=scope-1"
+        ),
         None,
         {"items": [_OBLIGATION_ROW]},
         [_OBLIGATION_ROW],
     ),
     (
         "agentnet.obligation.get",
-        {"obligation_id": "obligation:1"},
+        {"collaboration_scope_id": "scope-1", "obligation_id": "obligation:1"},
         "GET",
-        "/v1/response-obligations/obligation%3A1",
+        "/v1/response-obligations/obligation%3A1?collaboration_scope_id=scope-1",
         None,
         _OBLIGATION_ROW
         | {
@@ -447,37 +484,106 @@ _ROUTE_CASES = (
     (
         "agentnet.obligation.transition",
         {
+            "collaboration_scope_id": "scope-1",
             "obligation_id": "obligation:1",
             "to_state": "in_progress",
             "reason": "recipient_update",
         },
         "POST",
         "/v1/response-obligations/obligation%3A1/transition",
-        {"reason": "recipient_update", "to_state": "in_progress"},
+        {
+            "collaboration_scope_id": "scope-1",
+            "reason": "recipient_update",
+            "to_state": "in_progress",
+        },
         {"obligation_id": "obligation:1", "revision": 2, "state": "in_progress"},
         {"obligation_id": "obligation:1", "revision": 2, "state": "in_progress"},
     ),
     (
         "agentnet.obligation.cancel",
         {
+            "collaboration_scope_id": "scope-1",
             "obligation_id": "obligation:1",
             "reason_code": "requester_canceled",
             "expected_revision": 3,
         },
         "POST",
         "/v1/response-obligations/obligation%3A1/cancel",
-        {"expected_revision": 3, "reason_code": "requester_canceled"},
+        {
+            "collaboration_scope_id": "scope-1",
+            "expected_revision": 3,
+            "reason_code": "requester_canceled",
+        },
         {"obligation_id": "obligation:1", "revision": 4, "state": "canceled"},
         {"obligation_id": "obligation:1", "revision": 4, "state": "canceled"},
     ),
     (
         "agentnet.obligation.reconcile",
-        {"limit": 13},
+        {"collaboration_scope_id": "scope-1", "limit": 13},
         "POST",
         "/v1/response-obligations/reconcile",
-        {"limit": 13},
+        {"collaboration_scope_id": "scope-1", "limit": 13},
         {"expired": [], "recipient_committed": []},
         {"expired": [], "recipient_committed": []},
+    ),
+    (
+        "agentnet.recipient.resolve",
+        {"query": "the enrolled server"},
+        "POST",
+        "/v1/recipients/resolve",
+        {"query": "the enrolled server"},
+        {"items": [_RESOLVED_ENDPOINT]},
+        [_RESOLVED_ENDPOINT],
+    ),
+    (
+        "agentnet.file.send",
+        {
+            "collaboration_scope_id": "scope-1",
+            "classification": "C1",
+            "idempotency_key": "remote-file-send-0001",
+            "media_type": "text/plain",
+            "recipients": ["server-harness-0001"],
+            "source_path": "/safe/source/report.txt",
+        },
+        "POST",
+        "/v1/files/send",
+        {
+            "collaboration_scope_id": "scope-1",
+            "classification": "C1",
+            "idempotency_key": "remote-file-send-0001",
+            "media_type": "text/plain",
+            "recipients": ["server-harness-0001"],
+            "source_path": "/safe/source/report.txt",
+        },
+        _TRANSFER_RESULT,
+        _TRANSFER_RESULT,
+    ),
+    (
+        "agentnet.file.status",
+        {"collaboration_scope_id": "scope-1", "transfer_id": "transfer:/one"},
+        "GET",
+        "/v1/files/transfers/transfer%3A%2Fone?collaboration_scope_id=scope-1",
+        None,
+        _TRANSFER_RESULT,
+        _TRANSFER_RESULT,
+    ),
+    (
+        "agentnet.file.download",
+        {
+            "collaboration_scope_id": "scope-1",
+            "artifact_id": "artifact:/one",
+            "destination_path": "/safe/destination/report.txt",
+            "idempotency_key": "remote-file-download-0001",
+        },
+        "POST",
+        "/v1/files/artifact%3A%2Fone/download",
+        {
+            "collaboration_scope_id": "scope-1",
+            "destination_path": "/safe/destination/report.txt",
+            "idempotency_key": "remote-file-download-0001",
+        },
+        _DOWNLOAD_RESULT,
+        _DOWNLOAD_RESULT,
     ),
 )
 
@@ -496,7 +602,7 @@ def test_dispatcher_maps_every_canonical_method_to_the_existing_signed_http_cont
     expected: Any,
 ) -> None:
     client = RecordingClient(payload)
-    dispatcher = RemoteManagerDispatcher(client, _actor())
+    dispatcher = RemoteManagerDispatcher(client, lambda: _actor())
 
     result = dispatcher.dispatch(canonical_method, arguments)
 
@@ -510,15 +616,155 @@ def test_dispatcher_maps_every_canonical_method_to_the_existing_signed_http_cont
         }
     ]
 
+def test_remote_route_table_covers_the_exact_canonical_surface() -> None:
+    assert {case[0] for case in _ROUTE_CASES} | {"agentnet.send"} == set(CANONICAL_TOOL_NAMES)
+
+def test_remote_dispatcher_refreshes_the_exact_actor_for_every_call() -> None:
+    actors = [_actor(), _actor()]
+    supplied: list[VerifiedActor] = []
+    remaining = iter(actors)
+
+    def actor_provider() -> VerifiedActor:
+        actor = next(remaining)
+        supplied.append(actor)
+        return actor
+
+    client = RecordingClient({"items": [_RESOLVED_ENDPOINT]})
+    dispatcher = RemoteManagerDispatcher(client, actor_provider)
+
+    first = dispatcher.dispatch(
+        "agentnet.recipient.resolve",
+        {"query": "the enrolled server"},
+    )
+    second = dispatcher.dispatch(
+        "agentnet.recipient.resolve",
+        {"query": "the enrolled server"},
+    )
+
+    assert first == second == [_RESOLVED_ENDPOINT]
+    assert len(supplied) == 2
+    assert supplied[0] is actors[0]
+    assert supplied[1] is actors[1]
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("method", "arguments"),
+    (
+        ("agentnet.recipient.resolve", {"query": "the enrolled server"}),
+        (
+            "agentnet.file.send",
+            {
+                "collaboration_scope_id": "scope-1",
+                "classification": "C1",
+                "idempotency_key": "remote-file-send-0001",
+                "media_type": "text/plain",
+                "recipients": ["server-harness-0001"],
+                "source_path": "/safe/source/report.txt",
+            },
+        ),
+        (
+            "agentnet.file.status",
+            {"collaboration_scope_id": "scope-1", "transfer_id": "transfer:/one"},
+        ),
+        (
+            "agentnet.file.download",
+            {
+                "collaboration_scope_id": "scope-1",
+                "artifact_id": "artifact:/one",
+                "destination_path": "/safe/destination/report.txt",
+                "idempotency_key": "remote-file-download-0001",
+            },
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "spoof",
+    (
+        {"actor": {"harness_id": "attacker"}},
+        {"caller": {"harness_id": "attacker"}},
+        {"harness_id": "attacker"},
+        {"credential_id": "attacker"},
+        {"identity_path": "/tmp/attacker-identity.json"},
+        {"unexpected": True},
+    ),
+)
+def test_remote_new_tools_reject_unknown_fields_and_caller_identity_overrides(
+    method: str,
+    arguments: dict[str, Any],
+    spoof: dict[str, Any],
+) -> None:
+    client = RecordingClient({})
+    dispatcher = RemoteManagerDispatcher(client, lambda: _actor())
+
+    with pytest.raises(ValidationError, match="arguments"):
+        dispatcher.dispatch(method, {**arguments, **spoof})
+
+    assert client.calls == []
+
+@pytest.mark.parametrize(
+    ("method", "arguments", "payload"),
+    (
+        (
+            "agentnet.recipient.resolve",
+            {"query": "the enrolled server"},
+            {"items": [_RESOLVED_ENDPOINT], "unexpected": True},
+        ),
+        (
+            "agentnet.file.send",
+            {
+                "collaboration_scope_id": "scope-1",
+                "classification": "C1",
+                "idempotency_key": "remote-file-send-0001",
+                "media_type": "text/plain",
+                "recipients": ["server-harness-0001"],
+                "source_path": "/safe/source/report.txt",
+            },
+            _TRANSFER_RESULT | {"quarantine_path": "/must/not/disclose"},
+        ),
+        (
+            "agentnet.file.status",
+            {
+                "collaboration_scope_id": "scope-1",
+                "transfer_id": "transfer:/one",
+            },
+            _TRANSFER_RESULT | {"download_token": "must-not-disclose"},
+        ),
+        (
+            "agentnet.file.download",
+            {
+                "collaboration_scope_id": "scope-1",
+                "artifact_id": "artifact:/one",
+                "destination_path": "/safe/destination/report.txt",
+                "idempotency_key": "remote-file-download-0001",
+            },
+            _DOWNLOAD_RESULT | {"object_key": "must-not-disclose"},
+        ),
+    ),
+)
+def test_remote_new_tools_reject_non_exact_or_sensitive_success_fields(
+    method: str,
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    client = RecordingClient(payload)
+    dispatcher = RemoteManagerDispatcher(client, lambda: _actor())
+
+    with pytest.raises(ValidationError, match="response schema|collection response schema"):
+        dispatcher.dispatch(method, arguments)
+
+    assert len(client.calls) == 1
+
 
 
 def test_room_gateway_rejects_unsafe_arguments_and_non_exact_success_shapes() -> None:
     unsafe_client = RecordingClient({"event_id": "must-not-be-used"})
-    unsafe = RemoteManagerDispatcher(unsafe_client, _actor())
+    unsafe = RemoteManagerDispatcher(unsafe_client, lambda: _actor())
     with pytest.raises(ValidationError, match="arguments"):
         unsafe.dispatch(
             "agentnet.room.send",
             {
+                "collaboration_scope_id": "scope-1",
                 "expected_control_sequence": 1,
                 "idempotency_key": "room-message-unsafe-0001",
                 "payload": {"body": "unsafe"},
@@ -533,6 +779,7 @@ def test_room_gateway_rejects_unsafe_arguments_and_non_exact_success_shapes() ->
         unsafe.dispatch(
             "agentnet.conversation.action",
             {
+                "collaboration_scope_id": "scope-1",
                 "action": {
                     "body": "unsafe",
                     "kind": "post",
@@ -570,10 +817,13 @@ def test_room_gateway_rejects_unsafe_arguments_and_non_exact_success_shapes() ->
                 "unexpected": True,
             }
         ),
-        _actor(),
+        lambda: _actor(),
     )
     with pytest.raises(ValidationError, match="response schema"):
-        malformed.dispatch("agentnet.room.create", {})
+        malformed.dispatch(
+            "agentnet.room.create",
+            {"collaboration_scope_id": "scope-1"},
+        )
 
 
 def test_dispatcher_propagates_remote_denial_code_and_rejects_malformed_success_json() -> None:
@@ -581,20 +831,26 @@ def test_dispatcher_propagates_remote_denial_code_and_rejects_malformed_success_
         {"code": "not_authorized", "message": "request could not be processed"},
         status_code=404,
     )
-    denied = RemoteManagerDispatcher(denied_client, _actor())
+    denied = RemoteManagerDispatcher(denied_client, lambda: _actor())
 
     with pytest.raises(RemoteManagerRequestError) as rejected:
-        denied.dispatch("agentnet.obligation.inbox", {})
+        denied.dispatch(
+            "agentnet.obligation.inbox",
+            {"collaboration_scope_id": "scope-1"},
+        )
 
     assert rejected.value.code == "not_authorized"
     assert rejected.value.status_code == 404
 
     malformed = RemoteManagerDispatcher(
         RecordingClient(None, status_code=200, raw_content=b"not-json"),
-        _actor(),
+        lambda: _actor(),
     )
     with pytest.raises(ValidationError, match="valid JSON"):
-        malformed.dispatch("agentnet.obligation.inbox", {})
+        malformed.dispatch(
+            "agentnet.obligation.inbox",
+            {"collaboration_scope_id": "scope-1"},
+        )
 
 
 def test_runner_propagates_remote_denial_over_the_local_socket(tmp_path: Path) -> None:
@@ -612,7 +868,7 @@ def test_runner_propagates_remote_denial_over_the_local_socket(tmp_path: Path) -
 
     status = run_manager_gateway(
         client,
-        _actor(),
+        lambda: _actor(),
         (sys.executable, "-c", source, "--verify-denied", str(identity), source),
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
@@ -636,7 +892,7 @@ def test_runner_binds_exact_child_without_exposing_signing_material_and_cleans_l
 
     status = run_manager_gateway(
         client,
-        _actor(),
+        lambda: _actor(),
         (sys.executable, "-c", source, "--verify-bound", str(identity), source),
         state_dir=state_dir,
         environment={
@@ -656,7 +912,10 @@ def test_runner_binds_exact_child_without_exposing_signing_material_and_cleans_l
         {
             "json_body": None,
             "method": "GET",
-            "path": "/v1/mailbox?after=0&limit=1",
+            "path": (
+                "/v1/mailbox?after=0&limit=1"
+                "&collaboration_scope_id=scope-1"
+            ),
             "timeout_seconds": None,
         }
     ]
@@ -684,7 +943,7 @@ def test_runner_propagates_child_exit_and_signal_status_and_still_cleans_state(
 
     status = run_manager_gateway(
         RecordingClient({"items": []}),
-        _actor(),
+        lambda: _actor(),
         command,
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
@@ -755,7 +1014,7 @@ assert.equal(digest(response), args[1]);
 
     status = run_manager_gateway(
         RecordingClient({"items": []}),
-        _actor(),
+        lambda: _actor(),
         (str(pi_executable), digest, response_digest, expected_tools),
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
@@ -789,7 +1048,7 @@ def test_runner_kills_descendants_when_measured_child_exits(tmp_path: Path) -> N
 
         status = run_manager_gateway(
             RecordingClient({"items": []}),
-            _actor(),
+            lambda: _actor(),
             (sys.executable, "-c", parent_source),
             state_dir=state_dir,
             environment={

@@ -35,6 +35,13 @@ if os.name == "posix":
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from agentnet import __version__
+from agentnet.artifacts.clamav import (
+    ClamAVScanner,
+    ScannerEndpoint,
+    clamav_profile_digest,
+    clamav_rules_digest,
+)
+from agentnet.artifacts.scanner import ScannerTrustPolicy
 from agentnet.approval.internal_client import (
     ApprovalServiceClient,
     require_approval_tls_environment,
@@ -57,16 +64,21 @@ from agentnet.operations.config import (
     ScannerTrustConfig,
 )
 from agentnet.operations.config_migration import load_config_json
-from agentnet.security.signatures import P256KeyPair, canonical_digest
+from agentnet.security.signatures import P256KeyPair, canonical_digest, verify_signature
+from agentnet.storage.migrations import MIGRATIONS
 from agentnet.storage.postgres import (
+    MIGRATION_LOCK_ID,
     ORDINARY_SERVER_POSTGRES_DATABASE,
     ORDINARY_SERVER_POSTGRES_DSN,
     ORDINARY_SERVER_POSTGRES_SOCKET,
     ORDINARY_SERVER_POSTGRES_USER,
+    apply_postgres_migrations,
     inspect_ordinary_server_postgres_auth,
     probe_ordinary_server_postgres_connection,
+    validate_applied_migrations,
     validate_ordinary_server_postgres_dsn,
 )
+from agentnet.storage.postgres_catalog import require_exact_postgres_catalog
 
 
 CORE_USER = "agentnet"
@@ -98,6 +110,8 @@ SERVER_AGENT_KEY = CORE_DATA / "guided-join.key.pem"
 CREDENTIAL_RENEW_STATE = CORE_DATA / "credential-renewal-state.json"
 CORE_CONFIG = CORE_DATA / "agentnet.json"
 CORE_OIDC_CONFIG = CORE_DATA / "oidc-enrollment.json"
+SCANNER_SIGNING_KEY = CORE_DATA / "scanner-signing-key.pem"
+SCANNER_WORKER_CONFIG = CORE_DATA / "scanner-worker.json"
 APPROVAL_CONFIG = APPROVAL_DATA / "config.json"
 APPROVAL_STATE = APPROVAL_DATA / "state"
 SETUP_ROOT = Path("/var/lib/agentnet-setup")
@@ -164,6 +178,7 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.39", "0.1.40"): MANAGED_UNITS,
     ("0.1.40", "0.1.41"): MANAGED_UNITS,
     ("0.1.41", "0.1.42"): MANAGED_UNITS,
+    ("0.1.44", "0.1.45"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -176,7 +191,34 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.39", "0.1.40"),
         ("0.1.40", "0.1.41"),
         ("0.1.41", "0.1.42"),
+        ("0.1.44", "0.1.45"),
     }
+)
+# The lifecycle release is the sole rollback-capable database upgrade.  Older
+# setup edges retain their released forward-only recovery behavior.
+_LIFECYCLE_SETUP_UPGRADE = ("0.1.44", "0.1.45")
+_LIFECYCLE_SOURCE_SCHEMA = 6
+_LIFECYCLE_TARGET_SCHEMA = 7
+_LIFECYCLE_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v4"
+_LIFECYCLE_RELEASE_TABLES = (
+    "invitation_link_failures",
+    "invitation_links",
+    "artifact_transfer_recipients",
+    "artifact_transfers",
+    "collaboration_scope_members",
+    "collaboration_scopes",
+    "endpoint_lifecycle",
+)
+_LIFECYCLE_PRESERVED_TABLES = (
+    "domains",
+    "principals",
+    "principal_aliases",
+    "harnesses",
+    "credentials",
+    "entitlements",
+    "events",
+    "recipients",
+    "communication_scopes",
 )
 # Blockers that mean "the response was lost", not "the operation was refused".
 # Only these justify one bounded idempotent retry of a product command.
@@ -185,6 +227,18 @@ _UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v2"
 _LEGACY_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
 _MAX_UNIT_BYTES = 65_536
 _MAX_CONFIG_BYTES = 1_048_576
+_SCANNER_ENVIRONMENT_KEYS = frozenset(
+    {
+        "AGENTNET_CLAMAV_ENDPOINT",
+        "AGENTNET_CLAMAV_SCANNER_ID",
+        "AGENTNET_CLAMAV_KEY_EPOCH",
+        "AGENTNET_CLAMAV_SIGNING_KEY_FILE",
+        "AGENTNET_CLAMAV_ENGINE_VERSION",
+        "AGENTNET_CLAMAV_SIGNATURE_VERSION",
+        "AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT",
+        "AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS",
+    }
+)
 _JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
 
 
@@ -441,6 +495,22 @@ class SetupRuntimeIdentity:
     useradd_executable: Path
     useradd_sha256: str
 
+@dataclass(frozen=True)
+class ScannerSetupSpec:
+    endpoint: ScannerEndpoint
+    key: P256KeyPair
+    key_input: bytes
+    scanner_id: str
+    scanner_key_epoch: int
+    engine_version: str
+    signature_version: str
+    signature_updated_at: int
+    signature_max_age_seconds: int
+    rules_digest: str
+    profile_digest: str
+    trust_policy: ScannerTrustPolicy
+
+
 
 @dataclass(frozen=True)
 class ServerSetupPreflight:
@@ -450,6 +520,7 @@ class ServerSetupPreflight:
     owner_oidc: ApprovalOwnerOIDCConfig
     approvers: tuple[SetupApprover, ...]
     scanner_trust: ScannerTrustConfig | None
+    scanner_setup: ScannerSetupSpec | None
     core_values: dict[str, str]
     approval_values: dict[str, str]
     core_environment: dict[str, str]
@@ -1465,6 +1536,226 @@ def _validate_broker_credential(value: str) -> None:
             "invalid_broker_credential",
             "Approval broker credential does not satisfy the fixed runtime policy",
         )
+def _scanner_integer(
+    values: Mapping[str, str],
+    name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(values[name])
+    except (KeyError, ValueError) as exc:
+        raise ServerSetupError(
+            "scanner_configuration",
+            f"{name} is not a bounded integer",
+        ) from exc
+    if str(value) != values[name] or not minimum <= value <= maximum:
+        raise ServerSetupError(
+            "scanner_configuration",
+            f"{name} is not a bounded integer",
+        )
+    return value
+
+
+def _resolve_scanner_setup(
+    request: ServerSetupRequest,
+    *,
+    core_values: Mapping[str, str],
+    scanner_trust: ScannerTrustConfig | None,
+) -> ScannerSetupSpec | None:
+    configured = _SCANNER_ENVIRONMENT_KEYS & set(core_values)
+    if request.effective_artifact_mode == "disabled":
+        if configured:
+            raise ServerSetupError(
+                "scanner_configuration",
+                "communication-only setup must not receive scanner secrets",
+            )
+        return None
+    if configured != _SCANNER_ENVIRONMENT_KEYS or scanner_trust is None:
+        raise ServerSetupError(
+            "scanner_configuration",
+            "artifact setup requires the complete maintained ClamAV configuration",
+        )
+    try:
+        endpoint = ScannerEndpoint.from_uri(core_values["AGENTNET_CLAMAV_ENDPOINT"])
+    except ValueError as exc:
+        raise ServerSetupError(
+            "scanner_configuration",
+            "ClamAV endpoint is not one exact loopback or Unix endpoint",
+        ) from exc
+    scanner_id = core_values["AGENTNET_CLAMAV_SCANNER_ID"]
+    if not scanner_id or len(scanner_id) > 256 or scanner_id != scanner_id.strip():
+        raise ServerSetupError("scanner_configuration", "scanner identity is invalid")
+    key_epoch = _scanner_integer(
+        core_values,
+        "AGENTNET_CLAMAV_KEY_EPOCH",
+        minimum=1,
+        maximum=2**31 - 1,
+    )
+    signature_updated_at = _scanner_integer(
+        core_values,
+        "AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT",
+        minimum=1,
+        maximum=2**63 - 1,
+    )
+    signature_max_age_seconds = _scanner_integer(
+        core_values,
+        "AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS",
+        minimum=1,
+        maximum=604_800,
+    )
+    now = int(time.time())
+    if (
+        signature_updated_at > now + scanner_trust.allowed_future_skew_seconds
+        or now - signature_updated_at > signature_max_age_seconds
+    ):
+        raise ServerSetupError(
+            "scanner_signatures_stale",
+            "ClamAV signature database freshness is outside the approved bound",
+        )
+    key_path = Path(core_values["AGENTNET_CLAMAV_SIGNING_KEY_FILE"])
+    try:
+        key_input = _read_private_input(
+            key_path,
+            label="ClamAV scanner signing key",
+            max_bytes=65_536,
+        )
+    except ServerSetupError as exc:
+        raise ServerSetupError(
+            "scanner_key_custody",
+            "ClamAV scanner signing key custody is unsafe",
+        ) from exc
+    try:
+        key = P256KeyPair.from_private_pem(key_input)
+    except Exception as exc:
+        raise ServerSetupError(
+            "scanner_key_custody",
+            "ClamAV scanner signing key is invalid",
+        ) from exc
+    engine_version = core_values["AGENTNET_CLAMAV_ENGINE_VERSION"]
+    signature_version = core_values["AGENTNET_CLAMAV_SIGNATURE_VERSION"]
+    try:
+        rules_digest = clamav_rules_digest(
+            signature_version=signature_version,
+            signature_updated_at=signature_updated_at,
+        )
+        profile_digest = clamav_profile_digest(
+            endpoint=endpoint,
+            engine_version=engine_version,
+            timeout_seconds=30.0,
+            max_bytes=16_777_216,
+            max_response_bytes=4_096,
+            max_signature_age_seconds=signature_max_age_seconds,
+        )
+        trust_policy = ScannerTrustPolicy(
+            max_attestation_age_seconds=scanner_trust.max_attestation_age_seconds,
+            allowed_future_skew_seconds=scanner_trust.allowed_future_skew_seconds,
+            required_engine=scanner_trust.required_engine,
+            required_rules_digest=scanner_trust.required_rules_digest,
+            required_profile_digest=scanner_trust.required_profile_digest,
+            revoked_key_epochs=scanner_trust.revoked_key_epochs,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ServerSetupError(
+            "scanner_configuration",
+            "maintained scanner evidence is invalid",
+        ) from exc
+    if (
+        scanner_trust.trusted_public_keys.get(f"{scanner_id}:{key_epoch}")
+        != key.public_pem
+        or scanner_trust.required_engine != "clamav"
+        or scanner_trust.required_rules_digest != rules_digest
+        or scanner_trust.required_profile_digest != profile_digest
+    ):
+        raise ServerSetupError(
+            "scanner_trust_mismatch",
+            "ClamAV runtime does not match pinned scanner trust",
+        )
+    return ScannerSetupSpec(
+        endpoint=endpoint,
+        key=key,
+        key_input=key_input,
+        scanner_id=scanner_id,
+        scanner_key_epoch=key_epoch,
+        engine_version=engine_version,
+        signature_version=signature_version,
+        signature_updated_at=signature_updated_at,
+        signature_max_age_seconds=signature_max_age_seconds,
+        rules_digest=rules_digest,
+        profile_digest=profile_digest,
+        trust_policy=trust_policy,
+    )
+
+
+
+def _require_scanner_readiness(spec: ScannerSetupSpec) -> dict[str, Any]:
+    """Probe the exact maintained daemon and require signed clean evidence."""
+
+    issued_at = int(time.time())
+    digest = hashlib.sha256(b"agentnet-clamav-readiness\n").hexdigest()
+    try:
+        scanner = ClamAVScanner(
+            spec.endpoint,
+            spec.key,
+            scanner_id=spec.scanner_id,
+            scanner_key_epoch=spec.scanner_key_epoch,
+            engine_version=spec.engine_version,
+            signature_version=spec.signature_version,
+            signature_updated_at=spec.signature_updated_at,
+            policy_revision=1,
+            trust_policy=spec.trust_policy,
+            max_signature_age_seconds=spec.signature_max_age_seconds,
+        )
+        attestation = scanner.scan(
+            artifact_id="agentnet-scanner-readiness",
+            classification="C0",
+            ciphertext_digest=digest,
+            object_key="0" * 32,
+            object_version=digest,
+            plaintext_digest=digest,
+            policy_revision=1,
+            content=b"agentnet-clamav-readiness\n",
+            issued_at=issued_at,
+            expires_at=issued_at + min(
+                60,
+                spec.trust_policy.max_attestation_age_seconds,
+            ),
+        )
+        verify_signature(
+            spec.key.public_pem,
+            "agentnet.artifact.attestation.v1",
+            attestation.signed_fields(),
+            attestation.signature,
+        )
+        spec.trust_policy.require_profile(attestation)
+    except Exception as exc:
+        raise ServerSetupError(
+            "scanner_unready",
+            "maintained ClamAV readiness could not be proven",
+        ) from exc
+    if (
+        attestation.result != "allow"
+        or attestation.scanner_id != spec.scanner_id
+        or attestation.scanner_key_epoch != spec.scanner_key_epoch
+        or attestation.rules_digest != spec.rules_digest
+        or attestation.profile_digest != spec.profile_digest
+    ):
+        raise ServerSetupError(
+            "scanner_unready",
+            "maintained ClamAV readiness evidence is not exact",
+        )
+    return {
+        "endpoint": spec.endpoint.uri,
+        "engine_version": spec.engine_version,
+        "profile_digest": spec.profile_digest,
+        "rules_digest": spec.rules_digest,
+        "scanner_id": spec.scanner_id,
+        "scanner_key_epoch": spec.scanner_key_epoch,
+        "signature_updated_at": spec.signature_updated_at,
+        "status": "ready",
+    }
+
 
 
 def _server_setup_preflight(
@@ -1489,10 +1780,22 @@ def _server_setup_preflight(
         raise ServerSetupError("unsupported_host", "ordinary server setup requires systemd as PID 1")
     runtime = _resolve_setup_runtime()
     input_bundle = _read_input_bundle(request)
-    oidc, owner_oidc, approvers, scanner_trust = _validate_inputs(request, input_bundle)
+    oidc, owner_oidc, approvers, scanner_trust = _validate_inputs(
+        request,
+        input_bundle,
+    )
     core_values = _parse_environment(input_bundle["core_environment_file"], label="Core environment input")
     approval_values = _parse_environment(input_bundle["approval_environment_file"], label="Approval environment input")
+    scanner_setup = _resolve_scanner_setup(
+        request,
+        core_values=core_values,
+        scanner_trust=scanner_trust,
+    )
+    if scanner_setup is not None:
+        input_bundle["scanner_signing_key_file"] = scanner_setup.key_input
     required_core = {request.database_url_env, _BROKER_CREDENTIAL_NAME}
+    if scanner_setup is not None:
+        required_core.update(_SCANNER_ENVIRONMENT_KEYS)
     if oidc.client_secret_env is not None:
         required_core.add(oidc.client_secret_env)
     required_approval = {_BROKER_CREDENTIAL_NAME}
@@ -1512,6 +1815,10 @@ def _server_setup_preflight(
         runtime.uv_executable,
         allowed_names=frozenset(required_approval),
     )
+    if scanner_setup is not None:
+        core_environment["AGENTNET_CLAMAV_SIGNING_KEY_FILE"] = str(
+            SCANNER_SIGNING_KEY
+        )
     core_broker_credential = core_environment[_BROKER_CREDENTIAL_NAME]
     approval_broker_credential = approval_environment[_BROKER_CREDENTIAL_NAME]
     _validate_broker_credential(core_broker_credential)
@@ -1527,6 +1834,7 @@ def _server_setup_preflight(
         owner_oidc=owner_oidc,
         approvers=approvers,
         scanner_trust=scanner_trust,
+        scanner_setup=scanner_setup,
         core_values=core_values,
         approval_values=approval_values,
         core_environment=core_environment,
@@ -2173,6 +2481,87 @@ def _require_marker_realized_state(
             )
 
 
+def _validated_v0145_database_snapshot(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "migration_catalog",
+        "endpoint_lifecycle_absent",
+        "endpoint_mailbox_cursor",
+        "identity",
+        "preserved_relation_digests",
+    }:
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    catalog = value.get("migration_catalog")
+    identity = value.get("identity")
+    preserved = value.get("preserved_relation_digests")
+    if (
+        value.get("schema_version") != _LIFECYCLE_SOURCE_SCHEMA
+        or value.get("endpoint_lifecycle_absent") is not True
+        or not isinstance(value.get("endpoint_mailbox_cursor"), int)
+        or isinstance(value.get("endpoint_mailbox_cursor"), bool)
+        or int(value["endpoint_mailbox_cursor"]) < 0
+        or not isinstance(catalog, list)
+        or len(catalog) != _LIFECYCLE_SOURCE_SCHEMA
+        or not isinstance(identity, dict)
+        or set(identity)
+        != {
+            "domain_id",
+            "harness_id",
+            "principal_id",
+            "credential_id",
+            "source_harness_kind",
+            "harness_kind",
+            "profile_key",
+        }
+        or identity.get("harness_kind") != "server"
+        or any(
+            not isinstance(identity.get(key), str) or not identity[key]
+            for key in identity
+        )
+        or not isinstance(preserved, dict)
+        or set(preserved) != set(_LIFECYCLE_PRESERVED_TABLES)
+        or any(
+            not isinstance(digest, str) or _HEX64.fullmatch(digest) is None
+            for digest in preserved.values()
+        )
+    ):
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    for expected_migration, record in zip(MIGRATIONS[:6], catalog, strict=True):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"version", "name", "checksum", "applied_at"}
+            or record.get("version") != expected_migration.version
+            or record.get("name") != expected_migration.name
+            or record.get("checksum") != expected_migration.checksum
+            or not isinstance(record.get("applied_at"), int)
+            or isinstance(record.get("applied_at"), bool)
+            or int(record["applied_at"]) < 0
+        ):
+            raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    return dict(value)
+
+
+def _validated_upgrade_systemd_snapshot(value: object) -> dict[str, dict[str, str]]:
+    if not isinstance(value, dict) or set(value) != set(MANAGED_UNITS):
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    result: dict[str, dict[str, str]] = {}
+    for unit, raw in value.items():
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"LoadState", "UnitFileState", "ActiveState"}
+            or any(
+                not isinstance(raw.get(key), str)
+                or not raw[key]
+                or len(raw[key]) > 64
+                or any(character in raw[key] for character in "\r\n\x00")
+                for key in raw
+            )
+        ):
+            raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+        result[str(unit)] = {key: str(raw[key]) for key in raw}
+    return result
+
+
 def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] | None:
     payload = _read_managed_exact(
         path,
@@ -2206,7 +2595,7 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         and all(isinstance(value, str) for value in units.values())
     )
     current_unit_shape = (
-        schema == _UPGRADE_JOURNAL_SCHEMA
+        schema in {_UPGRADE_JOURNAL_SCHEMA, _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA}
         and source_profile is not None
         and isinstance(units, dict)
         and set(units) == set(MANAGED_UNITS)
@@ -2217,19 +2606,42 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
             for unit in MANAGED_UNITS
         )
     )
+    base_keys = {
+        "schema",
+        "from_marker_sha256",
+        "from_package_version",
+        "from_request_digest",
+        "to_package_version",
+        "to_request_digest",
+        "previous_units",
+        "previous_configs",
+    }
+    lifecycle_keys = base_keys | {
+        "previous_marker",
+        "previous_database",
+        "previous_systemd",
+    }
+    expected_keys = (
+        lifecycle_keys
+        if schema == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+        else base_keys
+    )
+    lifecycle_shape = (
+        schema != _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+        or (
+            (from_package_version, to_package_version) == _LIFECYCLE_SETUP_UPGRADE
+            and isinstance(journal.get("previous_marker"), str)
+            and len(str(journal["previous_marker"])) <= 2 * _MAX_CONFIG_BYTES
+        )
+    )
     if (
-        schema not in {_LEGACY_UPGRADE_JOURNAL_SCHEMA, _UPGRADE_JOURNAL_SCHEMA}
-        or set(journal)
-        != {
-            "schema",
-            "from_marker_sha256",
-            "from_package_version",
-            "from_request_digest",
-            "to_package_version",
-            "to_request_digest",
-            "previous_units",
-            "previous_configs",
+        schema
+        not in {
+            _LEGACY_UPGRADE_JOURNAL_SCHEMA,
+            _UPGRADE_JOURNAL_SCHEMA,
+            _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA,
         }
+        or set(journal) != expected_keys
         or any(
             not isinstance(journal.get(key), str) or not _HEX64.fullmatch(str(journal.get(key)))
             for key in ("from_marker_sha256", "from_request_digest", "to_request_digest")
@@ -2239,6 +2651,7 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         or not (legacy_unit_shape or current_unit_shape)
         or not isinstance(configs, dict)
         or set(configs) != _JOURNALED_CONFIG_KEYS
+        or not lifecycle_shape
     ):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
     for value in units.values():
@@ -2251,6 +2664,25 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
             raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
     _journaled_unit_payloads(journal)
     _journaled_config_payloads(journal)
+    if schema == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA:
+        try:
+            previous_marker = base64.b64decode(
+                str(journal["previous_marker"]),
+                validate=True,
+            )
+        except (ValueError, TypeError) as exc:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "setup upgrade journal is invalid",
+            ) from exc
+        if (
+            not previous_marker
+            or hashlib.sha256(previous_marker).hexdigest()
+            != journal["from_marker_sha256"]
+        ):
+            raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+        _validated_v0145_database_snapshot(journal.get("previous_database"))
+        _validated_upgrade_systemd_snapshot(journal.get("previous_systemd"))
     return journal
 
 
@@ -2945,6 +3377,535 @@ def _run_postgres_probe_as(
             f"{stage} failed ({reason_class}); apply the exact operator-owned PostgreSQL peer rule, reload PostgreSQL, and retry the same approved digest",
         )
     return evidence
+
+
+def _postgres_relation_digest(connection: Any, relation: str) -> str:
+    """Hash one preserved relation without exporting its protected row values."""
+
+    if relation not in _LIFECYCLE_PRESERVED_TABLES:
+        raise ServerSetupError("setup_upgrade_conflict", "upgrade digest relation is invalid")
+    digest = hashlib.sha256()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            f"""
+            SELECT row_json
+              FROM (
+                    SELECT to_jsonb(snapshot_row)::text AS row_json
+                      FROM "{relation}" AS snapshot_row
+                   ) AS serialized_rows
+             ORDER BY row_json
+            """
+        )
+        while True:
+            rows = cursor.fetchmany(256)
+            if not rows:
+                break
+            for row in rows:
+                value = row["row_json"]
+                if not isinstance(value, str):
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "preserved PostgreSQL relation could not be serialized",
+                    )
+                digest.update(value.encode("utf-8"))
+                digest.update(b"\n")
+    finally:
+        cursor.close()
+    return digest.hexdigest()
+
+
+def _postgres_migration_catalog(connection: Any) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        "SELECT version,name,checksum,applied_at FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    return [
+        {
+            "version": int(row["version"]),
+            "name": str(row["name"]),
+            "checksum": str(row["checksum"]),
+            "applied_at": int(row["applied_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _postgres_schema_version(connection: Any) -> int:
+    row = connection.execute(
+        "SELECT value FROM metadata WHERE key='schema_version'"
+    ).fetchone()
+    if row is None:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "PostgreSQL schema version metadata is absent",
+        )
+    try:
+        value = int(row["value"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "PostgreSQL schema version metadata is invalid",
+        ) from exc
+    return value
+
+
+def _postgres_v0145_identity(
+    connection: Any,
+    *,
+    domain_id: str,
+    harness_id: str,
+    credential_id: str,
+    profile_key: str,
+) -> dict[str, str]:
+    row = connection.execute(
+        """
+        SELECT harness.domain_id,harness.harness_id,harness.principal_id,
+               harness.kind,harness.status AS harness_status,
+               harness.credential_epoch,credential.credential_id,
+               credential.status AS credential_status,credential.epoch
+          FROM harnesses AS harness
+          JOIN credentials AS credential
+            ON credential.harness_id=harness.harness_id
+         WHERE harness.domain_id=%s AND harness.harness_id=%s
+           AND credential.credential_id=%s
+        """,
+        (domain_id, harness_id, credential_id),
+    ).fetchone()
+    if (
+        row is None
+        or not isinstance(row["principal_id"], str)
+        or row["harness_status"] != "active"
+        or row["credential_status"] != "active"
+        or int(row["credential_epoch"]) != int(row["epoch"])
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.44 enrolled server identity is not the exact active binding",
+        )
+    return {
+        "domain_id": str(row["domain_id"]),
+        "harness_id": str(row["harness_id"]),
+        "principal_id": str(row["principal_id"]),
+        "credential_id": str(row["credential_id"]),
+        "source_harness_kind": str(row["kind"]),
+        "harness_kind": "server",
+        "profile_key": profile_key,
+    }
+
+
+def _postgres_v0145_source_snapshot(
+    connection: Any,
+    *,
+    domain_id: str,
+    harness_id: str,
+    credential_id: str,
+    profile_key: str,
+) -> dict[str, Any]:
+    catalog_rows = connection.execute(
+        "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    if (
+        _postgres_schema_version(connection) != _LIFECYCLE_SOURCE_SCHEMA
+        or validate_applied_migrations(catalog_rows, migrations=MIGRATIONS[:6])
+        != _LIFECYCLE_SOURCE_SCHEMA
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 requires the exact schema-v6 source",
+        )
+    require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:6])
+    lifecycle_relation = connection.execute(
+        "SELECT to_regclass('endpoint_lifecycle') AS relation"
+    ).fetchone()
+    if lifecycle_relation is None or lifecycle_relation["relation"] is not None:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "schema-v6 source contains endpoint lifecycle state",
+        )
+    identity = _postgres_v0145_identity(
+        connection,
+        domain_id=domain_id,
+        harness_id=harness_id,
+        credential_id=credential_id,
+        profile_key=profile_key,
+    )
+    cursor_row = connection.execute(
+        "SELECT COALESCE(MAX(cursor),0) AS cursor FROM recipients WHERE recipient_id=%s",
+        (identity["harness_id"],),
+    ).fetchone()
+    committed_scopes = connection.execute(
+        "SELECT scope_id,owner_harness_id,fresh_harness_id FROM communication_scopes "
+        "WHERE state='committed' ORDER BY domain_id,principal_id,scope_id"
+    ).fetchall()
+    return {
+        "schema_version": _LIFECYCLE_SOURCE_SCHEMA,
+        "migration_catalog": _postgres_migration_catalog(connection),
+        "endpoint_lifecycle_absent": True,
+        "endpoint_mailbox_cursor": (
+            int(cursor_row["cursor"]) if cursor_row is not None else 0
+        ),
+        "identity": identity,
+        "migrated_collaboration": _expected_migrated_collaboration(committed_scopes),
+        "preserved_relation_digests": {
+            relation: _postgres_relation_digest(connection, relation)
+            for relation in _LIFECYCLE_PRESERVED_TABLES
+        },
+    }
+
+def _expected_migrated_collaboration(rows: Any) -> list[dict[str, str]]:
+    """Project committed v6 communication authority into its exact v7 image."""
+
+    expectation: list[dict[str, str]] = []
+    for row in rows:
+        expectation.append(
+            {
+                "scope_id": str(row["scope_id"]),
+                "owner_harness_id": str(row["owner_harness_id"]),
+                "member_harness_id": str(row["fresh_harness_id"]),
+            }
+        )
+    expectation.sort(key=lambda entry: entry["scope_id"])
+    return expectation
+
+
+def _require_migrated_collaboration_state(
+    *,
+    expected: Any,
+    scope_rows: Any,
+    member_rows: Any,
+) -> None:
+    """Admit exactly the migrated authority and nothing else.
+
+    An upgraded deployment legitimately carries one v7 collaboration scope per
+    committed v6 communication scope, so emptiness is not the invariant.  Any
+    extra scope, missing scope, foreign member, or changed role means new
+    v0.1.45 activity that rollback would silently discard.
+    """
+
+    expectation = sorted(
+        (
+            str(entry["scope_id"]),
+            str(entry["owner_harness_id"]),
+            str(entry["member_harness_id"]),
+        )
+        for entry in expected
+    )
+    observed_scopes = sorted(
+        (
+            str(row["scope_id"]),
+            str(row["owner_harness_id"]),
+            str(row["source_communication_scope_id"]),
+            str(row["state"]),
+            str(row["state_reason"]),
+        )
+        for row in scope_rows
+    )
+    if observed_scopes != [
+        (scope_id, owner, scope_id, "active", "migrated_v6_communication_scope")
+        for scope_id, owner, _member in expectation
+    ]:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 release state changed before rollback",
+        )
+    expected_members = sorted(
+        [(scope_id, owner, "owner") for scope_id, owner, _member in expectation]
+        + [(scope_id, member, "member") for scope_id, _owner, member in expectation]
+    )
+    observed_members = sorted(
+        (str(row["scope_id"]), str(row["harness_id"]), str(row["role"]))
+        for row in member_rows
+    )
+    if expected_members != observed_members:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 release state changed before rollback",
+        )
+
+
+def _require_v0145_source_snapshot(
+    actual: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> None:
+    if dict(actual) != dict(expected):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "PostgreSQL source changed after the upgrade journal was committed",
+        )
+
+
+def _postgres_v0145_target_endpoint(
+    connection: Any,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    identity = dict(source["identity"])
+    endpoint_rows = connection.execute(
+        "SELECT * FROM endpoint_lifecycle ORDER BY domain_id,harness_id"
+    ).fetchall()
+    if len(endpoint_rows) != 1:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 endpoint lifecycle target is not exact",
+        )
+    row = dict(endpoint_rows[0])
+    expected = {
+        "domain_id": identity["domain_id"],
+        "harness_id": identity["harness_id"],
+        "principal_id": identity["principal_id"],
+        "current_credential_id": identity["credential_id"],
+        "harness_kind": identity["harness_kind"],
+        "profile_key": identity["profile_key"],
+        "state": "restart_required",
+        "adapter_generation": 1,
+        "mailbox_cursor": source["endpoint_mailbox_cursor"],
+        "capability_root_digest": None,
+        "process_measurement": None,
+        "state_reason": "explicit_user_restart_required",
+        "revision": 2,
+    }
+    if any(row.get(key) != value for key, value in expected.items()):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 endpoint lifecycle target changed unexpectedly",
+        )
+    if (
+        not isinstance(row.get("mailbox_cursor"), int)
+        or isinstance(row.get("mailbox_cursor"), bool)
+        or int(row["mailbox_cursor"]) < 0
+        or not isinstance(row.get("created_at"), int)
+        or not isinstance(row.get("updated_at"), int)
+        or row["updated_at"] < row["created_at"]
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 endpoint lifecycle target metadata is invalid",
+        )
+    return row
+
+
+def _postgres_v0145_target_is_rollback_safe(
+    connection: Any,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    catalog_rows = connection.execute(
+        "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    if (
+        _postgres_schema_version(connection) != _LIFECYCLE_TARGET_SCHEMA
+        or validate_applied_migrations(catalog_rows) != _LIFECYCLE_TARGET_SCHEMA
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 PostgreSQL target changed before rollback",
+        )
+    require_exact_postgres_catalog(connection, migrations=MIGRATIONS)
+    source_catalog = list(source["migration_catalog"])
+    target_catalog = _postgres_migration_catalog(connection)
+    if target_catalog[:6] != source_catalog or len(target_catalog) != 7:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "PostgreSQL migration catalog changed before rollback",
+        )
+    preserved = dict(source["preserved_relation_digests"])
+    if {
+        relation: _postgres_relation_digest(connection, relation)
+        for relation in _LIFECYCLE_PRESERVED_TABLES
+    } != preserved:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "protected identity, access, or message state changed before rollback",
+        )
+    endpoint = _postgres_v0145_target_endpoint(connection, source)
+    expected_migration = source.get("migrated_collaboration")
+    if not isinstance(expected_migration, list):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 upgrade journal lacks its exact migrated authority expectation",
+        )
+    _require_migrated_collaboration_state(
+        expected=expected_migration,
+        scope_rows=connection.execute(
+            "SELECT scope_id,owner_harness_id,source_communication_scope_id,state,"
+            "state_reason FROM collaboration_scopes"
+        ).fetchall(),
+        member_rows=connection.execute(
+            "SELECT scope_id,harness_id,role FROM collaboration_scope_members "
+            "WHERE state='active'"
+        ).fetchall(),
+    )
+    for relation in _LIFECYCLE_RELEASE_TABLES:
+        if relation in {
+            "endpoint_lifecycle",
+            "collaboration_scopes",
+            "collaboration_scope_members",
+        }:
+            continue
+        row = connection.execute(
+            f'SELECT COUNT(*) AS count FROM "{relation}"'
+        ).fetchone()
+        if row is None or int(row["count"]) != 0:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "v0.1.45 release state changed before rollback",
+            )
+    return endpoint
+
+
+def _postgres_v0145_database_operation(
+    database_url: str,
+    *,
+    operation: Literal["snapshot", "migrate", "rollback"],
+    source: Mapping[str, Any] | None,
+    domain_id: str,
+    harness_id: str,
+    credential_id: str,
+    profile_key: str,
+) -> dict[str, Any]:
+    """Run one exact schema-6/7 transition under the PostgreSQL peer identity."""
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    connection = psycopg.connect(
+        database_url,
+        autocommit=True,
+        row_factory=dict_row,
+        connect_timeout=5,
+        application_name=f"agentnet:server-setup-{operation}",
+    )
+    try:
+        with connection.transaction():
+            connection.execute("SELECT pg_advisory_xact_lock(%s)", (MIGRATION_LOCK_ID,))
+            if operation == "snapshot":
+                snapshot = _postgres_v0145_source_snapshot(
+                    connection,
+                    domain_id=domain_id,
+                    harness_id=harness_id,
+                    credential_id=credential_id,
+                    profile_key=profile_key,
+                )
+                return {"ready": True, "source": snapshot}
+            if source is None:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "v0.1.45 database journal is absent",
+                )
+            if operation == "migrate":
+                if _postgres_schema_version(connection) == _LIFECYCLE_SOURCE_SCHEMA:
+                    actual = _postgres_v0145_source_snapshot(
+                        connection,
+                        domain_id=domain_id,
+                        harness_id=harness_id,
+                        credential_id=credential_id,
+                        profile_key=profile_key,
+                    )
+                    _require_v0145_source_snapshot(actual, source)
+                    apply_postgres_migrations(connection)
+                    identity = dict(source["identity"])
+                    now = int(time.time())
+                    connection.execute(
+                        """
+                        INSERT INTO endpoint_lifecycle(
+                            domain_id,harness_id,principal_id,current_credential_id,
+                            harness_kind,profile_key,state,adapter_generation,
+                            mailbox_cursor,capability_root_digest,process_measurement,
+                            state_reason,revision,created_at,updated_at
+                        ) VALUES(%s,%s,%s,%s,%s,%s,'restart_required',1,%s,NULL,NULL,
+                                 'explicit_user_restart_required',2,%s,%s)
+                        """,
+                        (
+                            identity["domain_id"],
+                            identity["harness_id"],
+                            identity["principal_id"],
+                            identity["credential_id"],
+                            identity["harness_kind"],
+                            identity["profile_key"],
+                            int(source["endpoint_mailbox_cursor"]),
+                            now,
+                            now,
+                        ),
+                    )
+                endpoint = _postgres_v0145_target_is_rollback_safe(connection, source)
+                return {"ready": True, "endpoint_lifecycle": endpoint}
+            if operation == "rollback":
+                if _postgres_schema_version(connection) == _LIFECYCLE_SOURCE_SCHEMA:
+                    actual = _postgres_v0145_source_snapshot(
+                        connection,
+                        domain_id=domain_id,
+                        harness_id=harness_id,
+                        credential_id=credential_id,
+                        profile_key=profile_key,
+                    )
+                    _require_v0145_source_snapshot(actual, source)
+                    return {"ready": True, "rolled_back": "already_source"}
+                _postgres_v0145_target_is_rollback_safe(connection, source)
+                for relation in _LIFECYCLE_RELEASE_TABLES:
+                    connection.execute(f'DROP TABLE "{relation}"')
+                migration = MIGRATIONS[6]
+                deleted = connection.execute(
+                    """
+                    DELETE FROM schema_migrations
+                     WHERE version=%s AND name=%s AND checksum=%s
+                    """,
+                    (migration.version, migration.name, migration.checksum),
+                )
+                if deleted.rowcount != 1:
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "v0.1.45 migration catalog changed before rollback",
+                    )
+                updated = connection.execute(
+                    """
+                    UPDATE metadata SET value=%s
+                     WHERE key='schema_version' AND value=%s
+                    """,
+                    (str(_LIFECYCLE_SOURCE_SCHEMA), str(_LIFECYCLE_TARGET_SCHEMA)),
+                )
+                if updated.rowcount != 1:
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "v0.1.45 schema metadata changed before rollback",
+                    )
+                require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:6])
+                return {"ready": True, "rolled_back": "schema_v6_restored"}
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "v0.1.45 database operation is invalid",
+            )
+    finally:
+        connection.close()
+
+
+def _run_v0145_database_operation_as(
+    account: pwd.struct_passwd,
+    database_url: str,
+    *,
+    operation: Literal["snapshot", "migrate", "rollback"],
+    source: Mapping[str, Any] | None,
+    domain_id: str,
+    harness_id: str,
+    credential_id: str,
+    profile_key: str,
+) -> dict[str, Any]:
+    try:
+        return _run_postgres_probe_as(
+            account,
+            lambda: _postgres_v0145_database_operation(
+                database_url,
+                operation=operation,
+                source=source,
+                domain_id=domain_id,
+                harness_id=harness_id,
+                credential_id=credential_id,
+                profile_key=profile_key,
+            ),
+            stage=f"v0145_database_{operation}",
+        )
+    except ServerSetupError as exc:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            f"v0.1.45 PostgreSQL {operation} could not be proven exact",
+        ) from exc
 
 
 def _postgres_peer_gate(core_account: pwd.struct_passwd, database_url: str) -> dict[str, Any]:
@@ -3874,7 +4835,14 @@ def _prepare_supported_upgrade(
     core_oidc_path: Path,
     core_account: pwd.struct_passwd,
     core_preexisting: bool,
+    database_url: str,
+    domain_id: str,
+    enrolled_harness_id: str | None,
+    enrolled_credential_id: str | None,
+    profile_key: str,
+    systemctl_executable: Path,
     unit_paths: Mapping[str, Path],
+    marker_path: Path,
     journal_path: Path,
     uid: int,
     gid: int,
@@ -3972,6 +4940,9 @@ def _prepare_supported_upgrade(
                 uid=uid,
                 gid=gid,
             )
+            if journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA:
+                _clear_upgrade_journal(journal_path)
+                return "cleared_committed_lifecycle_upgrade"
             if _forward_only_setup_upgrade(
                 journal["from_package_version"],
                 journal["to_package_version"],
@@ -3995,19 +4966,28 @@ def _prepare_supported_upgrade(
                 "setup_upgrade_conflict",
                 "an unrelated interrupted AgentNet setup upgrade is journaled on this host",
             )
+        lifecycle_upgrade = journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
         pending.update(
             journal=journal,
             journal_path=journal_path,
+            marker_path=marker_path,
             unit_paths=dict(unit_paths),
             config_paths={
                 "core_config": core_config_path,
                 "core_oidc_config": core_oidc_path,
             },
             core_account=core_account,
+            database_url=database_url,
+            systemctl_executable=systemctl_executable,
+            rollback_capable_upgrade=lifecycle_upgrade,
             uid=uid,
             gid=gid,
         )
-        return "resumed_journaled_upgrade"
+        return (
+            "resumed_journaled_lifecycle_upgrade"
+            if lifecycle_upgrade
+            else "resumed_journaled_upgrade"
+        )
     if not upgrading:
         return "not_required"
     assert existing_marker is not None and existing_marker_payload is not None
@@ -4075,8 +5055,16 @@ def _prepare_supported_upgrade(
             )
         ).decode("ascii"),
     }
-    journal = {
-        "schema": _UPGRADE_JOURNAL_SCHEMA,
+    lifecycle_upgrade = (
+        str(existing_marker["package_version"]),
+        __version__,
+    ) == _LIFECYCLE_SETUP_UPGRADE
+    journal: dict[str, Any] = {
+        "schema": (
+            _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+            if lifecycle_upgrade
+            else _UPGRADE_JOURNAL_SCHEMA
+        ),
         "from_marker_sha256": hashlib.sha256(existing_marker_payload).hexdigest(),
         "from_package_version": str(existing_marker["package_version"]),
         "from_request_digest": str(existing_marker["request_digest"]),
@@ -4085,104 +5073,268 @@ def _prepare_supported_upgrade(
         "previous_units": previous_units,
         "previous_configs": previous_configs,
     }
+    if lifecycle_upgrade:
+        if not enrolled_harness_id or not enrolled_credential_id:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "v0.1.44 source has no exact enrolled server identity",
+            )
+        database_evidence = _run_v0145_database_operation_as(
+            core_account,
+            database_url,
+            operation="snapshot",
+            source=None,
+            domain_id=domain_id,
+            harness_id=enrolled_harness_id,
+            credential_id=enrolled_credential_id,
+            profile_key=profile_key,
+        )
+        previous_database = _validated_v0145_database_snapshot(
+            database_evidence.get("source")
+        )
+        previous_systemd: dict[str, dict[str, str]] = {}
+        for unit in MANAGED_UNITS:
+            properties = _systemd_show(systemctl_executable, unit)
+            previous_systemd[unit] = {
+                key: properties[key]
+                for key in ("LoadState", "UnitFileState", "ActiveState")
+            }
+        _validated_upgrade_systemd_snapshot(previous_systemd)
+        journal.update(
+            previous_marker=base64.b64encode(existing_marker_payload).decode("ascii"),
+            previous_database=previous_database,
+            previous_systemd=previous_systemd,
+        )
     _write_upgrade_journal(journal_path, journal, uid=uid, gid=gid)
     pending.update(
         journal=journal,
         journal_path=journal_path,
+        marker_path=marker_path,
         unit_paths=dict(unit_paths),
         config_paths={
             "core_config": core_config_path,
             "core_oidc_config": core_oidc_path,
         },
         core_account=core_account,
+        database_url=database_url,
+        systemctl_executable=systemctl_executable,
+        rollback_capable_upgrade=lifecycle_upgrade,
         uid=uid,
         gid=gid,
     )
     return "validated_pre_upgrade_realized_state"
 
 
-def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
-    """Restore exact journaled Core configs and units after a failed upgrade.
+def _restore_upgrade_systemd_state(pending: Mapping[str, Any]) -> None:
+    if pending.get("service_state_changed") is not True:
+        return
+    journal = pending["journal"]
+    previous = _validated_upgrade_systemd_snapshot(journal.get("previous_systemd"))
+    systemctl_executable = Path(str(pending["systemctl_executable"]))
+    _run_systemctl(
+        systemctl_executable,
+        ["daemon-reload"],
+        failure_message="systemd could not reload restored v0.1.44 units",
+    )
+    for unit in MANAGED_UNITS:
+        state = previous[unit]
+        active = state["ActiveState"] == "active"
+        unit_file_state = state["UnitFileState"]
+        if unit_file_state == "enabled":
+            arguments = ["enable", "--now", unit] if active else ["enable", unit]
+            _run_systemctl(
+                systemctl_executable,
+                arguments,
+                failure_message="systemd could not restore v0.1.44 enablement",
+            )
+            if not active:
+                _run_systemctl(
+                    systemctl_executable,
+                    ["stop", unit],
+                    failure_message="systemd could not restore v0.1.44 inactive state",
+                )
+        elif unit_file_state == "disabled":
+            _run_systemctl(
+                systemctl_executable,
+                ["disable", "--now", unit],
+                failure_message="systemd could not restore v0.1.44 disablement",
+            )
+            if active:
+                _run_systemctl(
+                    systemctl_executable,
+                    ["start", unit],
+                    failure_message="systemd could not restore v0.1.44 active state",
+                )
+        elif unit_file_state == "static":
+            _run_systemctl(
+                systemctl_executable,
+                ["start" if active else "stop", unit],
+                failure_message="systemd could not restore v0.1.44 static unit state",
+            )
+        else:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "journaled v0.1.44 systemd state cannot be restored exactly",
+            )
+    for unit in MANAGED_UNITS:
+        actual = _systemd_show(systemctl_executable, unit)
+        expected = previous[unit]
+        if any(
+            actual.get(key) != expected[key]
+            for key in ("LoadState", "UnitFileState", "ActiveState")
+        ):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "restored v0.1.44 systemd state could not be proven exact",
+            )
 
-    Rollback never touches identity, credential, enrollment, or audit records: it
-    restores only managed config/unit payloads the previous package version had
-    committed, so the recorded marker stays the truth about realized state.  If
-    the restore itself cannot complete, the journal is retained so the next run
-    resumes instead of silently losing the pre-upgrade state.
-    """
+
+def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
+    """Restore only exact journaled state and retain evidence on uncertainty."""
 
     journal = pending.get("journal")
     if not isinstance(journal, Mapping):
         return
-    try:
-        previous_configs = _journaled_config_payloads(journal)
-        replacements = pending.get("replacement_configs", {})
-        if not isinstance(replacements, Mapping):
-            raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
-        core_account = pending["core_account"]
-        for key, path in dict(pending["config_paths"]).items():
-            current = _read_private_managed_file(
-                path,
-                core_account,
-                blocker="setup_upgrade_conflict",
-                max_bytes=_MAX_CONFIG_BYTES,
+    previous_configs = _journaled_config_payloads(journal)
+    replacements = pending.get("replacement_configs", {})
+    if not isinstance(replacements, Mapping):
+        raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
+    core_account = pending["core_account"]
+    config_paths = dict(pending["config_paths"])
+    current_configs: dict[str, bytes] = {}
+    for key, path in config_paths.items():
+        current = _read_private_managed_file(
+            path,
+            core_account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        )
+        replacement = replacements.get(key)
+        if current != previous_configs[key] and (
+            not isinstance(replacement, bytes) or current != replacement
+        ):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "managed Core config changed before upgrade rollback",
             )
-            if current == previous_configs[key]:
-                continue
-            replacement = replacements.get(key)
-            if not isinstance(replacement, bytes) or current != replacement:
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "managed Core config changed before upgrade rollback",
+        current_configs[key] = current
+
+    previous_units = _journaled_unit_payloads(journal)
+    unit_paths = dict(pending["unit_paths"])
+    replacements_units = pending.get("replacement_units", {})
+    if set(previous_units) != set(unit_paths) or not isinstance(replacements_units, Mapping):
+        raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
+    current_units: dict[str, bytes | None] = {}
+    for unit, path in unit_paths.items():
+        current = _read_managed_unit(
+            path,
+            uid=int(pending["uid"]),
+            gid=int(pending["gid"]),
+            blocker="setup_upgrade_conflict",
+        )
+        replacement = replacements_units.get(unit)
+        if current != previous_units[unit] and (
+            not isinstance(replacement, bytes) or current != replacement
+        ):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "managed unit changed before upgrade rollback",
+            )
+        current_units[unit] = current
+
+    lifecycle_upgrade = journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+    if lifecycle_upgrade:
+        marker_payload = _read_setup_marker(
+            Path(str(pending["marker_path"])),
+            uid=int(pending["uid"]),
+            gid=int(pending["gid"]),
+        )
+        try:
+            previous_marker = base64.b64decode(
+                str(journal["previous_marker"]),
+                validate=True,
+            )
+        except (ValueError, TypeError) as exc:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "journaled setup marker is invalid",
+            ) from exc
+        if marker_payload != previous_marker:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "setup marker changed before upgrade rollback",
+            )
+        if pending.get("service_state_changed") is True:
+            systemctl_executable = Path(str(pending["systemctl_executable"]))
+            for arguments in (
+                ["disable", "--now", C0_RESPONDER_UNIT],
+                ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+                ["stop", CREDENTIAL_RENEW_UNIT],
+                ["disable", "--now", CORE_UNIT],
+                ["disable", "--now", APPROVAL_UNIT],
+            ):
+                _run_systemctl(
+                    systemctl_executable,
+                    arguments,
+                    failure_message="v0.1.45 services could not be quiesced for rollback",
                 )
-            _write_journaled_core_config(
-                path,
-                previous_configs[key],
-                account=core_account,
-                previous=replacement,
+        source = _validated_v0145_database_snapshot(journal.get("previous_database"))
+        identity = source["identity"]
+        _run_v0145_database_operation_as(
+            core_account,
+            str(pending["database_url"]),
+            operation="rollback",
+            source=source,
+            domain_id=str(identity["domain_id"]),
+            harness_id=str(identity["harness_id"]),
+            credential_id=str(identity["credential_id"]),
+            profile_key=str(identity["profile_key"]),
+        )
+
+    for key, path in config_paths.items():
+        current = current_configs[key]
+        if current == previous_configs[key]:
+            continue
+        _write_journaled_core_config(
+            path,
+            previous_configs[key],
+            account=core_account,
+            previous=current,
+        )
+    for unit, path in unit_paths.items():
+        current = current_units[unit]
+        previous_payload = previous_units[unit]
+        if current == previous_payload:
+            continue
+        if not isinstance(current, bytes):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "upgrade-created unit disappeared before rollback",
             )
-        previous = _journaled_unit_payloads(journal)
-        unit_paths = dict(pending["unit_paths"])
-        replacements = pending.get("replacement_units", {})
-        if set(previous) != set(unit_paths) or not isinstance(replacements, Mapping):
-            raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
-        for unit, path in unit_paths.items():
-            current = _read_managed_unit(
+        if previous_payload is None:
+            _remove_managed_unit_exact(
                 path,
+                expected=current,
                 uid=int(pending["uid"]),
                 gid=int(pending["gid"]),
-                blocker="setup_upgrade_conflict",
             )
-            previous_payload = previous[unit]
-            if current == previous_payload:
-                continue
-            replacement = replacements.get(unit)
-            if not isinstance(replacement, bytes) or current != replacement:
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "managed unit changed before upgrade rollback",
-                )
-            if previous_payload is None:
-                _remove_managed_unit_exact(
-                    path,
-                    expected=replacement,
-                    uid=int(pending["uid"]),
-                    gid=int(pending["gid"]),
-                )
-            else:
-                _write_managed_unit(
-                    path,
-                    previous_payload,
-                    uid=int(pending["uid"]),
-                    gid=int(pending["gid"]),
-                    previous=replacement,
-                )
-    except Exception:
-        return
+        else:
+            _write_managed_unit(
+                path,
+                previous_payload,
+                uid=int(pending["uid"]),
+                gid=int(pending["gid"]),
+                previous=current,
+            )
+    if lifecycle_upgrade:
+        _restore_upgrade_systemd_state(pending)
     try:
         _clear_upgrade_journal(Path(str(pending["journal_path"])))
-    except OSError:
-        return
+    except OSError as exc:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "upgrade rollback completed but its journal evidence could not be cleared",
+        ) from exc
 
 
 def apply_server_setup(
@@ -4206,7 +5358,19 @@ def apply_server_setup(
             _verified=verified,
         )
     except BaseException as exc:
-        _rollback_pending_upgrade(pending)
+        try:
+            _rollback_pending_upgrade(pending)
+        except ServerSetupError as rollback_exc:
+            if (
+                isinstance(exc, ServerSetupError)
+                and exc.blocker == "managed_path_conflict"
+            ):
+                if verified.get("identity_enrolled"):
+                    exc.identity_enrolled = True
+                raise exc from rollback_exc
+            if verified.get("identity_enrolled"):
+                rollback_exc.identity_enrolled = True
+            raise rollback_exc from exc
         if isinstance(exc, ServerSetupError) and verified.get("identity_enrolled"):
             exc.identity_enrolled = True
         raise
@@ -4282,6 +5446,8 @@ def _apply_server_setup(
         approval_config_path = layout.host(APPROVAL_CONFIG)
         approval_state = layout.host(APPROVAL_STATE)
         setup_marker = layout.host(SETUP_MARKER)
+        scanner_signing_key_path = layout.host(SCANNER_SIGNING_KEY)
+        scanner_worker_config_path = layout.host(SCANNER_WORKER_CONFIG)
         setup_attempt = layout.host(SETUP_ATTEMPT)
         journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
         core_env_path = layout.host(CORE_ENV)
@@ -4298,6 +5464,7 @@ def _apply_server_setup(
         systemctl_executable = preflight.runtime.systemctl_executable
         useradd_executable = preflight.runtime.useradd_executable
         input_bundle = preflight.input_bundle
+        scanner_setup = preflight.scanner_setup
         oidc_provider = preflight.oidc_provider
         owner_oidc = preflight.owner_oidc
         approvers = preflight.approvers
@@ -4531,20 +5698,12 @@ def _apply_server_setup(
                 ),
             }
         )
-        attempt_status, attempt_active = _prepare_setup_attempt(
-            setup_attempt,
-            existing_marker=existing_marker,
-            preexisting_state=preexisting_managed_state,
-            request_digest=approved_digest,
-            uid=root_uid,
-            gid=root_gid,
-        )
-        steps.append({"id": "setup_attempt", "status": attempt_status})
         if approval_state_preexisting:
             _require_private_tree(approval_state, approval_account, blocker="approval_custody")
         if core_runtime_preexisting:
             _require_private_tree(core_runtime, core_account, blocker="core_custody")
         prevalidated_oidc: OIDCEnrollmentConfig | None = None
+        prevalidated_config: Any | None = None
         legacy_owner_policy = False
         if approval_preexisting and core_preexisting:
             approval_config_before, trusted_before = _approval_trust(
@@ -4565,7 +5724,7 @@ def _apply_server_setup(
                 trusted=trusted_before,
                 approvers=approvers,
             )
-            _, legacy_owner_policy = _load_upgrade_compatible_core_config(
+            prevalidated_config, legacy_owner_policy = _load_upgrade_compatible_core_config(
                 core_config_path,
                 core_oidc_path,
                 core_account,
@@ -4585,22 +5744,104 @@ def _apply_server_setup(
             core_oidc_path=core_oidc_path,
             core_account=core_account,
             core_preexisting=core_preexisting,
+            database_url=request.database_url,
+            domain_id=request.domain_id,
+            enrolled_harness_id=(
+                prevalidated_config.enrolled_harness_id
+                if prevalidated_config is not None
+                else None
+            ),
+            enrolled_credential_id=(
+                prevalidated_config.enrolled_credential_id
+                if prevalidated_config is not None
+                else None
+            ),
+            profile_key=request.runtime_instance_id,
+            systemctl_executable=systemctl_executable,
             unit_paths=unit_paths,
+            marker_path=setup_marker,
             journal_path=journal_path,
             uid=root_uid,
             gid=root_gid,
             pending=_pending_upgrade,
         )
         steps.append({"id": "package_upgrade", "status": upgrade_status})
+        attempt_status, attempt_active = _prepare_setup_attempt(
+            setup_attempt,
+            existing_marker=existing_marker,
+            preexisting_state=preexisting_managed_state,
+            request_digest=approved_digest,
+            uid=root_uid,
+            gid=root_gid,
+        )
+        steps.append({"id": "setup_attempt", "status": attempt_status})
+        if scanner_setup is not None:
+            scanner_config_payload = (
+                json.dumps(
+                    {
+                        "endpoint": scanner_setup.endpoint.uri,
+                        "engine_version": scanner_setup.engine_version,
+                        "key_file": str(SCANNER_SIGNING_KEY),
+                        "profile_digest": scanner_setup.profile_digest,
+                        "rules_digest": scanner_setup.rules_digest,
+                        "scanner_id": scanner_setup.scanner_id,
+                        "scanner_key_epoch": scanner_setup.scanner_key_epoch,
+                        "schema": "agentnet.scanner-worker.config.v1",
+                        "signature_max_age_seconds": (
+                            scanner_setup.signature_max_age_seconds
+                        ),
+                        "signature_updated_at": scanner_setup.signature_updated_at,
+                        "signature_version": scanner_setup.signature_version,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
+            steps.append(
+                {
+                    "id": "scanner_signing_key_custody",
+                    "status": _atomic_write(
+                        scanner_signing_key_path,
+                        scanner_setup.key_input,
+                        mode=0o600,
+                        uid=core_account.pw_uid,
+                        gid=core_account.pw_gid,
+                    ),
+                }
+            )
+            steps.append(
+                {
+                    "id": "scanner_worker_config",
+                    "status": _atomic_write(
+                        scanner_worker_config_path,
+                        scanner_config_payload,
+                        mode=0o600,
+                        uid=core_account.pw_uid,
+                        gid=core_account.pw_gid,
+                    ),
+                }
+            )
+            steps.append(
+                {
+                    "id": "scanner_readiness",
+                    "status": _require_scanner_readiness(scanner_setup)["status"],
+                }
+            )
+        else:
+            steps.append(
+                {
+                    "id": "scanner_readiness",
+                    "status": "not_configured_file_capability_disabled",
+                }
+            )
         journaled_units = (
             _journaled_unit_payloads(_pending_upgrade["journal"])
             if _pending_upgrade.get("journal") is not None
             else {}
         )
 
-        def commit_setup_profile() -> dict[str, bytes]:
-            """Commit exact managed files and marker, then cross forward-only."""
-
+        def write_setup_units() -> dict[str, bytes]:
             unit_payloads = render_units(
                 node_executable,
                 executable,
@@ -4621,6 +5862,15 @@ def _apply_server_setup(
                         ),
                     }
                 )
+            return unit_payloads
+
+        def commit_setup_profile(
+            unit_payloads: dict[str, bytes] | None = None,
+        ) -> dict[str, bytes]:
+            """Commit exact managed files and marker, then cross the boundary."""
+
+            if unit_payloads is None:
+                unit_payloads = write_setup_units()
             approval_config_digest = _managed_config_digest(
                 approval_config_path,
                 approval_account,
@@ -4888,8 +6138,14 @@ def _apply_server_setup(
             scanner_trust=scanner_trust,
         )
         profile_committed_early = False
+        rollback_capable_upgrade = (
+            _pending_upgrade.get("rollback_capable_upgrade") is True
+        )
+        endpoint_lifecycle_result: dict[str, Any] | None = None
         unit_payloads: dict[str, bytes] | None = None
-        if forward_only_upgrade:
+        if rollback_capable_upgrade:
+            unit_payloads = write_setup_units()
+        elif forward_only_upgrade:
             unit_payloads = commit_setup_profile()
             profile_committed_early = True
         if forward_only_transition:
@@ -4908,6 +6164,8 @@ def _apply_server_setup(
                         properties=_systemd_show(systemctl_executable, unit),
                     )
 
+            if rollback_capable_upgrade:
+                _pending_upgrade["service_state_changed"] = True
             quiesce_status = _run_systemctl_sequence_or_reconcile(
                 systemctl_executable,
                 [
@@ -4933,7 +6191,50 @@ def _apply_server_setup(
                     "status": quiesce_status,
                 }
             )
-        if core_preexisting:
+        if rollback_capable_upgrade:
+            journal = _pending_upgrade.get("journal")
+            if not isinstance(journal, Mapping):
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "v0.1.45 migration requires its exact upgrade journal",
+                )
+            source = _validated_v0145_database_snapshot(
+                journal.get("previous_database")
+            )
+            identity = source["identity"]
+            migration_evidence = _run_v0145_database_operation_as(
+                core_account,
+                request.database_url,
+                operation="migrate",
+                source=source,
+                domain_id=str(identity["domain_id"]),
+                harness_id=str(identity["harness_id"]),
+                credential_id=str(identity["credential_id"]),
+                profile_key=str(identity["profile_key"]),
+            )
+            endpoint_row = migration_evidence.get("endpoint_lifecycle")
+            if (
+                not isinstance(endpoint_row, dict)
+                or endpoint_row.get("harness_id") != identity["harness_id"]
+                or endpoint_row.get("state") != "restart_required"
+            ):
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "v0.1.45 migration did not prove the exact endpoint lifecycle",
+                )
+            endpoint_lifecycle_result = {
+                "endpoint_id": str(identity["harness_id"]),
+                "state": "restart_required",
+                "public_url": request.core_public_origin,
+                "identity_created": False,
+            }
+            steps.append(
+                {
+                    "id": "schema_v7_endpoint_lifecycle",
+                    "status": "restart_required",
+                }
+            )
+        if core_preexisting and not rollback_capable_upgrade:
             _, bootstrap_status = _run_bootstrap_idempotently(
                 core_account,
                 [str(node_executable), str(executable), "bootstrap-server-agent", "--config", str(core_config_path)],
@@ -4951,7 +6252,9 @@ def _apply_server_setup(
                 oidc=oidc,
                 scanner_trust=scanner_trust,
             )
-        if forward_only_transition:
+        elif rollback_capable_upgrade:
+            bootstrap_status = "schema_v7_migrated_preserved_identity"
+        if forward_only_transition and not rollback_capable_upgrade:
             _clear_upgrade_journal(journal_path)
         if c0_responder_account is None:
             c0_responder_account = _ensure_account(
@@ -5055,7 +6358,7 @@ def _apply_server_setup(
         if trusted_after != trusted:
             raise ServerSetupError("approval_conflict", "Approval trust changed during setup")
 
-        if not profile_committed_early:
+        if unit_payloads is None:
             unit_payloads = commit_setup_profile()
         assert unit_payloads is not None
         if start:
@@ -5313,6 +6616,9 @@ def _apply_server_setup(
             steps.append({"id": "service_start", "status": "pending_explicit_start"})
             status = "configured_not_started"
             next_action = "rerun with the same --expected-request-digest plus --apply --start inside the approved scope"
+        if rollback_capable_upgrade:
+            commit_setup_profile(unit_payloads)
+            _clear_upgrade_journal(journal_path)
         return {
             **plan,
             "status": status,
@@ -5320,6 +6626,7 @@ def _apply_server_setup(
             "next": next_action,
             "authority_granted": False,
             "identity_enrolled": identity_enrolled,
+            "endpoint_lifecycle": endpoint_lifecycle_result,
             "production_durability_proven": False,
         }
     finally:

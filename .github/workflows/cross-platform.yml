@@ -78,12 +78,21 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/agentnet-pack"
           PREFIX="$RUNNER_TEMP/agentnet-prefix"
           UNRELATED="$RUNNER_TEMP/agentnet-unrelated"
-          mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED"
+          PORTABLE_RUNTIME="$RUNNER_TEMP/agentnet-portable-runtime"
+          mkdir -p "$PACK_DIR" "$PREFIX" "$UNRELATED" "$PORTABLE_RUNTIME"
           PACKED="$(npm pack --ignore-scripts --pack-destination "$PACK_DIR")"
           umask 022
           npm install --prefix "$PREFIX" --umask=0022 --ignore-scripts --no-audit --no-fund "$PACK_DIR/$PACKED"
+          PACKAGE_ROOT="$PREFIX/node_modules/@misunders2d/agentnet"
+          LAUNCHER="$PACKAGE_ROOT/npm/bin/agentnet.mjs"
           cd "$UNRELATED"
-          node "$PREFIX/node_modules/@misunders2d/agentnet/npm/bin/agentnet.mjs" --version
+          node "$LAUNCHER" --version
+          node "$LAUNCHER" verify
+          UV_PROJECT_ENVIRONMENT="$PORTABLE_RUNTIME" uv run \
+            --project "$PACKAGE_ROOT" --frozen --no-default-groups \
+            --python 3.13.13 python -B -I \
+            "$PACKAGE_ROOT/scripts/ci/packaged_v0145_user_journey.py" portable \
+            --package-root "$PACKAGE_ROOT"
 
       - name: Verify recursive packed package and server preflight
         if: runner.os == 'Linux'

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -23,6 +25,59 @@ from agentnet.rooms.mls import (
 )
 from agentnet.rooms.service import RoomService
 from agentnet.security.signatures import P256KeyPair, canonical_digest
+
+_SCOPE_ID = "scope-room-authority"
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopeSnapshot:
+    scope_id: str
+    domain_id: str
+    member_harness_ids: tuple[str, ...]
+    revision: int = 7
+    policy_revision: int = 1
+    domain_revocation_epoch: int = 1
+    scope_digest: str = "a" * 64
+
+    def authorization_context(self) -> dict[str, object]:
+        return {
+            "collaboration_scope_id": self.scope_id,
+            "collaboration_scope_revision": self.revision,
+            "collaboration_scope_policy_revision": self.policy_revision,
+            "collaboration_scope_domain_revocation_epoch": self.domain_revocation_epoch,
+            "collaboration_scope_member_harness_ids": list(self.member_harness_ids),
+            "collaboration_scope_digest": self.scope_digest,
+        }
+
+
+class _RoomScopes:
+    def __init__(self) -> None:
+        self.revoked = False
+        self.calls: list[dict[str, Any]] = []
+
+    def require(self, **values: Any) -> _ScopeSnapshot:
+        return self.require_in_transaction(None, **values)
+
+    def require_in_transaction(self, _connection: object, **values: Any) -> _ScopeSnapshot:
+        actor = values["actor"]
+        targets = tuple(sorted(values["target_harness_ids"]))
+        self.calls.append(dict(values))
+        if (
+            self.revoked
+            or values["scope_id"] != _SCOPE_ID
+            or actor.domain_id != "corp.example"
+            or actor.harness_id not in targets
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return _ScopeSnapshot(
+            scope_id=_SCOPE_ID,
+            domain_id=actor.domain_id,
+            member_harness_ids=targets,
+        )
+
+
+def _room_service(store: object, **values: Any) -> RoomService:
+    return RoomService(store, collaboration_scopes=_RoomScopes(), **values)
 
 
 def _digest(label: str) -> str:
@@ -103,31 +158,38 @@ def test_room_from_join_membership_and_signed_fenced_transfer(store, identity_fa
     owner, owner_key = identity_factory()
     member, _ = identity_factory()
     target, target_key = identity_factory(domain="partner.example")
-    rooms = RoomService(store)
-    created = rooms.create(actor=owner, classification=Classification.C1_INTERNAL, persistent=True, expires_at=None)
-    creator_view = rooms.describe(actor=owner, room_id=created["room_id"])
+    rooms = _room_service(store)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL, persistent=True, expires_at=None)
+    creator_view = rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])
     assert creator_view["self_membership"] == {
         "role": "owner_moderator",
         "joined_sequence": 1,
     }
     assert creator_view["member_count"] == 1
     assert rooms.may_read_event(
+        actor=owner,
+        collaboration_scope_id=_SCOPE_ID,
         room_id=created["room_id"],
-        harness_id=owner.harness_id,
         event_control_sequence=1,
     )
-    creator_send = rooms.authorize_send(
-        actor=owner,
-        room_id=created["room_id"],
-        recipients=(owner.harness_id,),
-        classification=Classification.C1_INTERNAL,
-        expected_control_sequence=1,
-    )
+    creator_send = rooms.authorize_send(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+    recipients=(owner.harness_id,),
+    classification=Classification.C1_INTERNAL,
+    expected_control_sequence=1,)
     assert creator_send["sender_role"] == "owner_moderator"
-    assert not rooms.may_read_event(room_id=created["room_id"], harness_id=member.harness_id, event_control_sequence=1)
-    joined = rooms.add_member(actor=owner, room_id=created["room_id"], harness_id=member.harness_id)
+    with pytest.raises(AuthorizationError):
+        rooms.may_read_event(
+            actor=member,
+            collaboration_scope_id=_SCOPE_ID,
+            room_id=created["room_id"],
+            event_control_sequence=1,
+        )
+    joined = rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
     assert rooms.may_read_event(
-        room_id=created["room_id"], harness_id=member.harness_id, event_control_sequence=joined["control_sequence"]
+        actor=member,
+        collaboration_scope_id=_SCOPE_ID,
+        room_id=created["room_id"],
+        event_control_sequence=joined["control_sequence"],
     )
 
     snapshot = _snapshot(joined)
@@ -148,7 +210,7 @@ def test_room_from_join_membership_and_signed_fenced_transfer(store, identity_fa
     )
     committed = governance.commit(transfer["transfer_id"])
     assert committed["owner_epoch"] == 2
-    described = rooms.describe(actor=owner, room_id=created["room_id"])
+    described = rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])
     assert described["owner_domain_id"] == "partner.example"
     assert described["application_epoch"] == 2
     assert described["file_key_epoch"] == 2
@@ -160,9 +222,7 @@ def test_transfer_rejects_bad_source_and_mismatched_destination_signatures(store
     owner, owner_key = identity_factory()
     attacker, attacker_key = identity_factory()
     target, target_key = identity_factory(domain="partner.example")
-    created = RoomService(store).create(
-        actor=owner, classification=Classification.C1_INTERNAL, persistent=True, expires_at=None
-    )
+    created = _room_service(store).create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL, persistent=True, expires_at=None)
     snapshot = _snapshot(created)
     now = int(time.time())
     proposal = _proposal(owner, snapshot, now)
@@ -174,7 +234,7 @@ def test_transfer_rejects_bad_source_and_mismatched_destination_signatures(store
             snapshot=snapshot,
             signature=attacker_key.sign("agentnet.room.control.v1", proposal.signed_fields()),
         )
-    assert RoomService(store).describe(actor=owner, room_id=created["room_id"])["state"] == "active"
+    assert _room_service(store).describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["state"] == "active"
 
     governance.propose_transfer(
         actor=owner,
@@ -201,17 +261,14 @@ def test_transfer_rejects_bad_source_and_mismatched_destination_signatures(store
 def test_tombstone_requires_predeclared_signed_recovery_threshold(store, identity_factory) -> None:
     owner, owner_key = identity_factory()
     recovery, recovery_key = identity_factory()
-    rooms = RoomService(store)
-    created = rooms.create(
-        actor=owner,
-        classification=Classification.C1_INTERNAL,
-        persistent=True,
-        expires_at=None,
-        policy={
-            "recovery_threshold": 2,
-            "recovery_credential_ids": [owner.credential_id, recovery.credential_id],
-        },
-    )
+    rooms = _room_service(store)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL,
+    persistent=True,
+    expires_at=None,
+    policy={
+        "recovery_threshold": 2,
+        "recovery_credential_ids": [owner.credential_id, recovery.credential_id],
+    },)
     now = int(time.time())
     evidence = RecoveryTombstoneEvidence(
         room_id=created["room_id"],
@@ -305,61 +362,51 @@ def test_sealed_room_requires_validated_adoption_and_live_provider_before_commit
     owner, _ = identity_factory()
     member, _ = identity_factory()
     with pytest.raises(AuthorizationError):
-        RoomService(store).create(
-            actor=owner, classification=Classification.C3_SEALED, persistent=True, expires_at=None
-        )
+        _room_service(store).create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C3_SEALED, persistent=True, expires_at=None)
     provider = _FakeMLSProvider(store)
     with pytest.raises(AuthorizationError):
-        RoomService(store, mls_provider=provider, mls_adoption="passed-the-gate").create(  # type: ignore[arg-type]
-            actor=owner, classification=Classification.C3_SEALED, persistent=True, expires_at=None
+        _room_service(store, mls_provider=provider, mls_adoption="passed-the-gate").create(  # type: ignore[arg-type]
+            actor=owner,
+            collaboration_scope_id=_SCOPE_ID,
+            classification=Classification.C3_SEALED,
+            persistent=True,
+            expires_at=None,
         )
     now = int(time.time())
     adoption = _validated_adoption(provider, now)
-    rooms = RoomService(store, mls_provider=provider, mls_adoption=adoption)
-    created = rooms.create(actor=owner, classification=Classification.C3_SEALED, persistent=True, expires_at=None)
+    rooms = _room_service(store, mls_provider=provider, mls_adoption=adoption)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C3_SEALED, persistent=True, expires_at=None)
     assert provider.created_before_room_commit is True
     assert created["mls_group_id"] == f"mls:{created['room_id']}"
-    assert rooms.describe(actor=owner, room_id=created["room_id"])["history_mode"] == "no_prior_history"
+    assert rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["history_mode"] == "no_prior_history"
     with pytest.raises(AuthorizationError):
-        rooms.add_member(actor=owner, room_id=created["room_id"], harness_id=member.harness_id)
-    added = rooms.add_member(
-        actor=owner,
-        room_id=created["room_id"],
-        harness_id=member.harness_id,
-        mls_key_package=b"maintained-provider-key-package",
-    )
-    assert rooms.describe(actor=owner, room_id=created["room_id"])["mls_epoch"] == 2
-    rooms.remove_member(actor=owner, room_id=created["room_id"], harness_id=member.harness_id)
-    assert rooms.describe(actor=owner, room_id=created["room_id"])["mls_epoch"] == 3
+        rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
+    added = rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+    harness_id=member.harness_id,
+    mls_key_package=b"maintained-provider-key-package",)
+    assert rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["mls_epoch"] == 2
+    rooms.remove_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
+    assert rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["mls_epoch"] == 3
     assert added["control_sequence"] == 2
 
 
 def test_configured_room_policy_enforces_stricter_history_and_recovery_floor(store, identity_factory) -> None:
     owner, owner_key = identity_factory()
     strict_history = RoomGovernancePolicy(history_mode="no_prior_history")
-    rooms = RoomService(store, governance_policy=strict_history)
-    created = rooms.create(
-        actor=owner,
-        classification=Classification.C1_INTERNAL,
-        persistent=True,
-        expires_at=None,
-    )
-    assert rooms.describe(actor=owner, room_id=created["room_id"])["history_mode"] == "no_prior_history"
+    rooms = _room_service(store, governance_policy=strict_history)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL,
+    persistent=True,
+    expires_at=None,)
+    assert rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["history_mode"] == "no_prior_history"
     with pytest.raises(ConflictError, match="weakens"):
-        rooms.create(
-            actor=owner,
-            classification=Classification.C1_INTERNAL,
-            persistent=True,
-            expires_at=None,
-            policy={"history_mode": "from_join"},
-        )
-
-    legacy = RoomService(store).create(
-        actor=owner,
-        classification=Classification.C1_INTERNAL,
+        rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL,
         persistent=True,
         expires_at=None,
-    )
+        policy={"history_mode": "from_join"},)
+
+    legacy = _room_service(store).create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL,
+    persistent=True,
+    expires_at=None,)
     now = int(time.time())
     evidence = RecoveryTombstoneEvidence(
         room_id=legacy["room_id"],
@@ -406,65 +453,45 @@ def test_room_delivery_requires_current_speaker_membership_and_exact_epoch_roste
             "UPDATE harnesses SET principal_id=? WHERE harness_id=?",
             (owner.principal_id, sibling.harness_id),
         )
-    rooms = RoomService(store)
-    created = rooms.create(
-        actor=owner,
-        classification=Classification.C2_RESTRICTED,
-        persistent=True,
-        expires_at=None,
-    )
-    joined = rooms.add_member(
-        actor=owner, room_id=created["room_id"], harness_id=member.harness_id
-    )
+    rooms = _room_service(store)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C2_RESTRICTED,
+    persistent=True,
+    expires_at=None,)
+    joined = rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
     recipients = tuple(sorted((owner.harness_id, member.harness_id)))
-    snapshot = rooms.authorize_send(
-        actor=member,
-        room_id=created["room_id"],
-        recipients=recipients,
-        classification=Classification.C1_INTERNAL,
-        expected_control_sequence=joined["control_sequence"],
-    )
+    snapshot = rooms.authorize_send(actor=member, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+    recipients=recipients,
+    classification=Classification.C1_INTERNAL,
+    expected_control_sequence=joined["control_sequence"],)
     assert snapshot["control_sequence"] == joined["control_sequence"]
     assert snapshot["sender_role"] == "member"
 
     for actor in (never_member, sibling_actor):
         with pytest.raises(AuthorizationError, match="authorization failed"):
-            rooms.authorize_send(
-                actor=actor,
-                room_id=created["room_id"],
-                recipients=recipients,
-                classification=Classification.C1_INTERNAL,
-            )
+            rooms.authorize_send(actor=actor, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+            recipients=recipients,
+            classification=Classification.C1_INTERNAL,)
     for probed in ((owner.harness_id,), (*recipients, never_member.harness_id)):
         with pytest.raises(AuthorizationError, match="authorization failed"):
-            rooms.authorize_send(
-                actor=owner,
-                room_id=created["room_id"],
-                recipients=tuple(probed),
-                classification=Classification.C1_INTERNAL,
-            )
+            rooms.authorize_send(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+            recipients=tuple(probed),
+            classification=Classification.C1_INTERNAL,)
     with pytest.raises(AuthorizationError, match="authorization failed"):
-        rooms.authorize_send(
-            actor=owner,
-            room_id=created["room_id"],
-            recipients=recipients,
-            classification=Classification.C1_INTERNAL,
-            expected_control_sequence=1,
-        )
+        rooms.authorize_send(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+        recipients=recipients,
+        classification=Classification.C1_INTERNAL,
+        expected_control_sequence=1,)
 
-    member_description = rooms.describe(actor=member, room_id=created["room_id"])
+    member_description = rooms.describe(actor=member, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])
     assert member_description["member_count"] == 2
     assert "members" not in member_description
-    assert len(rooms.describe(actor=owner, room_id=created["room_id"])["members"]) == 2
+    assert len(rooms.describe(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"])["members"]) == 2
 
-    rooms.remove_member(actor=owner, room_id=created["room_id"], harness_id=member.harness_id)
+    rooms.remove_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
     with pytest.raises(AuthorizationError, match="authorization failed"):
-        rooms.authorize_send(
-            actor=member,
-            room_id=created["room_id"],
-            recipients=(owner.harness_id,),
-            classification=Classification.C1_INTERNAL,
-        )
+        rooms.authorize_send(actor=member, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+        recipients=(owner.harness_id,),
+        classification=Classification.C1_INTERNAL,)
 
 
 @pytest.mark.parametrize("terminal_state", ["frozen", "transferring", "tombstoned"])
@@ -473,64 +500,101 @@ def test_room_delivery_denies_non_active_state_and_restricted_guest(
 ) -> None:
     owner, _ = identity_factory()
     guest, _ = identity_factory()
-    rooms = RoomService(store)
-    created = rooms.create(
-        actor=owner,
-        classification=Classification.C2_RESTRICTED,
-        persistent=True,
-        expires_at=None,
-    )
-    rooms.add_member(
-        actor=owner,
-        room_id=created["room_id"],
-        harness_id=guest.harness_id,
-        role="guest",
-    )
+    rooms = _room_service(store)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C2_RESTRICTED,
+    persistent=True,
+    expires_at=None,)
+    rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+    harness_id=guest.harness_id,
+    role="guest",)
     recipients = tuple(sorted((owner.harness_id, guest.harness_id)))
     with pytest.raises(AuthorizationError, match="authorization failed"):
-        rooms.authorize_send(
-            actor=guest,
-            room_id=created["room_id"],
-            recipients=recipients,
-            classification=Classification.C2_RESTRICTED,
-        )
-    rooms.authorize_send(
-        actor=guest,
-        room_id=created["room_id"],
+        rooms.authorize_send(actor=guest, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
         recipients=recipients,
-        classification=Classification.C1_INTERNAL,
-    )
+        classification=Classification.C2_RESTRICTED,)
+    rooms.authorize_send(actor=guest, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+    recipients=recipients,
+    classification=Classification.C1_INTERNAL,)
     with store.transaction() as connection:
         connection.execute(
             "UPDATE rooms SET state=? WHERE room_id=?",
             (terminal_state, created["room_id"]),
         )
     with pytest.raises(AuthorizationError, match="authorization failed"):
-        rooms.authorize_send(
-            actor=owner,
-            room_id=created["room_id"],
-            recipients=recipients,
-            classification=Classification.C1_INTERNAL,
-        )
+        rooms.authorize_send(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+        recipients=recipients,
+        classification=Classification.C1_INTERNAL,)
 
 
 def test_room_delivery_rejects_revoked_current_recipient(store, identity_factory) -> None:
     owner, _ = identity_factory()
     member, _ = identity_factory()
-    rooms = RoomService(store)
+    rooms = _room_service(store)
+    created = rooms.create(actor=owner, collaboration_scope_id=_SCOPE_ID, classification=Classification.C1_INTERNAL,
+    persistent=True,
+    expires_at=None,)
+    rooms.add_member(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"], harness_id=member.harness_id)
+    with store.transaction() as connection:
+        connection.execute("UPDATE harnesses SET status='revoked' WHERE harness_id=?", (member.harness_id,))
+    with pytest.raises(AuthorizationError, match="authorization failed"):
+        rooms.authorize_send(actor=owner, collaboration_scope_id=_SCOPE_ID, room_id=created["room_id"],
+        recipients=tuple(sorted((owner.harness_id, member.harness_id))),
+        classification=Classification.C1_INTERNAL,)
+
+
+def test_room_scope_snapshot_is_bound_and_revocation_blocks_history_and_send(
+    store,
+    identity_factory,
+) -> None:
+    owner, _ = identity_factory()
+    member, _ = identity_factory()
+    scopes = _RoomScopes()
+    rooms = RoomService(store, collaboration_scopes=scopes)
     created = rooms.create(
         actor=owner,
+        collaboration_scope_id=_SCOPE_ID,
         classification=Classification.C1_INTERNAL,
         persistent=True,
         expires_at=None,
     )
-    rooms.add_member(actor=owner, room_id=created["room_id"], harness_id=member.harness_id)
-    with store.transaction() as connection:
-        connection.execute("UPDATE harnesses SET status='revoked' WHERE harness_id=?", (member.harness_id,))
-    with pytest.raises(AuthorizationError, match="authorization failed"):
+    joined = rooms.add_member(
+        actor=owner,
+        collaboration_scope_id=_SCOPE_ID,
+        room_id=created["room_id"],
+        harness_id=member.harness_id,
+    )
+    recipients = tuple(sorted((owner.harness_id, member.harness_id)))
+    authorized = rooms.authorize_send(
+        actor=owner,
+        collaboration_scope_id=_SCOPE_ID,
+        room_id=created["room_id"],
+        recipients=recipients,
+        classification=Classification.C1_INTERNAL,
+        expected_control_sequence=joined["control_sequence"],
+    )
+
+    assert authorized["authorization_context"] == _ScopeSnapshot(
+        scope_id=_SCOPE_ID,
+        domain_id=owner.domain_id,
+        member_harness_ids=recipients,
+    ).authorization_context()
+    assert scopes.calls[-1]["action"] == "room.send"
+    assert scopes.calls[-1]["resource"] == f"room:{created['room_id']}"
+    assert scopes.calls[-1]["target_harness_ids"] == recipients
+
+    scopes.revoked = True
+    with pytest.raises(AuthorizationError):
+        rooms.describe(
+            actor=owner,
+            collaboration_scope_id=_SCOPE_ID,
+            room_id=created["room_id"],
+        )
+    with pytest.raises(AuthorizationError):
         rooms.authorize_send(
             actor=owner,
+            collaboration_scope_id=_SCOPE_ID,
             room_id=created["room_id"],
-            recipients=tuple(sorted((owner.harness_id, member.harness_id))),
+            recipients=recipients,
             classification=Classification.C1_INTERNAL,
+            expected_control_sequence=joined["control_sequence"],
         )

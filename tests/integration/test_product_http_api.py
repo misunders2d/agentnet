@@ -29,6 +29,13 @@ from agentnet.authorization import (
     SignedAuthorityCommand,
 )
 from agentnet.authorization.decision import AuthorizationDecision, DecisionRecorder
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    COLLABORATION_SCOPE_REVOKE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.discovery.directory import DirectoryRecord
@@ -206,6 +213,145 @@ def _allow(core: CommunicationCore, actor, action: str, resource: str) -> None:
             revision=1,
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
+    )
+
+
+_ROOM_SCOPE_ACTIONS = (
+    "room.create",
+    "room.member.add",
+    "room.member.remove",
+    "room.read",
+    "room.send",
+)
+
+
+def _issue_test_scope(
+    core: CommunicationCore,
+    owner,
+    members: tuple[str, ...],
+    *,
+    scope_id: str,
+    allowed_actions: tuple[str, ...] = _ROOM_SCOPE_ACTIONS,
+    allowed_resource_prefixes: tuple[str, ...] = ("room:",),
+    allowed_classifications: tuple[Classification, ...] = (
+        Classification.C1_INTERNAL,
+    ),
+) -> CollaborationScope:
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind=(
+            "personal"
+            if len(members) == 1
+            else "direct"
+            if len(members) == 2
+            else "shared"
+        ),
+        member_harness_ids=tuple(sorted(members)),
+        allowed_actions=tuple(sorted(allowed_actions)),
+        allowed_resource_prefixes=allowed_resource_prefixes,
+        allowed_classifications=allowed_classifications,
+        canonical_references=(),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+        expires_at=int(time.time()) + 3600,
+    )
+    resource = f"scope:{scope_id}"
+    request = core.collaboration_scopes.issuance_request(actor=owner, proposal=proposal)
+    _allow(core, owner, COLLABORATION_SCOPE_ISSUE_ACTION, resource)
+    decision = core._require(
+        actor=owner,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource=resource,
+        context=request,
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+
+
+def _issue_mailbox_scope(
+    core: CommunicationCore,
+    owner,
+    recipient,
+    *,
+    scope_id: str,
+) -> CollaborationScope:
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(
+            sorted((owner.harness_id, recipient.harness_id))
+        ),
+        allowed_actions=("message.read",),
+        allowed_resource_prefixes=("conversation:direct",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        canonical_references=(),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{scope_id}"
+    request = core.collaboration_scopes.issuance_request(
+        actor=owner,
+        proposal=proposal,
+    )
+    _allow(core, owner, COLLABORATION_SCOPE_ISSUE_ACTION, resource)
+    decision = core._require(
+        actor=owner,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource=resource,
+        context=request,
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+
+
+def _revoke_room_scope(
+    core: CommunicationCore,
+    owner,
+    scope: CollaborationScope,
+) -> None:
+    reason = "product_http_revoked"
+    resource = f"scope:{scope.scope_id}"
+    request = core.collaboration_scopes.revocation_request(
+        scope=scope,
+        expected_revision=scope.revision,
+        reason=reason,
+    )
+    _allow(core, owner, COLLABORATION_SCOPE_REVOKE_ACTION, resource)
+    decision = core._require(
+        actor=owner,
+        action=COLLABORATION_SCOPE_REVOKE_ACTION,
+        resource=resource,
+        context=request,
+    )
+    core.collaboration_scopes.revoke(
+        actor=owner,
+        scope_id=scope.scope_id,
+        expected_revision=scope.revision,
+        reason=reason,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
     )
 
 
@@ -901,6 +1047,14 @@ async def test_authenticated_relationship_renewal_requires_fresh_exact_consent_a
         domain=administrator.domain_id,
         approval_verifier=verifier,
     )
+    collaboration_scope = _issue_test_scope(
+        core,
+        administrator,
+        (administrator.harness_id, subordinate.harness_id),
+        scope_id="scope:http-relationship-renewal-tasks",
+        allowed_actions=("task.accept", "task.propose"),
+        allowed_resource_prefixes=("task:",),
+    )
     now = datetime.now(UTC)
     resources = [
         "catalog:before-activation",
@@ -983,6 +1137,7 @@ async def test_authenticated_relationship_renewal_requires_fresh_exact_consent_a
             "POST",
             "/v1/tasks/assign",
             {
+                "collaboration_scope_id": collaboration_scope.scope_id,
                 "recipient_harness_id": subordinate.harness_id,
                 "task_type": "research",
                 "resources": [resource],
@@ -1178,6 +1333,17 @@ async def test_authenticated_task_conflict_http_is_exact_owner_scoped_strict_and
         domain=first_admin.domain_id,
         approval_verifier=verifier,
     )
+    assignment_scopes = {
+        administrator.harness_id: _issue_test_scope(
+            core,
+            administrator,
+            (administrator.harness_id, subordinate.harness_id),
+            scope_id=f"scope:http-conflict:{administrator.harness_id}",
+            allowed_actions=("task.accept", "task.propose"),
+            allowed_resource_prefixes=("task:",),
+        )
+        for administrator in (first_admin, second_admin)
+    }
     now = datetime.now(UTC)
     for administrator in (first_admin, second_admin):
         relationship = Relationship(
@@ -1243,6 +1409,9 @@ async def test_authenticated_task_conflict_http_is_exact_owner_scoped_strict_and
                 "POST",
                 "/v1/tasks/assign",
                 {
+                    "collaboration_scope_id": assignment_scopes[
+                        administrator.harness_id
+                    ].scope_id,
                     "recipient_harness_id": subordinate.harness_id,
                     "task_type": "research",
                     "resources": ["catalog:alpha"],
@@ -1667,6 +1836,12 @@ async def test_room_presence_directory_and_content_free_operator_http(
     member, member_key = identity_factory(kind="pi", binding_assurance="os_bound")
     core = _core(store, tmp_path, domain=owner.domain_id)
     _allow(core, owner, "room.create", "room:new")
+    scope = _issue_test_scope(
+        core,
+        owner,
+        (owner.harness_id, member.harness_id),
+        scope_id="scope:product-http-room",
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=create_app(core), raise_app_exceptions=False),
@@ -1678,9 +1853,17 @@ async def test_room_presence_directory_and_content_free_operator_http(
             owner,
             "POST",
             "/v1/rooms",
-            {"classification": "C1", "persistent": True},
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "classification": "C1",
+                "persistent": True,
+            },
         )
         assert created.status_code == 201, created.text
+        assert (
+            created.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
         room_id = created.json()["room_id"]
         meeting = await _request(
             client,
@@ -1689,11 +1872,16 @@ async def test_room_presence_directory_and_content_free_operator_http(
             "POST",
             "/v1/meetings",
             {
+                "collaboration_scope_id": scope.scope_id,
                 "classification": "C1",
                 "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
             },
         )
         assert meeting.status_code == 201, meeting.text
+        assert (
+            meeting.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
         meeting_row = store.fetch_one(
             "SELECT policy_json,expires_at FROM rooms WHERE room_id=?",
             (meeting.json()["room_id"],),
@@ -1710,14 +1898,33 @@ async def test_room_presence_directory_and_content_free_operator_http(
             owner,
             "POST",
             f"/v1/rooms/{room_id}/members",
-            {"harness_id": member.harness_id, "role": "member"},
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "harness_id": member.harness_id,
+                "role": "member",
+            },
         )
         assert added.status_code == 201, added.text
         assert added.json()["control_sequence"] == 2
+        assert (
+            added.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
 
-        described = await _request(client, member_key, member, "GET", f"/v1/rooms/{room_id}")
+        described = await _request(
+            client,
+            member_key,
+            member,
+            "POST",
+            f"/v1/rooms/{room_id}",
+            {"collaboration_scope_id": scope.scope_id},
+        )
         assert described.status_code == 200
         assert described.json()["member_count"] == 2
+        assert (
+            described.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
         assert "members" not in described.json()
 
         recipients = sorted((owner.harness_id, member.harness_id))
@@ -1728,6 +1935,7 @@ async def test_room_presence_directory_and_content_free_operator_http(
             "POST",
             "/v1/messages",
             {
+                "collaboration_scope_id": scope.scope_id,
                 "recipients": recipients,
                 "payload": {"text": "missing epoch"},
                 "idempotency_key": "room-http-message-missing-0001",
@@ -1743,6 +1951,7 @@ async def test_room_presence_directory_and_content_free_operator_http(
             "POST",
             f"/v1/rooms/{room_id}/messages",
             {
+                "collaboration_scope_id": scope.scope_id,
                 "recipients": recipients,
                 "payload": {"text": "stale"},
                 "idempotency_key": "room-http-message-stale-0001",
@@ -1758,6 +1967,7 @@ async def test_room_presence_directory_and_content_free_operator_http(
             "POST",
             f"/v1/rooms/{room_id}/messages",
             {
+                "collaboration_scope_id": scope.scope_id,
                 "recipients": recipients,
                 "payload": {"text": "current epoch"},
                 "idempotency_key": "room-http-message-current-0001",
@@ -1773,6 +1983,15 @@ async def test_room_presence_directory_and_content_free_operator_http(
         assert room_envelope["room_control_sequence"] == 2
         assert room_envelope["room_application_epoch"] == 1
         assert room_envelope["room_file_key_epoch"] == 1
+        expected_room_payload = {
+            "text": "current epoch",
+            "authorization_context": scope.authorization_context(),
+        }
+        assert room_envelope["payload_digest"] == canonical_digest(
+            expected_room_payload
+        )
+        assert room_envelope["policy_revision"] == scope.policy_revision
+        assert "payload" not in room_envelope
         persisted_room_event = json.loads(
             store.fetch_one(
                 "SELECT envelope_json FROM events WHERE event_id=?",
@@ -1890,10 +2109,24 @@ async def test_room_presence_directory_and_content_free_operator_http(
             owner,
             "POST",
             f"/v1/rooms/{room_id}/members/remove",
-            {"harness_id": member.harness_id},
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "harness_id": member.harness_id,
+            },
         )
         assert removed.status_code == 200
-        hidden_after_remove = await _request(client, member_key, member, "GET", f"/v1/rooms/{room_id}")
+        assert (
+            removed.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
+        hidden_after_remove = await _request(
+            client,
+            member_key,
+            member,
+            "POST",
+            f"/v1/rooms/{room_id}",
+            {"collaboration_scope_id": scope.scope_id},
+        )
         assert hidden_after_remove.status_code == 404
         room_policy_rows = store.fetch_all(
             """SELECT action,context_json FROM policy_decisions
@@ -1911,6 +2144,182 @@ async def test_room_presence_directory_and_content_free_operator_http(
 
 
 @pytest.mark.anyio
+async def test_room_http_requires_one_exact_current_collaboration_scope(
+    store,
+    identity_factory,
+    tmp_path: Path,
+) -> None:
+    owner, owner_key = identity_factory(binding_assurance="os_bound")
+    core = _core(store, tmp_path, domain=owner.domain_id)
+    _allow(core, owner, "room.create", "room:new")
+    revoked_scope = _issue_test_scope(
+        core,
+        owner,
+        (owner.harness_id,),
+        scope_id="scope:product-http-revoked",
+        allowed_actions=("room.create",),
+    )
+    _revoke_room_scope(core, owner, revoked_scope)
+    scope = _issue_test_scope(
+        core,
+        owner,
+        (owner.harness_id,),
+        scope_id="scope:product-http-strict",
+    )
+    wrong_scope = _issue_test_scope(
+        core,
+        owner,
+        (owner.harness_id,),
+        scope_id="scope:product-http-wrong-action",
+        allowed_actions=("message.send",),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=create_app(core),
+            raise_app_exceptions=False,
+        ),
+        base_url="http://127.0.0.1",
+    ) as client:
+        created = await _request(
+            client,
+            owner_key,
+            owner,
+            "POST",
+            "/v1/rooms",
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "classification": "C1",
+                "persistent": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        room_id = created.json()["room_id"]
+        _allow(core, owner, "room.read", room_id)
+        assert (
+            created.json()["authorization_context"]["collaboration_scope_id"]
+            == scope.scope_id
+        )
+
+        missing_scope_requests = (
+            ("POST", "/v1/rooms", {"classification": "C1", "persistent": True}),
+            (
+                "POST",
+                "/v1/meetings",
+                {
+                    "classification": "C1",
+                    "expires_at": (
+                        datetime.now(UTC) + timedelta(minutes=30)
+                    ).isoformat(),
+                },
+            ),
+            (
+                "POST",
+                f"/v1/rooms/{room_id}/members",
+                {"harness_id": owner.harness_id, "role": "member"},
+            ),
+            (
+                "POST",
+                f"/v1/rooms/{room_id}/members/remove",
+                {"harness_id": owner.harness_id},
+            ),
+            (
+                "POST",
+                f"/v1/rooms/{room_id}/messages",
+                {
+                    "recipients": [owner.harness_id],
+                    "payload": {"text": "must not reach send"},
+                    "idempotency_key": "room-http-missing-scope-0001",
+                    "classification": "C1",
+                    "expected_control_sequence": 1,
+                },
+            ),
+            ("POST", f"/v1/rooms/{room_id}", {}),
+        )
+        for method, path, body in missing_scope_requests:
+            denied = await _request(client, owner_key, owner, method, path, body)
+            assert denied.status_code == 422
+            assert room_id not in denied.text
+            assert "member_count" not in denied.text
+
+        for method, path, body in missing_scope_requests:
+            strict_body = {
+                **body,
+                "collaboration_scope_id": scope.scope_id,
+                "unexpected": True,
+            }
+            denied = await _request(
+                client,
+                owner_key,
+                owner,
+                method,
+                path,
+                strict_body,
+            )
+            assert denied.status_code == 422
+
+        wrong_type = await _request(
+            client,
+            owner_key,
+            owner,
+            "POST",
+            "/v1/rooms",
+            {
+                "collaboration_scope_id": 7,
+                "classification": "C1",
+                "persistent": True,
+            },
+        )
+        assert wrong_type.status_code == 422
+
+        unknown = await _request(
+            client,
+            owner_key,
+            owner,
+            "POST",
+            f"/v1/rooms/{room_id}",
+            {"collaboration_scope_id": "scope:does-not-exist"},
+        )
+        assert unknown.status_code == 404
+        assert "member_count" not in unknown.text
+
+        wrong = await _request(
+            client,
+            owner_key,
+            owner,
+            "POST",
+            f"/v1/rooms/{room_id}",
+            {"collaboration_scope_id": wrong_scope.scope_id},
+        )
+        assert wrong.status_code == 404
+        assert "member_count" not in wrong.text
+
+        revoked = await _request(
+            client,
+            owner_key,
+            owner,
+            "POST",
+            "/v1/rooms",
+            {
+                "collaboration_scope_id": revoked_scope.scope_id,
+                "classification": "C1",
+                "persistent": True,
+            },
+        )
+        assert revoked.status_code == 404
+        assert store.fetch_one("SELECT COUNT(*) AS count FROM rooms")["count"] == 1
+
+        legacy_get = await _request(
+            client,
+            owner_key,
+            owner,
+            "GET",
+            f"/v1/rooms/{room_id}",
+        )
+        assert legacy_get.status_code == 405
+
+
+@pytest.mark.anyio
 async def test_protected_rollout_http_replays_mailbox_and_survives_restart_with_downgrade_fence(
     store,
     identity_factory,
@@ -1919,6 +2328,12 @@ async def test_protected_rollout_http_replays_mailbox_and_survives_restart_with_
     owner, owner_key = identity_factory(binding_assurance="os_bound")
     recipient, _recipient_key = identity_factory(kind="pi", binding_assurance="os_bound")
     core = _core(store, tmp_path, domain=owner.domain_id)
+    scope = _issue_mailbox_scope(
+        core,
+        owner,
+        recipient,
+        scope_id="scope:product-http:version-replay",
+    )
     clock = [int(time.time())]
     core.versioning.clock = lambda: clock[0]
     peer = "upgrade-peer.example"
@@ -1927,10 +2342,14 @@ async def test_protected_rollout_http_replays_mailbox_and_survives_restart_with_
         actor=owner,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"kind": "queued-before-upgrade"},
+        payload={
+            "kind": "queued-before-upgrade",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key="version-replay-envelope-0001",
         recipients=(recipient.harness_id,),
         retention_delete_at=datetime.now(UTC) + timedelta(days=1),
+        policy_revision=scope.policy_revision,
     )
     requirement = CompatibilityRequirement(
         event_type="mailbox.future",
@@ -2029,8 +2448,12 @@ async def test_protected_rollout_http_replays_mailbox_and_survives_restart_with_
         )
         assert replayed.status_code == 200, replayed.text
         assert replayed.json() == {"replayed": 1, "still_queued": 0}
-        assert core.mailboxes.reconcile(recipient.harness_id)[0]["payload"] == {
-            "kind": "queued-before-upgrade"
+        assert core.mailboxes.reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )[0]["payload"] == {
+            "kind": "queued-before-upgrade",
+            "authorization_context": scope.authorization_context(),
         }
         clock[0] = begin_body["compatibility_deadline"] + 1
         contracted = await _request(
@@ -2070,6 +2493,12 @@ async def test_room_governance_transfer_http_is_signed_fenced_and_target_bound(
     target, target_key = identity_factory(domain="partner.example", binding_assurance="os_bound")
     core = _core(store, tmp_path, domain=owner.domain_id)
     _allow(core, owner, "room.create", "room:new")
+    scope = _issue_test_scope(
+        core,
+        owner,
+        (owner.harness_id,),
+        scope_id="scope:product-http-room-transfer",
+    )
     app = create_app(core)
 
     async with httpx.AsyncClient(
@@ -2082,7 +2511,11 @@ async def test_room_governance_transfer_http_is_signed_fenced_and_target_bound(
             owner,
             "POST",
             "/v1/rooms",
-            {"classification": "C1", "persistent": True},
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "classification": "C1",
+                "persistent": True,
+            },
         )
         assert created.status_code == 201, created.text
         room_id = created.json()["room_id"]
@@ -2448,6 +2881,15 @@ async def test_artifact_and_effect_http_lifecycles_mint_server_side_decisions(
 
         released_binding = core.artifacts.resolve_released_binding(artifact_id)
         _allow(core, actor, "message.send", "direct")
+        collaboration_scope = _issue_test_scope(
+            core,
+            actor,
+            (actor.harness_id,),
+            scope_id="scope:http-artifact-effect-message",
+            allowed_actions=("message.send",),
+            allowed_resource_prefixes=("conversation:direct",),
+            allowed_classifications=(Classification.C2_RESTRICTED,),
+        )
         message = await _request(
             client,
             actor_key,
@@ -2455,6 +2897,7 @@ async def test_artifact_and_effect_http_lifecycles_mint_server_side_decisions(
             "POST",
             "/v1/messages",
             {
+                "collaboration_scope_id": collaboration_scope.scope_id,
                 "recipients": [actor.harness_id],
                 "payload": {"task": "prepare effect"},
                 "idempotency_key": "effect-parent-message-0001",

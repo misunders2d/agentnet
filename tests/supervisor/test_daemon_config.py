@@ -29,6 +29,7 @@ def _write_config(tmp_path: Path, *, mode: int = 0o600) -> Path:
                 "domain_id": "corp.example",
                 "harness_id": "laptop-codex",
                 "credential_id": "credential-laptop-codex",
+                "collaboration_scope_id": "scope:supervisor-background",
                 "signing_key_path": str(tmp_path / "signing-key.pem"),
                 "harness": "codex",
                 "runtime_root": str(tmp_path / "runtime"),

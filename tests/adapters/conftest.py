@@ -9,6 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from agentnet.bindings.endpoint import EndpointBinding
+from agentnet.core.capabilities import (
+    ENDPOINT_CAPABILITY_ROOT_BYTES,
+    endpoint_capability_root_name,
+)
 from agentnet.security.signatures import P256KeyPair
 from agentnet.supervisor.workers import (
     CleanWorkerLauncher,
@@ -34,6 +39,41 @@ def fake_harnesses(tmp_path: Path) -> dict[str, str]:
         os.chmod(destination, 0o700)
         result[harness] = str(destination)
     return result
+
+
+@pytest.fixture
+def enrolled_endpoint_binding_factory(tmp_path: Path):
+    def create(*, harness_id: str, harness_kind: str = "codex") -> EndpointBinding:
+        adapter_generation = 1
+        domain_id = "domain-subprocess-lifecycle"
+        endpoint_scope = endpoint_capability_root_name(
+            domain_id=domain_id,
+            harness_id=harness_id,
+            adapter_generation=adapter_generation,
+        )
+        capability_directory = (
+            tmp_path / "endpoint-capabilities" / "endpoints" / endpoint_scope
+        )
+        capability_directory.mkdir(parents=True, mode=0o700)
+        capability_directory.chmod(0o700)
+        capability_root = capability_directory / "capability-root.key"
+        capability_root.write_bytes(b"\x01" * ENDPOINT_CAPABILITY_ROOT_BYTES)
+        capability_root.chmod(0o600)
+        return EndpointBinding(
+            domain_id=domain_id,
+            principal_id="principal-subprocess-lifecycle",
+            harness_id=harness_id,
+            harness_kind=harness_kind,
+            credential_id="credential-current-epoch",
+            credential_epoch=1,
+            adapter_generation=adapter_generation,
+            mailbox_cursor=0,
+            profile_key=f"{harness_kind}:subprocess-lifecycle",
+            capability_root_path=capability_root,
+            process_measurement="sha256:" + "a" * 64,
+        )
+
+    return create
 
 
 @pytest.fixture

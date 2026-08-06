@@ -8,6 +8,7 @@ import pytest
 from agentnet.console.mutations import ConsoleMutationService
 from agentnet.errors import AuthenticationError, AuthorizationError, IdempotencyConflict
 from agentnet.identity.revocation import HarnessRevocationRequest
+from agentnet.identity.invitation_links import InvitationLinkService
 from agentnet.security.signatures import canonical_json
 
 
@@ -116,9 +117,15 @@ def _service(store, *, clock: _Clock | None = None):
                 "allowed",
             ),
         )
+    invitation_links = InvitationLinkService(
+        store,
+        public_base_url="https://console.example/join",
+        clock=active_clock,
+    )
     service = ConsoleMutationService(
         store=store,
         approval_client=approvals,
+        invitation_links=invitation_links,
         require=authorizer.require,
         harness_revocations=revocations,
         clock=active_clock,

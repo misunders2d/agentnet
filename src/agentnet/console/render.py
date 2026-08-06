@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import html
 import secrets
-from datetime import UTC, datetime
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from urllib.parse import quote
+from datetime import UTC, datetime
+from urllib.parse import quote, urlsplit
 
 from agentnet.console.models import (
     ActivityPage,
@@ -17,6 +18,7 @@ from agentnet.console.models import (
     ServerPage,
     VisibleState,
 )
+from agentnet.identity.onboarding_prompt import OnboardingPrompt
 
 
 MutationAuthorizer = Callable[[str, Mapping[str, Sequence[str]]], str]
@@ -64,6 +66,99 @@ def _technical(values: dict[str, str] | None) -> str:
         return ""
     rows = "".join(f"<dt>{_e(key)}</dt><dd><code>{_e(value)}</code></dd>" for key, value in values.items())
     return f"<details><summary>Technical details</summary><dl class=\"meta\">{rows}</dl></details>"
+
+
+_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+_SAFE_QR_ATTRIBUTES = {
+    f"{{{_SVG_NAMESPACE}}}svg": frozenset(
+        {"class", "height", "preserveAspectRatio", "version", "viewBox", "width"}
+    ),
+    f"{{{_SVG_NAMESPACE}}}path": frozenset(
+        {
+            "class",
+            "d",
+            "fill",
+            "shape-rendering",
+            "stroke",
+            "stroke-linecap",
+            "stroke-width",
+            "transform",
+        }
+    ),
+}
+
+
+def _https_invitation_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError("invitation URL must be an HTTPS URL")
+    return value
+
+
+def _safe_invitation_qr_svg(value: str) -> str:
+    svg = value.strip()
+    if not svg or len(svg) > 1_000_000 or "<!" in svg or "<?" in svg:
+        raise ValueError("invitation QR code is not a safe SVG")
+    try:
+        root = ET.fromstring(svg)
+    except ET.ParseError as exc:
+        raise ValueError("invitation QR code is not a safe SVG") from exc
+    if root.tag != f"{{{_SVG_NAMESPACE}}}svg":
+        raise ValueError("invitation QR code is not a safe SVG")
+    path_count = 0
+    for element in root.iter():
+        allowed = _SAFE_QR_ATTRIBUTES.get(element.tag)
+        if allowed is None:
+            raise ValueError("invitation QR code is not a safe SVG")
+        if element.tag == f"{{{_SVG_NAMESPACE}}}path":
+            path_count += 1
+        if element.text and element.text.strip():
+            raise ValueError("invitation QR code is not a safe SVG")
+        if element.tail and element.tail.strip():
+            raise ValueError("invitation QR code is not a safe SVG")
+        for name, attribute in element.attrib.items():
+            if (
+                name not in allowed
+                or "url(" in attribute.casefold()
+                or any(character in attribute for character in "<>\"'`")
+            ):
+                raise ValueError("invitation QR code is not a safe SVG")
+    if path_count == 0:
+        raise ValueError("invitation QR code is not a safe SVG")
+    return svg
+
+
+def _local_invitation_revoke_path(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.startswith("/invitations/")
+        or not parsed.path.endswith("/revoke")
+        or "//" in parsed.path
+    ):
+        raise ValueError("invitation revocation path must be local")
+    return parsed.path
+
+
+def _invitation_expiry(expires_at: int, fresh_at: int) -> str:
+    remaining = expires_at - fresh_at
+    if remaining <= 0:
+        return "Expired"
+    hours = max(1, (remaining + 3_599) // 3_600)
+    if hours < 48:
+        return f"Expires in {hours} hour{'s' if hours != 1 else ''}"
+    days = (hours + 23) // 24
+    return f"Expires in {days} day{'s' if days != 1 else ''}"
 
 class ConsoleRenderer:
     def __init__(self, *, asset_version: str, approval_origin: str | None = None) -> None:
@@ -114,6 +209,98 @@ class ConsoleRenderer:
             f'<main id="main" tabindex="-1">{body}'
             f'<p class="freshness" aria-live="polite" data-live-status data-revision="{revision}">'
             f"Updated {_e(_time(fresh_at))}</p></main></body></html>"
+        )
+
+    def public_invitation(
+        self,
+        *,
+        prompt: OnboardingPrompt,
+        continue_path: str,
+    ) -> str:
+        parsed = urlsplit(continue_path)
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.startswith("/join/")
+            or not parsed.path.endswith("/continue")
+            or "//" in parsed.path
+        ):
+            raise ValueError("invitation continuation path must be local")
+        steps = "".join(f"<li>{_e(step)}</li>" for step in prompt.flow_steps)
+        return self.public_document(
+            title="Join AgentNet",
+            body=(
+                '<div class="page-heading"><div><p class="eyebrow">Invitation</p>'
+                "<h1>You are invited to AgentNet</h1>"
+                "<p>Review the exact setup and access before continuing.</p></div></div>"
+                '<section class="section panel" aria-labelledby="invitation-setup-title">'
+                '<h2 id="invitation-setup-title">Set up this agent</h2>'
+                f"<p>{_e(prompt.install_text)}</p>"
+                f"<ol>{steps}</ol>"
+                '<div class="field"><label for="onboarding-prompt">'
+                "Copy these onboarding instructions</label>"
+                f'<textarea id="onboarding-prompt" readonly rows="24">{_e(prompt.copyable_text)}</textarea></div>'
+                '<p><button class="secondary" type="button" data-copy-target="onboarding-prompt" '
+                'data-copy-status="public-onboarding-copy-status">Copy onboarding instructions</button> '
+                '<span id="public-onboarding-copy-status" class="muted" aria-live="polite"></span></p>'
+                '<noscript><p class="muted">Select the instructions and use your device’s copy command.</p></noscript>'
+                f"<p>{_e(prompt.restart_text)}</p>"
+                f"<p>{_e(prompt.recovery_text)}</p>"
+                f'<form method="post" action="{_e(parsed.path)}" data-invitation-continue>'
+                '<button type="submit">Continue with work account</button>'
+                '<span class="muted" aria-live="polite" data-invitation-continue-status></span>'
+                "</form></section>"
+            ),
+        )
+
+    def public_invitation_status(self, *, state: str) -> str:
+        copy = {
+            "waiting_approval": (
+                "Approve with passkey",
+                "Review the exact person, agent, space, and access in the secure approval page.",
+            ),
+            "restart_required": (
+                "Restart your agent to enable AgentNet",
+                "Access is ready. Nothing restarts automatically; restart the exact agent yourself when you are ready.",
+            ),
+            "active": (
+                "AgentNet is active",
+                "The exact agent is connected to the approved space.",
+            ),
+        }
+        if state not in copy:
+            raise ValueError("invitation browser state is invalid")
+        title, description = copy[state]
+        return self.public_document(
+            title=title,
+            body=(
+                '<section class="section panel" aria-live="polite">'
+                f"<h1>{_e(title)}</h1><p>{_e(description)}</p>"
+                "</section>"
+            ),
+        )
+
+    def public_invitation_unavailable(self) -> str:
+        return (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            "<title>Invitation unavailable</title></head><body><main>"
+            "<p>This invitation is unavailable. Ask the sender for a new link.</p>"
+            "</main></body></html>"
+        )
+
+    def public_document(self, *, title: str, body: str) -> str:
+        return (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta name="referrer" content="no-referrer">'
+            f"<title>{_e(title)} · AgentNet</title>"
+            f'<link rel="stylesheet" href="/assets/console.css?v={_e(self.asset_version)}">'
+            f'<script src="/assets/console.js?v={_e(self.asset_version)}" defer></script>'
+            '</head><body><a class="skip-link" href="#main">Skip to main content</a>'
+            f'<main id="main" tabindex="-1">{body}</main></body></html>'
         )
 
     def mutation_review(
@@ -341,7 +528,8 @@ class ConsoleRenderer:
         )
         body = (
             '<div class="page-heading"><div><p class="eyebrow">Verified identities</p><h1>People</h1>'
-            '<p>Each laptop and agent keeps its own access state. Removing one does not remove its siblings.</p></div></div>'
+            '<p>Each laptop and agent keeps its own access state. Removing one does not remove its siblings.</p>'
+            '<p><a class="button" href="/invitations/new">Invite a colleague</a></p></div></div>'
             f'{("".join(people) if people else "<div class=\"empty\"><h2>No people are visible</h2><p>Enroll a verified person to begin.</p></div>")}'
             f"{relationships}{enroll}"
         )
@@ -403,6 +591,163 @@ class ConsoleRenderer:
             fresh_at=fresh_at,
         )
 
+    def invitation_new(
+        self,
+        *,
+        spaces: Sequence[tuple[str, str]],
+        authorize_mutation: MutationAuthorizer,
+        fresh_at: int,
+        values: Mapping[str, object] | None = None,
+        error: str | None = None,
+    ) -> str:
+        form_values = values or {}
+        email = str(form_values.get("email", ""))
+        selected_scope = str(form_values.get("scope_id", ""))
+        raw_permissions = form_values.get("permissions", ())
+        selected_permissions = (
+            {str(value) for value in raw_permissions if isinstance(value, str)}
+            if isinstance(raw_permissions, (tuple, list, set, frozenset))
+            else set()
+        )
+        options = "".join(
+            f'<option value="{_e(scope_id)}"'
+            f'{(" selected" if scope_id == selected_scope else "")}>{_e(display_name)}</option>'
+            for scope_id, display_name in spaces
+        )
+        if not options:
+            options = '<option value="">No spaces are available</option>'
+        review_error = (
+            f'<div class="notice warning" role="alert"><strong>Review the form:</strong> {_e(error)}</div>'
+            if error
+            else ""
+        )
+        permissions = (
+            ("message.send", "Can send messages"),
+            ("message.read", "Can read messages"),
+            ("artifact.send", "Can send files"),
+            ("artifact.download", "Can download files"),
+        )
+        permission_fields = "".join(
+            f'<label><input type="checkbox" name="permissions" value="{_e(value)}"'
+            f'{(" checked" if value in selected_permissions else "")}> {_e(label)}</label>'
+            for value, label in permissions
+        )
+        body = (
+            '<div class="page-heading"><div><p class="eyebrow">Invite a colleague</p>'
+            '<h1>Create an invitation</h1>'
+            '<p>Choose one space and only the actions this person needs.</p></div></div>'
+            '<section class="section panel" aria-labelledby="invitation-form-title">'
+            '<h2 id="invitation-form-title">Invitation details</h2>'
+            '<p>The invitation will work only for the work email entered below and will expire automatically.</p>'
+            f"{review_error}"
+            '<form method="post" action="/invitations">'
+            '<div class="field"><label for="invitation-email">Work email</label>'
+            f'<input id="invitation-email" name="email" type="email" autocomplete="email" maxlength="320" required value="{_e(email)}"></div>'
+            '<div class="field"><label for="invitation-space">Space</label>'
+            f'<select id="invitation-space" name="scope_id" required>{options}</select></div>'
+            '<fieldset class="field"><legend>What can this person do?</legend>'
+            f"{permission_fields}</fieldset>"
+            '<div class="notice warning"><strong>Before you create it:</strong> Share the invitation only with the person named above. You can revoke it at any time.</div>'
+            f'<button type="submit"{(" disabled" if not spaces else "")}>Create invitation</button>'
+            "</form></section>"
+        )
+        return self.document(
+            title="Create invitation",
+            current_nav="people",
+            body=body,
+            authorize_mutation=authorize_mutation,
+            fresh_at=fresh_at,
+        )
+
+    def invitation_detail(
+        self,
+        *,
+        work_email: str,
+        space: str,
+        permissions: Sequence[str],
+        invitation_url: str,
+        qr_svg: str,
+        expires_at: int,
+        revoked: bool,
+        revoke_path: str,
+        authorize_mutation: MutationAuthorizer,
+        fresh_at: int,
+    ) -> str:
+        expired = expires_at <= fresh_at
+        state = "Access removed" if revoked else "Expired" if expired else "Active"
+        permission_labels = {
+            "message.send": "Can send messages",
+            "message.read": "Can read messages",
+            "artifact.send": "Can send files",
+            "artifact.download": "Can download files",
+        }
+        visible_permissions = (
+            permission_labels[value]
+            for value in permission_labels
+            if value in permissions
+        )
+        actions = ""
+        if not revoked and not expired:
+            public_url = _https_invitation_url(invitation_url)
+            safe_svg = _safe_invitation_qr_svg(qr_svg)
+            safe_revoke_path = _local_invitation_revoke_path(revoke_path)
+            download_url = "data:image/svg+xml;charset=utf-8," + quote(safe_svg, safe="")
+            onboarding = (
+                f"You have been invited to the space “{space}” in AgentNet.\n\n"
+                f"Open this invitation link: {public_url}\n"
+                f"Sign in with {work_email} and follow the steps shown there.\n\n"
+                f"This invitation expires at {_time(expires_at)}."
+            )
+            revoke_token = self._mutation_token_input(
+                authorize_mutation,
+                path=safe_revoke_path,
+                form={},
+            )
+            actions = (
+                '<section class="section panel" aria-labelledby="invitation-link-title">'
+                '<h2 id="invitation-link-title">Share the invitation</h2>'
+                f'<p><a id="invitation-url" href="{_e(public_url)}">{_e(public_url)}</a></p>'
+                '<p><button class="secondary" type="button" data-copy-target="invitation-url" '
+                'data-copy-status="invitation-link-copy-status">Copy invitation link</button> '
+                '<span id="invitation-link-copy-status" class="muted" aria-live="polite"></span></p>'
+                '<noscript><p class="muted">Select the invitation link and use your device’s copy command.</p></noscript>'
+                '<div role="img" aria-label="QR code for this invitation link">'
+                f"{safe_svg}</div>"
+                f'<p><a class="button secondary" href="{_e(download_url)}" download="agentnet-invitation-qr.svg">Download QR code</a></p>'
+                '<div class="field"><label for="onboarding-instructions">Onboarding instructions</label>'
+                f'<textarea id="onboarding-instructions" readonly rows="7">{_e(onboarding)}</textarea></div>'
+                '<p><button class="secondary" type="button" data-copy-target="onboarding-instructions" '
+                'data-copy-status="onboarding-copy-status">Copy onboarding instructions</button> '
+                '<span id="onboarding-copy-status" class="muted" aria-live="polite"></span></p>'
+                '<noscript><p class="muted">Select the instructions and use your device’s copy command.</p></noscript>'
+                '<details><summary>Revoke this invitation</summary>'
+                '<p>The link will stop working immediately. This does not remove access already completed through a different invitation.</p>'
+                f'<form method="post" action="{_e(safe_revoke_path)}">{revoke_token}'
+                '<button class="danger" type="submit">Revoke invitation</button></form></details>'
+                "</section>"
+            )
+        body = (
+            '<div class="page-heading"><div><p class="eyebrow">Invitation</p>'
+            '<h1>Invitation details</h1>'
+            '<p>Share this only with the person listed below.</p></div>'
+            f'<span class="status {_status_class(state)}">{_e(state)}</span></div>'
+            '<section class="panel" aria-labelledby="invitation-summary-title">'
+            '<h2 id="invitation-summary-title">Who and where</h2><dl class="meta">'
+            f'<div><dt>Work email</dt><dd>{_e(work_email)}</dd></div>'
+            f'<div><dt>Space</dt><dd>{_e(space)}</dd></div>'
+            f'<div><dt>Expiry</dt><dd>{_e(_invitation_expiry(expires_at, fresh_at))}</dd></div>'
+            f'<div><dt>Available until</dt><dd>{_e(_time(expires_at))}</dd></div></dl>'
+            '<h3>Allowed actions</h3>'
+            f'{_tags(visible_permissions, empty="No message or file actions")}</section>'
+            f"{actions}"
+        )
+        return self.document(
+            title="Invitation details",
+            current_nav="people",
+            body=body,
+            authorize_mutation=authorize_mutation,
+            fresh_at=fresh_at,
+        )
     def approvals(self, page: ApprovalPage, authorize_mutation: MutationAuthorizer) -> str:
         approval_href = (self.approval_origin + "/approval") if self.approval_origin else "/approvals"
         if page.approvals:

@@ -32,12 +32,16 @@ from pydantic import (
 
 from agentnet.bindings.ipc import IPCSessionClaims, UnixIPCServer, mint_inherited_session_capability
 from agentnet.bindings.tools import (
+    ActorProvider,
     CANONICAL_TOOL_NAMES,
     CanonicalToolRequest,
     ConversationActionArguments,
     ConversationCreateArguments,
     ConversationThreadArguments,
-    EmptyArguments,
+    CollaborationScopeArguments,
+    FileDownloadArguments,
+    FileSendArguments,
+    FileStatusArguments,
     InboxAcknowledgeArguments,
     InboxArguments,
     ObligationCancelArguments,
@@ -45,11 +49,14 @@ from agentnet.bindings.tools import (
     ObligationListArguments,
     ObligationReconcileArguments,
     ObligationTransitionArguments,
+    RecipientResolveArguments,
     RoomCreateArguments,
     RoomGetArguments,
     RoomMemberAddArguments,
     RoomSendArguments,
+    SendAcceptanceResult,
     SendArguments,
+    public_send_result,
 )
 from agentnet.client import AgentNetClient
 from agentnet.errors import (
@@ -59,9 +66,11 @@ from agentnet.errors import (
     GateBlocked,
     ValidationError,
 )
+from agentnet.discovery.recipient_resolver import ResolvedEndpoint
 from agentnet.host import host_platform
 from agentnet.host_security import HostProcessIdentity, current_account_id, measure_process_identity
 from agentnet.identity.actors import ActorKind, VerifiedActor
+from agentnet.messaging.obligation import MailboxResponseObligation
 from agentnet.protocol.models import EventEnvelope
 from agentnet.provenance import ProvenanceReferenceV1
 from agentnet.security.envelope import LocalEnvelopeCipher
@@ -187,24 +196,11 @@ class _RoomGetResult(_RemoteResult):
     members: list[_RoomMemberResult] = Field(default_factory=list)
 
 
-class _RoomSendResult(_RemoteResult):
-    event_id: str = Field(min_length=1, max_length=256)
-    fact: str = Field(min_length=1, max_length=128)
-    duplicate: bool
-    provenance: ProvenanceReferenceV1
-    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
-    audit_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+class _RoomSendResult(SendAcceptanceResult):
+    pass
 
 
 
-class _MessageAcceptanceResult(_RemoteResult):
-    event_id: str = Field(min_length=1, max_length=256)
-    fact: str = Field(min_length=1, max_length=128)
-    duplicate: bool
-    receipt_id: str | None = Field(default=None, min_length=1, max_length=256)
-    envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
-    provenance: ProvenanceReferenceV1
-    audit_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class _CustodyReference(_RemoteResult):
@@ -231,6 +227,7 @@ class _InboxItem(_RemoteResult):
     payload: Any
     payload_available: bool
     provenance: ProvenanceReferenceV1
+    response_obligation: MailboxResponseObligation | None
     payload_access: Literal["task_grant_required"] | None = None
     payload_withheld_reason: Literal["exact_task_grant_required"] | None = None
     custody_reference: _CustodyReference | None = None
@@ -281,7 +278,7 @@ class _ObligationReference(_RemoteResult):
     revision: int = Field(ge=1)
 
 
-class _ConversationActionResult(_MessageAcceptanceResult):
+class _ConversationActionResult(SendAcceptanceResult):
     action_kind: str = Field(min_length=1, max_length=64)
     conversation_id: str = Field(min_length=1, max_length=256)
     policy_decision_id: str | None = Field(default=None, min_length=1, max_length=256)
@@ -343,12 +340,80 @@ class _ObligationReconcileResult(_RemoteResult):
     recipient_committed: list[str] = Field(max_length=1_000)
     expired: list[str] = Field(max_length=1_000)
 
+
+class _ResolvedEndpoint(_RemoteResult):
+    harness_id: str = Field(min_length=1, max_length=256)
+    display_name: str = Field(min_length=1, max_length=256)
+    harness_kind: str = Field(min_length=1, max_length=64)
+    availability: Literal["online", "offline", "unknown"]
+    scope_id: str = Field(min_length=1, max_length=256)
+
+class _ExactRecipientScopeResult(_RemoteResult):
+    recipient_harness_ids: list[str] = Field(min_length=1, max_length=1000)
+    scope_id: str = Field(min_length=1, max_length=256)
+
+    @field_validator("recipient_harness_ids")
+    @classmethod
+    def exact_unique_recipients(cls, value: list[str]) -> list[str]:
+        if (
+            len(value) != len(set(value))
+            or any(not recipient or len(recipient) > 256 for recipient in value)
+        ):
+            raise ValueError("exact recipients must be a bounded unique list")
+        return value
+
+
+
+class _FileTransferResult(_RemoteResult):
+    transfer_id: str = Field(min_length=1, max_length=256)
+    state: Literal[
+        "reserved",
+        "quarantined",
+        "scanning",
+        "released",
+        "event_committed",
+        "recipient_committed",
+        "failed",
+        "canceled",
+    ]
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=256)
+    event_id: str | None = Field(default=None, min_length=1, max_length=256)
+    digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size: int = Field(ge=0)
+    media_type: str = Field(min_length=3, max_length=255)
+
+
+class _FileDownloadResult(_RemoteResult):
+    artifact_id: str = Field(min_length=1, max_length=256)
+    state: Literal["materialized"]
+    destination_path: str = Field(min_length=1, max_length=4096)
+    digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size: int = Field(ge=0)
+
+
 class RemoteManagerDispatcher:
     """Map the canonical local surface to the existing signed HTTP endpoints."""
 
-    def __init__(self, client: AgentNetClient, signing_context: VerifiedActor) -> None:
+    def __init__(
+        self,
+        client: AgentNetClient,
+        signing_context_provider: ActorProvider,
+    ) -> None:
+        if not callable(signing_context_provider):
+            raise AuthenticationError("manager gateway requires a signing context provider")
+        self.client = client
+        self.signing_context_provider = signing_context_provider
+
+    def _current_signing_context(self) -> VerifiedActor:
+        try:
+            signing_context = self.signing_context_provider()
+        except ExtensionError:
+            raise
+        except Exception as exc:
+            raise AuthenticationError("manager gateway signing context is unavailable") from exc
         if (
-            signing_context.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+            not isinstance(signing_context, VerifiedActor)
+            or signing_context.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
             or signing_context.positive_authority_id is None
             or signing_context.harness_id is None
             or signing_context.credential_id is None
@@ -356,17 +421,16 @@ class RemoteManagerDispatcher:
         ):
             raise AuthenticationError("manager gateway requires one exact human harness identity")
         if (
-            client.domain_id,
-            client.harness_id,
-            client.credential_id,
+            self.client.domain_id,
+            self.client.harness_id,
+            self.client.credential_id,
         ) != (
             signing_context.domain_id,
             signing_context.harness_id,
             signing_context.credential_id,
         ):
             raise AuthenticationError("signed client and manager identity context differ")
-        self.client = client
-        self.signing_context = signing_context
+        return signing_context
 
     @staticmethod
     def _arguments(model: type[BaseModel], value: dict[str, Any]) -> BaseModel:
@@ -452,6 +516,7 @@ class RemoteManagerDispatcher:
         return value
 
     def dispatch(self, method: str, arguments: dict[str, Any]) -> Any:
+        self._current_signing_context()
         try:
             request = CanonicalToolRequest.model_validate(
                 {"arguments": arguments, "method": method}
@@ -459,15 +524,113 @@ class RemoteManagerDispatcher:
         except PydanticValidationError as exc:
             raise ValidationError("canonical manager tool request is invalid") from exc
 
+        if request.method == "agentnet.recipient.resolve":
+            parsed = self._arguments(RecipientResolveArguments, request.arguments)
+            assert isinstance(parsed, RecipientResolveArguments)
+            return self._typed_items(
+                _ResolvedEndpoint,
+                self._request(
+                    "POST",
+                    "/v1/recipients/resolve",
+                    json_body={"query": parsed.query},
+                ),
+            )
+        if request.method == "agentnet.file.send":
+            parsed = self._arguments(FileSendArguments, request.arguments)
+            assert isinstance(parsed, FileSendArguments)
+            return self._typed_object(
+                _FileTransferResult,
+                self._request(
+                    "POST",
+                    "/v1/files/send",
+                    json_body=parsed.model_dump(mode="json"),
+                ),
+            )
+        if request.method == "agentnet.file.status":
+            parsed = self._arguments(FileStatusArguments, request.arguments)
+            assert isinstance(parsed, FileStatusArguments)
+            transfer_id = quote(parsed.transfer_id, safe="")
+            return self._typed_object(
+                _FileTransferResult,
+                self._request(
+                    "GET",
+                    (
+                        f"/v1/files/transfers/{transfer_id}"
+                        f"?collaboration_scope_id={quote(parsed.collaboration_scope_id, safe='')}"
+                    ),
+                ),
+            )
+        if request.method == "agentnet.file.download":
+            parsed = self._arguments(FileDownloadArguments, request.arguments)
+            assert isinstance(parsed, FileDownloadArguments)
+            artifact_id = quote(parsed.artifact_id, safe="")
+            return self._typed_object(
+                _FileDownloadResult,
+                self._request(
+                    "POST",
+                    f"/v1/files/{artifact_id}/download",
+                    json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
+                        "destination_path": parsed.destination_path,
+                        "idempotency_key": parsed.idempotency_key,
+                    },
+                ),
+            )
         if request.method == "agentnet.send":
             parsed = self._arguments(SendArguments, request.arguments)
             assert isinstance(parsed, SendArguments)
-            value = self._request(
-                "POST",
-                "/v1/messages",
-                json_body=parsed.model_dump(mode="json"),
+            if parsed.recipient_query is not None:
+                resolved_items = self._typed_items(
+                    _ResolvedEndpoint,
+                    self._request(
+                        "POST",
+                        "/v1/recipients/resolve",
+                        json_body={"query": parsed.recipient_query},
+                    ),
+                )
+                if len(resolved_items) != 1:
+                    raise ValidationError("recipient could not be resolved")
+                display_metadata = tuple(
+                    ResolvedEndpoint.model_validate(item) for item in resolved_items
+                )
+                recipients = (display_metadata[0].harness_id,)
+                collaboration_scope_id = display_metadata[0].scope_id
+            else:
+                assert parsed.recipients is not None
+                recipients = tuple(parsed.recipients)
+                display_metadata = ()
+                exact_scope = self._typed_object(
+                    _ExactRecipientScopeResult,
+                    self._request(
+                        "POST",
+                        "/v1/recipients/exact-scope",
+                        json_body={
+                            "classification": parsed.classification.value,
+                            "recipients": list(recipients),
+                        },
+                    ),
+                )
+                if tuple(exact_scope["recipient_harness_ids"]) != recipients:
+                    raise ValidationError("signed upstream exact recipient scope is invalid")
+                collaboration_scope_id = str(exact_scope["scope_id"])
+            value = self._object(
+                self._request(
+                    "POST",
+                    "/v1/messages",
+                    json_body={
+                        "classification": parsed.classification.value,
+                        "collaboration_scope_id": collaboration_scope_id,
+                        "idempotency_key": parsed.idempotency_key,
+                        "payload": parsed.payload,
+                        "recipients": list(recipients),
+                    },
+                )
             )
-            return self._typed_object(_MessageAcceptanceResult, value)
+            return public_send_result(
+                value,
+                recipient_harness_ids=recipients,
+                recipient_display_metadata=display_metadata,
+            )
         if request.method == "agentnet.inbox":
             parsed = self._arguments(InboxArguments, request.arguments)
             assert isinstance(parsed, InboxArguments)
@@ -475,7 +638,10 @@ class RemoteManagerDispatcher:
                 _InboxItem,
                 self._request(
                     "GET",
-                    f"/v1/mailbox?after={parsed.after_cursor}&limit={parsed.limit}",
+                    (
+                        f"/v1/mailbox?after={parsed.after_cursor}&limit={parsed.limit}"
+                        f"&collaboration_scope_id={quote(parsed.collaboration_scope_id, safe='')}"
+                    ),
                 )
             )
         if request.method == "agentnet.inbox.acknowledge":
@@ -487,7 +653,10 @@ class RemoteManagerDispatcher:
                 self._request(
                     "POST",
                     f"/v1/mailbox/{event_id}/acknowledge",
-                    json_body={"envelope_digest": parsed.envelope_digest},
+                    json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
+                        "envelope_digest": parsed.envelope_digest,
+                    },
                 )
             )
         if request.method == "agentnet.conversation.create":
@@ -516,6 +685,7 @@ class RemoteManagerDispatcher:
                     "POST",
                     f"/v1/conversations/{conversation_id}/actions",
                     json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
                         "action": parsed.action.model_dump(mode="json", exclude_none=True),
                         "idempotency_key": parsed.idempotency_key,
                         "recipients": list(parsed.recipients),
@@ -532,7 +702,11 @@ class RemoteManagerDispatcher:
                 _ThreadItem,
                 self._request(
                     "GET",
-                    f"/v1/conversations/{conversation_id}/threads/{thread_id}?limit={parsed.limit}",
+                    (
+                        f"/v1/conversations/{conversation_id}/threads/{thread_id}"
+                        f"?limit={parsed.limit}"
+                        f"&collaboration_scope_id={quote(parsed.collaboration_scope_id, safe='')}"
+                    ),
                 )
             )
         if request.method == "agentnet.room.create":
@@ -555,7 +729,11 @@ class RemoteManagerDispatcher:
                 self._request(
                     "POST",
                     f"/v1/rooms/{room_id}/members",
-                    json_body={"harness_id": parsed.harness_id, "role": parsed.role},
+                    json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
+                        "harness_id": parsed.harness_id,
+                        "role": parsed.role,
+                    },
                 ),
             )
         if request.method == "agentnet.room.get":
@@ -564,7 +742,13 @@ class RemoteManagerDispatcher:
             room_id = quote(parsed.room_id, safe="")
             return self._typed_object(
                 _RoomGetResult,
-                self._request("GET", f"/v1/rooms/{room_id}"),
+                self._request(
+                    "POST",
+                    f"/v1/rooms/{room_id}",
+                    json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
+                    },
+                ),
             )
         if request.method == "agentnet.room.send":
             parsed = self._arguments(RoomSendArguments, request.arguments)
@@ -576,6 +760,7 @@ class RemoteManagerDispatcher:
                     "POST",
                     f"/v1/rooms/{room_id}/messages",
                     json_body={
+                        "collaboration_scope_id": parsed.collaboration_scope_id,
                         "classification": parsed.classification.value,
                         "conversation_id": parsed.conversation_id,
                         "expected_control_sequence": parsed.expected_control_sequence,
@@ -587,16 +772,27 @@ class RemoteManagerDispatcher:
                 ),
             )
         if request.method == "agentnet.obligation.inbox":
-            self._arguments(EmptyArguments, request.arguments)
+            parsed = self._arguments(CollaborationScopeArguments, request.arguments)
+            assert isinstance(parsed, CollaborationScopeArguments)
             return self._typed_object(
                 _ObligationInboxResult,
-                self._request("GET", "/v1/response-obligations/inbox"),
+                self._request(
+                    "GET",
+                    (
+                        "/v1/response-obligations/inbox"
+                        f"?collaboration_scope_id={quote(parsed.collaboration_scope_id, safe='')}"
+                    ),
+                ),
             )
         if request.method == "agentnet.obligation.list":
             parsed = self._arguments(ObligationListArguments, request.arguments)
             assert isinstance(parsed, ObligationListArguments)
             query = f"?role={parsed.role}&limit={parsed.limit}"
             query += "".join(f"&state={quote(state, safe='')}" for state in parsed.states)
+            query += (
+                "&collaboration_scope_id="
+                f"{quote(parsed.collaboration_scope_id, safe='')}"
+            )
             return self._typed_items(
                 _ObligationRow,
                 self._request("GET", f"/v1/response-obligations{query}"),
@@ -607,13 +803,20 @@ class RemoteManagerDispatcher:
             obligation_id = quote(parsed.obligation_id, safe="")
             return self._typed_object(
                 _ObligationGetResult,
-                self._request("GET", f"/v1/response-obligations/{obligation_id}")
+                self._request(
+                    "GET",
+                    (
+                        f"/v1/response-obligations/{obligation_id}"
+                        f"?collaboration_scope_id={quote(parsed.collaboration_scope_id, safe='')}"
+                    ),
+                )
             )
         if request.method == "agentnet.obligation.transition":
             parsed = self._arguments(ObligationTransitionArguments, request.arguments)
             assert isinstance(parsed, ObligationTransitionArguments)
             obligation_id = quote(parsed.obligation_id, safe="")
             body: dict[str, Any] = {
+                "collaboration_scope_id": parsed.collaboration_scope_id,
                 "reason": parsed.reason,
                 "to_state": parsed.to_state,
             }
@@ -632,6 +835,7 @@ class RemoteManagerDispatcher:
             assert isinstance(parsed, ObligationCancelArguments)
             obligation_id = quote(parsed.obligation_id, safe="")
             body = {"reason_code": parsed.reason_code}
+            body["collaboration_scope_id"] = parsed.collaboration_scope_id
             if parsed.expected_revision is not None:
                 body["expected_revision"] = parsed.expected_revision
             return self._typed_object(
@@ -649,7 +853,10 @@ class RemoteManagerDispatcher:
             self._request(
                 "POST",
                 "/v1/response-obligations/reconcile",
-                json_body={"limit": parsed.limit},
+                json_body={
+                    "collaboration_scope_id": parsed.collaboration_scope_id,
+                    "limit": parsed.limit,
+                },
             )
         )
 
@@ -667,7 +874,7 @@ class RemoteManagerDispatcher:
             or not isinstance(arguments, dict)
         ):
             raise AuthorizationError("IPC method is outside the exact manager capability")
-        context = self.signing_context
+        context = self._current_signing_context()
         if (
             claims.binding != "direct_ipc"
             or claims.process_binding != "exact"
@@ -1231,7 +1438,7 @@ def _cleanup_session(path: Path, identity: tuple[int, int]) -> None:
 
 async def _run_manager_gateway(
     client: AgentNetClient,
-    signing_context: VerifiedActor,
+    signing_context_provider: ActorProvider,
     command: tuple[str, ...],
     *,
     state_dir: Path | None,
@@ -1244,7 +1451,7 @@ async def _run_manager_gateway(
             "remote_manager",
             "interactive Manager requires the supported Linux filesystem sandbox",
         )
-    dispatcher = RemoteManagerDispatcher(client, signing_context)
+    dispatcher = RemoteManagerDispatcher(client, signing_context_provider)
     root = _private_state_root(state_dir)
     session_path = Path(tempfile.mkdtemp(prefix="s-", dir=root))
     os.chmod(session_path, 0o700)
@@ -1309,6 +1516,7 @@ async def _run_manager_gateway(
             expected_executable=expected_executable,
         )
         process_handle = _open_process_handle(child_pid)
+        signing_context = dispatcher._current_signing_context()
         payload, expires_at = _binding_payload(
             capability_root=capability_root,
             signing_context=signing_context,
@@ -1368,7 +1576,7 @@ async def _run_manager_gateway(
 
 def run_manager_gateway(
     client: AgentNetClient,
-    signing_context: VerifiedActor,
+    signing_context_provider: ActorProvider,
     command: Sequence[str],
     *,
     state_dir: Path | None = None,
@@ -1381,6 +1589,8 @@ def run_manager_gateway(
     Standard input, output, error, terminal process group, and the child's normal
     environment are preserved. AgentNet signing material remains in this parent;
     the child receives only ``AGENTNET_LOCAL_BINDING_FD`` in that namespace.
+    The signing context provider revalidates current proof-derived exact-harness
+    identity before each invocation; no child-supplied argument can replace it.
     A signal exit is returned using the conventional ``128 + signal`` status.
     The caller retains ownership of ``client`` and must close it.
     """
@@ -1399,7 +1609,7 @@ def run_manager_gateway(
     return asyncio.run(
         _run_manager_gateway(
             client,
-            signing_context,
+            signing_context_provider,
             validated_command,
             state_dir=state_dir,
             environment=environment,

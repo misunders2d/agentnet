@@ -1,4 +1,4 @@
-/** Exact Pi local tools over direct process-bound Unix IPC. */
+/** Exact OMP/Pi local tools over a sealed process-bound IPC descriptor. */
 
 import { createHmac, randomBytes } from "node:crypto";
 import { closeSync, fstatSync, readSync } from "node:fs";
@@ -159,7 +159,11 @@ async function binding(): Promise<Binding> {
 type CanonicalMethod =
 	| "agentnet.inbox"
 	| "agentnet.inbox.acknowledge"
+	| "agentnet.recipient.resolve"
 	| "agentnet.send"
+	| "agentnet.file.send"
+	| "agentnet.file.status"
+	| "agentnet.file.download"
 	| "agentnet.conversation.create"
 	| "agentnet.conversation.action"
 	| "agentnet.conversation.thread"
@@ -226,11 +230,13 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet inbox",
 		description: "Read this exact enrolled harness mailbox.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			after_cursor: Type.Optional(Type.Integer({ minimum: 0 })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.inbox", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				after_cursor: params.after_cursor ?? 0,
 				limit: params.limit ?? 25,
 			});
@@ -242,6 +248,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet acknowledge inbox event",
 		description: "Record durable custody for one exact mailbox event.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			event_id: Type.String({
 				minLength: 1,
 				maxLength: 256,
@@ -255,11 +262,27 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 	pi.registerTool({
+		name: "agentnet_recipient_resolve",
+		label: "AgentNet resolve recipient",
+		description: "Resolve one human-readable recipient to an exact authorized enrolled endpoint.",
+		parameters: Type.Object({
+			query: Type.String({ minLength: 1, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.recipient.resolve", params);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
 		name: "agentnet_send",
 		label: "AgentNet send",
-		description: "Send an authorized corporate message as this exact enrolled harness.",
+		description: "Send to either one friendly exact recipient or explicit exact harness IDs as this enrolled harness.",
 		parameters: Type.Object({
-			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
+			recipient_query: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+			recipients: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+				minItems: 1,
+				maxItems: 1000,
+			})),
 			payload: Type.Record(Type.String(), Type.Unknown()),
 			idempotency_key: Type.String({ minLength: 16, maxLength: 256 }),
 			classification: Type.Optional(Type.Union([
@@ -267,12 +290,68 @@ export default function (pi: ExtensionAPI) {
 			])),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
-			const result = await invoke("agentnet.send", {
-				recipients: params.recipients,
+			const arguments_: Record<string, unknown> = {
 				payload: params.payload,
 				idempotency_key: params.idempotency_key,
 				classification: params.classification ?? "C1",
+			};
+			if (params.recipient_query !== undefined) arguments_.recipient_query = params.recipient_query;
+			if (params.recipients !== undefined) arguments_.recipients = params.recipients;
+			const result = await invoke("agentnet.send", arguments_);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_file_send",
+		label: "AgentNet send file",
+		description: "Send one file to exact authorized enrolled endpoints from this sealed endpoint binding.",
+		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
+			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
+			source_path: Type.String({ minLength: 1, maxLength: 4096 }),
+			media_type: Type.String({ minLength: 3, maxLength: 255 }),
+			classification: Type.Optional(Type.Union([
+				Type.Literal("C0"), Type.Literal("C1"), Type.Literal("C2"), Type.Literal("C3"),
+			])),
+			idempotency_key: Type.String({ minLength: 16, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.file.send", {
+				collaboration_scope_id: params.collaboration_scope_id,
+				recipients: params.recipients,
+				source_path: params.source_path,
+				media_type: params.media_type,
+				classification: params.classification ?? "C1",
+				idempotency_key: params.idempotency_key,
 			});
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_file_status",
+		label: "AgentNet file status",
+		description: "Read the authorized durable state of one file transfer.",
+		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
+			transfer_id: Type.String({ minLength: 1, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.file.status", params);
+			return { content: [{ type: "text", text: canonical(result) }], details: result };
+		},
+	});
+	pi.registerTool({
+		name: "agentnet_file_download",
+		label: "AgentNet download file",
+		description: "Download one authorized released artifact through this exact endpoint binding.",
+		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
+			artifact_id: Type.String({ minLength: 1, maxLength: 256 }),
+			destination_path: Type.String({ minLength: 1, maxLength: 4096 }),
+			idempotency_key: Type.String({ minLength: 16, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.file.download", params);
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},
 	});
@@ -281,6 +360,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet create conversation",
 		description: "Create an authorized corporate conversation for this harness.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
 			member_harness_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
 			classification: Type.Optional(Type.Union([
@@ -289,6 +369,7 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.conversation.create", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				conversation_id: params.conversation_id,
 				member_harness_ids: params.member_harness_ids,
 				classification: params.classification ?? "C1",
@@ -301,6 +382,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet conversation action",
 		description: "Post a typed action, request obligation, or bound obligation response.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
 			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
 			thread_id: Type.String({ minLength: 1, maxLength: 256 }),
@@ -317,12 +399,14 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet conversation thread",
 		description: "Read one authorized corporate conversation thread.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			conversation_id: Type.String({ minLength: 1, maxLength: 256 }),
 			thread_id: Type.String({ minLength: 1, maxLength: 256 }),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.conversation.thread", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				conversation_id: params.conversation_id,
 				thread_id: params.thread_id,
 				limit: params.limit ?? 100,
@@ -335,6 +419,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet create room",
 		description: "Create an authorized room as this exact enrolled harness.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			classification: Type.Optional(Type.Union([
 				Type.Literal("C0"), Type.Literal("C1"), Type.Literal("C2"), Type.Literal("C3"),
 			])),
@@ -350,6 +435,7 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.room.create", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				classification: params.classification ?? "C1",
 				persistent: params.persistent ?? true,
 				expires_at: params.expires_at ?? null,
@@ -363,6 +449,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet add room member",
 		description: "Add one ordinary member to an authorized room.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			room_id: Type.String({ minLength: 1, maxLength: 256 }),
 			harness_id: Type.String({ minLength: 1, maxLength: 256 }),
 			role: Type.Optional(Type.Union([
@@ -371,6 +458,7 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.room.member.add", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				room_id: params.room_id,
 				harness_id: params.harness_id,
 				role: params.role ?? "member",
@@ -383,6 +471,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet room detail",
 		description: "Describe one room visible to this exact enrolled harness.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			room_id: Type.String({ minLength: 1, maxLength: 256 }),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
@@ -395,6 +484,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet room send",
 		description: "Send an artifact-free message to current members of an authorized room.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			room_id: Type.String({ minLength: 1, maxLength: 256 }),
 			recipients: Type.Array(Type.String(), { minItems: 1, maxItems: 1000 }),
 			payload: Type.Record(Type.String(), Type.Unknown()),
@@ -410,6 +500,7 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.room.send", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				room_id: params.room_id,
 				recipients: params.recipients,
 				payload: params.payload,
@@ -425,9 +516,11 @@ export default function (pi: ExtensionAPI) {
 		name: "agentnet_obligation_inbox",
 		label: "AgentNet obligation inbox",
 		description: "Read content-free response-obligation attention counters.",
-		parameters: Type.Object({}, { additionalProperties: false }),
-		async execute() {
-			const result = await invoke("agentnet.obligation.inbox", {});
+		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const result = await invoke("agentnet.obligation.inbox", params);
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},
 	});
@@ -436,6 +529,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet obligation list",
 		description: "List response obligations visible to this authenticated harness.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			role: Type.Optional(Type.Union([
 				Type.Literal("requester"), Type.Literal("responsible"), Type.Literal("any"),
 			])),
@@ -444,6 +538,7 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
 			const result = await invoke("agentnet.obligation.list", {
+				collaboration_scope_id: params.collaboration_scope_id,
 				role: params.role ?? "any",
 				states: params.states ?? [],
 				limit: params.limit ?? 100,
@@ -456,6 +551,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet obligation detail",
 		description: "Fetch one response obligation and its transition history.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
@@ -468,6 +564,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet obligation progress",
 		description: "Record responsible-recipient progress on an obligation.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
 			to_state: Type.Union([
 				Type.Literal("recipient_committed"), Type.Literal("acknowledged"),
@@ -489,6 +586,7 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet obligation cancel",
 		description: "Cancel an open obligation as its accountable requester.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			obligation_id: Type.String({ minLength: 1, maxLength: 256 }),
 			reason_code: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 			expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -506,10 +604,14 @@ export default function (pi: ExtensionAPI) {
 		label: "AgentNet obligation reconcile",
 		description: "Reconcile durable obligation custody and deadlines.",
 		parameters: Type.Object({
+			collaboration_scope_id: Type.String({ minLength: 1, maxLength: 256 }),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
 		}, { additionalProperties: false }),
 		async execute(_id, params) {
-			const result = await invoke("agentnet.obligation.reconcile", { limit: params.limit ?? 100 });
+			const result = await invoke("agentnet.obligation.reconcile", {
+				collaboration_scope_id: params.collaboration_scope_id,
+				limit: params.limit ?? 100,
+			});
 			return { content: [{ type: "text", text: canonical(result) }], details: result };
 		},
 	});

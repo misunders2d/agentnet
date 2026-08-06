@@ -1,11 +1,11 @@
 {
   "$schema": "https://agentnet.invalid/schemas/release-manifest-v1.json",
   "manifest_version": "1.0",
-  "snapshot_date": "2026-08-04",
+  "snapshot_date": "2026-08-06",
   "release": {
     "name": "agentnet",
-    "version": "0.1.44",
-    "profile": "private_admin_manager_communication_candidate",
+    "version": "0.1.45",
+    "profile": "exact_endpoint_collaboration_lifecycle_candidate",
     "status": "BLOCKED",
     "production_ready": false,
     "ship_eligible": false,
@@ -32,12 +32,12 @@
   },
   "dependency_lock": {
     "path": "uv.lock",
-    "sha256": "2af940ff41b5b01fdc858fa6abc1f9052dc64d7007a6416e85f3c001ab053f91",
+    "sha256": "56774c65eef4811b6f08ece2b760a9b0ed5a8a0641f92938a232ccbab930dd8c",
     "format_version": 1,
     "revision": 3,
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "ecab8e57b29f52f80f4f5112978c74febb2e3986f5cb6c8413eeb1f2713e611b"
+      "sha256": "e68412cfaf48509121be677e69c6e04793a02276c02d078b0c69ee7e6296ca62"
     },
     "direct_dependencies": {
       "build": {
@@ -89,6 +89,11 @@
         },
         "pydantic": {
           "version": "2.13.4",
+          "extras": [],
+          "marker": null
+        },
+        "segno": {
+          "version": "1.6.6",
           "extras": [],
           "marker": null
         },
@@ -178,6 +183,7 @@
       "referencing": "0.37.0",
       "requests": "2.34.2",
       "rpds-py": "2026.6.3",
+      "segno": "1.6.6",
       "sortedcontainers": "2.4.0",
       "sse-starlette": "3.4.5",
       "starlette": "1.3.1",
@@ -193,11 +199,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "9e436fee7c096da27434609652e412bf3b63971472e58edc2b4554b6456ba1f2"
+      "sha256": "69fcf6bdf7187d480c5a9466e4c9f242cc9239534ca9173144d70526bf62f671"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "1e92b47b32b6938bf812e9c35cd2cc67b3d4b7b04a554f3027fd1f309c1799a4"
+      "sha256": "bec8acd4c062e698731a83af9a1cee5a83010740c2db2ff97961c8eeb0015f93"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -205,7 +211,7 @@
     },
     "deploy/compose.production.json": {
       "path": "deploy/compose.production.json",
-      "sha256": "cbda18b1d1ffa829b0bf4046036bb2af6288fba3c0be75693c028368d25653e7"
+      "sha256": "a66803887f965dc86862d8a7ef66e44e98f201743f200d826c270a4af1cab822"
     },
     "deploy/nginx-agent.conf": {
       "path": "deploy/nginx-agent.conf",
@@ -217,11 +223,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "6b84447dfc5016fe67eb8d4d92210b15ef622e88a518e759fadd7468af43517d"
+      "sha256": "7bf031f527bc87681f95559b32fa3ec909b1aa594e452f1e12fd79322245cf22"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "704883835a7151d67c160a7746101613e4e7ce6465c2d2d1e32071e5d5f1ad17"
+      "sha256": "6fa60cb2175d5df051de0dc8b5a7386d24cc8dcb31f09405753ac8d66d67a340"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -239,9 +245,17 @@
       "path": "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
       "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb"
     },
+    "scripts/ci/exact_endpoint_routing_e2e.py": {
+      "path": "scripts/ci/exact_endpoint_routing_e2e.py",
+      "sha256": "60347eb321bebed08971c24ece0be1d2a72bb32f3c12070bf5b0509606b90e80"
+    },
     "scripts/ci/packaged_local_communication_e2e.py": {
       "path": "scripts/ci/packaged_local_communication_e2e.py",
-      "sha256": "d00bb45574dfc12bde906539bab84581d24384350c5686b112d9f429878ab20a"
+      "sha256": "096bbc1a551c9bd313aa4e0024c40a7cb8b619a63417a7c5b1ef33776c66d27f"
+    },
+    "scripts/ci/packaged_v0145_user_journey.py": {
+      "path": "scripts/ci/packaged_v0145_user_journey.py",
+      "sha256": "f7cca1a43fe7bf4589186d3746ea51a0121b42b1c1e5c53f85b5e231197f542c"
     },
     "scripts/export_schemas.py": {
       "path": "scripts/export_schemas.py",
@@ -249,13 +263,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "f593be1cb2c2ca3a27da2d3d85e459e36941f50e0841f31b0ec0cfa03ce55429"
+      "sha256": "389631082ceedaf4b34047a7d9b323f1a5108080b0874adb199ebd6ee9fa0c60"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "766e46ebd59836e7975eee1b7988969d6236d440db392c8ae7ac273641035c1c"
+    "sha256": "5aa49f85cff9dc78814f2f6faa2996740153d5e9585d41616165ad2f0e285d91"
   },
   "protocols": {
     "a2a": {

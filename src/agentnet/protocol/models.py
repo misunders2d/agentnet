@@ -390,3 +390,91 @@ class PresenceLease(BaseModel):
         if now < self.expires_at:
             return "live"
         return "stale"
+
+
+
+class MailboxWakeHint(BaseModel):
+    """Authority-free authenticated hint; reconciliation remains authoritative."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        populate_by_name=True,
+    )
+
+    wire_schema: Literal["agentnet.mailbox-wake.v1"] = Field(
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
+    kind: Literal["wake", "idle"]
+    cursor_hint: int = Field(ge=0)
+
+
+class ObligationReconciliationResult(BaseModel):
+    """Content-free IDs changed by one bounded obligation reconciliation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    recipient_committed: tuple[str, ...]
+    expired: tuple[str, ...]
+
+    @field_validator("recipient_committed", "expired")
+    @classmethod
+    def exact_obligation_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item or len(item) > 256 for item in value) or len(set(value)) != len(value):
+            raise ValueError("obligation reconciliation identifiers are invalid")
+        return value
+
+
+class ObligationInboxCounters(BaseModel):
+    """The complete content-free obligation attention snapshot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    unread_information: int = Field(ge=0)
+    action_required: int = Field(ge=0)
+    awaiting_peer: int = Field(ge=0)
+    awaiting_human: int = Field(ge=0)
+    overdue: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+
+class SupervisorBackgroundAuthorization(BaseModel):
+    """Fresh server authorization bound to one exact endpoint and request event."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    decision_id: str = Field(min_length=1, max_length=256)
+    harness_id: str = Field(min_length=1, max_length=256)
+    event_id: str = Field(min_length=1, max_length=256)
+    envelope_digest: str = Field(pattern=_SHA256_PATTERN)
+    event_type: str = Field(min_length=1, max_length=64)
+    classification: Literal["C0", "C1", "C2", "C3"]
+    policy_revision: int = Field(ge=1)
+    expires_at: int = Field(gt=0)
+    task_grant_id: str = Field(min_length=1, max_length=256)
+
+
+class SupervisorCustodyReceipt(BaseModel):
+    """Durable exact-endpoint local-custody acknowledgement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    custody_receipt_id: str = Field(min_length=1, max_length=256)
+    duplicate: bool
+    event_id: str = Field(min_length=1, max_length=256)
+    state: Literal["local_custody", "result_uploaded"]
+
+
+class SupervisorResultReceipt(BaseModel):
+    """Authority-neutral result receipt returned after durable upload."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    duplicate: bool
+    event_id: str = Field(min_length=1, max_length=256)
+    provenance: dict[str, Any]
+    result_digest: str = Field(pattern=_SHA256_PATTERN)
+    result_receipt_id: str = Field(min_length=1, max_length=256)
+    state: Literal["result_uploaded"]

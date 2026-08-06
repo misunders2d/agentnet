@@ -56,7 +56,15 @@ OBLIGATION_COUNTER_KEYS = frozenset(
 
 
 class LocalQueue:
-    def __init__(self, path: Path, cipher: LocalEnvelopeCipher) -> None:
+    def __init__(
+        self,
+        path: Path,
+        cipher: LocalEnvelopeCipher,
+        *,
+        harness_id: str | None = None,
+    ) -> None:
+        if harness_id is not None and not harness_id:
+            raise ValidationError("local queue exact harness binding is invalid")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.is_symlink():
             raise ValidationError("local queue database cannot be a symbolic link")
@@ -65,10 +73,32 @@ class LocalQueue:
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self.cipher = cipher
+        self._harness_id = harness_id
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA synchronous=FULL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.executescript(QUEUE_SCHEMA)
+        if harness_id is not None:
+            foreign = self._connection.execute(
+                """SELECT harness_id
+                     FROM (
+                         SELECT harness_id FROM queue
+                         UNION
+                         SELECT harness_id FROM cursors
+                         UNION
+                         SELECT harness_id FROM obligation_snapshots
+                     )
+                    WHERE harness_id<>?
+                    LIMIT 1""",
+                (harness_id,),
+            ).fetchone()
+            if foreign is not None:
+                self._connection.close()
+                raise ConflictError("local queue contains a sibling endpoint")
+
+    def _require_harness(self, harness_id: str) -> None:
+        if self._harness_id is not None and harness_id != self._harness_id:
+            raise ConflictError("local queue crossed its exact harness binding")
 
     def enqueue(
         self,
@@ -81,6 +111,7 @@ class LocalQueue:
     ) -> dict[str, Any]:
         if not harness_id or direction not in {"inbox", "outbox"}:
             raise ValidationError("local queue binding is invalid")
+        self._require_harness(harness_id)
         if not 16 <= len(idempotency_key) <= 256:
             raise ValidationError("local queue idempotency key length is invalid")
         if expires_at is not None and expires_at <= int(time.time()):
@@ -128,6 +159,7 @@ class LocalQueue:
 
         if not harness_id or cursor < 0 or not 16 <= len(idempotency_key) <= 256:
             raise ValidationError("atomic inbox custody binding is invalid")
+        self._require_harness(harness_id)
         if expires_at is not None and expires_at <= int(time.time()):
             raise ValidationError("local queue expiry must be in the future")
         digest = canonical_digest(payload)
@@ -184,6 +216,7 @@ class LocalQueue:
     def claim(self, *, harness_id: str, direction: str, limit: int = 25) -> list[dict[str, Any]]:
         if not harness_id or direction not in {"inbox", "outbox"} or not 1 <= limit <= 100:
             raise ValidationError("local queue claim binding or limit is invalid")
+        self._require_harness(harness_id)
         now = int(time.time())
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -220,10 +253,18 @@ class LocalQueue:
 
     def complete(self, queue_id: str) -> None:
         with self._lock:
-            cursor = self._connection.execute(
-                "UPDATE queue SET state='completed',updated_at=? WHERE queue_id=? AND state='processing'",
-                (int(time.time()), queue_id),
-            )
+            if self._harness_id is None:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='completed',updated_at=?
+                       WHERE queue_id=? AND state='processing'""",
+                    (int(time.time()), queue_id),
+                )
+            else:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='completed',updated_at=?
+                       WHERE queue_id=? AND harness_id=? AND state='processing'""",
+                    (int(time.time()), queue_id, self._harness_id),
+                )
             if cursor.rowcount != 1:
                 raise ConflictError("only a processing queue item can complete")
 
@@ -235,31 +276,56 @@ class LocalQueue:
         idempotency_key: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Atomically persist native output and acknowledge its claimed input."""
+        """Atomically persist output and acknowledge its claimed exact input.
+
+        Repeating this operation after a committed transaction whose response
+        was lost returns the original outbox record instead of re-running the
+        endpoint worker.
+        """
 
         if not queue_id or not harness_id or not 16 <= len(idempotency_key) <= 256:
             raise ValidationError("atomic queue acknowledgement binding is invalid")
+        self._require_harness(harness_id)
         digest = canonical_digest(payload)
         now = int(time.time())
-        outbox_id = str(uuid4())
-        encrypted = self.cipher.encrypt_json(payload, purpose=f"local-queue:{outbox_id}")
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
+                source = self._connection.execute(
+                    """SELECT state FROM queue
+                       WHERE queue_id=? AND harness_id=? AND direction='inbox'""",
+                    (queue_id, harness_id),
+                ).fetchone()
+                if source is None:
+                    raise ConflictError("only the exact inbox item can acknowledge native output")
                 existing = self._connection.execute(
-                    "SELECT * FROM queue WHERE harness_id=? AND direction='outbox' AND idempotency_key=?",
+                    """SELECT * FROM queue
+                       WHERE harness_id=? AND direction='outbox' AND idempotency_key=?""",
                     (harness_id, idempotency_key),
                 ).fetchone()
-                if existing:
+                if existing is not None:
                     if existing["payload_digest"] != digest:
-                        raise IdempotencyConflict("local queue idempotency key has different payload")
-                    outbox_id = existing["queue_id"]
+                        raise IdempotencyConflict(
+                            "local queue idempotency key has different payload"
+                        )
                     result = {
-                        "queue_id": outbox_id,
+                        "queue_id": existing["queue_id"],
                         "state": existing["state"],
                         "duplicate": True,
                     }
+                    if source["state"] == "completed":
+                        self._connection.execute("COMMIT")
+                        return result
                 else:
+                    if source["state"] != "processing":
+                        raise ConflictError(
+                            "only the claimed inbox item can acknowledge native output"
+                        )
+                    outbox_id = str(uuid4())
+                    encrypted = self.cipher.encrypt_json(
+                        payload,
+                        purpose=f"local-queue:{outbox_id}",
+                    )
                     self._connection.execute(
                         """INSERT INTO queue(
                             queue_id,harness_id,direction,idempotency_key,payload_digest,payload_encrypted,
@@ -279,14 +345,25 @@ class LocalQueue:
                             now,
                         ),
                     )
-                    result = {"queue_id": outbox_id, "state": "queued", "duplicate": False}
+                    result = {
+                        "queue_id": outbox_id,
+                        "state": "queued",
+                        "duplicate": False,
+                    }
+                if source["state"] != "processing":
+                    raise ConflictError(
+                        "only the claimed inbox item can acknowledge native output"
+                    )
                 cursor = self._connection.execute(
                     """UPDATE queue SET state='completed',updated_at=?
-                       WHERE queue_id=? AND harness_id=? AND direction='inbox' AND state='processing'""",
+                       WHERE queue_id=? AND harness_id=? AND direction='inbox'
+                         AND state='processing'""",
                     (now, queue_id, harness_id),
                 )
                 if cursor.rowcount != 1:
-                    raise ConflictError("only the claimed inbox item can acknowledge native output")
+                    raise ConflictError(
+                        "only the claimed inbox item can acknowledge native output"
+                    )
                 self._connection.execute("COMMIT")
                 return result
             except Exception:
@@ -299,22 +376,40 @@ class LocalQueue:
             raise ValidationError("local retry delay is outside the bounded range")
         now = int(time.time())
         with self._lock:
-            cursor = self._connection.execute(
-                "UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=? WHERE queue_id=? AND state='processing'",
-                (now + delay_seconds, now, queue_id),
-            )
+            if self._harness_id is None:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=?
+                       WHERE queue_id=? AND state='processing'""",
+                    (now + delay_seconds, now, queue_id),
+                )
+            else:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=?
+                       WHERE queue_id=? AND harness_id=? AND state='processing'""",
+                    (now + delay_seconds, now, queue_id, self._harness_id),
+                )
             if cursor.rowcount != 1:
                 raise ConflictError("only a processing queue item can be retried")
 
     def recover_processing(self) -> int:
+        now = int(time.time())
         with self._lock:
-            cursor = self._connection.execute(
-                "UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=? WHERE state='processing'",
-                (int(time.time()), int(time.time())),
-            )
+            if self._harness_id is None:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=?
+                       WHERE state='processing'""",
+                    (now, now),
+                )
+            else:
+                cursor = self._connection.execute(
+                    """UPDATE queue SET state='retry_scheduled',available_at=?,updated_at=?
+                       WHERE harness_id=? AND state='processing'""",
+                    (now, now, self._harness_id),
+                )
             return cursor.rowcount
 
     def content_free_counts(self, harness_id: str) -> dict[str, int]:
+        self._require_harness(harness_id)
         with self._lock:
             rows = self._connection.execute(
                 """SELECT state,COUNT(*) AS count FROM queue
@@ -339,6 +434,7 @@ class LocalQueue:
             or any(type(value) is not int or value < 0 for value in counters.values())
         ):
             raise ValidationError("obligation counter snapshot schema is invalid")
+        self._require_harness(harness_id)
         digest = canonical_digest(counters)
         encrypted = self.cipher.encrypt_json(
             counters,
@@ -357,6 +453,7 @@ class LocalQueue:
             )
 
     def obligation_snapshot(self, harness_id: str) -> dict[str, int]:
+        self._require_harness(harness_id)
         with self._lock:
             row = self._connection.execute(
                 "SELECT snapshot_digest,snapshot_encrypted FROM obligation_snapshots WHERE harness_id=?",
@@ -378,6 +475,7 @@ class LocalQueue:
         return {key: int(value[key]) for key in OBLIGATION_COUNTER_KEYS}
 
     def cursor(self, harness_id: str) -> int:
+        self._require_harness(harness_id)
         with self._lock:
             row = self._connection.execute("SELECT core_cursor FROM cursors WHERE harness_id=?", (harness_id,)).fetchone()
             return int(row["core_cursor"]) if row else 0
@@ -385,6 +483,7 @@ class LocalQueue:
     def set_cursor(self, harness_id: str, cursor: int) -> None:
         if not harness_id or cursor < 0:
             raise ValidationError("local queue cursor binding is invalid")
+        self._require_harness(harness_id)
         with self._lock:
             self._connection.execute(
                 """INSERT INTO cursors(harness_id,core_cursor) VALUES(?,?)
