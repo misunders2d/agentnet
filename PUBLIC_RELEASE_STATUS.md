@@ -1,9 +1,9 @@
 # Public Package Status
 
-Snapshot: 2026-08-04
+Snapshot: 2026-08-06
 
 This additive status note reconciles public package availability with AgentNet's
-published `0.1.43` release and private-administration `0.1.44` candidate. It does not replace
+published `0.1.45` communication and collaboration release. It does not replace
 requirements, gate ledgers, or accountable-owner evidence.
 
 ## Current public package
@@ -11,11 +11,21 @@ requirements, gate ledgers, or accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.43`
-- published source commit: `a4a1f589a3741a07e43f151826d80652dbfa46ad`
+- latest published version: `0.1.45`
+- published source commit: `e8a49671481767078551f677599f51af051c3d5a`
+- immutable tag: `v0.1.45`
+- registry shasum: `06f4775ecf63097068e1f3583fe84a2c66c64096`
+- provenance: SLSA statement signed by the trusted GitHub Actions publisher and
+  approved by the accountable npm owner
+
+`0.1.45` is a **fresh-install-only** release. In-place upgrade from `0.1.44` is
+not a supported path: the packaged upgrade and rollback lane is preserved as
+non-green, so operators must install `0.1.45` on a clean host and re-enroll the
+server and each harness. Publication is gated on the ordinary-server
+clean-install lane, which is the exact path operators follow.
 
 Package availability does not authorize deployment and does not establish
-production readiness.
+production readiness. No must-not-ship gate is promoted by publication.
 
 ## Frozen release-input clarification
 
