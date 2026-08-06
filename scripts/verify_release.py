@@ -1021,7 +1021,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
         npm_result = command_results.get("npm run check", "")
         if (
             not npm_result.startswith("PASS:")
-            or "2128 passed and 21 expected" not in npm_result
+            or "2129 passed and 21 expected" not in npm_result
             or "source plus generations 1 and 2" not in npm_result
             or "exact-endpoint routing gate" not in npm_result
             or "packaged v0.1.45 user journey" not in npm_result
@@ -1071,6 +1071,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
             "tests/artifacts/test_transfer_service.py",
             "tests/artifacts/test_safe_download.py",
             "tests/integration/test_file_tools_e2e.py",
+            "tests/operations/test_server_setup.py",
             "tests/identity/test_invitation_links.py",
             "tests/identity/test_invitation_redemption.py",
             "tests/integration/test_invitation_browser_journey.py",
@@ -1082,7 +1083,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
                 "uv run pytest -q "
             )
             and all(path in command.split() for path in required_focused_paths)
-            and result == "PASS: 336 passed, 5 expected dedicated-PostgreSQL skips"
+            and result == "PASS: 454 passed, 5 expected dedicated-PostgreSQL skips"
             for command, result in command_results.items()
         ):
             failures.append("0.1.45 focused release-blocker evidence is incomplete")

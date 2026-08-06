@@ -263,13 +263,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "389631082ceedaf4b34047a7d9b323f1a5108080b0874adb199ebd6ee9fa0c60"
+      "sha256": "90a9696e0d2a932c5d3efd1ea8af36a3528c04b3d8c45a739c6b3070d77206eb"
     }
   },
   "release_source_tree": {
     "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "5aa49f85cff9dc78814f2f6faa2996740153d5e9585d41616165ad2f0e285d91"
+    "sha256": "c6c52735cb5e61e4157d8982619b0413d9e56e17b78520d8f763ded742a8f9bc"
   },
   "protocols": {
     "a2a": {
