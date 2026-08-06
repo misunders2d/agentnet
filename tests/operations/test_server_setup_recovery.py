@@ -418,6 +418,13 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
             "harness_kind": "server",
             "profile_key": request.runtime_instance_id,
         },
+        "migrated_collaboration": [
+            {
+                "scope_id": "scope-upgrade-source",
+                "owner_harness_id": "harness-upgrade-owner",
+                "member_harness_id": "harness-upgrade-fresh",
+            }
+        ],
         "preserved_relation_digests": {
             relation: hashlib.sha256(relation.encode()).hexdigest()
             for relation in setup._LIFECYCLE_PRESERVED_TABLES

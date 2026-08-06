@@ -2488,8 +2488,19 @@ def _validated_v0145_database_snapshot(value: object) -> dict[str, Any]:
         "endpoint_lifecycle_absent",
         "endpoint_mailbox_cursor",
         "identity",
+        "migrated_collaboration",
         "preserved_relation_digests",
     }:
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    migrated = value.get("migrated_collaboration")
+    if not isinstance(migrated, list) or any(
+        not isinstance(entry, dict)
+        or set(entry) != {"scope_id", "owner_harness_id", "member_harness_id"}
+        or any(not isinstance(entry[key], str) or not entry[key] for key in entry)
+        for entry in migrated
+    ):
+        raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    if len({str(entry["scope_id"]) for entry in migrated}) != len(migrated):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
     catalog = value.get("migration_catalog")
     identity = value.get("identity")
