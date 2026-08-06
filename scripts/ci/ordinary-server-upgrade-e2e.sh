@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # Destructive only inside a fresh GitHub-hosted Ubuntu 24.04 runner. The lane
 # installs two independent npm tarballs, realizes the released 0.1.44 service,
@@ -40,6 +40,24 @@ INJECT_PID=""
 TOKEN='synthetic-upgrade-broker-token-0123456789abcdef0123456789'
 mkdir -p "$INPUTS" "$PACK"
 chmod 700 "$WORK" "$INPUTS" "$PACK"
+
+# Ephemeral-runner diagnostics only. Never prints inputs, secrets, or keys.
+report_failure() {
+  local status=$?
+  local line="$1"
+  local command="$2"
+  echo "ordinary server upgrade E2E: failed at line $line with status $status: $command" >&2
+  local evidence
+  for evidence in "$WORK"/*.stderr "$WORK"/*.json; do
+    if [[ -s "$evidence" ]]; then
+      echo "--- ${evidence##*/} ---" >&2
+      tail -c 2000 "$evidence" >&2
+      echo >&2
+    fi
+  done
+  return "$status"
+}
+trap 'report_failure "$LINENO" "$BASH_COMMAND"' ERR
 
 cleanup() {
   set +e
