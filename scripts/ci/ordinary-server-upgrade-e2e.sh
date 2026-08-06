@@ -113,6 +113,7 @@ assert_credential_renewal_recurs() {
   sudo sed \
     -e 's/^Description=.*/Description=Accelerated AgentNet credential renewal E2E/' \
     -e 's/^OnActiveSec=.*/OnActiveSec=1s/' \
+    -e '/^OnActiveSec=/a AccuracySec=1s' \
     -e 's/^OnUnitInactiveSec=1h$/OnUnitInactiveSec=5s/' \
     /etc/systemd/system/agentnet-credential-renew.timer |
     sudo tee "$test_path" >/dev/null
