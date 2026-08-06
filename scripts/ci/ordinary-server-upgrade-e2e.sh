@@ -630,17 +630,21 @@ finally:
     core.close()
 PY
 sudo install -o agentnet -g agentnet -m 0700 "$WORK/seed-released-state.py" /var/lib/agentnet/seed-released-state.py
-# Core resolves its DSN, OIDC secret, and envelope key from the same
-# environment file the unit loads. Source it as root, then drop to the service
-# account so no secret ever reaches argv or the job log.
-sudo bash -c '
-  set -euo pipefail
-  set -a
-  . /etc/agentnet-secrets/core.env
-  set +a
-  exec setpriv --reuid=agentnet --regid=agentnet --init-groups \
-    env PYTHONDONTWRITEBYTECODE=1 "$0" "$1"
-' "$PYTHON_0144" /var/lib/agentnet/seed-released-state.py >"$WORK/released-fixture.json"
+# Core resolves its DSN, OIDC secret, and envelope key from the environment
+# file the unit loads. Source it as root, then drop to the service account so
+# no secret ever reaches argv or the job log.
+run_as_core_service() {
+  sudo bash -c '
+    set -euo pipefail
+    set -a
+    . /etc/agentnet-secrets/core.env
+    set +a
+    exec setpriv --reuid=agentnet --regid=agentnet --init-groups \
+      env PYTHONDONTWRITEBYTECODE=1 "$@"
+  ' bash "$@"
+}
+run_as_core_service "$PYTHON_0144" /var/lib/agentnet/seed-released-state.py \
+  >"$WORK/released-fixture.json"
 sudo rm -f /var/lib/agentnet/seed-released-state.py
 HARNESS_ID="$(jq -r '.harness_id' "$WORK/released-fixture.json")"
 CREDENTIAL_ID="$(jq -r '.credential_id' "$WORK/released-fixture.json")"
@@ -653,8 +657,7 @@ SCOPE_ID="$(jq -r '.communication_scope_id' "$WORK/released-fixture.json")"
 [[ "$SCOPE_ID" == "scope-upgrade-e2e-v6" ]]
 sudo systemctl stop agentnet-core.service
 [[ "$(sudo systemctl show agentnet-core.service --property=ActiveState --value)" == "inactive" ]]
-sudo -u agentnet env PYTHONDONTWRITEBYTECODE=1 \
-  "$AGENTNET_0144" server-agent activate \
+run_as_core_service "$AGENTNET_0144" server-agent activate \
   --config /var/lib/agentnet/agentnet.json \
   --identity /var/lib/agentnet/server-agent-identity.json >"$WORK/activate-0.1.44.json"
 jq -e --arg harness "$HARNESS_ID" --arg credential "$CREDENTIAL_ID" \
