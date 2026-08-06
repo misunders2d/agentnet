@@ -238,8 +238,9 @@ assert_preserved_snapshots() {
   [[ "$(message_snapshot)" == "$MESSAGES_0144" ]]
   [[ "$(security_snapshot "$AUDIT_MAX_0144")" == "$SECURITY_0144" ]]
   [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM principals')" == "1" ]]
-  [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM harnesses')" == "1" ]]
-  [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM credentials')" == "1" ]]
+  # One owner harness plus the fresh harness the committed v6 scope binds.
+  [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM harnesses')" == "2" ]]
+  [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM credentials')" == "2" ]]
   [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM events')" == "1" ]]
   [[ "$(psql_agentnet -c 'SELECT COUNT(*) FROM recipients')" == "1" ]]
 }
