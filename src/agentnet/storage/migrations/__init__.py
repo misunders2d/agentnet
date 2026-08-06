@@ -25,6 +25,7 @@ from agentnet.storage.relationship_governance_schema import (
 )
 from agentnet.storage.response_obligation_schema import RESPONSE_OBLIGATION_SCHEMA
 from agentnet.storage.supervisor_schema import SUPERVISOR_SCHEMA
+from agentnet.storage.release_v7_schema import RELEASE_V7_SCHEMA
 from agentnet.storage.sqlite import BASE_SCHEMA as SQLITE_BASE_SCHEMA
 from agentnet.storage.task_custody_schema import TASK_CUSTODY_SCHEMA
 from agentnet.storage.task_payload_release_schema import TASK_PAYLOAD_RELEASE_SCHEMA
@@ -144,6 +145,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         (COMMUNICATION_SCOPE_TABLE_DDL + ADMIN_CONSOLE_SCHEMA).replace(
             " INTEGER", " BIGINT"
         ),
+    ),
+    Migration(
+        7,
+        "communication_collaboration_release",
+        RELEASE_V7_SCHEMA.replace(" INTEGER", " BIGINT"),
     ),
 )
 

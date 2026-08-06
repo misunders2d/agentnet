@@ -86,6 +86,8 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     for required in (
         '"-B",',
         '"agentnet.packaged-local-client-diagnostic.v1"',
+        'COLLABORATION_SCOPE_ID = "scope:packaged-local-conformance"',
+        '"collaboration_scope_id": collaboration_scope_id',
         'error_type={error_type}',
         'core_exit=',
         'f"{name}_bytes={len(data)}"',

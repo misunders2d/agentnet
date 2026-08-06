@@ -16,6 +16,7 @@ from agentnet.console.session import ConsoleOIDCCoordinator, ConsoleSessionServi
 from agentnet.errors import AuthenticationError, AuthorizationError
 from agentnet.identity.enrollment import VerifiedOIDCIdentity
 from agentnet.identity.oidc import OIDCVerificationResult
+from agentnet.identity.invitation_links import InvitationLinkService
 
 
 class _CurrentConsoleAuthority:
@@ -34,6 +35,9 @@ class _Provider:
     def __init__(self, *, identity: VerifiedOIDCIdentity, clock: list[int]) -> None:
         self.identity = identity
         self.clock = clock
+        self.config = SimpleNamespace(
+            allowed_endpoint_origins=("https://idp.example",)
+        )
         self.exchange_hook = lambda: None
         self.exchanges = 0
 
@@ -62,6 +66,21 @@ class _ApprovalRecorder:
             "transaction_digest": request["transaction_digest"],
             "expires_at": int(time.time()) + 300,
         }
+
+
+def _console_services(store, require):
+    invitation_links = InvitationLinkService(
+        store,
+        public_base_url="https://console.example/join",
+    )
+    reads = ConsoleReadService(store=store, require=require)
+    mutations = ConsoleMutationService(
+        store=store,
+        approval_client=_ApprovalRecorder(),
+        invitation_links=invitation_links,
+        require=require,
+    )
+    return reads, mutations, invitation_links
 
 
 class _ConsoleConfig:
@@ -138,12 +157,14 @@ def test_signed_completion_returns_only_an_opaque_short_lived_handoff(store, ide
 def test_handoff_is_post_only_atomic_and_one_use(store, identity_factory) -> None:
     actor, _, _, sessions, _, oidc = _stack(store, identity_factory)
     handoff = _completed_handoff(sessions, actor)
-    reads = ConsoleReadService(store=store, require=_CurrentConsoleAuthority().require)
-    mutations = ConsoleMutationService(store=store, approval_client=_ApprovalRecorder(), require=_CurrentConsoleAuthority().require)
+    reads, mutations, invitation_links = _console_services(
+        store, _CurrentConsoleAuthority().require
+    )
     app = create_console_app(
         sessions=sessions,
         read_service=reads,
         mutation_service=mutations,
+        invitation_links=invitation_links,
         public_origin="https://console.example",
         oidc=oidc,
     )
@@ -168,13 +189,15 @@ def test_handoff_is_post_only_atomic_and_one_use(store, identity_factory) -> Non
 def test_external_oidc_callback_uses_lax_preauth_and_strict_final_cookie(store, identity_factory) -> None:
     actor, _, _, sessions, _, oidc = _stack(store, identity_factory)
     handoff = _completed_handoff(sessions, actor)
-    reads = ConsoleReadService(store=store, require=_CurrentConsoleAuthority().require)
-    mutations = ConsoleMutationService(store=store, approval_client=_ApprovalRecorder(), require=_CurrentConsoleAuthority().require)
+    reads, mutations, invitation_links = _console_services(
+        store, _CurrentConsoleAuthority().require
+    )
     client = TestClient(
         create_console_app(
             sessions=sessions,
             read_service=reads,
             mutation_service=mutations,
+            invitation_links=invitation_links,
             public_origin="https://console.example",
             oidc=oidc,
         ),
@@ -292,13 +315,13 @@ def test_mutation_authorization_is_session_method_path_body_bound_and_one_use(st
 
 def test_http_signed_completion_response_contains_no_credential_url(store, identity_factory, monkeypatch) -> None:
     actor, authority, _, sessions, _, oidc = _stack(store, identity_factory)
-    reads = ConsoleReadService(store=store, require=authority.require)
-    mutations = ConsoleMutationService(store=store, approval_client=_ApprovalRecorder(), require=authority.require)
+    reads, mutations, invitation_links = _console_services(store, authority.require)
     core = SimpleNamespace(
         config=SimpleNamespace(admin_console=_ConsoleConfig()),
         console_sessions=sessions,
         console_reads=reads,
         console_mutations=mutations,
+        invitation_links=invitation_links,
         console_oidc=oidc,
         sponsored_enrollment=None,
         _require=lambda **kwargs: authority.require(

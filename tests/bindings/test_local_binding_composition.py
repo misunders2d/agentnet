@@ -14,15 +14,34 @@ import httpx
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from agentnet.authorization import HumanEntitlement
+from agentnet.authorization import AuthorizationRequest, HumanEntitlement, IssuanceAuthority
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
 from agentnet.bindings.composition import create_local_binding_service
+from agentnet.bindings.endpoint import (
+    EndpointBindingRepository,
+    exact_process_measurement,
+    process_measurement_digest,
+)
 from agentnet.bindings.mcp_proxy import read_bootstrap_locator
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
-from agentnet.errors import AuthenticationError, AuthorizationError, GateBlocked
+from agentnet.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    GateBlocked,
+)
+from agentnet.host_security import measure_process_identity
 from agentnet.http_api import create_app
 from agentnet.operations.config import ExtensionConfig, FeatureFlags, LocalBindingConfig
+from agentnet.operations.endpoint_lifecycle import (
+    EndpointActivationState,
+    EndpointLifecycleService,
+)
 from agentnet.protocol.models import Classification, EventType
 from agentnet.security.dpop import create_request_proof
 from agentnet.security.signatures import P256KeyPair, canonical_json
@@ -31,21 +50,85 @@ from agentnet.security.signatures import P256KeyPair, canonical_json
 ROOT = b"g05-composed-capability-root-32b"
 
 
+@pytest.fixture(name="identity_factory")
+def endpoint_identity_factory(identity_factory, store):
+    """Give every local-binding identity one exact schema-v7 endpoint row."""
+
+    measurement = process_measurement_digest(
+        measure_process_identity(os.getpid()).executable_measurement
+    )
+
+    def create(**kwargs):
+        kwargs.setdefault("domain", "local.example")
+        actor, key = identity_factory(**kwargs)
+        kind = kwargs.get("kind", "codex")
+        now = int(time.time())
+        with store.transaction() as connection:
+            connection.execute(
+                """INSERT INTO endpoint_lifecycle(
+                       domain_id,harness_id,principal_id,current_credential_id,harness_kind,
+                       profile_key,state,adapter_generation,mailbox_cursor,
+                       process_measurement,state_reason,revision,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,'connected',1,0,?,'test_connected',1,?,?)""",
+                (
+                    actor.domain_id,
+                    actor.harness_id,
+                    actor.principal_id,
+                    actor.credential_id,
+                    kind,
+                    f"{kind}-{actor.harness_id}",
+                    measurement,
+                    now,
+                    now,
+                ),
+            )
+        return actor, key
+
+    return create
+
+
+class RecordingCollaborationScope:
+    scope_id = "scope:recording-direct"
+
+
+class RecordingCollaborationScopes:
+    def require(
+        self,
+        *,
+        actor,
+        scope_id,
+        action,
+        resource,
+        target_harness_ids,
+        classification,
+    ) -> RecordingCollaborationScope:
+        assert actor.harness_id is not None
+        assert scope_id is None
+        assert action == "message.send"
+        assert resource == "conversation:direct"
+        assert target_harness_ids
+        assert classification is Classification.C1_INTERNAL
+        return RecordingCollaborationScope()
+
+
 class RecordingCore:
     def __init__(self, config: ExtensionConfig, store) -> None:
         self.config = config
         self.store = store
         self.calls: list[dict[str, Any]] = []
+        self.collaboration_scopes = RecordingCollaborationScopes()
 
     def send_message(
         self,
         *,
         actor,
+        collaboration_scope_id,
         recipients,
         payload,
         idempotency_key,
         classification=Classification.C1_INTERNAL,
     ):
+        assert collaboration_scope_id == RecordingCollaborationScope.scope_id
         self.calls.append(
             {
                 "actor": actor.audit_view(),
@@ -56,13 +139,42 @@ class RecordingCore:
             }
         )
         return {
-            "classification": classification.value,
-            "idempotency_key": idempotency_key,
-            "payload": payload,
-            "recipients": list(recipients),
+            "audit_hash": "a" * 64,
+            "duplicate": False,
+            "envelope_digest": "c" * 64,
+            "event_id": "event-recording-1",
+            "fact": "accepted_local",
+            "provenance": {
+                "allowed_sinks": {
+                    "schema_version": "1.0",
+                    "sinks": ["recipient-1"],
+                },
+                "authority_effect": "none",
+                "classification": classification.value,
+                "content_digest": "d" * 64,
+                "domain_id": actor.domain_id,
+                "object_id": "event-recording-1",
+                "object_type": "event",
+                "policy_revision": 1,
+                "provenance_digest": "e" * 64,
+                "review_state": "unreviewed",
+                "scan_state": "not_required",
+                "schema_version": "1.0",
+                "tainted": False,
+                "version": 1,
+            },
+            "receipt_id": "receipt-recording-1",
         }
 
-    def mailbox(self, *, actor, after_cursor, limit):
+    def mailbox(
+        self,
+        *,
+        actor,
+        collaboration_scope_id,
+        after_cursor,
+        limit,
+    ):
+        assert collaboration_scope_id == RecordingCollaborationScope.scope_id
         self.calls.append(
             {
                 "actor": actor.audit_view(),
@@ -102,6 +214,56 @@ def _config(tmp_path: Path) -> ExtensionConfig:
             capability_ttl_seconds=300,
         ),
     )
+
+
+def _issue_direct_scope(
+    core: CommunicationCore,
+    *,
+    sender,
+    recipient,
+    scope_id: str,
+) -> str:
+    revision = core.policy.current_policy_revision(sender)
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((sender.harness_id, recipient.harness_id))),
+        allowed_actions=("message.send",),
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=revision,
+        domain_revocation_epoch=1,
+    )
+    resource = f"scope:{scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=sender.domain_id,
+            principal_id=sender.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=sender,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=sender,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=sender,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=sender,
+            policy_decision_id=decision.decision_id,
+        ),
+    ).scope_id
 
 
 def test_composition_rejects_overlong_encoded_bootstrap_socket_path(
@@ -144,7 +306,11 @@ def _child() -> subprocess.Popen[str]:
     )
 
 
-def _mcp_parent(state_dir: Path) -> subprocess.Popen[str]:
+def _mcp_parent(
+    state_dir: Path,
+    *,
+    collaboration_scope_id: str,
+) -> subprocess.Popen[str]:
     environment = {
         "AGENTNET_STATE_DIR": str(state_dir),
         "LANG": "C.UTF-8",
@@ -154,7 +320,11 @@ def _mcp_parent(state_dir: Path) -> subprocess.Popen[str]:
         "PYTHONNOUSERSITE": "1",
     }
     return subprocess.Popen(
-        [sys.executable, str(Path(__file__).with_name("mcp_parent.py"))],
+        [
+            sys.executable,
+            str(Path(__file__).with_name("mcp_parent.py")),
+            collaboration_scope_id,
+        ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -276,6 +446,7 @@ async def test_canonical_send_parity_mcp_local_and_real_pi_direct_ipc(
             harness_id=pi.harness_id,
             pid=child.pid,
             session_id="pi-direct-session-with-entropy-001",
+            actor=pi,
         )
         ipc = await _exchange(
             child,
@@ -329,6 +500,18 @@ async def test_task_shaped_prompt_http_direct_mcp_and_ipc_never_bypasses_typed_t
                 expires_at=expires_at,
             )
         )
+    codex_scope_id = _issue_direct_scope(
+        core,
+        sender=codex,
+        recipient=recipient,
+        scope_id="scope:task-shaped-codex",
+    )
+    pi_scope_id = _issue_direct_scope(
+        core,
+        sender=pi,
+        recipient=recipient,
+        scope_id="scope:task-shaped-pi",
+    )
 
     task_shaped_prompt = {
         "event_type": "task_assignment",
@@ -344,12 +527,14 @@ async def test_task_shaped_prompt_http_direct_mcp_and_ipc_never_bypasses_typed_t
         async with app.router.lifespan_context(app):
             direct = core.send_message(
                 actor=codex,
+                collaboration_scope_id=codex_scope_id,
                 recipients=(recipient.harness_id,),
                 payload=task_shaped_prompt,
                 idempotency_key="task-shaped-direct-message-0001",
             )
 
             http_value = {
+                "collaboration_scope_id": codex_scope_id,
                 "classification": "C1",
                 "idempotency_key": "task-shaped-http-message-0001",
                 "payload": task_shaped_prompt,
@@ -397,6 +582,7 @@ async def test_task_shaped_prompt_http_direct_mcp_and_ipc_never_bypasses_typed_t
                 harness_id=pi.harness_id,
                 pid=child.pid,
                 session_id="task-shaped-pi-ipc-session-0001",
+                actor=pi,
             )
             ipc = await _exchange(
                 child,
@@ -441,13 +627,21 @@ async def test_real_pi_process_restart_replay_sibling_and_epoch_fences(
     service = create_local_binding_service(core)
     child = _child()
     sibling = None
-    request = {"arguments": {"after_cursor": 0, "limit": 10}, "method": "agentnet.inbox"}
+    request = {
+        "arguments": {
+            "collaboration_scope_id": RecordingCollaborationScope.scope_id,
+            "after_cursor": 0,
+            "limit": 10,
+        },
+        "method": "agentnet.inbox",
+    }
     try:
         await service.start()
         issued = service.issue_child_capability(
             harness_id=pi.harness_id,
             pid=child.pid,
             session_id="pi-restart-session-with-entropy-001",
+            actor=pi,
         )
         instruction = _instruction(
             issued,
@@ -478,6 +672,7 @@ async def test_real_pi_process_restart_replay_sibling_and_epoch_fences(
             harness_id=pi.harness_id,
             pid=child.pid,
             session_id="pi-epoch-session-with-entropy-001",
+            actor=pi,
         )
         rotated_key = P256KeyPair.generate()
         rotated_credential_id = f"{pi.credential_id}-rotated"
@@ -504,6 +699,17 @@ async def test_real_pi_process_restart_replay_sibling_and_epoch_fences(
                     now + 3600,
                 ),
             )
+            connection.execute(
+                """UPDATE endpoint_lifecycle
+                      SET current_credential_id=?,revision=revision+1,updated_at=?
+                    WHERE domain_id=? AND harness_id=?""",
+                (
+                    rotated_credential_id,
+                    now,
+                    pi.domain_id,
+                    pi.harness_id,
+                ),
+            )
         stale = await _exchange(
             child,
             _instruction(
@@ -517,6 +723,7 @@ async def test_real_pi_process_restart_replay_sibling_and_epoch_fences(
             harness_id=pi.harness_id,
             pid=child.pid,
             session_id="pi-rotated-epoch-session-with-entropy-001",
+            actor=pi,
         )
         rotated_result = await _exchange(
             child,
@@ -540,6 +747,255 @@ async def test_real_pi_process_restart_replay_sibling_and_epoch_fences(
             sibling.wait(timeout=5)
 
 
+
+
+@pytest.mark.anyio
+async def test_issued_descriptor_fails_immediately_after_endpoint_generation_rotation(
+    tmp_path: Path,
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory(kind="pi", binding_assurance="os_bound")
+    core = RecordingCore(_config(tmp_path), store)
+    service = create_local_binding_service(core)
+    repository = EndpointBindingRepository(store, tmp_path / "secrets")
+    child = _child()
+    try:
+        await service.start()
+        issued = service.issue_child_capability(
+            harness_id=actor.harness_id,
+            pid=child.pid,
+            session_id="pi-stale-generation-session-with-entropy-001",
+            actor=actor,
+        )
+        current = repository.load_current(
+            domain_id=actor.domain_id,
+            harness_id=actor.harness_id,
+        )
+        repository.rotate_generation(
+            actor=actor,
+            expected_generation=current.adapter_generation,
+            process_measurement=measure_process_identity(child.pid).executable_measurement,
+        )
+
+        result = await _exchange(
+            child,
+            _instruction(
+                issued,
+                nonce="pi-stale-generation-nonce-with-entropy-001",
+                request={
+                    "arguments": {
+                        "collaboration_scope_id": RecordingCollaborationScope.scope_id,
+                        "after_cursor": 0,
+                        "limit": 10,
+                    },
+                    "method": "agentnet.inbox",
+                },
+            ),
+        )
+        assert result == {"error": "authentication_failed"}
+        assert core.calls == []
+    finally:
+        await service.close()
+        child.terminate()
+        child.wait(timeout=5)
+
+
+@pytest.mark.anyio
+async def test_requested_restart_fails_every_descriptor_and_unauthorized_reissue(
+    tmp_path: Path,
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory(kind="pi", binding_assurance="os_bound")
+    core = RecordingCore(_config(tmp_path), store)
+    service = create_local_binding_service(core)
+    lifecycle = EndpointLifecycleService(store)
+    child = _child()
+    restarted_child = _child()
+    try:
+        await service.start()
+        issued = service.issue_child_capability(
+            harness_id=actor.harness_id,
+            pid=child.pid,
+            session_id="pi-requested-restart-session-with-entropy-001",
+            actor=actor,
+        )
+        requested = lifecycle.request_activation(
+            actor=actor,
+            expected_revision=lifecycle.status(endpoint_id=actor.harness_id).revision,
+        )
+        assert requested.state is EndpointActivationState.RESTART_REQUIRED
+
+        stale = await _exchange(
+            child,
+            _instruction(
+                issued,
+                nonce="pi-requested-restart-nonce-with-entropy-001",
+                request={
+                    "arguments": {
+                        "collaboration_scope_id": RecordingCollaborationScope.scope_id,
+                        "after_cursor": 0,
+                        "limit": 10,
+                    },
+                    "method": "agentnet.inbox",
+                },
+            ),
+        )
+        assert stale == {"error": "authentication_failed"}
+        assert core.calls == []
+
+        with pytest.raises(AuthenticationError, match="verified harness actor"):
+            service.issue_child_capability(
+                harness_id=actor.harness_id,
+                pid=restarted_child.pid,
+                session_id="pi-unauthorized-restart-session-with-entropy-001",
+            )
+        assert (
+            lifecycle.status(endpoint_id=actor.harness_id).state
+            is EndpointActivationState.RESTART_REQUIRED
+        )
+
+        with pytest.raises(ConflictError, match="newly measured process"):
+            service.issue_child_capability(
+                harness_id=actor.harness_id,
+                pid=child.pid,
+                session_id="pi-same-process-restart-session-entropy-01",
+                actor=actor,
+            )
+
+        reconnected = service.issue_child_capability(
+            harness_id=actor.harness_id,
+            pid=restarted_child.pid,
+            session_id="pi-authorized-restart-session-with-entropy-001",
+            actor=actor,
+        )
+        assert (
+            lifecycle.status(endpoint_id=actor.harness_id).state
+            is EndpointActivationState.CONNECTED
+        )
+        result = await _exchange(
+            restarted_child,
+            _instruction(
+                reconnected,
+                nonce="pi-authorized-restart-nonce-with-entropy-001",
+                request={
+                    "arguments": {
+                        "collaboration_scope_id": RecordingCollaborationScope.scope_id,
+                        "after_cursor": 0,
+                        "limit": 10,
+                    },
+                    "method": "agentnet.inbox",
+                },
+            ),
+        )
+        assert result == {"ok": True, "result": [{"cursor": 1, "limit": 10}]}
+    finally:
+        await service.close()
+        for process in (child, restarted_child):
+            process.terminate()
+            process.wait(timeout=5)
+
+
+@pytest.mark.anyio
+async def test_connected_endpoint_records_the_exact_presented_process_instance(
+    tmp_path: Path,
+    store,
+    identity_factory,
+) -> None:
+    """A connected endpoint must never keep an executable-only measurement."""
+
+    actor, _ = identity_factory(kind="pi", binding_assurance="os_bound")
+    core = RecordingCore(_config(tmp_path), store)
+    service = create_local_binding_service(core)
+    lifecycle = EndpointLifecycleService(store)
+    child = _child()
+    try:
+        await service.start()
+        executable_only = store.fetch_one(
+            "SELECT process_measurement FROM endpoint_lifecycle WHERE harness_id=?",
+            (actor.harness_id,),
+        )["process_measurement"]
+        identity = measure_process_identity(child.pid)
+        exact = exact_process_measurement(
+            platform=identity.platform,
+            account_id=identity.account_id,
+            pid=identity.pid,
+            start_time=identity.start_time,
+            executable_measurement=identity.executable_measurement,
+        )
+        assert executable_only != exact
+
+        with pytest.raises(AuthenticationError, match="verified harness actor"):
+            service.issue_child_capability(
+                harness_id=actor.harness_id,
+                pid=child.pid,
+                session_id="pi-unmeasured-reconnect-session-entropy-1",
+            )
+
+        service.issue_child_capability(
+            harness_id=actor.harness_id,
+            pid=child.pid,
+            session_id="pi-measured-reconnect-session-with-entropy1",
+            actor=actor,
+        )
+        status = lifecycle.status(endpoint_id=actor.harness_id)
+        assert status.state is EndpointActivationState.CONNECTED
+        assert status.process_measurement == exact
+        assert status.adapter_generation == 1
+    finally:
+        await service.close()
+        child.terminate()
+        child.wait(timeout=5)
+
+
+@pytest.mark.anyio
+async def test_current_revocation_is_checked_again_for_every_ipc_request(
+    tmp_path: Path,
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory(kind="pi", binding_assurance="os_bound")
+    core = RecordingCore(_config(tmp_path), store)
+    service = create_local_binding_service(core)
+    child = _child()
+    try:
+        await service.start()
+        issued = service.issue_child_capability(
+            harness_id=actor.harness_id,
+            pid=child.pid,
+            session_id="pi-current-revocation-session-with-entropy-001",
+            actor=actor,
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE principals SET status='revoked' WHERE principal_id=?",
+                (actor.principal_id,),
+            )
+
+        result = await _exchange(
+            child,
+            _instruction(
+                issued,
+                nonce="pi-current-revocation-nonce-with-entropy-001",
+                request={
+                    "arguments": {
+                        "collaboration_scope_id": RecordingCollaborationScope.scope_id,
+                        "after_cursor": 0,
+                        "limit": 10,
+                    },
+                    "method": "agentnet.inbox",
+                },
+            ),
+        )
+        assert result == {"error": "authentication_failed"}
+        assert core.calls == []
+    finally:
+        await service.close()
+        child.terminate()
+        child.wait(timeout=5)
+
+
 @pytest.mark.anyio
 async def test_identity_and_bearer_arguments_never_replace_server_actor(
     tmp_path: Path,
@@ -557,6 +1013,7 @@ async def test_identity_and_bearer_arguments_never_replace_server_actor(
             harness_id=pi.harness_id,
             pid=child.pid,
             session_id="pi-negative-session-with-entropy-001",
+            actor=pi,
         )
         base = {
             "classification": "C1",
@@ -604,6 +1061,7 @@ async def test_identity_and_bearer_arguments_never_replace_server_actor(
                 harness_id=codex.harness_id,
                 pid=child.pid,
                 session_id="codex-mcp-child-process-binding-001",
+                actor=codex,
             )
     finally:
         await service.close()
@@ -648,13 +1106,17 @@ async def test_real_parent_launches_peer_bound_stdio_mcp_proxy_without_inherited
     service = create_local_binding_service(core)
     state_dir = tmp_path / "mcp-harness-state"
     state_dir.mkdir(mode=0o700)
-    parent = _mcp_parent(state_dir)
+    parent = _mcp_parent(
+        state_dir,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
     try:
         await service.start()
         issued = service.register_mcp_launch(
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id=f"{harness_kind}-production-mcp-parent-001",
+            actor=actor,
         )
         _publish_locator(
             state_dir, issued.bootstrap_socket_path, issued.bootstrap_generation
@@ -698,14 +1160,21 @@ async def test_mcp_bootstrap_rejects_unregistered_sibling_and_replacement_proxy(
     sibling_state = tmp_path / "sibling-state"
     registered_state.mkdir(mode=0o700)
     sibling_state.mkdir(mode=0o700)
-    parent = _mcp_parent(registered_state)
-    sibling = _mcp_parent(sibling_state)
+    parent = _mcp_parent(
+        registered_state,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
+    sibling = _mcp_parent(
+        sibling_state,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
     try:
         await service.start()
         issued = service.register_mcp_launch(
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id="codex-registered-parent-session-001",
+            actor=actor,
         )
         _publish_locator(
             registered_state, issued.bootstrap_socket_path, issued.bootstrap_generation
@@ -747,7 +1216,10 @@ async def test_mcp_launch_parent_exit_removes_registration_and_denies_reconnect(
     retry_state = tmp_path / "retry-state"
     first_state.mkdir(mode=0o700)
     retry_state.mkdir(mode=0o700)
-    parent = _mcp_parent(first_state)
+    parent = _mcp_parent(
+        first_state,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
     retry = None
     try:
         await service.start()
@@ -755,6 +1227,7 @@ async def test_mcp_launch_parent_exit_removes_registration_and_denies_reconnect(
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id="claude-parent-exit-session-001",
+            actor=actor,
         )
         _publish_locator(
             first_state, issued.bootstrap_socket_path, issued.bootstrap_generation
@@ -769,7 +1242,10 @@ async def test_mcp_launch_parent_exit_removes_registration_and_denies_reconnect(
             service._purge_mcp_launches()
             assert service._mcp_launches == {}
 
-        retry = _mcp_parent(retry_state)
+        retry = _mcp_parent(
+            retry_state,
+            collaboration_scope_id=RecordingCollaborationScope.scope_id,
+        )
         _publish_locator(
             retry_state, issued.bootstrap_socket_path, issued.bootstrap_generation
         )
@@ -792,13 +1268,17 @@ async def test_mcp_open_connection_fails_after_credential_epoch_rotation(
     service = create_local_binding_service(core)
     state_dir = tmp_path / "epoch-state"
     state_dir.mkdir(mode=0o700)
-    parent = _mcp_parent(state_dir)
+    parent = _mcp_parent(
+        state_dir,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
     try:
         await service.start()
         issued = service.register_mcp_launch(
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id="codex-epoch-rotation-session-001",
+            actor=actor,
         )
         _publish_locator(
             state_dir, issued.bootstrap_socket_path, issued.bootstrap_generation
@@ -853,13 +1333,17 @@ async def test_live_mcp_proxy_recovers_on_next_call_after_core_socket_generation
     service = create_local_binding_service(core)
     state_dir = tmp_path / "restart-generation-state"
     state_dir.mkdir(mode=0o700)
-    parent = _mcp_parent(state_dir)
+    parent = _mcp_parent(
+        state_dir,
+        collaboration_scope_id=RecordingCollaborationScope.scope_id,
+    )
     try:
         await service.start()
         first = service.register_mcp_launch(
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id="codex-core-restart-generation-001",
+            actor=actor,
         )
         _publish_locator(
             state_dir, first.bootstrap_socket_path, first.bootstrap_generation
@@ -897,6 +1381,7 @@ async def test_live_mcp_proxy_recovers_on_next_call_after_core_socket_generation
             harness_id=actor.harness_id,
             pid=parent.pid,
             session_id="codex-core-restart-generation-001",
+            actor=actor,
         )
         assert renewed.bootstrap_generation != first.bootstrap_generation
         _publish_locator(
@@ -935,6 +1420,7 @@ def test_mcp_registration_rejects_pid_start_and_executable_mismatch(
                 pid=parent.pid,
                 session_id="codex-wrong-start-session-001",
                 expected_process_start_time="0",
+                actor=actor,
             )
         with pytest.raises(AuthenticationError, match="changed before registration"):
             service.register_mcp_launch(
@@ -942,12 +1428,14 @@ def test_mcp_registration_rejects_pid_start_and_executable_mismatch(
                 pid=parent.pid,
                 session_id="codex-wrong-executable-session-001",
                 expected_process_measurement="sha256:" + "0" * 64,
+                actor=actor,
             )
         with pytest.raises(AuthenticationError, match="unavailable"):
             service.register_mcp_launch(
                 harness_id=actor.harness_id,
                 pid=2_147_483_647,
                 session_id="codex-absent-pid-session-001",
+                actor=actor,
             )
     finally:
         parent.terminate()

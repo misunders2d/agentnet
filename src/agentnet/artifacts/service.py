@@ -44,7 +44,8 @@ from agentnet.provenance import (
     SinkSet,
 )
 from agentnet.security.signatures import canonical_digest, canonical_json, verify_signature
-from agentnet.storage.sqlite import SQLiteStore
+from agentnet.storage.backend import StoreBackend
+from agentnet.storage.artifact_transfer_schema import require_current_artifact_schema
 
 
 SAFE_KEY = re.compile(r"^[a-f0-9]{32}$")
@@ -269,7 +270,7 @@ class FilesystemArtifactStore:
 class ArtifactService:
     def __init__(
         self,
-        store: SQLiteStore,
+        store: StoreBackend,
         objects: FilesystemArtifactStore | None,
         *,
         enabled: bool = True,
@@ -283,6 +284,8 @@ class ArtifactService:
     ) -> None:
         if enabled != (objects is not None):
             raise ValueError("artifact service enablement and object storage must agree")
+        if enabled:
+            require_current_artifact_schema(store)
         self.store = store
         self.objects = objects
         self.enabled = enabled
@@ -989,19 +992,21 @@ class ArtifactService:
         scope_clause = ""
         parameters: list[Any] = [now]
         if domain_id is not None:
-            scope_clause += " AND domain_id=?"
+            scope_clause += " AND r.domain_id=?"
             parameters.append(domain_id)
         if actor_id is not None:
-            scope_clause += " AND actor_id=?"
+            scope_clause += " AND r.actor_id=?"
             parameters.append(actor_id)
         parameters.append(limit)
         rows = self.store.fetch_all(
-            """SELECT reservation_id FROM artifact_reservations
-                WHERE (state='abort_pending'
-                   OR state='prefilter_denied'
-                   OR (state IN ('upload_reserved','object_verified') AND expires_at<=?))"""
+            """SELECT r.reservation_id
+                 FROM artifact_reservations r
+                 JOIN artifact_byte_charges c ON c.reservation_id=r.reservation_id
+                WHERE (r.state='abort_pending'
+                   OR (r.state='prefilter_denied' AND c.state!='released')
+                   OR (r.state IN ('upload_reserved','object_verified') AND r.expires_at<=?))"""
             + scope_clause
-            + " ORDER BY expires_at,reservation_id LIMIT ?",
+            + " ORDER BY r.expires_at,r.reservation_id LIMIT ?",
             tuple(parameters),
         )
         recovered: list[dict[str, Any]] = []
@@ -2152,10 +2157,18 @@ class ArtifactService:
         if self.outage_gate is not None:
             self.outage_gate.require_privileged()
         visible = self.store.fetch_one(
-            "SELECT state,domain_id FROM artifact_manifests WHERE artifact_id=?",
+            """SELECT m.state,m.domain_id,l.status AS lifecycle_status
+                 FROM artifact_manifests m
+                 JOIN artifact_lifecycle l ON l.artifact_id=m.artifact_id
+                WHERE m.artifact_id=?""",
             (artifact_id,),
         )
-        if visible is None or visible["state"] != "released" or visible["domain_id"] != actor.domain_id:
+        if (
+            visible is None
+            or visible["state"] != "released"
+            or visible["lifecycle_status"] != "active"
+            or visible["domain_id"] != actor.domain_id
+        ):
             raise AuthorizationError("artifact is not released")
         try:
             self._require_fresh_scan(artifact_id)
@@ -2166,8 +2179,19 @@ class ArtifactService:
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
         now = int(time.time())
         with self.store.transaction() as connection:
-            row = connection.execute("SELECT state,domain_id FROM artifact_manifests WHERE artifact_id=?", (artifact_id,)).fetchone()
-            if row is None or row["state"] != "released" or row["domain_id"] != actor.domain_id:
+            row = connection.execute(
+                """SELECT m.state,m.domain_id,l.status AS lifecycle_status
+                     FROM artifact_manifests m
+                     JOIN artifact_lifecycle l ON l.artifact_id=m.artifact_id
+                    WHERE m.artifact_id=?""",
+                (artifact_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["state"] != "released"
+                or row["lifecycle_status"] != "active"
+                or row["domain_id"] != actor.domain_id
+            ):
                 raise AuthorizationError("artifact is not released")
             if actor.harness_id != audience_harness_id:
                 raise AuthorizationError("download audience must be the verified caller harness")
@@ -2197,9 +2221,10 @@ class ArtifactService:
         now = int(time.time())
         capability = self.store.fetch_one(
             """SELECT c.artifact_id,c.audience_harness_id,c.expires_at,c.consumed_at,
-                      m.state,m.domain_id
+                      m.state,m.domain_id,l.status AS lifecycle_status
                  FROM download_capabilities c
                  JOIN artifact_manifests m ON m.artifact_id=c.artifact_id
+                 JOIN artifact_lifecycle l ON l.artifact_id=m.artifact_id
                 WHERE c.capability_hash=?""",
             (token_hash,),
         )
@@ -2210,6 +2235,7 @@ class ArtifactService:
             or int(capability["expires_at"]) <= now
             or capability["consumed_at"] is not None
             or capability["state"] != "released"
+            or capability["lifecycle_status"] != "active"
         ):
             raise AuthorizationError("download capability is invalid")
         if capability is not None:
@@ -2220,9 +2246,12 @@ class ArtifactService:
                 raise
         with self.store.transaction() as connection:
             row = connection.execute(
-                """SELECT c.*,m.object_key,m.object_version,m.state,m.domain_id,m.plaintext_digest_encrypted
-                   FROM download_capabilities c JOIN artifact_manifests m ON m.artifact_id=c.artifact_id
-                   WHERE c.capability_hash=?""",
+                """SELECT c.*,m.object_key,m.object_version,m.state,m.domain_id,
+                          m.plaintext_digest_encrypted,l.status AS lifecycle_status
+                     FROM download_capabilities c
+                     JOIN artifact_manifests m ON m.artifact_id=c.artifact_id
+                     JOIN artifact_lifecycle l ON l.artifact_id=m.artifact_id
+                    WHERE c.capability_hash=?""",
                 (token_hash,),
             ).fetchone()
             if (
@@ -2232,6 +2261,7 @@ class ArtifactService:
                 or row["expires_at"] <= now
                 or row["consumed_at"] is not None
                 or row["state"] != "released"
+                or row["lifecycle_status"] != "active"
             ):
                 raise AuthorizationError("download capability is invalid")
             denial, _revision = validate_actor_state(

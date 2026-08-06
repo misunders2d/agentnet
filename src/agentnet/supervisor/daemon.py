@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -50,6 +51,11 @@ class SupervisorDaemonConfig(BaseModel):
     domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
     harness_id: str = Field(min_length=1, max_length=256)
     credential_id: str = Field(min_length=1, max_length=256)
+    collaboration_scope_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+    )
     signing_key_path: Path
     harness: HarnessKind
     executable: str | None = Field(default=None, min_length=1, max_length=4_096)
@@ -78,7 +84,7 @@ class SupervisorDaemonConfig(BaseModel):
     reconnect_max_seconds: float = Field(default=5.0, ge=0.1, le=30)
     request_timeout_seconds: float = Field(default=30.0, ge=0.25, le=60)
     heartbeat_interval_seconds: float = Field(default=1.0, ge=0.05, le=60)
-    max_restart_attempts: int = Field(default=3, ge=0, le=20)
+    max_restart_attempts: Literal[0] = 0
     max_consecutive_cycle_errors: int = Field(default=5, ge=1, le=100)
     max_cycle_staleness_seconds: float = Field(default=90.0, ge=1.0, le=300.0)
     local_bindings_required: bool = False
@@ -245,6 +251,7 @@ def run_supervisor_daemon(
         queue = LocalQueue(
             config.queue_database_path,
             _owner_queue_cipher(config.queue_key_path),
+            harness_id=config.harness_id,
         )
         client = AgentNetClient(
             base_url=config.core_base_url,
@@ -255,9 +262,12 @@ def run_supervisor_daemon(
             audience=config.audience,
             transport=transport,
         )
-        core_client = AgentNetSupervisorCoreClient(client)
+        core_client = AgentNetSupervisorCoreClient(
+            client,
+            collaboration_scope_id=config.collaboration_scope_id,
+        )
         integration = BackgroundHarnessIntegration(
-            DeviceSupervisor(queue),
+            DeviceSupervisor(queue, harness_id=config.harness_id),
             core_client=core_client,
             watch_wait_seconds=config.watch_wait_seconds,
             reconciliation_interval_seconds=config.reconciliation_interval_seconds,
@@ -339,14 +349,30 @@ def run_supervisor_daemon(
             "stopped": True,
         }
     finally:
+        active_failure = sys.exc_info()[0] is not None
+        cleanup_failures: list[Exception] = []
         if integration is not None:
-            integration.close()
+            try:
+                integration.close()
+            except Exception as exc:
+                cleanup_failures.append(exc)
         if client is not None:
-            client.close()
+            try:
+                client.close()
+            except Exception as exc:
+                cleanup_failures.append(exc)
         if queue is not None:
-            queue.close()
+            try:
+                queue.close()
+            except Exception as exc:
+                cleanup_failures.append(exc)
         for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+            try:
+                signal.signal(signum, handler)
+            except Exception as exc:
+                cleanup_failures.append(exc)
+        if cleanup_failures and not active_failure:
+            raise cleanup_failures[0]
 
 
 def redacted_supervisor_status(config: SupervisorDaemonConfig) -> dict[str, object]:

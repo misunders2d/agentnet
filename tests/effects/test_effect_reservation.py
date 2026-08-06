@@ -8,8 +8,14 @@ from uuid import uuid4
 
 import pytest
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.authorization.grants import GrantUse
-from agentnet.authorization.policy import HumanEntitlement
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
 from agentnet.core.app import CommunicationCore
 from agentnet.effects.reservations import (
     EffectExecutionEvidence,
@@ -30,6 +36,63 @@ from agentnet.security.signatures import canonical_digest
 class InjectedCrash(RuntimeError):
     pass
 
+_EFFECT_MAILBOX_ACTIONS = ("message.acknowledge", "message.read", "message.send")
+
+
+def issue_effect_scope(
+    core: CommunicationCore,
+    *,
+    owner,
+    recipient,
+) -> CollaborationScope:
+    domain = core.store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    if domain is None:
+        raise AssertionError("effect fixture domain is absent")
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:effect-reservation:{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((owner.harness_id, recipient.harness_id))),
+        allowed_actions=_EFFECT_MAILBOX_ACTIONS,
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C2_RESTRICTED,),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=proposal.policy_revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=proposal.policy_revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=owner,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+
+
 
 def prepare_effect(store, identity_factory, tmp_path: Path):
     # Contract-level OS binding exercises the protected-effect path.  This is
@@ -45,6 +108,7 @@ def prepare_effect(store, identity_factory, tmp_path: Path):
         ),
         store,
     )
+    scope = issue_effect_scope(core, owner=actor, recipient=recipient)
     core.policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
             domain_id=actor.domain_id,
@@ -59,12 +123,32 @@ def prepare_effect(store, identity_factory, tmp_path: Path):
         actor=actor,
         event_type=EventType.TASK_ASSIGNMENT,
         classification=Classification.C2_RESTRICTED,
-        payload={"task": "synthetic"},
+        payload={
+            "task": "synthetic",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key=f"effect-parent-{uuid4()}",
         recipients=(recipient.harness_id,),
         retention_delete_at=datetime.now(UTC) + timedelta(days=30),
+        policy_revision=scope.policy_revision,
     )
     core.mailboxes.accept(event)
+    mailbox_entries = core.mailboxes.reconcile(
+        actor=recipient,
+        collaboration_scope_id=scope.scope_id,
+    )
+    parent_entry = next(
+        entry
+        for entry in mailbox_entries
+        if entry["event"]["event_id"] == event.event_id
+    )
+    core.mailboxes.acknowledge(
+        event_id=event.event_id,
+        collaboration_scope_id=scope.scope_id,
+        recipient_id=recipient.harness_id,
+        envelope_digest_value=parent_entry["envelope_digest"],
+        owner_actor=recipient,
+    )
     grant = TaskGrant(
         domain_id=actor.domain_id,
         principal_id=actor.principal_id,

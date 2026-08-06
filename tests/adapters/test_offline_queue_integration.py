@@ -32,12 +32,15 @@ class FakeCorporateClient:
         self,
         harness_id: str,
         *,
+        collaboration_scope_id: str,
         deliver_on_watch: bool = False,
         watch_failures_before_wake: int = 0,
     ) -> None:
         self.harness_id = harness_id
+        self.collaboration_scope_id = collaboration_scope_id
+        self.scoped_mailbox_calls: list[tuple[str, str]] = []
+        self.authorized: list[str] = []
         self.acknowledged: list[str] = []
-        self.released: list[str] = []
         self.uploaded: list[dict[str, object]] = []
         self.watch_calls = 0
         self.reconcile_calls = 0
@@ -52,8 +55,7 @@ class FakeCorporateClient:
         }
         self.available = not deliver_on_watch
         self.watch_failures_before_wake = watch_failures_before_wake
-        self.payload = {"task": "run autonomously"}
-        payload_digest = canonical_digest(self.payload)
+        payload_digest = canonical_digest({"task": "run autonomously"})
         self.item = {
             "cursor": 11,
             "envelope_digest": "a" * 64,
@@ -70,9 +72,18 @@ class FakeCorporateClient:
                 "envelope_digest": "a" * 64,
                 "payload_access": "task_grant_required",
             },
+            "response_obligation": {
+                "obligation_id": "corporate-task-obligation",
+                "responsible_harness_id": harness_id,
+                "state": "recipient_committed",
+            },
         }
 
+    def _record_scoped_mailbox_call(self, operation: str) -> None:
+        self.scoped_mailbox_calls.append((operation, self.collaboration_scope_id))
+
     def watch(self, *, after_cursor: int, wait_seconds: float) -> bool:
+        self._record_scoped_mailbox_call("watch")
         self.watch_calls += 1
         if self.watch_calls <= self.watch_failures_before_wake:
             raise RuntimeError("synthetic authenticated watch disconnect")
@@ -84,19 +95,23 @@ class FakeCorporateClient:
 
     def reconcile(self, *, after_cursor: int, limit: int):
         assert limit > 0
+        self._record_scoped_mailbox_call("reconcile")
         self.reconcile_calls += 1
         return [self.item] if self.available and after_cursor < 11 else []
 
     def reconcile_obligations(self, *, limit: int):
         assert limit > 0
+        self._record_scoped_mailbox_call("reconcile_obligations")
         self.obligation_reconcile_calls += 1
         return {"recipient_committed": [], "expired": []}
 
     def obligation_inbox(self):
+        self._record_scoped_mailbox_call("obligation_inbox")
         return dict(self.obligation_counts)
 
-    def authorize_background(self, item):
-        assert item == self.item
+    def authorize_background(self, obligation_id: str):
+        assert obligation_id == "corporate-task-obligation"
+        self.authorized.append(obligation_id)
         return {
             "decision_id": "background-decision-1",
             "harness_id": self.harness_id,
@@ -109,51 +124,32 @@ class FakeCorporateClient:
             "task_grant_id": "task-grant-1",
         }
 
-    def acknowledge_custody(self, item, authorization, *, local_queue_id: str) -> None:
-        assert item == self.item
+    def acknowledge_custody(
+        self,
+        obligation_id: str,
+        authorization,
+        *,
+        local_queue_id: str,
+    ) -> None:
+        assert obligation_id == "corporate-task-obligation"
+        assert authorization.event_id == "corporate-task-event"
         assert local_queue_id
-        self.acknowledged.append(authorization.event_id)
-
-    def release_task_payload(self, item, authorization, *, local_queue_id: str):
-        assert item == self.item
-        assert local_queue_id
-        self.released.append(authorization.event_id)
-        intent = {
-            "schema_version": "1.0",
-            "resources": [
-                {
-                    "resource": "synthetic:test",
-                    "operation": "process",
-                    "access": "read",
-                    "exclusivity": "shared",
-                }
-            ],
-        }
-        return {
-            "effect_authorized": False,
-            "intent": intent,
-            "payload": dict(self.payload),
-            "payload_access_authorized": True,
-            "provenance": {
-                "authority_effect": "none",
-                "content_digest": canonical_digest(self.payload),
-            },
-            "release_receipt_id": "synthetic-release-receipt",
-            "semantic_processing_authorized": True,
-            "tool_authorized": False,
-        }
+        self.acknowledged.append(obligation_id)
 
     def upload_result(self, result) -> None:
         self.uploaded.append(dict(result))
 
 
 class BlockingCorporateClient(FakeCorporateClient):
-    def __init__(self, harness_id: str) -> None:
-        super().__init__(harness_id)
+    def __init__(self, harness_id: str, *, collaboration_scope_id: str) -> None:
+        super().__init__(harness_id, collaboration_scope_id=collaboration_scope_id)
         self.entered = threading.Event()
         self.release = threading.Event()
 
     def reconcile(self, *, after_cursor: int, limit: int):
+        assert limit > 0
+        self._record_scoped_mailbox_call("reconcile")
+        self.reconcile_calls += 1
         self.entered.set()
         if not self.release.wait(timeout=3):
             raise RuntimeError("test did not release the blocked corporate poll")
@@ -163,10 +159,15 @@ class BlockingCorporateClient(FakeCorporateClient):
 class MissedWakeCorporateClient(FakeCorporateClient):
     """Makes data visible without a wake to exercise reconciliation fallback."""
 
-    def __init__(self, harness_id: str) -> None:
-        super().__init__(harness_id, deliver_on_watch=True)
+    def __init__(self, harness_id: str, *, collaboration_scope_id: str) -> None:
+        super().__init__(
+            harness_id,
+            collaboration_scope_id=collaboration_scope_id,
+            deliver_on_watch=True,
+        )
 
     def watch(self, *, after_cursor: int, wait_seconds: float) -> bool:
+        self._record_scoped_mailbox_call("watch")
         self.watch_calls += 1
         self.available = True
         time.sleep(min(wait_seconds, 0.02))
@@ -192,6 +193,7 @@ def test_supervisor_daemon_config_preserves_codex_pin_and_rejects_impossible_wat
         "domain_id": "corp.example",
         "harness_id": "codex-background-harness",
         "credential_id": "codex-background-credential",
+        "collaboration_scope_id": "scope:codex-background",
         "signing_key_path": tmp_path / "signing.pem",
         "harness": "codex",
         "runtime_root": tmp_path / "runtime",
@@ -226,11 +228,15 @@ def test_daemon_status_tracks_first_in_flight_cycle_before_any_completion(
     fake_harnesses,
 ) -> None:
     harness_id = "pi-first-cycle-watchdog"
+    collaboration_scope_id = "scope:pi-first-cycle-watchdog"
     queue = LocalQueue(
         tmp_path / "watchdog-queue.sqlite3",
         LocalEnvelopeCipher.from_key_file(tmp_path / "watchdog-queue.key"),
     )
-    client = BlockingCorporateClient(harness_id)
+    client = BlockingCorporateClient(
+        harness_id,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     integration = BackgroundHarnessIntegration(
         DeviceSupervisor(queue),
         core_client=client,
@@ -253,6 +259,7 @@ def test_daemon_status_tracks_first_in_flight_cycle_before_any_completion(
     try:
         integration.start_daemon(harness_id)
         assert client.entered.wait(timeout=2)
+        assert ("reconcile", collaboration_scope_id) in client.scoped_mailbox_calls
         status = integration.passive_status(harness_id)["daemon"]
         assert status["running"] is True
         assert status["daemon_started_at"] is not None
@@ -403,12 +410,16 @@ def test_cursor_does_not_advance_when_local_durable_enqueue_crashes(
     fake_harnesses,
 ) -> None:
     harness_id = "pi-cursor-crash"
+    collaboration_scope_id = "scope:pi-cursor-crash"
     queue = LocalQueue(
         tmp_path / "cursor-crash.sqlite3",
         LocalEnvelopeCipher.from_key_file(tmp_path / "cursor-crash.key"),
     )
     supervisor = DeviceSupervisor(queue)
-    client = FakeCorporateClient(harness_id)
+    client = FakeCorporateClient(
+        harness_id,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     integration = BackgroundHarnessIntegration(supervisor, core_client=client)
     runtime = BackgroundAdapterRuntime(
         build_launch_spec(
@@ -421,20 +432,20 @@ def test_cursor_does_not_advance_when_local_durable_enqueue_crashes(
         heartbeat_interval_seconds=0.05,
     )
     integration.register(runtime)
-    original_receive = supervisor.receive_from_core
+    original_queue_background_obligation = supervisor.queue_background_obligation
     try:
         integration.start(harness_id)
 
         def crash_before_durable_enqueue(**_kwargs):
             raise RuntimeError("synthetic local custody crash")
 
-        supervisor.receive_from_core = crash_before_durable_enqueue  # type: ignore[method-assign]
+        supervisor.queue_background_obligation = crash_before_durable_enqueue  # type: ignore[method-assign]
         with pytest.raises(RuntimeError, match="custody crash"):
             integration.run_once(harness_id)
         assert queue.cursor(harness_id) == 0
         assert queue.content_free_counts(harness_id) == {}
 
-        supervisor.receive_from_core = original_receive  # type: ignore[method-assign]
+        supervisor.queue_background_obligation = original_queue_background_obligation  # type: ignore[method-assign]
         recovered = integration.run_once(harness_id)
         assert recovered == {
             "fetched": 1,
@@ -445,6 +456,10 @@ def test_cursor_does_not_advance_when_local_durable_enqueue_crashes(
         }
         assert queue.cursor(harness_id) == 11
         assert queue.content_free_counts(harness_id) == {"queued": 1}
+        assert client.authorized == []
+        assert {scope_id for _, scope_id in client.scoped_mailbox_calls} == {
+            collaboration_scope_id
+        }
     finally:
         integration.close()
         queue.close()
@@ -455,10 +470,14 @@ def test_obligation_attention_is_automatically_reconciled_and_survives_restart(
     fake_harnesses,
 ) -> None:
     harness_id = "pi-durable-obligation-attention"
+    collaboration_scope_id = "scope:pi-durable-obligation-attention"
     database = tmp_path / "obligation-attention.sqlite3"
     key_file = tmp_path / "obligation-attention.key"
     queue = LocalQueue(database, LocalEnvelopeCipher.from_key_file(key_file))
-    client = FakeCorporateClient(harness_id)
+    client = FakeCorporateClient(
+        harness_id,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     client.available = False
     client.obligation_counts["action_required"] = 2
     client.obligation_counts["overdue"] = 1
@@ -499,11 +518,15 @@ def test_low_frequency_reconciliation_recovers_a_missed_authority_free_wake(
     fake_harnesses,
 ) -> None:
     harness_id = "pi-missed-wake-reconciliation"
+    collaboration_scope_id = "scope:pi-missed-wake-reconciliation"
     queue = LocalQueue(
         tmp_path / "missed-wake.sqlite3",
         LocalEnvelopeCipher.from_key_file(tmp_path / "missed-wake.key"),
     )
-    client = MissedWakeCorporateClient(harness_id)
+    client = MissedWakeCorporateClient(
+        harness_id,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     integration = BackgroundHarnessIntegration(
         DeviceSupervisor(queue),
         core_client=client,
@@ -529,6 +552,9 @@ def test_low_frequency_reconciliation_recovers_a_missed_authority_free_wake(
         assert client.watch_calls >= 2
         assert client.reconcile_calls == 2
         assert queue.content_free_counts(harness_id) == {"queued": 1}
+        assert ("watch", collaboration_scope_id) in client.scoped_mailbox_calls
+        assert ("reconcile", collaboration_scope_id) in client.scoped_mailbox_calls
+        assert client.authorized == []
     finally:
         integration.close()
         queue.close()
@@ -542,11 +568,15 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
     harness: str,
 ) -> None:
     harness_id = f"{harness}-autonomous-corporate"
+    collaboration_scope_id = f"scope:{harness}-autonomous-corporate"
     queue = LocalQueue(
         tmp_path / "daemon-queue.sqlite3",
         LocalEnvelopeCipher.from_key_file(tmp_path / "daemon-queue.key"),
     )
-    client = FakeCorporateClient(harness_id)
+    client = FakeCorporateClient(
+        harness_id,
+        collaboration_scope_id=collaboration_scope_id,
+    )
     integration = BackgroundHarnessIntegration(DeviceSupervisor(queue), core_client=client)
     production_spec = build_launch_spec(
         harness,
@@ -567,6 +597,8 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
     else:
         source = tmp_path / f"{harness}-private-auth"
         source.mkdir(mode=0o700)
+        if harness == "antigravity":
+            (production_spec.home_dir / ".gemini").rename(source / ".gemini")
         auth_file = source / "auth.json"
         auth_file.write_text('{"fixture":"private-broker"}\n', encoding="utf-8")
         os.chmod(auth_file, 0o600)
@@ -592,7 +624,8 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
             "uploaded": 1,
             "obligations_reconciled": 0,
         }
-        assert client.acknowledged == ["corporate-task-event"]
+        assert client.authorized == ["corporate-task-obligation"]
+        assert client.acknowledged == ["corporate-task-obligation"]
         assert len(client.uploaded) == 1
         assert client.uploaded[0]["authorization"]["task_grant_id"] == "task-grant-1"
         assert client.uploaded[0]["native_result"]["terminal_event"] == {
@@ -613,6 +646,9 @@ def test_autonomous_daemon_reconciles_eligible_custody_dispatches_and_uploads_wi
         assert "run autonomously" not in json.dumps(
             integration.passive_status(harness_id), sort_keys=True
         )
+        assert {scope_id for _, scope_id in client.scoped_mailbox_calls} == {
+            collaboration_scope_id
+        }
     finally:
         integration.close()
         queue.close()
@@ -624,12 +660,14 @@ def test_started_daemon_runs_and_stops_without_foreground_or_unmonitored_thread(
     contract_clean_runtime_factory,
 ) -> None:
     harness_id = "claude-threaded-autonomous"
+    collaboration_scope_id = "scope:claude-threaded-autonomous"
     queue = LocalQueue(
         tmp_path / "threaded-queue.sqlite3",
         LocalEnvelopeCipher.from_key_file(tmp_path / "threaded-queue.key"),
     )
     client = FakeCorporateClient(
         harness_id,
+        collaboration_scope_id=collaboration_scope_id,
         deliver_on_watch=True,
         watch_failures_before_wake=2,
     )
@@ -671,6 +709,9 @@ def test_started_daemon_runs_and_stops_without_foreground_or_unmonitored_thread(
         )
         assert client.watch_calls >= 3
         assert client.reconcile_calls == 2
+        assert {scope_id for _, scope_id in client.scoped_mailbox_calls} == {
+            collaboration_scope_id
+        }
         assert "run autonomously" not in json.dumps(status, sort_keys=True)
         integration.stop(harness_id)
         stopped = integration.passive_status(harness_id)

@@ -157,7 +157,13 @@ def test_compose_wires_two_ordinary_server_agents_to_shared_durable_storage() ->
 
     assert server_agents[0]["environment"]["AGENTNET_RUNTIME_INSTANCE_ID"] != server_agents[1]["environment"]["AGENTNET_RUNTIME_INSTANCE_ID"]
     assert server_agents[0]["environment"]["AGENTNET_PUBLIC_BASE_URL"] != server_agents[1]["environment"]["AGENTNET_PUBLIC_BASE_URL"]
-    assert set(compose["volumes"]) == {"agentnet-postgres-data", "agentnet-artifacts", "agentnet-runtime-secrets"}
+    assert set(compose["volumes"]) == {
+        "agentnet-postgres-data",
+        "agentnet-artifacts",
+        "agentnet-runtime-secrets",
+        "agentnet-clamav-signatures",
+        "agentnet-clamav-socket",
+    }
     assert services["agentnet-bootstrap"]["depends_on"] == {"postgres": {"condition": "service_healthy"}}
     assert services["agentnet-bootstrap"]["environment"]["AGENTNET_COMMAND"] == "bootstrap"
 

@@ -177,8 +177,9 @@ class ProvenanceDerivationBody(BaseModel):
 
 
 class RoomCreateBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
     classification: Classification = Classification.C1_INTERNAL
     persistent: bool = True
     expires_at: datetime | None = None
@@ -186,30 +187,34 @@ class RoomCreateBody(BaseModel):
 
 
 class MeetingCreateBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
     classification: Classification = Classification.C1_INTERNAL
     expires_at: datetime
     policy: dict[str, Any] | None = None
 
 
 class RoomMemberBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
     harness_id: str = Field(min_length=1, max_length=256)
     role: str = Field(default="member", pattern=r"^(member|guest|moderator)$")
     mls_key_package_b64: str | None = Field(default=None, max_length=1_000_000)
 
 
 class RoomMemberRemoveBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
     harness_id: str = Field(min_length=1, max_length=256)
 
 
 class RoomSendBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
     recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
     payload: dict[str, Any]
     idempotency_key: str = Field(min_length=16, max_length=256)
@@ -217,6 +222,12 @@ class RoomSendBody(BaseModel):
     released_artifacts: tuple[ReleasedArtifactBinding, ...] = ()
     expected_control_sequence: int = Field(ge=1)
     conversation_id: str | None = None
+
+
+class RoomDescribeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
 
 class TransferProposalBody(BaseModel):
@@ -936,6 +947,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
         result = core.rooms.create(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             classification=parsed.classification,
             persistent=parsed.persistent,
             expires_at=parsed.expires_at,
@@ -960,6 +972,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
         result = core.rooms.create(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             classification=parsed.classification,
             persistent=False,
             expires_at=parsed.expires_at,
@@ -993,6 +1006,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
         result = core.rooms.add_member(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             room_id=room_id,
             harness_id=parsed.harness_id,
             role=parsed.role,
@@ -1011,14 +1025,26 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
             context={"operation": "member.remove", "harness_id": parsed.harness_id},
         )
         return JSONResponse(
-            core.rooms.remove_member(actor=actor, room_id=room_id, harness_id=parsed.harness_id)
+            core.rooms.remove_member(
+                actor=actor,
+                collaboration_scope_id=parsed.collaboration_scope_id,
+                room_id=room_id,
+                harness_id=parsed.harness_id,
+            )
         )
 
     async def describe_room(request: Request) -> Response:
-        _body, actor = await body_and_actor(request, core)
+        body, actor = await body_and_actor(request, core)
+        parsed = RoomDescribeBody.model_validate_json(body)
         room_id = request.path_params["room_id"]
         core._require(actor=actor, action="room.read", resource=room_id)
-        return JSONResponse(core.rooms.describe(actor=actor, room_id=room_id))
+        return JSONResponse(
+            core.rooms.describe(
+                actor=actor,
+                collaboration_scope_id=parsed.collaboration_scope_id,
+                room_id=room_id,
+            )
+        )
 
     async def send_room_message(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
@@ -1038,6 +1064,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         )
         result = core.send_message(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             recipients=parsed.recipients,
             payload=parsed.payload,
             idempotency_key=parsed.idempotency_key,
@@ -1739,7 +1766,7 @@ def create_product_routes(core: CommunicationCore, body_and_actor: BodyAndActor)
         Route("/v1/task-grants/{grant_id}/revoke", revoke_task_grant, methods=["POST"]),
         Route("/v1/rooms", create_room, methods=["POST"]),
         Route("/v1/meetings", create_meeting, methods=["POST"]),
-        Route("/v1/rooms/{room_id}", describe_room, methods=["GET"]),
+        Route("/v1/rooms/{room_id}", describe_room, methods=["POST"]),
         Route("/v1/rooms/{room_id}/members", add_room_member, methods=["POST"]),
         Route("/v1/rooms/{room_id}/members/remove", remove_room_member, methods=["POST"]),
         Route("/v1/rooms/{room_id}/messages", send_room_message, methods=["POST"]),

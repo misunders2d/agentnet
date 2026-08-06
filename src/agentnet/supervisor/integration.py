@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from typing import Any, Protocol
 
 from agentnet.adapters.status import status_indicator
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
+from agentnet.supervisor.live_gate import should_wake
 from agentnet.supervisor.runtime import (
     BackgroundAdapterRuntime,
     BackgroundTurnAuthorization,
@@ -29,23 +30,15 @@ class SupervisorCoreClient(Protocol):
 
     def obligation_inbox(self) -> dict[str, int]: ...
 
-    def authorize_background(self, item: Mapping[str, Any]) -> dict[str, Any]: ...
+    def authorize_background(self, obligation_id: str) -> dict[str, Any]: ...
 
     def acknowledge_custody(
         self,
-        item: Mapping[str, Any],
+        obligation_id: str,
         authorization: BackgroundTurnAuthorization,
         *,
         local_queue_id: str,
     ) -> None: ...
-
-    def release_task_payload(
-        self,
-        item: Mapping[str, Any],
-        authorization: BackgroundTurnAuthorization,
-        *,
-        local_queue_id: str,
-    ) -> dict[str, Any]: ...
 
     def upload_result(self, result: Mapping[str, Any]) -> None: ...
 
@@ -72,6 +65,7 @@ class BackgroundHarnessIntegration:
         reconciliation_interval_seconds: float = 30.0,
         reconnect_initial_seconds: float = 0.25,
         reconnect_max_seconds: float = 5.0,
+        binding_guard: Callable[[str], object] | None = None,
     ) -> None:
         if not 0.05 <= watch_wait_seconds <= 30:
             raise ValueError("supervisor watch wait is outside the bounded profile")
@@ -87,6 +81,7 @@ class BackgroundHarnessIntegration:
         self.reconciliation_interval_seconds = reconciliation_interval_seconds
         self.reconnect_initial_seconds = reconnect_initial_seconds
         self.reconnect_max_seconds = reconnect_max_seconds
+        self._binding_guard = binding_guard
         self._runtimes: dict[str, BackgroundAdapterRuntime] = {}
         self._daemon_stops: dict[str, threading.Event] = {}
         self._daemon_threads: dict[str, threading.Thread] = {}
@@ -101,6 +96,17 @@ class BackgroundHarnessIntegration:
         self._last_reconciliation_at: dict[str, int] = {}
         self._last_wake_at: dict[str, int] = {}
         self.supervisor.recover()
+
+    def _reload_binding(self, harness_id: str) -> None:
+        if self._binding_guard is None:
+            return
+        try:
+            self._binding_guard(harness_id)
+        except Exception:
+            runtime = self._runtimes.get(harness_id)
+            if runtime is not None:
+                runtime.stop()
+            raise
 
     def register(self, runtime: BackgroundAdapterRuntime) -> None:
         harness_id = runtime.spec.harness_id
@@ -316,7 +322,7 @@ class BackgroundHarnessIntegration:
         limit: int = 25,
         reconcile_remote: bool = True,
     ) -> dict[str, int]:
-        """Reconcile when requested, then dispatch durable eligible local work."""
+        """Reconcile content-free obligation wakes, then authorize at launch."""
 
         if self.core_client is None:
             raise ValidationError("autonomous supervisor requires an authenticated corporate client")
@@ -325,12 +331,8 @@ class BackgroundHarnessIntegration:
         runtime = self._runtime(harness_id)
         runtime.require_ready()
         after_cursor = self.supervisor.local_queue.cursor(harness_id)
-        fetched = (
-            self.core_client.reconcile(after_cursor=after_cursor, limit=limit)
-            if reconcile_remote
-            else []
-        )
         obligations_reconciled = 0
+        fetched: list[dict[str, Any]] = []
         if reconcile_remote:
             obligation_result = self.core_client.reconcile_obligations(limit=limit)
             obligations_reconciled = sum(len(items) for items in obligation_result.values())
@@ -338,31 +340,31 @@ class BackgroundHarnessIntegration:
                 harness_id,
                 self.core_client.obligation_inbox(),
             )
+            fetched = self.core_client.reconcile(after_cursor=after_cursor, limit=limit)
+
         enqueued = 0
+        highest_cursor = after_cursor
         for item in fetched:
-            event_id, cursor, envelope_digest = self._mailbox_item(item)
-            authorization = BackgroundTurnAuthorization.from_mapping(
-                self.core_client.authorize_background(item)
-            )
-            if (
-                authorization.harness_id != harness_id
-                or authorization.event_id != event_id
-                or authorization.envelope_digest != envelope_digest
-            ):
-                raise AuthorizationError("background eligibility crossed its exact mailbox binding")
-            stored = {
-                "authorization": asdict(authorization),
-                "mailbox_item": dict(item),
-            }
-            result = self.supervisor.receive_from_core(
+            _event_id, cursor, _envelope_digest = self._mailbox_item(item)
+            highest_cursor = max(highest_cursor, cursor)
+            if not should_wake(item, endpoint_harness_id=harness_id):
+                continue
+            reference = item["response_obligation"]
+            obligation_id = str(reference["obligation_id"])
+            result = self.supervisor.queue_background_obligation(
                 harness_id=harness_id,
-                event={"event": {"event_id": event_id}, "eligible_delivery": stored},
-                cursor=cursor,
+                obligation_id=obligation_id,
             )
             if not result["duplicate"]:
                 enqueued += 1
+        if highest_cursor > after_cursor:
+            self.supervisor.advance_mailbox_cursor(
+                harness_id=harness_id,
+                cursor=highest_cursor,
+            )
 
         dispatched = 0
+        self._reload_binding(harness_id)
         if runtime.spec.semantic_mode == "clean_worker":
             claimed = self.supervisor.local_queue.claim(
                 harness_id=harness_id,
@@ -371,40 +373,35 @@ class BackgroundHarnessIntegration:
             )
             for queued in claimed:
                 try:
-                    delivery = queued["payload"]["eligible_delivery"]
-                    item = delivery["mailbox_item"]
+                    wake = queued["payload"]
+                    if (
+                        not isinstance(wake, dict)
+                        or set(wake) != {"schema", "obligation_id"}
+                        or wake["schema"] != "agentnet.background-obligation.v1"
+                        or not isinstance(wake["obligation_id"], str)
+                        or not wake["obligation_id"]
+                    ):
+                        raise AuthorizationError("background obligation queue binding is invalid")
+                    obligation_id = wake["obligation_id"]
+                    self._reload_binding(harness_id)
                     authorization = BackgroundTurnAuthorization.from_mapping(
-                        delivery["authorization"]
+                        self.core_client.authorize_background(obligation_id)
                     )
+                    if authorization.harness_id != harness_id:
+                        raise AuthorizationError(
+                            "background eligibility crossed its exact harness binding"
+                        )
                     self.core_client.acknowledge_custody(
-                        item,
+                        obligation_id,
                         authorization,
                         local_queue_id=queued["queue_id"],
                     )
-                    released = self.core_client.release_task_payload(
-                        item,
-                        authorization,
-                        local_queue_id=queued["queue_id"],
-                    )
+                    self._reload_binding(harness_id)
                     response = runtime.submit_background(
                         json.dumps(
                             {
-                                "authority": {
-                                    "effect_authorized": released["effect_authorized"],
-                                    "payload_access_authorized": released[
-                                        "payload_access_authorized"
-                                    ],
-                                    "release_receipt_id": released["release_receipt_id"],
-                                    "semantic_processing_authorized": released[
-                                        "semantic_processing_authorized"
-                                    ],
-                                    "tool_authorized": released["tool_authorized"],
-                                },
-                                "event": item["event"],
-                                "intent": released["intent"],
-                                "payload": released["payload"],
-                                "provenance": released["provenance"],
-                                "task_grant_id": authorization.task_grant_id,
+                                "authorization": asdict(authorization),
+                                "obligation_id": obligation_id,
                             },
                             allow_nan=False,
                             separators=(",", ":"),
@@ -412,6 +409,7 @@ class BackgroundHarnessIntegration:
                         ),
                         authorization=authorization,
                     )
+                    self._reload_binding(harness_id)
                     self.supervisor.acknowledge_with_local_output(
                         harness_id=harness_id,
                         source_queue_id=queued["queue_id"],
@@ -428,6 +426,7 @@ class BackgroundHarnessIntegration:
                     raise
 
         uploaded = 0
+        self._reload_binding(harness_id)
         for queued in self.supervisor.local_queue.claim(
             harness_id=harness_id,
             direction="outbox",
@@ -435,6 +434,7 @@ class BackgroundHarnessIntegration:
         ):
             try:
                 self.core_client.upload_result(queued["payload"])
+                self._reload_binding(harness_id)
                 self.supervisor.local_queue.complete(queued["queue_id"])
                 uploaded += 1
             except Exception:
@@ -454,6 +454,7 @@ class BackgroundHarnessIntegration:
 
         runtime = self._runtime(harness_id)
         runtime.require_ready()
+        self._reload_binding(harness_id)
         claimed = self.supervisor.explicit_open(harness_id, limit=limit)
         results: list[dict[str, Any]] = []
         for item in claimed:
@@ -474,6 +475,7 @@ class BackgroundHarnessIntegration:
                         ),
                         explicit=True,
                     )
+                    self._reload_binding(harness_id)
                     durable_output = self.supervisor.acknowledge_with_local_output(
                         harness_id=harness_id,
                         source_queue_id=item["queue_id"],
@@ -533,18 +535,38 @@ class BackgroundHarnessIntegration:
         }
 
     def recover(self) -> int:
-        recovered = self.supervisor.recover()
-        for runtime in self._runtimes.values():
-            if runtime.status().phase in {"offline", "degraded"}:
-                try:
-                    runtime.start()
-                except Exception:
-                    continue
-        return recovered
+        """Recover queue custody only; a harness requires an explicit restart."""
+
+        return self.supervisor.recover()
 
     def close(self) -> None:
-        for harness_id in set(self._runtimes) | set(self._c0_daemon_threads):
-            self.stop(harness_id)
+        failures: list[Exception] = []
+        for harness_id in sorted(set(self._runtimes) | set(self._c0_daemon_threads)):
+            try:
+                self.stop(harness_id)
+            except Exception as exc:
+                failures.append(exc)
+                runtime = self._runtimes.get(harness_id)
+                if runtime is not None:
+                    try:
+                        runtime.stop()
+                    except Exception as runtime_exc:
+                        failures.append(runtime_exc)
+        self._runtimes.clear()
+        self._daemon_stops.clear()
+        self._daemon_threads.clear()
+        self._daemon_errors.clear()
+        self._c0_daemon_stops.clear()
+        self._c0_daemon_threads.clear()
+        self._last_daemon_error_at.clear()
+        self._last_daemon_error_type.clear()
+        self._last_cycle_at.clear()
+        self._cycle_started_at.clear()
+        self._daemon_started_at.clear()
+        self._last_reconciliation_at.clear()
+        self._last_wake_at.clear()
+        if failures:
+            raise failures[0]
 
     def _runtime(self, harness_id: str) -> BackgroundAdapterRuntime:
         try:

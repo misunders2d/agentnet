@@ -12,12 +12,18 @@ import pytest
 
 from agentnet.artifacts.scanner import ArtifactDerivationV1, ScannerTrustPolicy
 from agentnet.artifacts.service import ArtifactService, FilesystemArtifactStore
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
 from agentnet.authorization.policy import (
     AuthorizationRequest,
     HumanEntitlement,
     LocalConformancePolicyEngine,
     PolicyEngine,
 )
+from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -523,6 +529,10 @@ def test_quarantine_scan_release_and_single_use_download(store, identity_factory
             resource=manifest["artifact_id"],
         ),
     )
+    lifecycle = service.lifecycle_status(manifest["artifact_id"], actor=actor)
+    assert lifecycle["manifest_state"] == "released"
+    assert lifecycle["lifecycle_state"] == "active"
+    assert lifecycle["object_version"] == uploaded["version"]
     token = service.issue_download_capability(
         manifest["artifact_id"],
         actor=actor,
@@ -685,6 +695,7 @@ def test_local_content_prefilter_persists_content_free_denial_without_storing_by
     denied = next(item for item in records if item.get("action") == "artifact.prefilter_denied")
     assert denied["reason_code"] == reason
     assert content.decode("latin1") not in json.dumps(denied)
+    assert service.recover_expired_reservations() == []
 
 
 def prepare_scanned_artifact(store, identity_factory, tmp_path: Path):
@@ -1342,18 +1353,48 @@ def test_retained_and_legally_held_event_references_block_artifact_deletion(
         ),
     )
     recipient, _ = identity_factory(kind="pi")
+    scopes = CollaborationScopeService(store)
+    scope_id = f"scope:retained-artifact:{uuid4()}"
+    scope_proposal = CollaborationScopeProposal(
+        scope_id=scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((actor.harness_id, recipient.harness_id))),
+        allowed_actions=("message.send",),
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=1,
+        domain_revocation_epoch=1,
+    )
+    scope_decision = authorize(
+        policy,
+        actor,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource=f"scope:{scope_id}",
+        context=scopes.issuance_request(actor=actor, proposal=scope_proposal),
+    )
+    scope = scopes.issue(
+        actor=actor,
+        proposal=scope_proposal,
+        authority=IssuanceAuthority(
+            actor=actor,
+            policy_decision_id=scope_decision,
+        ),
+    )
     event = new_event(
         domain_id=actor.domain_id,
         actor=actor,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"text": "retained artifact reference"},
+        payload={
+            "text": "retained artifact reference",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key=f"retained-artifact-{uuid4()}",
         recipients=(recipient.harness_id,),
         released_artifacts=(binding,),
         retention_delete_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    MailboxService(store).accept(event)
+    MailboxService(store, collaboration_scopes=scopes).accept(event)
     reason = "delete after retained history expires"
     decision = authorize(
         policy,

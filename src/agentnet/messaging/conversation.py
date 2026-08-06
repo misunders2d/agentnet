@@ -17,6 +17,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+from agentnet.authorization.communication_scope_service import (
+    CollaborationScope,
+    CollaborationScopeService,
+)
 from agentnet.authorization.policy import (
     AuthorizationRequest,
     OperationClass,
@@ -68,6 +72,7 @@ class ReplyAction(_ConversationAction):
     reply_to_event_id: str = Field(min_length=1, max_length=256)
     body: str = Field(min_length=1, max_length=65_536)
     mentions: tuple[str, ...] = ()
+    response_obligation: ResponseObligationSpec | None = None
 
 
 class TaskAction(_ConversationAction):
@@ -76,6 +81,7 @@ class TaskAction(_ConversationAction):
     summary: str = Field(min_length=1, max_length=4_096)
     structured_request: dict[str, Any] = Field(default_factory=dict)
     effect_deadline: datetime | None = None
+    response_obligation: ResponseObligationSpec | None = None
 
 
 class HandoffAction(_ConversationAction):
@@ -210,6 +216,28 @@ def _action_payload(parsed: ConversationAction) -> dict[str, Any]:
         exclude={"released_artifacts"},
     )
 
+def _collaboration_action(parsed: ConversationAction) -> str:
+    if isinstance(parsed, TaskAction):
+        return "task.propose"
+    if isinstance(parsed, HandoffAction):
+        return "task.handoff"
+    if isinstance(parsed, CancellationAction):
+        return "task.cancel"
+    if isinstance(parsed, CompletionAcknowledgementAction):
+        return "message.acknowledge"
+    if isinstance(parsed, ObligationResponseAction):
+        return "obligation.respond"
+    return "message.send"
+
+
+def _event_payload(
+    parsed: ConversationAction,
+    collaboration_scope: CollaborationScope,
+) -> dict[str, Any]:
+    return _action_payload(parsed) | {
+        "authorization_context": collaboration_scope.authorization_context()
+    }
+
 
 def build_conversation_event(
     *,
@@ -220,7 +248,7 @@ def build_conversation_event(
     action: dict[str, Any],
     idempotency_key: str,
     classification: Classification,
-    policy_revision: int = 1,
+    collaboration_scope: CollaborationScope,
     retention_delete_at: datetime | None = None,
 ) -> EventEnvelope:
     """Validate a conversation action and construct an immutable event.
@@ -238,6 +266,41 @@ def build_conversation_event(
     if isinstance(parsed, HandoffAction):
         if actor.harness_id != parsed.from_harness_id or parsed.to_harness_id not in recipients:
             raise AuthorizationError("handoff endpoints do not bind the exact actor and recipient")
+    required_scope_action = _collaboration_action(parsed)
+    if (
+        collaboration_scope.state != "active"
+        or collaboration_scope.domain_id != actor.domain_id
+        or actor.harness_id not in collaboration_scope.member_harness_ids
+        or not set(recipients).issubset(collaboration_scope.member_harness_ids)
+        or required_scope_action not in collaboration_scope.allowed_actions
+        or classification not in collaboration_scope.allowed_classifications
+        or not any(
+            f"conversation:{conversation_id}".startswith(prefix)
+            for prefix in collaboration_scope.allowed_resource_prefixes
+        )
+    ):
+        raise AuthorizationError("conversation event is outside its collaboration scope")
+    if parsed.released_artifacts and (
+        "artifact.send" not in collaboration_scope.allowed_actions
+        or any(
+            not any(
+                f"artifact:{binding.artifact_id}".startswith(prefix)
+                for prefix in collaboration_scope.allowed_resource_prefixes
+            )
+            for binding in parsed.released_artifacts
+        )
+    ):
+        raise AuthorizationError(
+            "conversation artifact is outside its collaboration scope"
+        )
+    obligation_spec = getattr(parsed, "response_obligation", None)
+    if (
+        obligation_spec is not None
+        and "obligation.create" not in collaboration_scope.allowed_actions
+    ):
+        raise AuthorizationError(
+            "conversation response obligation is outside its collaboration scope"
+        )
 
     event_type = EventType.MESSAGE
     if isinstance(parsed, TaskAction):
@@ -258,7 +321,11 @@ def build_conversation_event(
     event_id = str(
         uuid5(
             NAMESPACE_URL,
-            f"agentnet:conversation:{actor.domain_id}:{actor.harness_id}:{conversation_id}:{idempotency_key}",
+            (
+                f"agentnet:conversation:{actor.domain_id}:{actor.harness_id}:"
+                f"{conversation_id}:{collaboration_scope.scope_id}:"
+                f"{collaboration_scope.revision}:{idempotency_key}"
+            ),
         )
     )
     return new_event(
@@ -267,7 +334,7 @@ def build_conversation_event(
         actor=actor,
         event_type=event_type,
         classification=classification,
-        payload=_action_payload(parsed),
+        payload=_event_payload(parsed, collaboration_scope),
         idempotency_key=idempotency_key,
         recipients=recipients,
         released_artifacts=parsed.released_artifacts,
@@ -276,7 +343,7 @@ def build_conversation_event(
         task_id=getattr(parsed, "task_id", None),
         causal_parent_ids=(parent_id,) if parent_id else (),
         effect_deadline=getattr(parsed, "effect_deadline", None),
-        policy_revision=policy_revision,
+        policy_revision=collaboration_scope.policy_revision,
         retention_delete_at=retention_delete_at,
     )
 
@@ -295,6 +362,7 @@ class ConversationService:
         policy: PolicyEngine,
         mailbox: MailboxService,
         *,
+        collaboration_scopes: CollaborationScopeService,
         assignments: AssignmentService | None = None,
         obligations: ResponseObligationService | None = None,
         artifact_binding_validator: Callable[..., ReleasedArtifactBinding] | None = None,
@@ -305,12 +373,18 @@ class ConversationService:
         self.store = store
         self.policy = policy
         self.mailbox = mailbox
+        self.collaboration_scopes = collaboration_scopes
         self.assignments = assignments or AssignmentService(
             store,
+            collaboration_scopes=collaboration_scopes,
             mailbox=mailbox,
             policy=policy,
         )
-        self.obligations = obligations or ResponseObligationService(store, policy)
+        self.obligations = obligations or ResponseObligationService(
+            store,
+            policy,
+            collaboration_scopes,
+        )
         self.artifact_binding_validator = artifact_binding_validator
         self.retention_days = retention_days
 
@@ -434,11 +508,34 @@ class ConversationService:
             raise AuthorizationError("conversation recipient is unavailable")
         return mapped
 
+    def _require_task_scope_binding(
+        self,
+        connection: Any,
+        *,
+        task_row: Any,
+        collaboration_scope: CollaborationScope,
+    ) -> None:
+        event = connection.execute(
+            "SELECT payload_encrypted FROM events WHERE event_id=?",
+            (task_row["latest_event_id"],),
+        ).fetchone()
+        if event is None:
+            raise AuthorizationError("conversation task scope binding is unavailable")
+        payload = self.store.decrypted_payload(
+            event["payload_encrypted"],
+            task_row["latest_event_id"],
+        )
+        if payload.get("authorization_context") != collaboration_scope.authorization_context():
+            raise AuthorizationError(
+                "conversation task is outside the exact collaboration scope revision"
+            )
+
     def create(
         self,
         *,
         actor: VerifiedActor,
         conversation_id: str,
+        collaboration_scope_id: str,
         member_harness_ids: tuple[str, ...],
         classification: Classification = Classification.C1_INTERNAL,
         phase_hook: Callable[[str], None] | None = None,
@@ -462,7 +559,18 @@ class ConversationService:
                 members,
                 classification=classification,
             )
+            collaboration_scope = self.collaboration_scopes.require_in_transaction(
+                connection,
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="message.send",
+                resource=f"conversation:{conversation_id}",
+                target_harness_ids=members,
+                classification=classification,
+                when=datetime.fromtimestamp(now, UTC),
+            )
             context = {
+                "authorization_context": collaboration_scope.authorization_context(),
                 "classification": classification.value,
                 "member_digest": canonical_digest({"members": sorted(mapped.items())}),
                 "member_harness_ids": sorted(mapped),
@@ -493,10 +601,40 @@ class ConversationService:
                     (conversation_id,),
                 ).fetchall()
                 expected = sorted(
-                    (harness_id, mapped[harness_id], "owner" if mapped[harness_id] == authority_id else "member", "active")
+                    (harness_id, mapped[harness_id], "owner" if harness_id == actor.harness_id else "member", "active")
                     for harness_id in mapped
                 )
                 stored = sorted((row["harness_id"], row["authority_id"], row["role"], row["status"]) for row in rows)
+                previous_decisions = connection.execute(
+                    """SELECT context_json FROM policy_decisions
+                         WHERE action='conversation.create' AND actor_json=?
+                           AND resource_json=? AND allowed=1 AND decision_id<>?""",
+                    (
+                        canonical_json(actor.audit_view()).decode("utf-8"),
+                        canonical_json({"id": f"conversation:{conversation_id}"}).decode(
+                            "utf-8"
+                        ),
+                        decision.decision_id,
+                    ),
+                ).fetchall()
+                expected_scope_context = collaboration_scope.authorization_context()
+                try:
+                    prior_scope_contexts = {
+                        canonical_json(
+                            json.loads(row["context_json"])["request"][
+                                "authorization_context"
+                            ]
+                        )
+                        for row in previous_decisions
+                    }
+                except (KeyError, TypeError, ValueError):
+                    raise AuthorizationError(
+                        "conversation identifier lacks an exact collaboration scope binding"
+                    ) from None
+                if prior_scope_contexts != {canonical_json(expected_scope_context)}:
+                    raise AuthorizationError(
+                        "conversation identifier already names a different collaboration scope"
+                    )
                 if (
                     existing["domain_id"] != actor.domain_id
                     or existing["created_by_authority_id"] != authority_id
@@ -504,7 +642,13 @@ class ConversationService:
                     or stored != expected
                 ):
                     raise AuthorizationError("conversation identifier already names different authority or membership")
-                return {"conversation_id": conversation_id, "duplicate": True, "policy_decision_id": decision.decision_id}
+                return {
+                    "conversation_id": conversation_id,
+                    "collaboration_scope_id": collaboration_scope.scope_id,
+                    "collaboration_scope_revision": collaboration_scope.revision,
+                    "duplicate": True,
+                    "policy_decision_id": decision.decision_id,
+                }
             connection.execute(
                 """INSERT INTO conversations(
                     conversation_id,domain_id,created_by_authority_id,classification,state,created_at,updated_at
@@ -520,7 +664,7 @@ class ConversationService:
                         conversation_id,
                         member_authority,
                         harness_id,
-                        "owner" if member_authority == authority_id else "member",
+                        "owner" if harness_id == actor.harness_id else "member",
                         now,
                     ),
                 )
@@ -532,12 +676,19 @@ class ConversationService:
                     "classification": classification.value,
                     "conversation_id": conversation_id,
                     "member_authority_digest": context["member_digest"],
+                    "authorization_context": collaboration_scope.authorization_context(),
                     "policy_decision_id": decision.decision_id,
                 },
             )
             if phase_hook is not None:
                 phase_hook("before_conversation_commit")
-        return {"conversation_id": conversation_id, "duplicate": False, "policy_decision_id": decision.decision_id}
+        return {
+            "conversation_id": conversation_id,
+            "collaboration_scope_id": collaboration_scope.scope_id,
+            "collaboration_scope_revision": collaboration_scope.revision,
+            "duplicate": False,
+            "policy_decision_id": decision.decision_id,
+        }
 
     def post(
         self,
@@ -545,6 +696,7 @@ class ConversationService:
         actor: VerifiedActor,
         recipients: tuple[str, ...],
         conversation_id: str,
+        collaboration_scope_id: str,
         thread_id: str,
         action: dict[str, Any],
         idempotency_key: str,
@@ -584,6 +736,46 @@ class ConversationService:
             ).fetchall()
             if not set(recipients).issubset({row["harness_id"] for row in active_rows}):
                 raise AuthorizationError("conversation delivery targets a nonmember harness")
+            collaboration_scope = self.collaboration_scopes.require_in_transaction(
+                connection,
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action=_collaboration_action(parsed),
+                resource=f"conversation:{conversation_id}",
+                target_harness_ids=recipients,
+                classification=classification,
+                when=datetime.fromtimestamp(now, UTC),
+            )
+            for binding in parsed.released_artifacts:
+                artifact_scope = self.collaboration_scopes.require_in_transaction(
+                    connection,
+                    actor=actor,
+                    scope_id=collaboration_scope_id,
+                    action="artifact.send",
+                    resource=f"artifact:{binding.artifact_id}",
+                    target_harness_ids=recipients,
+                    classification=classification,
+                    when=datetime.fromtimestamp(now, UTC),
+                )
+                if artifact_scope.scope_digest != collaboration_scope.scope_digest:
+                    raise AuthorizationError(
+                        "conversation artifact scope binding is contradictory"
+                    )
+            if getattr(parsed, "response_obligation", None) is not None:
+                obligation_scope = self.collaboration_scopes.require_in_transaction(
+                    connection,
+                    actor=actor,
+                    scope_id=collaboration_scope_id,
+                    action="obligation.create",
+                    resource=f"conversation:{conversation_id}",
+                    target_harness_ids=recipients,
+                    classification=classification,
+                    when=datetime.fromtimestamp(now, UTC),
+                )
+                if obligation_scope.scope_digest != collaboration_scope.scope_digest:
+                    raise AuthorizationError(
+                        "conversation obligation scope binding is contradictory"
+                    )
 
             existing = connection.execute(
                 """SELECT e.event_id,e.acceptance_fact,e.envelope_digest,e.envelope_json,e.payload_encrypted,
@@ -599,7 +791,7 @@ class ConversationService:
             if existing is not None:
                 envelope = json.loads(existing["envelope_json"])
                 exact_payload = self.store.decrypted_payload(existing["payload_encrypted"], existing["event_id"])
-                expected_payload = _action_payload(parsed)
+                expected_payload = _event_payload(parsed, collaboration_scope)
                 expected_artifacts = [
                     binding.model_dump(mode="json") for binding in parsed.released_artifacts
                 ]
@@ -619,6 +811,8 @@ class ConversationService:
                     "envelope_digest": existing["envelope_digest"],
                     "action_kind": parsed.kind,
                     "conversation_id": conversation_id,
+                    "collaboration_scope_id": collaboration_scope.scope_id,
+                    "collaboration_scope_revision": collaboration_scope.revision,
                 }
                 obligation = connection.execute(
                     """SELECT obligation_id,state,revision FROM response_obligations
@@ -707,12 +901,19 @@ class ConversationService:
                 policy_action = "conversation.structured_request.send"
             elif isinstance(parsed, ObligationResponseAction):
                 policy_action = "conversation.response_obligation.respond"
+            if task_row is not None:
+                self._require_task_scope_binding(
+                    connection,
+                    task_row=task_row,
+                    collaboration_scope=collaboration_scope,
+                )
             obligation_row: Any | None = None
             if isinstance(parsed, ObligationResponseAction):
                 parent_event_id = parsed.request_event_id
                 obligation_row = self.obligations.require_open_for_response_in_transaction(
                     connection,
                     actor=actor,
+                    collaboration_scope_id=collaboration_scope.scope_id,
                     responder_authority_id=authority_id,
                     obligation_id=parsed.obligation_id,
                     request_event_id=parsed.request_event_id,
@@ -763,10 +964,11 @@ class ConversationService:
                 ),
                 idempotency_key=idempotency_key,
                 classification=classification,
-                policy_revision=revision,
+                collaboration_scope=collaboration_scope,
                 retention_delete_at=datetime.fromtimestamp(now, UTC) + timedelta(days=self.retention_days),
             )
             context = {
+                "authorization_context": collaboration_scope.authorization_context(),
                 "action_digest": event.payload_digest,
                 "recipient_authority_digest": canonical_digest({"recipients": sorted(recipient_authorities.items())}),
                 "thread_id": thread_id,
@@ -818,8 +1020,19 @@ class ConversationService:
                         budget = declared_budget
                     if isinstance(declared_concurrency, int) and declared_concurrency >= 1:
                         concurrency = declared_concurrency
+                if any(
+                    not any(
+                        resource.startswith(prefix)
+                        for prefix in collaboration_scope.allowed_resource_prefixes
+                    )
+                    for resource in resources
+                ):
+                    raise AuthorizationError(
+                        "conversation task resource is outside its collaboration scope"
+                    )
                 assignment = AssignmentRequest(
                     actor=actor,
+                    collaboration_scope_id=collaboration_scope.scope_id,
                     recipient_harness_id=recipients[0],
                     task_type=task_type,
                     resources=frozenset(resources),
@@ -830,6 +1043,7 @@ class ConversationService:
                     deadline=deadline,
                     policy_revision=revision,
                     context={
+                        "authorization_context": collaboration_scope.authorization_context(),
                         "conversation_id": conversation_id,
                         "thread_id": thread_id,
                         "action_digest": event.payload_digest,
@@ -844,6 +1058,12 @@ class ConversationService:
                     "parent_event_id": parent_event_id,
                     "actor_authority_id": authority_id,
                     "actor_harness_id": actor.harness_id,
+                    "collaboration_scope_id": collaboration_scope.scope_id,
+                    "collaboration_scope_revision": collaboration_scope.revision,
+                    "collaboration_scope_policy_revision": collaboration_scope.policy_revision,
+                    "collaboration_scope_member_harness_ids": list(
+                        collaboration_scope.member_harness_ids
+                    ),
                     "authorization": {
                         "action": policy_action,
                         "resource": f"conversation:{conversation_id}",
@@ -876,6 +1096,7 @@ class ConversationService:
                         "action_digest": event.payload_digest,
                         "action_kind": parsed.kind,
                         "conversation_id": conversation_id,
+                        "authorization_context": collaboration_scope.authorization_context(),
                         "event_id": event.event_id,
                         "fact": custody["fact"],
                         "policy_decision_id": decision.decision_id,
@@ -885,10 +1106,49 @@ class ConversationService:
                 )
                 if phase_hook is not None:
                     phase_hook("before_conversation_action_commit")
+                obligation_result: dict[str, Any] | None = None
+                if obligation_spec is not None and responsible_harness_id is not None:
+                    if custody["duplicate"]:
+                        existing_obligation = connection.execute(
+                            """SELECT obligation_id,state,revision
+                                 FROM response_obligations
+                                WHERE request_event_id=? AND responsible_harness_id=?""",
+                            (event.event_id, responsible_harness_id),
+                        ).fetchone()
+                        if existing_obligation is None:
+                            raise ConflictError(
+                                "task response obligation replay is incomplete"
+                            )
+                        obligation_result = dict(existing_obligation)
+                    else:
+                        envelope_digest_value = custody.get("envelope_digest")
+                        if not isinstance(envelope_digest_value, str):
+                            raise AuthorizationError(
+                                "task response obligation requires accepted exact custody"
+                            )
+                        obligation_result = self.obligations.create_in_transaction(
+                            connection,
+                            actor=actor,
+                            requester_authority_id=authority_id,
+                            collaboration_scope_id=collaboration_scope.scope_id,
+                            spec=obligation_spec,
+                            request_event=event,
+                            request_envelope_digest=envelope_digest_value,
+                            responsible_harness_id=responsible_harness_id,
+                            responsible_authority_id=recipient_authorities[
+                                responsible_harness_id
+                            ],
+                            classification=classification,
+                            policy_revision=revision,
+                            now=now,
+                        )
                 return custody | {
                     "action_kind": parsed.kind,
                     "conversation_id": conversation_id,
+                    "collaboration_scope_id": collaboration_scope.scope_id,
+                    "collaboration_scope_revision": collaboration_scope.revision,
                     "policy_decision_id": decision.decision_id,
+                    "response_obligation": obligation_result,
                 }
             accepted = self.mailbox._accept_in_transaction(connection, event, now=now)
             if accepted["duplicate"]:
@@ -901,6 +1161,8 @@ class ConversationService:
                 return accepted | {
                     "action_kind": parsed.kind,
                     "conversation_id": conversation_id,
+                    "collaboration_scope_id": collaboration_scope.scope_id,
+                    "collaboration_scope_revision": collaboration_scope.revision,
                     "policy_decision_id": decision.decision_id,
                 }
             connection.execute(
@@ -968,6 +1230,7 @@ class ConversationService:
                     connection,
                     actor=actor,
                     requester_authority_id=authority_id,
+                    collaboration_scope_id=collaboration_scope.scope_id,
                     spec=obligation_spec,
                     request_event=event,
                     request_envelope_digest=accepted["envelope_digest"],
@@ -985,6 +1248,7 @@ class ConversationService:
                     connection,
                     row=obligation_row,
                     actor=actor,
+                    collaboration_scope_id=collaboration_scope.scope_id,
                     outcome=parsed.outcome,
                     response_event_id=event.event_id,
                     response_payload_digest=event.payload_digest,
@@ -1003,6 +1267,7 @@ class ConversationService:
                     "action_kind": parsed.kind,
                     "actor": actor.audit_view(),
                     "conversation_id": conversation_id,
+                    "authorization_context": collaboration_scope.authorization_context(),
                     "event_id": event.event_id,
                     "policy_decision_id": decision.decision_id,
                 },
@@ -1012,6 +1277,8 @@ class ConversationService:
         result = accepted | {
             "action_kind": parsed.kind,
             "conversation_id": conversation_id,
+            "collaboration_scope_id": collaboration_scope.scope_id,
+            "collaboration_scope_revision": collaboration_scope.revision,
             "policy_decision_id": decision.decision_id,
         }
         if obligation_result is not None:
@@ -1023,6 +1290,7 @@ class ConversationService:
         *,
         actor: VerifiedActor,
         conversation_id: str,
+        collaboration_scope_id: str,
         thread_id: str,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
@@ -1037,6 +1305,16 @@ class ConversationService:
                 now=now,
             )
             classification = Classification(conversation["classification"])
+            collaboration_scope = self.collaboration_scopes.require_in_transaction(
+                connection,
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="message.read",
+                resource=f"conversation:{conversation_id}",
+                target_harness_ids=(),
+                classification=classification,
+                when=datetime.fromtimestamp(now, UTC),
+            )
             decision = self.policy._decide_in_transaction(
                 connection,
                 AuthorizationRequest(
@@ -1044,7 +1322,12 @@ class ConversationService:
                     action="conversation.thread",
                     resource=f"conversation:{conversation_id}",
                     policy_revision=revision,
-                    context={"conversation_id": conversation_id, "thread_id": thread_id, "limit": limit},
+                    context={
+                        "authorization_context": collaboration_scope.authorization_context(),
+                        "conversation_id": conversation_id,
+                        "thread_id": thread_id,
+                        "limit": limit,
+                    },
                     classification=classification,
                 ),
                 when=datetime.fromtimestamp(now, UTC),
@@ -1057,27 +1340,68 @@ class ConversationService:
                      FROM conversation_actions a JOIN events e ON e.event_id=a.event_id
                     WHERE a.conversation_id=? AND a.thread_id=?
                     ORDER BY a.created_at,a.event_id LIMIT ?""",
-                (conversation_id, thread_id, limit),
+                (conversation_id, thread_id, 1_000),
             ).fetchall()
             result: list[dict[str, Any]] = []
             for row in rows:
+                payload_view = self.mailbox.generic_payload_view(row, now=now)
+                protected_payload = payload_view["payload"]
+                if protected_payload is None:
+                    protected_payload = self.store.decrypted_payload(
+                        row["payload_encrypted"],
+                        row["event_id"],
+                    )
+                if (
+                    protected_payload.get("authorization_context")
+                    != collaboration_scope.authorization_context()
+                ):
+                    continue
                 result.append(
                     {
                         "event": json.loads(row["envelope_json"]),
                         "envelope_digest": row["envelope_digest"],
-                        **self.mailbox.generic_payload_view(row, now=now),
+                        **payload_view,
                     }
                 )
+                if len(result) == limit:
+                    break
             return result
 
-    def task_state(self, *, actor: VerifiedActor, conversation_id: str, task_id: str) -> dict[str, Any]:
+    def task_state(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        conversation_id: str,
+        task_id: str,
+    ) -> dict[str, Any]:
         now = int(time.time())
         with self.store.transaction(immediate=False) as connection:
-            self._require_member(connection, actor, conversation_id, now=now)
+            conversation, _authority_id, _revision = self._require_member(
+                connection,
+                actor,
+                conversation_id,
+                now=now,
+            )
+            collaboration_scope = self.collaboration_scopes.require_in_transaction(
+                connection,
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="message.read",
+                resource=f"conversation:{conversation_id}",
+                target_harness_ids=(),
+                classification=Classification(conversation["classification"]),
+                when=datetime.fromtimestamp(now, UTC),
+            )
             row = connection.execute(
                 "SELECT * FROM conversation_tasks WHERE conversation_id=? AND task_id=?",
                 (conversation_id, task_id),
             ).fetchone()
             if row is None:
                 raise AuthorizationError("conversation task is unavailable")
+            self._require_task_scope_binding(
+                connection,
+                task_row=row,
+                collaboration_scope=collaboration_scope,
+            )
             return dict(row)

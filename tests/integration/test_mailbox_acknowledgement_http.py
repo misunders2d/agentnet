@@ -7,7 +7,12 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentnet.authorization.policy import HumanEntitlement
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
 from agentnet.http_api import create_app
@@ -39,6 +44,63 @@ def _signed(key, actor, method: str, path: str, body: bytes) -> dict[str, str]:
 def _count(store, table: str) -> int:
     return int(store.fetch_one(f"SELECT COUNT(*) AS count FROM {table}")["count"])
 
+def _collaboration_scope(
+    core: CommunicationCore,
+    *,
+    owner,
+    members,
+    actions: tuple[str, ...],
+    resources: tuple[str, ...],
+    classifications: tuple[Classification, ...],
+):
+    revision = core.policy.current_policy_revision(owner)
+    domain = core.store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope-http-ack-{uuid4()}",
+        scope_kind="personal" if len(members) == 1 else "direct" if len(members) == 2 else "shared",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=tuple(sorted(actions)),
+        allowed_resource_prefixes=tuple(sorted(resources)),
+        allowed_classifications=tuple(
+            sorted(classifications, key=lambda value: value.value)
+        ),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=owner,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+
 
 @pytest.mark.anyio
 async def test_signed_mailbox_acknowledgement_is_exact_replay_safe_and_non_escalating(
@@ -46,8 +108,8 @@ async def test_signed_mailbox_acknowledgement_is_exact_replay_safe_and_non_escal
     identity_factory,
     tmp_path: Path,
 ) -> None:
-    sender, _ = identity_factory(kind="codex")
-    recipient, recipient_key = identity_factory(kind="pi")
+    sender, _ = identity_factory(kind="codex", binding_assurance="os_bound")
+    recipient, recipient_key = identity_factory(kind="pi", binding_assurance="os_bound")
     outsider, outsider_key = identity_factory(kind="claude")
     config = ExtensionConfig(
         domain_id=sender.domain_id,
@@ -66,19 +128,36 @@ async def test_signed_mailbox_acknowledgement_is_exact_replay_safe_and_non_escal
             revision=1,
         )
     )
+    scope = _collaboration_scope(
+        core,
+        owner=sender,
+        members=(sender, recipient),
+        actions=("message.acknowledge",),
+        resources=("conversation:direct",),
+        classifications=(Classification.C1_INTERNAL,),
+    )
     event = new_event(
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"text": "persist before acknowledging"},
+        payload={
+            "text": "persist before acknowledging",
+            "authorization_context": scope.authorization_context(),
+        },
         idempotency_key=f"http-mailbox-ack-{uuid4()}",
         recipients=(recipient.harness_id,),
+        policy_revision=scope.policy_revision,
         retention_delete_at=datetime.now(UTC) + timedelta(days=1),
     )
     accepted = core.mailboxes.accept(event)
     path = f"/v1/mailbox/{event.event_id}/acknowledge"
-    body = canonical_json({"envelope_digest": accepted["envelope_digest"]})
+    body = canonical_json(
+        {
+            "collaboration_scope_id": scope.scope_id,
+            "envelope_digest": accepted["envelope_digest"],
+        }
+    )
     app = create_app(core)
 
     async with httpx.AsyncClient(
@@ -120,6 +199,7 @@ async def test_signed_mailbox_acknowledgement_is_exact_replay_safe_and_non_escal
 
         spoofed_body = canonical_json(
             {
+                "collaboration_scope_id": scope.scope_id,
                 "envelope_digest": accepted["envelope_digest"],
                 "recipient_id": outsider.harness_id,
             }
@@ -144,7 +224,12 @@ async def test_signed_mailbox_acknowledgement_is_exact_replay_safe_and_non_escal
         )
         assert wrong_actor.status_code in {403, 404}
 
-        altered = canonical_json({"envelope_digest": "0" * 64})
+        altered = canonical_json(
+            {
+                "collaboration_scope_id": scope.scope_id,
+                "envelope_digest": "0" * 64,
+            }
+        )
         body_substitution = await client.post(
             path,
             content=altered,

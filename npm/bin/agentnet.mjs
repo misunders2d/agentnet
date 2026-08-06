@@ -34,6 +34,7 @@ if (!supportedPlatform(process.platform)) {
 }
 
 const userArguments = process.argv.slice(2);
+const packagedSetup = userArguments[0] === "setup";
 const setupApply = process.platform === "linux" &&
   userArguments[0] === "server-agent" && userArguments[1] === "setup" &&
   userArguments.includes("--apply");
@@ -213,41 +214,66 @@ if (privilegedSetupApply) {
   chmodSync(setupRoot, 0o700);
   runtimeRoot = path.join(setupRoot, "npm-runtime", `${metadata.version}-${installIdentity}`);
 } else {
-  runtimeRoot = process.env.AGENTNET_NPM_RUNTIME_DIR
-    ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
-    : path.join(stateRoot, "agentnet", "npm-runtime", `${metadata.version}-${installIdentity}`);
+  const packageOwnedRuntime = path.join(
+    stateRoot,
+    "agentnet",
+    "npm-runtime",
+    `${metadata.version}-${installIdentity}`,
+  );
+  runtimeRoot = packagedSetup
+    ? packageOwnedRuntime
+    : process.env.AGENTNET_NPM_RUNTIME_DIR
+      ? path.resolve(process.env.AGENTNET_NPM_RUNTIME_DIR)
+      : packageOwnedRuntime;
 }
 
-mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
-const runtimeStat = lstatSync(runtimeRoot);
-if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink()) {
-  console.error("AgentNet npm runtime path must be a real directory.");
-  process.exit(1);
-}
-if (process.platform !== "win32") {
-  chmodSync(runtimeRoot, 0o700);
-} else {
-  const runtimeMode = readdirSync(runtimeRoot).length === 0 ? "initialize" : "verify";
-  const aclScript = path.join(packageRoot, "npm", "lib", "windows-runtime-acl.ps1");
-  const aclCheck = spawnSync(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      aclScript,
-      runtimeRoot,
-      runtimeMode,
-    ],
-    { encoding: "utf8", shell: false, windowsHide: true },
-  );
-  if (aclCheck.error || aclCheck.status !== 0) {
-    console.error("AgentNet Windows npm runtime root failed private-DACL verification.");
+try {
+  mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+  const runtimeStat = lstatSync(runtimeRoot);
+  if (
+    !runtimeStat.isDirectory() || runtimeStat.isSymbolicLink() ||
+    (
+      packagedSetup && process.platform !== "win32" &&
+      typeof process.getuid === "function" && runtimeStat.uid !== process.getuid()
+    )
+  ) {
+    console.error(
+      packagedSetup
+        ? "AgentNet setup could not access its package-owned Python runtime."
+        : "AgentNet npm runtime path must be a real directory.",
+    );
     process.exit(1);
   }
+  if (process.platform !== "win32") {
+    chmodSync(runtimeRoot, 0o700);
+  } else {
+    const runtimeMode = readdirSync(runtimeRoot).length === 0 ? "initialize" : "verify";
+    const aclScript = path.join(packageRoot, "npm", "lib", "windows-runtime-acl.ps1");
+    const aclCheck = spawnSync(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        aclScript,
+        runtimeRoot,
+        runtimeMode,
+      ],
+      { encoding: "utf8", shell: false, windowsHide: true },
+    );
+    if (aclCheck.error || aclCheck.status !== 0) {
+      if (packagedSetup) throw new Error("invalid runtime DACL");
+      console.error("AgentNet Windows npm runtime root failed private-DACL verification.");
+      process.exit(1);
+    }
+  }
+} catch (error) {
+  if (!packagedSetup) throw error;
+  console.error("AgentNet setup could not access its package-owned Python runtime.");
+  process.exit(1);
 }
 
 const verify = userArguments[0] === "verify";
@@ -261,7 +287,21 @@ const uvArguments = [
   "3.13.13",
 ];
 if (verify) uvArguments.push("--extra", "test");
-uvArguments.push("agentnet", ...userArguments);
+if (packagedSetup) {
+  uvArguments.push(
+    "--managed-python",
+    "--no-active",
+    "--no-config",
+    "python",
+    "-I",
+    "-B",
+    "-m",
+    "agentnet",
+    ...userArguments,
+  );
+} else {
+  uvArguments.push("agentnet", ...userArguments);
+}
 
 const inheritedEnvironment = privilegedSetupApply
   ? {
@@ -273,6 +313,21 @@ const inheritedEnvironment = privilegedSetupApply
         : {}),
     }
   : { ...process.env };
+if (packagedSetup) {
+  for (const name of [
+    "CONDA_PREFIX",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "UV_NO_SYNC",
+    "UV_PROJECT",
+    "UV_PYTHON",
+    "UV_PYTHON_INSTALL_DIR",
+    "UV_WORKING_DIRECTORY",
+    "VIRTUAL_ENV",
+  ]) {
+    delete inheritedEnvironment[name];
+  }
+}
 const child = spawn(uvExecutable, uvArguments, {
   stdio: "inherit",
   env: {

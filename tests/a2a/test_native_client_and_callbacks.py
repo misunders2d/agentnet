@@ -5,6 +5,7 @@ import time
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -28,7 +29,18 @@ from a2a.types import (
 )
 from starlette.applications import Starlette
 
-from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import ValidationError
 from agentnet.gateways.a2a import (
@@ -293,6 +305,59 @@ class CapturingCallbackSender:
         self.deliveries.append((copied_config, copied_event))
 
 
+def issue_task_scope(
+    store,
+    *,
+    owner: VerifiedActor,
+    recipient: VerifiedActor,
+) -> tuple[CollaborationScopeService, CollaborationScope]:
+    scopes = CollaborationScopeService(store)
+    policy = LocalConformancePolicyEngine(store)
+    revision = policy.current_policy_revision(owner)
+    domain = store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:a2a-native:{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((owner.harness_id, recipient.harness_id))),
+        allowed_actions=("task.accept", "task.propose"),
+        allowed_resource_prefixes=("task:",),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=scopes.issuance_request(actor=owner, proposal=proposal),
+        )
+    )
+    scope = scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+    return scopes, scope
+
+
 def seed_task_grant(store, actor, recipient_id: str) -> TaskGrant:
     policy = LocalConformancePolicyEngine(store)
     policy.bootstrap_entitlement_for_local_conformance(
@@ -342,10 +407,16 @@ async def test_runtime_persists_encrypted_callback_and_delivers_transition_event
     sender = sender.model_copy(update={"binding_assurance": "os_bound"})
     recipient = recipient.model_copy(update={"binding_assurance": "os_bound"})
     grant = seed_task_grant(store, sender, recipient.harness_id)
+    scopes, scope = issue_task_scope(store, owner=sender, recipient=recipient)
     callback_sender = CapturingCallbackSender()
     runtime = DurableA2ARuntime(
         store=store,
-        mailbox=MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL),
+        mailbox=MailboxService(
+            store,
+            collaboration_scopes=scopes,
+            acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        ),
+        collaboration_scopes=scopes,
         policy=LocalConformancePolicyEngine(store),
         agent_card=AgentCard(
             name="Callback server-agent",
@@ -379,6 +450,7 @@ async def test_runtime_persists_encrypted_callback_and_delivers_transition_event
             "agentnetIdempotencyKey": "callback-task-idempotency-0001",
             "agentnetTaskGrantId": grant.grant_id,
             "agentnetDataClass": "C1",
+            "agentnetCollaborationScopeId": scope.scope_id,
         },
     )
     task = await runtime.on_message_send(request, context)
@@ -456,6 +528,7 @@ async def test_official_sdk_client_sends_signed_corporate_task_through_pinned_in
     sender = sender.model_copy(update={"binding_assurance": "os_bound"})
     recipient = recipient.model_copy(update={"binding_assurance": "os_bound"})
     grant = seed_task_grant(store, sender, recipient.harness_id)
+    scopes, scope = issue_task_scope(store, owner=sender, recipient=recipient)
     route = OpaqueAgentRoute(
         route_token=TENANT,
         logical_agent_id=recipient.harness_id,
@@ -473,7 +546,12 @@ async def test_official_sdk_client_sends_signed_corporate_task_through_pinned_in
     )
     runtime = DurableA2ARuntime(
         store=store,
-        mailbox=MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL),
+        mailbox=MailboxService(
+            store,
+            collaboration_scopes=scopes,
+            acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        ),
+        collaboration_scopes=scopes,
         policy=LocalConformancePolicyEngine(store),
         agent_card=card,
         recipient_id=recipient.harness_id,
@@ -540,6 +618,7 @@ async def test_official_sdk_client_sends_signed_corporate_task_through_pinned_in
             "agentnetIdempotencyKey": "native-sdk-idempotency-0001",
             "agentnetTaskGrantId": grant.grant_id,
             "agentnetDataClass": "C1",
+            "agentnetCollaborationScopeId": scope.scope_id,
         },
     )
     try:

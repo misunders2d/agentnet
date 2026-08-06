@@ -2,9 +2,9 @@
 
 The official SDK owns the wire protocol.  This module owns the local durable
 projection and corporate policy boundary.  Unsigned public peers can create
-only inert proposals.  A corporate message or task is accepted into the
-mailbox only after an enrolled human+harness request proof and an exact,
-current, use-counted task grant are both verified.
+only inert proposals. A corporate message or task is accepted into the mailbox
+only after an enrolled human+harness request proof, an exact current immutable
+collaboration scope, and a separate current use-counted task grant are verified.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
+from agentnet.authorization.communication_scope_service import CollaborationScopeService
 from agentnet.authorization.grants import GrantUse
 from agentnet.authorization.policy import (
     AuthorizationRequest,
@@ -364,6 +365,7 @@ class DurableA2ARuntime(RequestHandler):
         *,
         store: StoreBackend,
         mailbox: MailboxService,
+        collaboration_scopes: CollaborationScopeService,
         policy: PolicyEngine,
         assignments: AssignmentService | None = None,
         agent_card: AgentCard,
@@ -379,9 +381,18 @@ class DurableA2ARuntime(RequestHandler):
     ) -> None:
         self.store = store
         self.mailbox = mailbox
+        if collaboration_scopes is not mailbox.collaboration_scopes:
+            raise ValueError("A2A runtime and mailbox must share one collaboration scope service")
+        if (
+            assignments is not None
+            and assignments.collaboration_scopes is not collaboration_scopes
+        ):
+            raise ValueError("A2A runtime and assignments must share one collaboration scope service")
+        self.collaboration_scopes = collaboration_scopes
         self.policy = policy
         self.assignments = assignments or AssignmentService(
             store,
+            collaboration_scopes=mailbox.collaboration_scopes,
             mailbox=mailbox,
             policy=policy,
         )
@@ -614,7 +625,7 @@ class DurableA2ARuntime(RequestHandler):
         actor: VerifiedActor,
         request: SendMessageRequest,
         request_digest: str,
-    ) -> tuple[str, str, Classification, int, str]:
+    ) -> tuple[str, str, Classification, int, str, str]:
         if actor.kind not in {ActorKind.VERIFIED_HUMAN_HARNESS, ActorKind.HOST_GUEST_HARNESS}:
             raise AuthorizationError("corporate A2A submission requires an enrolled human+harness actor")
         metadata = _struct_dict(request.metadata)
@@ -623,6 +634,10 @@ class DurableA2ARuntime(RequestHandler):
             raise ValidationError("agentnetIntent must be exactly message or task")
         idempotency_key = _required_string(metadata, "agentnetIdempotencyKey", minimum=16)
         grant_id = _required_string(metadata, "agentnetTaskGrantId")
+        collaboration_scope_id = _required_string(
+            metadata,
+            "agentnetCollaborationScopeId",
+        )
         try:
             data_class = Classification(_required_string(metadata, "agentnetDataClass"))
         except ValueError as exc:
@@ -642,6 +657,7 @@ class DurableA2ARuntime(RequestHandler):
                     "a2a_intent": intent,
                     "idempotency_key": idempotency_key,
                     "request_digest": request_digest,
+                    "collaboration_scope_id": collaboration_scope_id,
                 },
                 grant_use=GrantUse(
                     grant_id=grant_id,
@@ -660,7 +676,7 @@ class DurableA2ARuntime(RequestHandler):
         )
         if recipient is None or recipient["domain_id"] != actor.domain_id or recipient["status"] != "active":
             raise AuthorizationError("target server-agent is not an active harness in the actor domain")
-        return intent, idempotency_key, data_class, revision, grant_id
+        return intent, idempotency_key, data_class, revision, grant_id, collaboration_scope_id
 
     def _accept_external(
         self,
@@ -724,47 +740,23 @@ class DurableA2ARuntime(RequestHandler):
         owner_namespace: str,
         request_digest: str,
     ) -> Task | Message:
+        if actor.kind not in {ActorKind.VERIFIED_HUMAN_HARNESS, ActorKind.HOST_GUEST_HARNESS}:
+            raise AuthorizationError("corporate A2A submission requires an enrolled human+harness actor")
         metadata = _struct_dict(request.metadata)
+        intent = _required_string(metadata, "agentnetIntent")
+        if intent not in {"message", "task"}:
+            raise ValidationError("agentnetIntent must be exactly message or task")
         idempotency_key = _required_string(metadata, "agentnetIdempotencyKey", minimum=16)
-        existing = self._existing_ingress(
-            tenant=request.tenant,
-            owner_namespace=owner_namespace,
-            idempotency_key=idempotency_key,
-            request_digest=request_digest,
+        collaboration_scope_id = _required_string(
+            metadata,
+            "agentnetCollaborationScopeId",
         )
-        if existing is not None:
-            return existing
         try:
             declared_classification = Classification(
                 _required_string(metadata, "agentnetDataClass")
             )
         except ValueError as exc:
             raise ValidationError("agentnetDataClass is not a supported corporate class") from exc
-        inspection = _inspect_corporate_parts(
-            request.message,
-            max_parts=self.limits.max_parts,
-            max_inline_bytes=self.limits.max_inline_bytes,
-            domain_id=actor.domain_id,
-            classification=declared_classification,
-            resolver=self.artifact_binding_resolver,
-        )
-        intent, idempotency_key, data_class, revision, grant_id = self._authorize_corporate(
-            actor=actor,
-            request=request,
-            request_digest=request_digest,
-        )
-        if data_class != declared_classification:
-            raise ConflictError("corporate A2A classification changed during authorization")
-        references = list(inspection.references)
-        payload = {
-            "a2a_message": _protobuf_dict(inspection.message),
-            "artifact_references": references,
-            "transport": {
-                "binding": "A2A-1.0",
-                "owner_namespace": owner_namespace,
-                "request_digest": request_digest,
-            },
-        }
         task_id = str(
             uuid5(
                 NAMESPACE_URL,
@@ -777,6 +769,69 @@ class DurableA2ARuntime(RequestHandler):
                 f"agentnet:a2a-event:{request.tenant}:{owner_namespace}:{idempotency_key}",
             )
         )
+        scope_action = "message.send" if intent == "message" else "task.propose"
+        scope_resource = (
+            f"conversation:{request.message.context_id or 'direct'}"
+            if intent == "message"
+            else f"task:{event_id}"
+        )
+        scope = self.collaboration_scopes.require(
+            actor=actor,
+            scope_id=collaboration_scope_id,
+            action=scope_action,
+            resource=scope_resource,
+            target_harness_ids=(self.recipient_id,),
+            classification=declared_classification,
+            when=self.clock(),
+        )
+        existing = self._existing_ingress(
+            tenant=request.tenant,
+            owner_namespace=owner_namespace,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+        )
+        if existing is not None:
+            return existing
+        inspection = _inspect_corporate_parts(
+            request.message,
+            max_parts=self.limits.max_parts,
+            max_inline_bytes=self.limits.max_inline_bytes,
+            domain_id=actor.domain_id,
+            classification=declared_classification,
+            resolver=self.artifact_binding_resolver,
+        )
+        (
+            authorized_intent,
+            authorized_idempotency_key,
+            data_class,
+            revision,
+            grant_id,
+            authorized_scope_id,
+        ) = self._authorize_corporate(
+            actor=actor,
+            request=request,
+            request_digest=request_digest,
+        )
+        if (
+            authorized_intent != intent
+            or authorized_idempotency_key != idempotency_key
+            or authorized_scope_id != scope.scope_id
+            or revision != scope.policy_revision
+        ):
+            raise ConflictError("corporate A2A authorization changed during authorization")
+        if data_class != declared_classification:
+            raise ConflictError("corporate A2A classification changed during authorization")
+        references = list(inspection.references)
+        payload = {
+            "a2a_message": _protobuf_dict(inspection.message),
+            "artifact_references": references,
+            "authorization_context": scope.authorization_context(),
+            "transport": {
+                "binding": "A2A-1.0",
+                "owner_namespace": owner_namespace,
+                "request_digest": request_digest,
+            },
+        }
         event = new_event(
             event_id=event_id,
             domain_id=actor.domain_id,
@@ -847,6 +902,7 @@ class DurableA2ARuntime(RequestHandler):
         )
         assignment = AssignmentRequest(
             actor=actor,
+            collaboration_scope_id=scope.scope_id,
             recipient_harness_id=self.recipient_id,
             task_type=task_type,
             resources=resources,
@@ -858,6 +914,7 @@ class DurableA2ARuntime(RequestHandler):
             context={
                 "a2a_request_digest": request_digest,
                 "owner_namespace": owner_namespace,
+                "collaboration_scope_id": scope.scope_id,
                 "tenant": request.tenant,
             },
         )

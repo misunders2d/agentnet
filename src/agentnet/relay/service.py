@@ -2,8 +2,9 @@
 
 The relay process is an ordinary human-owned harness.  Its configured
 capability, bilateral peer pin, and signatures can only attenuate; an exact
-human policy decision is still required to stage outbound custody, and an
-exact host-local guest grant is consumed before inbound delivery.
+human policy decision is still required to stage outbound custody. Inbound
+custody requires both the current target-domain collaboration scope resolved
+under the host-local guest and the exact target grant.
 """
 
 from __future__ import annotations
@@ -215,7 +216,7 @@ class RelayPeerKeyRevocation(BaseModel):
 class RelayPacket(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    profile: Literal["agentnet.server-relay.packet.v1"] = "agentnet.server-relay.packet.v1"
+    profile: Literal["agentnet.server-relay.packet.v2"] = "agentnet.server-relay.packet.v2"
     hop_count: Literal[1] = 1
     max_hops: Literal[1] = 1
     packet_id: str = Field(min_length=16, max_length=128)
@@ -228,6 +229,7 @@ class RelayPacket(BaseModel):
     target_relay_harness_id: str = Field(min_length=1)
     target_recipient_id: str = Field(min_length=1)
     target_grant_id: str = Field(min_length=1)
+    target_collaboration_scope_id: str = Field(min_length=1, max_length=256)
     guest_pairwise_subject: str = Field(min_length=16, max_length=512)
     source_event_id: str = Field(min_length=1)
     source_event_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -295,7 +297,12 @@ class ServerAgentRelayService:
         self.policy = policy
         self.admission = admission
         self.assignments = (
-            AssignmentService(store, mailbox=mailbox, policy=policy)
+            AssignmentService(
+                store,
+                collaboration_scopes=mailbox.collaboration_scopes,
+                mailbox=mailbox,
+                policy=policy,
+            )
             if mailbox is not None and policy is not None
             else None
         )
@@ -1038,6 +1045,7 @@ class ServerAgentRelayService:
         target_recipient_id: str,
         guest_pairwise_subject: str,
         target_grant_id: str,
+        target_collaboration_scope_id: str,
     ) -> tuple[str, dict[str, str]]:
         request = {
             "event_id": event_id,
@@ -1045,6 +1053,7 @@ class ServerAgentRelayService:
             "packet_id": packet_id,
             "target_grant_id": target_grant_id,
             "target_recipient_id": target_recipient_id,
+            "target_collaboration_scope_id": target_collaboration_scope_id,
         }
         return f"server-agent-domain:{target_domain_id}", {"request_digest": canonical_digest(request)}
 
@@ -1063,6 +1072,7 @@ class ServerAgentRelayService:
         target_recipient_id: str,
         guest_pairwise_subject: str,
         target_grant_id: str,
+        target_collaboration_scope_id: str,
         authority: IssuanceAuthority,
         ttl_seconds: int = 300,
         phase_hook: Callable[[str], None] | None = None,
@@ -1096,6 +1106,7 @@ class ServerAgentRelayService:
                 target_recipient_id=target_recipient_id,
                 guest_pairwise_subject=guest_pairwise_subject,
                 target_grant_id=target_grant_id,
+                target_collaboration_scope_id=target_collaboration_scope_id,
             )
             require_current_authority_decision(
                 connection,
@@ -1128,6 +1139,7 @@ class ServerAgentRelayService:
                     or packet.target_recipient_id != target_recipient_id
                     or packet.guest_pairwise_subject != guest_pairwise_subject
                     or packet.target_grant_id != target_grant_id
+                    or packet.target_collaboration_scope_id != target_collaboration_scope_id
                     or packet.source_event_digest != event["envelope_digest"]
                     or existing["packet_digest"] != packet.digest
                 ):
@@ -1142,7 +1154,7 @@ class ServerAgentRelayService:
                 purpose=purpose,
             )
             fields = {
-                "profile": "agentnet.server-relay.packet.v1",
+                "profile": "agentnet.server-relay.packet.v2",
                 "hop_count": 1,
                 "max_hops": 1,
                 "packet_id": packet_id,
@@ -1155,6 +1167,7 @@ class ServerAgentRelayService:
                 "target_relay_harness_id": peer.relay_harness_id,
                 "target_recipient_id": target_recipient_id,
                 "target_grant_id": target_grant_id,
+                "target_collaboration_scope_id": target_collaboration_scope_id,
                 "guest_pairwise_subject": guest_pairwise_subject,
                 "source_event_id": event_id,
                 "source_event_digest": event["envelope_digest"],
@@ -1164,7 +1177,7 @@ class ServerAgentRelayService:
             }
             packet = RelayPacket(
                 **fields,
-                signature=self.local_signer.sign("agentnet.server-relay.packet.v1", fields),
+                signature=self.local_signer.sign("agentnet.server-relay.packet.v2", fields),
             )
             serialized = canonical_json(packet.model_dump(mode="json")).decode("utf-8")
             if self.admission is not None:
@@ -1217,6 +1230,9 @@ class ServerAgentRelayService:
                     "actor": self.local_actor.audit_view(),
                     "packet_digest": packet.digest,
                     "packet_id": packet_id,
+                    "source_event_digest": packet.source_event_digest,
+                    "source_event_id": packet.source_event_id,
+                    "target_collaboration_scope_id": packet.target_collaboration_scope_id,
                     "target_domain_id": target_domain_id,
                 },
             )
@@ -1312,7 +1328,7 @@ class ServerAgentRelayService:
             or packet.expires_at - packet.created_at > 3_600
         ):
             raise AuthenticationError("relay packet endpoint or freshness binding failed")
-        verify_signature(peer.public_key_pem, "agentnet.server-relay.packet.v1", packet.signed_fields(), packet.signature)
+        verify_signature(peer.public_key_pem, "agentnet.server-relay.packet.v2", packet.signed_fields(), packet.signature)
         with self.store.transaction(immediate=False) as replay_connection:
             prior = replay_connection.execute(
                 "SELECT packet_digest,state,local_event_id FROM server_agent_relay_inbox WHERE packet_id=?",
@@ -1366,6 +1382,17 @@ class ServerAgentRelayService:
                 "relay_room_import",
                 "cross-domain room traffic requires an explicit room-transfer epoch reconciliation",
             )
+        local_event_id = str(
+            uuid5(NAMESPACE_URL, f"agentnet:server-relay:{packet.packet_id}")
+        )
+        if source.event_type is EventType.TASK_ASSIGNMENT:
+            scope_action = "task.propose"
+            scope_resource = f"task:{local_event_id}"
+        elif source.event_type is EventType.MESSAGE:
+            scope_action = "message.send"
+            scope_resource = f"conversation:{source.conversation_id or 'direct'}"
+        else:
+            raise AuthorizationError("relay source event type is unsupported")
 
         denied_reason: str | None = None
         local_event: EventEnvelope | None = None
@@ -1407,6 +1434,26 @@ class ServerAgentRelayService:
                 if recipient is None or recipient["status"] != "active" or recipient["domain_id"] != packet.target_domain_id:
                     raise AuthorizationError("relay target recipient is not a current local harness")
                 guest_actor = self._resolve_guest(connection, packet, now=now)
+                collaboration_scope = (
+                    self.mailbox.collaboration_scopes.require_in_transaction(
+                        connection,
+                        actor=guest_actor,
+                        scope_id=packet.target_collaboration_scope_id,
+                        action=scope_action,
+                        resource=scope_resource,
+                        target_harness_ids=(packet.target_recipient_id,),
+                        classification=source.classification,
+                        when=datetime.fromtimestamp(now, UTC),
+                    )
+                )
+                target_payload = {
+                    key: value
+                    for key, value in source.payload.items()
+                    if key != "authorization_context"
+                }
+                target_payload["authorization_context"] = (
+                    collaboration_scope.authorization_context()
+                )
                 grant_use = GrantUse(
                     grant_id=packet.target_grant_id,
                     action="message.send",
@@ -1437,13 +1484,13 @@ class ServerAgentRelayService:
                     denied_reason = decision.reason
                 else:
                     local_event = EventEnvelope(
-                        event_id=str(uuid5(NAMESPACE_URL, f"agentnet:server-relay:{packet.packet_id}")),
+                        event_id=local_event_id,
                         domain_id=packet.target_domain_id,
                         actor=guest_actor,
                         event_type=source.event_type,
                         classification=source.classification,
-                        payload=source.payload,
-                        payload_digest=source.payload_digest,
+                        payload=target_payload,
+                        payload_digest=canonical_digest(target_payload),
                         idempotency_key=f"server-relay:{packet.packet_id}",
                         recipients=(packet.target_recipient_id,),
                         conversation_id=source.conversation_id,
@@ -1507,6 +1554,7 @@ class ServerAgentRelayService:
                         task_custody = self.assignments.submit_event(
                             AssignmentRequest(
                                 actor=guest_actor,
+                                collaboration_scope_id=packet.target_collaboration_scope_id,
                                 recipient_harness_id=packet.target_recipient_id,
                                 task_type="relay.task",
                                 resources=frozenset({f"recipient:{packet.target_recipient_id}"}),
@@ -1543,8 +1591,13 @@ class ServerAgentRelayService:
                         {
                             "action": "server_agent.relay_accepted",
                             "guest_actor": guest_actor.audit_view(),
+                            "local_event_digest": envelope_digest(local_event),
+                            "local_payload_digest": local_event.payload_digest,
                             "packet_digest": packet.digest,
                             "packet_id": packet.packet_id,
+                            "source_event_digest": packet.source_event_digest,
+                            "source_event_id": packet.source_event_id,
+                            "target_collaboration_scope_id": packet.target_collaboration_scope_id,
                             "policy_decision_id": decision.decision_id,
                             "task_custody_fact": task_custody["fact"] if task_custody else None,
                             "task_proposal_id": task_custody.get("proposal_id") if task_custody else None,

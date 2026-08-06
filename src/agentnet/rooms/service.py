@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from agentnet.authorization.communication_scope_service import CollaborationScopeService
 from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.identity.actors import VerifiedActor
 from agentnet.identity.credentials import (
@@ -30,6 +31,7 @@ class RoomService:
         self,
         store: SQLiteStore,
         *,
+        collaboration_scopes: CollaborationScopeService,
         mls_provider: MLSProvider | None = None,
         mls_adoption: ValidatedMLSAdoption | None = None,
         governance_policy: RoomGovernancePolicy | None = None,
@@ -37,6 +39,7 @@ class RoomService:
         outage_gate: OutageGate | None = None,
     ) -> None:
         self.store = store
+        self.collaboration_scopes = collaboration_scopes
         self.mls_provider = mls_provider
         self.mls_adoption = mls_adoption
         self.governance_policy = governance_policy or RoomGovernancePolicy()
@@ -56,6 +59,37 @@ class RoomService:
         presented = (actor.domain_id, actor.harness_id, actor.credential_id, actor.credential_epoch)
         if presented != expected:
             raise AuthorizationError("room actor does not match the authenticated credential binding")
+
+    def _require_collaboration_scope(
+        self,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+        action: str,
+        room_id: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+        connection: Any | None = None,
+    ) -> Any:
+        values = {
+            "actor": actor,
+            "scope_id": scope_id,
+            "action": action,
+            "resource": f"room:{room_id}",
+            "target_harness_ids": target_harness_ids,
+            "classification": classification,
+        }
+        scope = (
+            self.collaboration_scopes.require(**values)
+            if connection is None
+            else self.collaboration_scopes.require_in_transaction(
+                connection,
+                **values,
+            )
+        )
+        if scope.scope_id != scope_id or scope.domain_id != actor.domain_id:
+            raise AuthorizationError("room collaboration scope authorization failed")
+        return scope
 
     def _require_sealed_provider(self) -> tuple[MLSProvider, ValidatedMLSAdoption]:
         if (
@@ -87,6 +121,7 @@ class RoomService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         classification: Classification,
         persistent: bool,
         expires_at: datetime | None,
@@ -148,6 +183,14 @@ class RoomService:
             if threshold < configured_floor:
                 raise ConflictError(f"{threshold_field} weakens the configured policy")
 
+        self._require_collaboration_scope(
+            actor=actor,
+            scope_id=collaboration_scope_id,
+            action="room.create",
+            room_id=room_id,
+            target_harness_ids=(actor.harness_id,),
+            classification=classification,
+        )
         mls_binding: MLSGroupBinding | None = None
         if classification is Classification.C3_SEALED:
             provider, adoption = self._require_sealed_provider()
@@ -164,6 +207,16 @@ class RoomService:
                 }
             )
         with self.store.transaction() as connection:
+            self._require_authenticated_actor(actor, connection=connection)
+            collaboration_scope = self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.create",
+                room_id=room_id,
+                target_harness_ids=(actor.harness_id,),
+                classification=classification,
+                connection=connection,
+            )
             connection.execute(
                 """INSERT INTO rooms(
                     room_id,domain_id,owner_domain_id,owner_epoch,control_sequence,state,
@@ -194,7 +247,13 @@ class RoomService:
             )
             audit_hash = self.store.append_audit(
                 connection,
-                {"action": "room.create", "actor": actor.audit_view(), "classification": classification.value, "room_id": room_id},
+                {
+                    "action": "room.create",
+                    "actor": actor.audit_view(),
+                    "authorization_context": collaboration_scope.authorization_context(),
+                    "classification": classification.value,
+                    "room_id": room_id,
+                },
             )
         return {
             "room_id": room_id,
@@ -203,6 +262,7 @@ class RoomService:
             "mls_group_id": mls_binding.group_id if mls_binding else None,
             "mls_epoch": mls_binding.epoch if mls_binding else 0,
             "audit_hash": audit_hash,
+            "authorization_context": collaboration_scope.authorization_context(),
         }
 
     def _require_active_moderator(self, connection: Any, room_id: str, harness_id: str) -> Any:
@@ -218,10 +278,21 @@ class RoomService:
             raise AuthorizationError("room control requires current moderator authority")
         return room
 
+    @staticmethod
+    def _current_member_ids(connection: Any, room_id: str) -> tuple[str, ...]:
+        rows = connection.execute(
+            """SELECT harness_id FROM room_members
+                 WHERE room_id=? AND removed_sequence IS NULL
+                 ORDER BY harness_id""",
+            (room_id,),
+        ).fetchall()
+        return tuple(str(row["harness_id"]) for row in rows)
+
     def add_member(
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         room_id: str,
         harness_id: str,
         role: str = "member",
@@ -235,6 +306,7 @@ class RoomService:
         if role not in {"member", "guest", "moderator"}:
             raise ConflictError("invalid room membership role")
         with self.store.transaction() as connection:
+            self._require_authenticated_actor(actor, connection=connection)
             room = self._require_active_moderator(connection, room_id, actor.harness_id)
             existing = connection.execute(
                 "SELECT 1 FROM room_members WHERE room_id=? AND harness_id=? AND removed_sequence IS NULL",
@@ -242,6 +314,18 @@ class RoomService:
             ).fetchone()
             if existing:
                 raise ConflictError("harness is already a current room member")
+            prospective_members = tuple(
+                sorted((*self._current_member_ids(connection, room_id), harness_id))
+            )
+            collaboration_scope = self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.member.add",
+                room_id=room_id,
+                target_harness_ids=prospective_members,
+                classification=Classification(str(room["classification"])),
+                connection=connection,
+            )
             next_mls_epoch = int(room["mls_epoch"])
             if room["classification"] == Classification.C3_SEALED.value:
                 if not mls_key_package:
@@ -268,15 +352,37 @@ class RoomService:
             )
             audit_hash = self.store.append_audit(
                 connection,
-                {"action": "room.member_add", "actor": actor.audit_view(), "harness_id": harness_id, "role": role, "room_id": room_id, "sequence": sequence},
+                {
+                    "action": "room.member_add",
+                    "actor": actor.audit_view(),
+                    "authorization_context": collaboration_scope.authorization_context(),
+                    "harness_id": harness_id,
+                    "role": role,
+                    "room_id": room_id,
+                    "sequence": sequence,
+                },
             )
-        return {"room_id": room_id, "harness_id": harness_id, "control_sequence": sequence, "audit_hash": audit_hash}
+        return {
+            "room_id": room_id,
+            "harness_id": harness_id,
+            "control_sequence": sequence,
+            "audit_hash": audit_hash,
+            "authorization_context": collaboration_scope.authorization_context(),
+        }
 
-    def remove_member(self, *, actor: VerifiedActor, room_id: str, harness_id: str) -> dict[str, Any]:
+    def remove_member(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        room_id: str,
+        harness_id: str,
+    ) -> dict[str, Any]:
         self._require_authenticated_actor(actor)
         if actor.harness_id is None:
             raise AuthorizationError("room mutation requires an exact harness")
         with self.store.transaction() as connection:
+            self._require_authenticated_actor(actor, connection=connection)
             room = self._require_active_moderator(connection, room_id, actor.harness_id)
             membership = connection.execute(
                 "SELECT * FROM room_members WHERE room_id=? AND harness_id=? AND removed_sequence IS NULL",
@@ -284,6 +390,20 @@ class RoomService:
             ).fetchone()
             if membership is None:
                 raise AuthorizationError("room member is not visible")
+            prospective_members = tuple(
+                member_id
+                for member_id in self._current_member_ids(connection, room_id)
+                if member_id != harness_id
+            )
+            collaboration_scope = self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.member.remove",
+                room_id=room_id,
+                target_harness_ids=prospective_members,
+                classification=Classification(str(room["classification"])),
+                connection=connection,
+            )
             next_mls_epoch = int(room["mls_epoch"])
             if room["classification"] == Classification.C3_SEALED.value:
                 provider, _adoption = self._require_sealed_provider()
@@ -308,14 +428,28 @@ class RoomService:
             )
             audit_hash = self.store.append_audit(
                 connection,
-                {"action": "room.member_remove", "actor": actor.audit_view(), "harness_id": harness_id, "room_id": room_id, "sequence": sequence},
+                {
+                    "action": "room.member_remove",
+                    "actor": actor.audit_view(),
+                    "authorization_context": collaboration_scope.authorization_context(),
+                    "harness_id": harness_id,
+                    "room_id": room_id,
+                    "sequence": sequence,
+                },
             )
-        return {"room_id": room_id, "harness_id": harness_id, "control_sequence": sequence, "audit_hash": audit_hash}
+        return {
+            "room_id": room_id,
+            "harness_id": harness_id,
+            "control_sequence": sequence,
+            "audit_hash": audit_hash,
+            "authorization_context": collaboration_scope.authorization_context(),
+        }
 
     def authorize_send(
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         room_id: str,
         recipients: tuple[str, ...],
         classification: Classification,
@@ -332,6 +466,7 @@ class RoomService:
             return self.authorize_send_in_transaction(
                 connection,
                 actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
                 room_id=room_id,
                 recipients=recipients,
                 classification=classification,
@@ -343,6 +478,7 @@ class RoomService:
         connection: Any,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         room_id: str,
         recipients: tuple[str, ...],
         classification: Classification,
@@ -406,6 +542,15 @@ class RoomService:
             or any(row["domain_id"] != actor.domain_id or row["status"] != "active" for row in member_rows)
         ):
             raise AuthorizationError("room delivery authorization failed")
+        collaboration_scope = self._require_collaboration_scope(
+            actor=actor,
+            scope_id=collaboration_scope_id,
+            action="room.send",
+            room_id=room_id,
+            target_harness_ids=current_recipients,
+            classification=classification,
+            connection=connection,
+        )
         return {
             "application_epoch": int(room["application_epoch"]),
             "classification": room["classification"],
@@ -415,32 +560,89 @@ class RoomService:
             "recipients": current_recipients,
             "sender_joined_sequence": int(sender["joined_sequence"]),
             "sender_role": sender["role"],
+            "authorization_context": collaboration_scope.authorization_context(),
         }
 
-    def recipients(self, *, actor: VerifiedActor, room_id: str) -> tuple[str, ...]:
+    def recipients(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        room_id: str,
+    ) -> tuple[str, ...]:
         """Return the current roster only to a current room moderator."""
 
         with self.store.transaction(immediate=False) as connection:
             self._require_authenticated_actor(actor, connection=connection)
-            self._require_active_moderator(connection, room_id, actor.harness_id or "")
-            rows = connection.execute(
-                "SELECT harness_id FROM room_members WHERE room_id=? AND removed_sequence IS NULL ORDER BY harness_id",
-                (room_id,),
-            ).fetchall()
-            if not rows:
+            room = self._require_active_moderator(
+                connection,
+                room_id,
+                actor.harness_id or "",
+            )
+            recipients = self._current_member_ids(connection, room_id)
+            if not recipients:
                 raise AuthorizationError("room is unavailable")
-            return tuple(row["harness_id"] for row in rows)
+            self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.read",
+                room_id=room_id,
+                target_harness_ids=recipients,
+                classification=Classification(str(room["classification"])),
+                connection=connection,
+            )
+            return recipients
 
-    def may_read_event(self, *, room_id: str, harness_id: str, event_control_sequence: int) -> bool:
-        row = self.store.fetch_one(
-            """SELECT * FROM room_members WHERE room_id=? AND harness_id=?
-               AND joined_sequence<=? AND (removed_sequence IS NULL OR removed_sequence>?)
-               ORDER BY joined_sequence DESC LIMIT 1""",
-            (room_id, harness_id, event_control_sequence, event_control_sequence),
-        )
-        return row is not None
+    def may_read_event(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        room_id: str,
+        event_control_sequence: int,
+    ) -> bool:
+        with self.store.transaction(immediate=False) as connection:
+            self._require_authenticated_actor(actor, connection=connection)
+            room = connection.execute(
+                "SELECT * FROM rooms WHERE room_id=? AND domain_id=?",
+                (room_id, actor.domain_id),
+            ).fetchone()
+            current_members = self._current_member_ids(connection, room_id)
+            if (
+                room is None
+                or room["state"] != "active"
+                or actor.harness_id not in current_members
+            ):
+                raise AuthorizationError("room is unavailable")
+            self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.read",
+                room_id=room_id,
+                target_harness_ids=current_members,
+                classification=Classification(str(room["classification"])),
+                connection=connection,
+            )
+            row = connection.execute(
+                """SELECT 1 FROM room_members WHERE room_id=? AND harness_id=?
+                   AND joined_sequence<=? AND (removed_sequence IS NULL OR removed_sequence>?)
+                   ORDER BY joined_sequence DESC LIMIT 1""",
+                (
+                    room_id,
+                    actor.harness_id,
+                    event_control_sequence,
+                    event_control_sequence,
+                ),
+            ).fetchone()
+            return row is not None
 
-    def describe(self, *, actor: VerifiedActor, room_id: str) -> dict[str, Any]:
+    def describe(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        room_id: str,
+    ) -> dict[str, Any]:
         """Describe a room without making it or hidden membership enumerable."""
 
         with self.store.transaction(immediate=False) as connection:
@@ -461,10 +663,25 @@ class RoomService:
                 "SELECT harness_id,role,joined_sequence,removed_sequence FROM room_members WHERE room_id=? ORDER BY joined_sequence",
                 (room_id,),
             ).fetchall()
+            current_members = tuple(
+                str(member["harness_id"])
+                for member in members
+                if member["removed_sequence"] is None
+            )
+            collaboration_scope = self._require_collaboration_scope(
+                actor=actor,
+                scope_id=collaboration_scope_id,
+                action="room.read",
+                room_id=room_id,
+                target_harness_ids=current_members,
+                classification=Classification(str(room["classification"])),
+                connection=connection,
+            )
             result = dict(room) | {
                 "policy": json.loads(room["policy_json"]),
                 "member_count": sum(1 for member in members if member["removed_sequence"] is None),
                 "self_membership": dict(membership),
+                "authorization_context": collaboration_scope.authorization_context(),
             }
             if membership["role"] in {"owner_moderator", "moderator"}:
                 result["members"] = [dict(member) for member in members]

@@ -22,6 +22,13 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agentnet.approval.service import (
+    IndependentApprovalVerifier,
+    VerifiedIndependentApproval,
+    consume_independent_approval,
+)
+
+from agentnet.authorization.communication_scope_service import CollaborationScopeService
 from agentnet.authorization.evidence import (
     IssuanceAuthority,
     SignedAuthorityCommand,
@@ -38,6 +45,11 @@ from agentnet.errors import (
     GateBlocked,
     ValidationError,
 )
+from agentnet.identity.invitation_links import (
+    InvitationLinkService,
+    InvitationOffer,
+    InvitationRedemptionReservation,
+)
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import (
     load_credential_binding_from_connection,
@@ -45,6 +57,7 @@ from agentnet.identity.credentials import (
 )
 from agentnet.identity.enrollment import VerifiedOIDCIdentity
 from agentnet.identity.oidc import OIDCVerificationResult
+from agentnet.protocol.models import Classification
 from agentnet.security.signatures import (
     canonical_digest,
     canonical_json,
@@ -321,6 +334,14 @@ class InternalInvitationAcceptance(BaseModel):
     positive_entitlements_issued: Literal[0] = 0
 
 
+InternalInvitationCommit = Callable[[Any, InternalInvitationAcceptance], None]
+InternalInvitationCommitPreparer = Callable[
+    [InternalInvitationTransaction, OIDCVerificationResult],
+    InternalInvitationCommit | None,
+]
+
+
+
 class InternalInvitationService:
     """Issue, consume, revoke, expire, and safely reissue internal invites."""
 
@@ -592,7 +613,7 @@ class InternalInvitationService:
                 commit_callback(connection, record)
             return record
 
-    def accept(
+    def prepare_acceptance(
         self,
         *,
         invitation_id: str,
@@ -601,55 +622,19 @@ class InternalInvitationService:
         candidate_possession_signature: str,
         source_fingerprint: str,
         when: datetime | None = None,
-    ) -> InternalInvitationAcceptance:
-        """Consume one invitation after verifier-derived OIDC and exact key PoP.
-
-        ``source_fingerprint`` must be a privacy-minimized digest supplied by a
-        trusted HTTP/transport adapter, never a request-body identity claim.
-        """
+    ) -> tuple[InternalInvitationTransaction, OIDCVerificationResult]:
+        """Verify exact OIDC and key evidence without creating identity state."""
 
         when = when or datetime.fromtimestamp(int(self.clock()), UTC)
         now = _epoch_seconds(when)
         if not _SHA256.fullmatch(source_fingerprint):
             raise ValidationError("invitation source fingerprint must be a SHA-256 digest")
-        self.expire_due(when=when)
         try:
-            transaction = self._parse_exact_transaction(canonical_invitation)
-            if transaction.invitation_id != invitation_id:
-                raise AuthenticationError("internal invitation binding mismatch")
-            row = self.store.fetch_one(
-                "SELECT * FROM internal_invitations WHERE invitation_id=?", (invitation_id,)
-            )
-            if row is None:
-                raise AuthenticationError("internal invitation is unavailable")
-            self._require_row_matches_bytes(row, transaction, canonical_invitation)
-            self._require_not_locked(row, source_fingerprint=source_fingerprint, now=now)
-            try:
-                verification = self.oidc_verifier.verify_invitation_identity(
-                    canonical_invitation=canonical_invitation,
-                    evidence=oidc_evidence,
-                    expected_issuer=transaction.invited_oidc_issuer,
-                    when=when,
-                )
-            except ExtensionError:
-                raise
-            except Exception as exc:
-                raise GateBlocked(
-                    "oidc_verifier",
-                    "internal invitation identity verifier failed closed",
-                ) from exc
-            self._validate_oidc_verification(transaction, verification, now=now)
-            possession_fields = self.candidate_possession_fields(transaction, verification)
-            verify_signature(
-                transaction.candidate_public_key_pem,
-                INTERNAL_INVITATION_POP_PURPOSE,
-                possession_fields,
-                candidate_possession_signature,
-            )
-            return self._consume(
-                transaction=transaction,
+            return self._verify_acceptance(
+                invitation_id=invitation_id,
                 canonical_invitation=canonical_invitation,
-                verification=verification,
+                oidc_evidence=oidc_evidence,
+                candidate_possession_signature=candidate_possession_signature,
                 source_fingerprint=source_fingerprint,
                 when=when,
             )
@@ -663,6 +648,102 @@ class InternalInvitationService:
             )
             raise AuthenticationError("internal invitation is unavailable or invalid") from exc
 
+    def accept(
+        self,
+        *,
+        invitation_id: str,
+        canonical_invitation: bytes,
+        oidc_evidence: Mapping[str, Any],
+        candidate_possession_signature: str,
+        source_fingerprint: str,
+        prepare_commit: InternalInvitationCommitPreparer | None = None,
+        when: datetime | None = None,
+    ) -> InternalInvitationAcceptance:
+        """Verify and atomically consume one exact internal invitation."""
+
+        when = when or datetime.fromtimestamp(int(self.clock()), UTC)
+        now = _epoch_seconds(when)
+        if not _SHA256.fullmatch(source_fingerprint):
+            raise ValidationError("invitation source fingerprint must be a SHA-256 digest")
+        try:
+            transaction, verification = self._verify_acceptance(
+                invitation_id=invitation_id,
+                canonical_invitation=canonical_invitation,
+                oidc_evidence=oidc_evidence,
+                candidate_possession_signature=candidate_possession_signature,
+                source_fingerprint=source_fingerprint,
+                when=when,
+            )
+            commit_callback = (
+                prepare_commit(transaction, verification)
+                if prepare_commit is not None
+                else None
+            )
+            return self._consume(
+                transaction=transaction,
+                canonical_invitation=canonical_invitation,
+                verification=verification,
+                source_fingerprint=source_fingerprint,
+                when=when,
+                commit_callback=commit_callback,
+            )
+        except GateBlocked:
+            raise
+        except ExtensionError as exc:
+            self._record_failed_attempt(
+                invitation_id=invitation_id,
+                source_fingerprint=source_fingerprint,
+                now=now,
+            )
+            raise AuthenticationError("internal invitation is unavailable or invalid") from exc
+
+    def _verify_acceptance(
+        self,
+        *,
+        invitation_id: str,
+        canonical_invitation: bytes,
+        oidc_evidence: Mapping[str, Any],
+        candidate_possession_signature: str,
+        source_fingerprint: str,
+        when: datetime,
+    ) -> tuple[InternalInvitationTransaction, OIDCVerificationResult]:
+        now = _epoch_seconds(when)
+        if not _SHA256.fullmatch(source_fingerprint):
+            raise ValidationError("invitation source fingerprint must be a SHA-256 digest")
+        self.expire_due(when=when)
+        transaction = self._parse_exact_transaction(canonical_invitation)
+        if transaction.invitation_id != invitation_id:
+            raise AuthenticationError("internal invitation binding mismatch")
+        row = self.store.fetch_one(
+            "SELECT * FROM internal_invitations WHERE invitation_id=?", (invitation_id,)
+        )
+        if row is None:
+            raise AuthenticationError("internal invitation is unavailable")
+        self._require_row_matches_bytes(row, transaction, canonical_invitation)
+        self._require_not_locked(row, source_fingerprint=source_fingerprint, now=now)
+        try:
+            verification = self.oidc_verifier.verify_invitation_identity(
+                canonical_invitation=canonical_invitation,
+                evidence=oidc_evidence,
+                expected_issuer=transaction.invited_oidc_issuer,
+                when=when,
+            )
+        except ExtensionError:
+            raise
+        except Exception as exc:
+            raise GateBlocked(
+                "oidc_verifier",
+                "internal invitation identity verifier failed closed",
+            ) from exc
+        self._validate_oidc_verification(transaction, verification, now=now)
+        verify_signature(
+            transaction.candidate_public_key_pem,
+            INTERNAL_INVITATION_POP_PURPOSE,
+            self.candidate_possession_fields(transaction, verification),
+            candidate_possession_signature,
+        )
+        return transaction, verification
+
     def _consume(
         self,
         *,
@@ -671,6 +752,7 @@ class InternalInvitationService:
         verification: OIDCVerificationResult,
         source_fingerprint: str,
         when: datetime,
+        commit_callback: InternalInvitationCommit | None = None,
     ) -> InternalInvitationAcceptance:
         now = _epoch_seconds(when)
         with self.store.transaction() as connection:
@@ -876,6 +958,27 @@ class InternalInvitationService:
                     "positive_entitlements_issued": 0,
                 },
             )
+            actor = VerifiedActor(
+                kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+                domain_id=transaction.domain_id,
+                principal_id=principal_id,
+                harness_id=transaction.candidate_harness_id,
+                credential_id=credential_id,
+                credential_epoch=1,
+                binding_assurance=transaction.candidate_binding_assurance,
+            )
+            acceptance = InternalInvitationAcceptance(
+                invitation_id=transaction.invitation_id,
+                principal_id=principal_id,
+                harness_id=transaction.candidate_harness_id,
+                credential_id=credential_id,
+                key_id=transaction.candidate_key_id,
+                credential_expires_at=datetime.fromtimestamp(credential_expires_at, UTC),
+                actor=actor,
+                requested_capabilities=transaction.requested_capabilities,
+            )
+            if commit_callback is not None:
+                commit_callback(connection, acceptance)
             connection.execute(
                 """UPDATE console_enrollment_intents
                    SET state='enrolled',revision=revision+1,terminal_at=?,updated_at=?
@@ -888,25 +991,7 @@ class InternalInvitationService:
                 (now, now, transaction.invitation_id),
             )
 
-        actor = VerifiedActor(
-            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
-            domain_id=transaction.domain_id,
-            principal_id=principal_id,
-            harness_id=transaction.candidate_harness_id,
-            credential_id=credential_id,
-            credential_epoch=1,
-            binding_assurance=transaction.candidate_binding_assurance,
-        )
-        return InternalInvitationAcceptance(
-            invitation_id=transaction.invitation_id,
-            principal_id=principal_id,
-            harness_id=transaction.candidate_harness_id,
-            credential_id=credential_id,
-            key_id=transaction.candidate_key_id,
-            credential_expires_at=datetime.fromtimestamp(credential_expires_at, UTC),
-            actor=actor,
-            requested_capabilities=transaction.requested_capabilities,
-        )
+        return acceptance
 
     def revoke(
         self,
@@ -1349,14 +1434,578 @@ class InternalInvitationService:
         )
 
 
+INVITATION_REDEMPTION_APPROVAL_PURPOSE = "agentnet.invitation-redemption.approval.v1"
+_ENDPOINT_HARNESS_KINDS = frozenset(
+    {"omp", "pi", "claude", "codex", "antigravity", "server"}
+)
+_INVITATION_PERMISSION_LABELS = {
+    "artifact.download": "Can download files",
+    "artifact.send": "Can send files",
+    "message.read": "Can read messages",
+    "message.send": "Can send messages",
+}
+
+
+class InvitationRedemptionEvidence(BaseModel):
+    """Strict HTTP-ready evidence for one exact reserved invitation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reservation: InvitationRedemptionReservation
+    canonical_internal_invitation: str = Field(min_length=2, max_length=131_072)
+    oidc_evidence: dict[str, Any]
+    candidate_possession_signature: str = Field(min_length=1, max_length=16_384)
+    selected_scope_id: str = Field(min_length=1, max_length=256)
+    permission_actions: tuple[str, ...] = Field(min_length=1, max_length=64)
+
+    @field_validator("selected_scope_id")
+    @classmethod
+    def canonical_scope_id(cls, value: str) -> str:
+        return _require_safe_token(value, label="selected scope identifier", maximum=256)
+
+    @field_validator("permission_actions")
+    @classmethod
+    def canonical_permissions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if tuple(sorted(set(value))) != value:
+            raise ValueError("redemption permissions must be unique and canonically sorted")
+        for action in value:
+            _require_safe_token(action, label="redemption permission", maximum=128)
+        return value
+
+    @model_validator(mode="after")
+    def bounded_oidc_evidence(self) -> "InvitationRedemptionEvidence":
+        try:
+            encoded = canonical_json(self.oidc_evidence)
+        except Exception as exc:
+            raise ValueError("OIDC evidence must be a JSON object") from exc
+        if len(encoded) > 131_072:
+            raise ValueError("OIDC evidence exceeds the invitation profile")
+        return self
+
+
+class InvitationRedemptionApprovalTransaction(BaseModel):
+    """Exact transaction independently approved with user verification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agentnet.invitation-redemption-approval.v1"] = (
+        "agentnet.invitation-redemption-approval.v1"
+    )
+    invitation_id: str
+    offer_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reservation_id: str
+    reservation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    internal_invitation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    domain_id: str
+    oidc_issuer: str
+    oidc_subject: str
+    verified_email: str
+    oidc_token_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    oidc_token_expires_at: int
+    candidate_harness_id: str
+    candidate_harness_kind: str
+    candidate_harness_display_name: str
+    candidate_key_id: str
+    destination_scope_id: str
+    destination_scope_kind: Literal["personal", "direct", "shared"]
+    scope_template_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    permission_actions: tuple[str, ...]
+    policy_revision: int = Field(ge=1)
+    domain_revocation_epoch: int = Field(ge=1)
+    expires_at: int
+    max_uses: Literal[1] = 1
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return canonical_json(self.model_dump(mode="json"))
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(self.canonical_bytes).hexdigest()
+
+
+class InvitationRedemptionChallenge(BaseModel):
+    """Approval-service request plus safe plain-language transaction summary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agentnet.invitation-redemption-challenge.v1"] = (
+        "agentnet.invitation-redemption-challenge.v1"
+    )
+    canonical_transaction: str
+    transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    title: Literal["Approve AgentNet invitation"] = "Approve AgentNet invitation"
+    person: str
+    agent: str
+    space: str
+    permissions: tuple[str, ...]
+    expires_at: int
+
+
+class InvitationRedemption(BaseModel):
+    """Atomic onboarding result with no authority outside one chosen scope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    invitation_id: str
+    principal_id: str
+    harness_id: str
+    credential_id: str
+    key_id: str
+    scope_id: str
+    endpoint_state: Literal["restart_required"] = "restart_required"
+    restart_required: Literal[True] = True
+    positive_entitlements: tuple[str, ...]
+    unrelated_entitlements_issued: Literal[0] = 0
+    actor: VerifiedActor
+
+
+class InvitationRedemptionService:
+    """Compose existing identity proofs and approval into one durable commit."""
+
+    def __init__(
+        self,
+        store: StoreBackend,
+        *,
+        invitation_links: InvitationLinkService,
+        internal_invitations: InternalInvitationService,
+        approval_verifier: IndependentApprovalVerifier,
+        clock: Any | None = None,
+    ) -> None:
+        if invitation_links.store is not store or internal_invitations.store is not store:
+            raise ValueError("invitation redemption dependencies must share one store")
+        if getattr(approval_verifier, "lab_only", True) or getattr(
+            approval_verifier, "assurance", ""
+        ) != "independent_webauthn_uv":
+            raise GateBlocked(
+                "invitation_redemption",
+                "invitation redemption requires independent WebAuthn approval",
+            )
+        self.store = store
+        self.invitation_links = invitation_links
+        self.internal_invitations = internal_invitations
+        self.approval_verifier = approval_verifier
+        self.clock = clock or (lambda: int(datetime.now(UTC).timestamp()))
+
+    def prepare(
+        self,
+        evidence: InvitationRedemptionEvidence,
+        *,
+        source_fingerprint: str,
+    ) -> InvitationRedemptionChallenge:
+        """Verify candidate evidence and return the exact passkey challenge."""
+
+        evidence = InvitationRedemptionEvidence.model_validate(
+            evidence.model_dump(mode="python")
+        )
+        if not _SHA256.fullmatch(source_fingerprint):
+            raise ValidationError(
+                "invitation source fingerprint must be a SHA-256 digest"
+            )
+        now = int(self.clock())
+        try:
+            offer = self.invitation_links.validate_reserved(
+                reservation=evidence.reservation,
+                source_fingerprint=source_fingerprint,
+            )
+            canonical_invitation = evidence.canonical_internal_invitation.encode(
+                "utf-8"
+            )
+            transaction, verification = self.internal_invitations.prepare_acceptance(
+                invitation_id=evidence.reservation.invitation_id,
+                canonical_invitation=canonical_invitation,
+                oidc_evidence=evidence.oidc_evidence,
+                candidate_possession_signature=evidence.candidate_possession_signature,
+                source_fingerprint=source_fingerprint,
+                when=datetime.fromtimestamp(now, UTC),
+            )
+            approval_transaction = self._approval_transaction(
+                evidence=evidence,
+                offer=offer,
+                transaction=transaction,
+                verification=verification,
+                now=now,
+            )
+            return self._challenge(approval_transaction)
+        except GateBlocked:
+            raise
+        except ExtensionError as exc:
+            self.invitation_links.note_redemption_failure(
+                reservation=evidence.reservation,
+                source_fingerprint=source_fingerprint,
+            )
+            raise AuthenticationError("invitation is unavailable or invalid") from exc
+
+    def redeem(
+        self,
+        evidence: InvitationRedemptionEvidence,
+        *,
+        approval: Mapping[str, Any],
+        source_fingerprint: str,
+    ) -> InvitationRedemption:
+        """Atomically enroll one harness, join one scope, and consume one link."""
+
+        evidence = InvitationRedemptionEvidence.model_validate(
+            evidence.model_dump(mode="python")
+        )
+        if not _SHA256.fullmatch(source_fingerprint):
+            raise ValidationError(
+                "invitation source fingerprint must be a SHA-256 digest"
+            )
+        now = int(self.clock())
+        try:
+            offer = self.invitation_links.validate_reserved(
+                reservation=evidence.reservation,
+                source_fingerprint=source_fingerprint,
+            )
+            canonical_invitation = evidence.canonical_internal_invitation.encode(
+                "utf-8"
+            )
+
+            def prepare_commit(
+                transaction: InternalInvitationTransaction,
+                verification: OIDCVerificationResult,
+            ) -> InternalInvitationCommit:
+                approval_transaction = self._approval_transaction(
+                    evidence=evidence,
+                    offer=offer,
+                    transaction=transaction,
+                    verification=verification,
+                    now=now,
+                )
+                receipt = self.approval_verifier.verify(
+                    canonical_transaction=approval_transaction.canonical_bytes,
+                    approval=approval,
+                    expected_purpose=INVITATION_REDEMPTION_APPROVAL_PURPOSE,
+                    expected_domain_id=offer.domain_id,
+                    when=datetime.fromtimestamp(now, UTC),
+                )
+                if secrets.compare_digest(
+                    receipt.signer_key_id, transaction.candidate_key_id
+                ):
+                    raise AuthorizationError(
+                        "enrolling credential cannot approve its own invitation"
+                    )
+
+                def commit(
+                    connection: Any, acceptance: InternalInvitationAcceptance
+                ) -> None:
+                    self._commit_redemption(
+                        connection,
+                        evidence=evidence,
+                        offer=offer,
+                        transaction=transaction,
+                        verification=verification,
+                        approval_transaction=approval_transaction,
+                        approval_receipt=receipt,
+                        acceptance=acceptance,
+                        source_fingerprint=source_fingerprint,
+                        now=now,
+                    )
+
+                return commit
+
+            acceptance = self.internal_invitations.accept(
+                invitation_id=evidence.reservation.invitation_id,
+                canonical_invitation=canonical_invitation,
+                oidc_evidence=evidence.oidc_evidence,
+                candidate_possession_signature=evidence.candidate_possession_signature,
+                source_fingerprint=source_fingerprint,
+                prepare_commit=prepare_commit,
+                when=datetime.fromtimestamp(now, UTC),
+            )
+            return InvitationRedemption(
+                invitation_id=evidence.reservation.invitation_id,
+                principal_id=acceptance.principal_id,
+                harness_id=acceptance.harness_id,
+                credential_id=acceptance.credential_id,
+                key_id=acceptance.key_id,
+                scope_id=offer.collaboration_scope_template.scope_id,
+                positive_entitlements=offer.permission_actions,
+                actor=acceptance.actor,
+            )
+        except GateBlocked:
+            raise
+        except ExtensionError as exc:
+            self.invitation_links.note_redemption_failure(
+                reservation=evidence.reservation,
+                source_fingerprint=source_fingerprint,
+            )
+            raise AuthenticationError("invitation is unavailable or invalid") from exc
+
+    def _approval_transaction(
+        self,
+        *,
+        evidence: InvitationRedemptionEvidence,
+        offer: InvitationOffer,
+        transaction: InternalInvitationTransaction,
+        verification: OIDCVerificationResult,
+        now: int,
+    ) -> InvitationRedemptionApprovalTransaction:
+        proposal = offer.collaboration_scope_template
+        identity = verification.identity
+        if (
+            now >= offer.expires_at
+            or evidence.reservation.invitation_id != offer.invitation_id
+            or evidence.reservation.offer_digest != offer.digest
+            or evidence.reservation.destination_scope_id != proposal.scope_id
+            or evidence.reservation.permission_actions != offer.permission_actions
+            or evidence.reservation.expires_at != offer.expires_at
+            or evidence.selected_scope_id != proposal.scope_id
+            or evidence.permission_actions != offer.permission_actions
+            or transaction.invitation_id != offer.invitation_id
+            or transaction.sponsor_authority_kind != "human"
+            or transaction.domain_id != offer.domain_id
+            or transaction.invited_verified_email != offer.invited_verified_email
+            or identity.verified_email != offer.invited_verified_email
+            or _epoch_seconds(transaction.expires_at) != offer.expires_at
+            or transaction.policy_revision != proposal.policy_revision
+            or transaction.domain_revocation_epoch != proposal.domain_revocation_epoch
+            or transaction.requested_capabilities != ()
+            or transaction.candidate_harness_kind not in _ENDPOINT_HARNESS_KINDS
+        ):
+            raise AuthorizationError("invitation redemption binding mismatch")
+        self.invitation_links.require_internal_sponsor_binding(
+            reservation=evidence.reservation,
+            domain_id=transaction.domain_id,
+            sponsor_principal_id=transaction.sponsor_authority_id,
+            sponsor_harness_id=transaction.sponsor_harness_id,
+            sponsor_credential_id=transaction.sponsor_credential_id,
+            sponsor_credential_epoch=transaction.sponsor_credential_epoch,
+        )
+        scope_template_digest = canonical_digest(proposal.model_dump(mode="json"))
+        return InvitationRedemptionApprovalTransaction(
+            invitation_id=offer.invitation_id,
+            offer_digest=offer.digest,
+            reservation_id=evidence.reservation.reservation_id,
+            reservation_digest=evidence.reservation.reservation_digest,
+            internal_invitation_digest=transaction.digest,
+            domain_id=offer.domain_id,
+            oidc_issuer=identity.issuer,
+            oidc_subject=identity.subject,
+            verified_email=identity.verified_email,
+            oidc_token_hash=verification.id_token_hash,
+            oidc_token_expires_at=verification.expires_at,
+            candidate_harness_id=transaction.candidate_harness_id,
+            candidate_harness_kind=transaction.candidate_harness_kind,
+            candidate_harness_display_name=transaction.candidate_harness_display_name,
+            candidate_key_id=transaction.candidate_key_id,
+            destination_scope_id=proposal.scope_id,
+            destination_scope_kind=proposal.scope_kind,
+            scope_template_digest=scope_template_digest,
+            permission_actions=offer.permission_actions,
+            policy_revision=transaction.policy_revision,
+            domain_revocation_epoch=transaction.domain_revocation_epoch,
+            expires_at=offer.expires_at,
+        )
+
+    @staticmethod
+    def _challenge(
+        transaction: InvitationRedemptionApprovalTransaction,
+    ) -> InvitationRedemptionChallenge:
+        canonical = transaction.canonical_bytes
+        return InvitationRedemptionChallenge(
+            canonical_transaction=canonical.decode("utf-8"),
+            transaction_digest=hashlib.sha256(canonical).hexdigest(),
+            person=transaction.verified_email,
+            agent=transaction.candidate_harness_display_name,
+            space=f"{transaction.destination_scope_kind} collaboration space",
+            permissions=tuple(
+                _INVITATION_PERMISSION_LABELS.get(
+                    action, action.replace(".", " ").replace("_", " ")
+                )
+                for action in transaction.permission_actions
+            ),
+            expires_at=transaction.expires_at,
+        )
+
+    def _commit_redemption(
+        self,
+        connection: Any,
+        *,
+        evidence: InvitationRedemptionEvidence,
+        offer: InvitationOffer,
+        transaction: InternalInvitationTransaction,
+        verification: OIDCVerificationResult,
+        approval_transaction: InvitationRedemptionApprovalTransaction,
+        approval_receipt: VerifiedIndependentApproval,
+        acceptance: InternalInvitationAcceptance,
+        source_fingerprint: str,
+        now: int,
+    ) -> None:
+        if approval_receipt.transaction_digest != approval_transaction.digest:
+            raise AuthenticationError("invitation approval transaction changed")
+        if (
+            acceptance.harness_id != transaction.candidate_harness_id
+            or acceptance.key_id != transaction.candidate_key_id
+            or acceptance.requested_capabilities != ()
+            or verification.identity.verified_email != offer.invited_verified_email
+        ):
+            raise AuthorizationError("invitation acceptance binding changed")
+        consume_independent_approval(
+            connection,
+            receipt=approval_receipt,
+            retain_until=offer.expires_at,
+        )
+        scope = self.invitation_links._require_exact_scope(
+            connection,
+            offer=offer,
+            actor=acceptance.actor,
+            now=now,
+            require_administrator=False,
+        )
+        membership_sequence = int(scope["membership_sequence"]) + 1
+        member_digest = CollaborationScopeService._member_digest(
+            scope_id=offer.collaboration_scope_template.scope_id,
+            authority_kind="principal",
+            authority_id=acceptance.principal_id,
+            harness_id=acceptance.harness_id,
+            role="member",
+            joined_at=now,
+        )
+        connection.execute(
+            """INSERT INTO collaboration_scope_members(
+                scope_id,authority_kind,authority_id,harness_id,role,state,
+                joined_sequence,removed_sequence,member_digest,joined_at,removed_at
+            ) VALUES(?,'principal',?,?,'member','active',1,NULL,?,?,NULL)""",
+            (
+                offer.collaboration_scope_template.scope_id,
+                acceptance.principal_id,
+                acceptance.harness_id,
+                member_digest,
+                now,
+            ),
+        )
+        member_rows = connection.execute(
+            """SELECT authority_kind,authority_id,harness_id,role,joined_at
+                 FROM collaboration_scope_members
+                WHERE scope_id=? AND state='active' ORDER BY harness_id""",
+            (offer.collaboration_scope_template.scope_id,),
+        ).fetchall()
+        members = [
+            {
+                "authority_kind": str(member["authority_kind"]),
+                "authority_id": str(member["authority_id"]),
+                "harness_id": str(member["harness_id"]),
+                "role": str(member["role"]),
+                "state": "active",
+                "joined_sequence": 1,
+                "joined_at": int(member["joined_at"]),
+            }
+            for member in member_rows
+        ]
+        revision = int(scope["revision"]) + 1
+        state_reason = "invitation_member_added"
+        proposal = offer.collaboration_scope_template
+        scope_digest = CollaborationScopeService._scope_digest(
+            scope_id=str(scope["scope_id"]),
+            scope_kind=str(scope["scope_kind"]),
+            domain_id=str(scope["domain_id"]),
+            owner_principal_id=str(scope["owner_principal_id"]),
+            owner_harness_id=str(scope["owner_harness_id"]),
+            members=members,
+            allowed_actions=proposal.allowed_actions,
+            allowed_resource_prefixes=proposal.allowed_resource_prefixes,
+            allowed_classifications=tuple(
+                Classification(value.value) for value in proposal.allowed_classifications
+            ),
+            canonical_references=proposal.canonical_references,
+            policy_revision=int(scope["policy_revision"]),
+            domain_revocation_epoch=int(scope["domain_revocation_epoch"]),
+            control_sequence=int(scope["control_sequence"]),
+            membership_sequence=membership_sequence,
+            proposal_digest=str(scope["proposal_digest"]),
+            revision=revision,
+            state="active",
+            state_reason=state_reason,
+            created_at=int(scope["created_at"]),
+            updated_at=now,
+            expires_at=(
+                int(scope["expires_at"]) if scope["expires_at"] is not None else None
+            ),
+            revoked_at=None,
+        )
+        updated_scope = connection.execute(
+            """UPDATE collaboration_scopes
+               SET membership_sequence=?,scope_digest=?,state_reason=?,revision=?,
+                   updated_at=?
+             WHERE scope_id=? AND state='active' AND revision=?
+               AND membership_sequence=?""",
+            (
+                membership_sequence,
+                scope_digest,
+                state_reason,
+                revision,
+                now,
+                proposal.scope_id,
+                int(scope["revision"]),
+                int(scope["membership_sequence"]),
+            ),
+        )
+        if updated_scope.rowcount != 1:
+            raise ConflictError("collaboration scope changed before invitation commit")
+        connection.execute(
+            """INSERT INTO endpoint_lifecycle(
+                domain_id,harness_id,principal_id,current_credential_id,harness_kind,
+                profile_key,state,adapter_generation,mailbox_cursor,
+                capability_root_digest,process_measurement,state_reason,revision,
+                created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,'restart_required',1,0,NULL,NULL,
+                'invitation_activation_pending_restart',1,?,?)""",
+            (
+                offer.domain_id,
+                acceptance.harness_id,
+                acceptance.principal_id,
+                acceptance.credential_id,
+                transaction.candidate_harness_kind,
+                acceptance.harness_id,
+                now,
+                now,
+            ),
+        )
+        self.invitation_links.consume_reserved_in_connection(
+            connection,
+            reservation=evidence.reservation,
+            source_fingerprint=source_fingerprint,
+            principal_id=acceptance.principal_id,
+            harness_id=acceptance.harness_id,
+            now=now,
+        )
+        self.store.append_audit(
+            connection,
+            {
+                "action": "invitation_redemption.committed",
+                "invitation_id": offer.invitation_id,
+                "offer_digest": offer.digest,
+                "internal_invitation_digest": transaction.digest,
+                "approval_transaction_digest": approval_transaction.digest,
+                "approval_receipt_id": approval_receipt.receipt_id,
+                "oidc_token_hash": verification.id_token_hash,
+                "principal_id": acceptance.principal_id,
+                "harness_id": acceptance.harness_id,
+                "credential_id": acceptance.credential_id,
+                "scope_id": offer.collaboration_scope_template.scope_id,
+                "permission_actions": list(offer.permission_actions),
+                "endpoint_state": "restart_required",
+                "unrelated_entitlements_issued": 0,
+            },
+        )
+
+
 __all__ = [
     "INTERNAL_INVITATION_ISSUE_ACTION",
     "INTERNAL_INVITATION_POP_PURPOSE",
     "INTERNAL_INVITATION_REVOKE_ACTION",
+    "INVITATION_REDEMPTION_APPROVAL_PURPOSE",
     "InternalInvitationAcceptance",
     "InternalInvitationOIDCVerifier",
     "InternalInvitationRecord",
     "InternalInvitationRequest",
     "InternalInvitationService",
     "InternalInvitationTransaction",
+    "InvitationRedemption",
+    "InvitationRedemptionApprovalTransaction",
+    "InvitationRedemptionChallenge",
+    "InvitationRedemptionEvidence",
+    "InvitationRedemptionService",
 ]

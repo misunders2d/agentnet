@@ -5,19 +5,29 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from agentnet.client import AgentNetClient
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.bindings.ipc import linux_process_probe
+from agentnet.messaging.obligation import MailboxResponseObligation
 from agentnet.organization.conflicts import TaskExecutionIntent
+from agentnet.protocol.models import (
+    MailboxWakeHint,
+    ObligationInboxCounters,
+    ObligationReconciliationResult,
+    SupervisorBackgroundAuthorization,
+    SupervisorCustodyReceipt,
+    SupervisorResultReceipt,
+)
 from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.supervisor.runtime import BackgroundTurnAuthorization
 
 
-class AgentNetSupervisorCoreClient:
-    """Translate the daemon protocol to signed ordinary-extension requests."""
+class AgentNetC0PilotCoreClient:
+    """Narrow signed client for the isolated C0 pilot responder."""
 
     def __init__(self, client: AgentNetClient) -> None:
         self.client = client
@@ -36,6 +46,67 @@ class AgentNetSupervisorCoreClient:
             raise ValidationError("corporate supervisor response was not JSON") from exc
 
     @staticmethod
+    def _c0_result(value: Any) -> dict[str, str]:
+        allowed = {
+            "prepared_unusable",
+            "waiting_owner",
+            "waiting_fresh",
+            "expired",
+            "invalidated",
+            "COMPLETED_C0_ROUND_TRIP",
+        }
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema", "status"}
+            or value.get("schema") != "agentnet.c0-pilot.result.v1"
+            or value.get("status") not in allowed
+        ):
+            raise ValidationError("C0 pilot response schema is invalid")
+        return {"schema": str(value["schema"]), "status": str(value["status"])}
+
+    def c0_pilot_readiness(self) -> dict[str, str]:
+        value = self._value(self.client.c0_pilot_readiness())
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema", "status"}
+            or value.get("schema") != "agentnet.c0-pilot.readiness-result.v1"
+            or value.get("status") not in {"waiting_plan", "ready"}
+        ):
+            raise ValidationError("C0 pilot readiness response schema is invalid")
+        return {"schema": str(value["schema"]), "status": str(value["status"])}
+
+    def c0_pilot_respond(self) -> dict[str, str]:
+        return self._c0_result(self._value(self.client.c0_pilot_respond()))
+
+    def c0_pilot_status(self) -> dict[str, str]:
+        return self._c0_result(self._value(self.client.c0_pilot_status()))
+
+
+class AgentNetSupervisorCoreClient(AgentNetC0PilotCoreClient):
+    """Translate the daemon protocol to signed ordinary-extension requests."""
+
+    def __init__(self, client: AgentNetClient, *, collaboration_scope_id: str) -> None:
+        if (
+            not collaboration_scope_id
+            or len(collaboration_scope_id) > 256
+            or any(
+                character
+                not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+                for character in collaboration_scope_id
+            )
+        ):
+            raise ValidationError("supervisor collaboration scope is invalid")
+        super().__init__(client)
+        self.collaboration_scope_id = collaboration_scope_id
+
+
+    def _scope_query(self) -> str:
+        if not self.collaboration_scope_id:
+            raise ValidationError("supervisor collaboration scope is unavailable")
+        return quote(self.collaboration_scope_id, safe="")
+
+
+    @staticmethod
     def _item_binding(item: Mapping[str, Any]) -> tuple[str, int, str]:
         event = item.get("event")
         cursor = item.get("cursor")
@@ -52,121 +123,103 @@ class AgentNetSupervisorCoreClient:
         return event["event_id"], cursor, digest
 
     @staticmethod
-    def _historical_authorization(value: Any) -> dict[str, Any]:
-        required = {
-            "decision_id",
-            "harness_id",
-            "event_id",
-            "envelope_digest",
-            "event_type",
-            "classification",
-            "policy_revision",
-            "expires_at",
-            "task_grant_id",
-        }
-        if not isinstance(value, dict) or set(value) != required:
-            raise ValidationError("local supervisor result authorization schema is invalid")
-        identifiers = (
-            value["decision_id"],
-            value["harness_id"],
-            value["event_id"],
-            value["event_type"],
-            value["task_grant_id"],
-        )
-        if (
-            any(not isinstance(item, str) or not 1 <= len(item) <= 256 for item in identifiers)
-            or not isinstance(value["envelope_digest"], str)
-            or len(value["envelope_digest"]) != 64
-            or any(character not in "0123456789abcdef" for character in value["envelope_digest"])
-            or value["classification"] not in {"C0", "C1", "C2", "C3"}
-            or type(value["policy_revision"]) is not int
-            or value["policy_revision"] < 1
-            or type(value["expires_at"]) is not int
-            or value["expires_at"] < 1
-        ):
-            raise ValidationError("local supervisor result authorization is invalid")
-        return value
+    def _response_obligation(item: Mapping[str, Any]) -> MailboxResponseObligation | None:
+        if "response_obligation" not in item:
+            raise ValidationError("mailbox item response obligation binding is missing")
+        value = item["response_obligation"]
+        if value is None:
+            return None
+        try:
+            return MailboxResponseObligation.model_validate(value, strict=True)
+        except Exception as exc:
+            raise ValidationError(
+                "mailbox item response obligation binding is invalid"
+            ) from exc
 
     @staticmethod
-    def _c0_result(value: Any) -> dict[str, str]:
-        allowed = {
-            "prepared_unusable", "waiting_owner", "waiting_fresh", "expired", "invalidated",
-            "COMPLETED_C0_ROUND_TRIP",
-        }
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"schema", "status"}
-            or value.get("schema") != "agentnet.c0-pilot.result.v1"
-            or value.get("status") not in allowed
-        ):
-            raise ValidationError("C0 pilot response schema is invalid")
-        return {"schema": str(value["schema"]), "status": str(value["status"])}
+    def _historical_authorization(value: Any) -> dict[str, Any]:
+        try:
+            return SupervisorBackgroundAuthorization.model_validate(
+                value,
+                strict=True,
+            ).model_dump(mode="json")
+        except Exception as exc:
+            raise ValidationError(
+                "local supervisor result authorization is invalid"
+            ) from exc
 
-    def c0_pilot_readiness(self) -> dict[str, str]:
-        value = self._value(self.client.c0_pilot_readiness())
-        if value.get("schema") != "agentnet.c0-pilot.readiness-result.v1" or value.get(
-            "status"
-        ) not in {"waiting_plan", "ready"}:
-            raise ValidationError("C0 pilot readiness response schema is invalid")
-        return {"schema": str(value["schema"]), "status": str(value["status"])}
-
-    def c0_pilot_respond(self) -> dict[str, str]:
-        return self._c0_result(self._value(self.client.c0_pilot_respond()))
-
-    def c0_pilot_status(self) -> dict[str, str]:
-        return self._c0_result(self._value(self.client.c0_pilot_status()))
 
     def reconcile(self, *, after_cursor: int, limit: int) -> list[dict[str, Any]]:
         if after_cursor < 0 or not 1 <= limit <= 100:
             raise ValidationError("supervisor mailbox cursor or limit is invalid")
         value = self._value(
-            self.client.request("GET", f"/v1/mailbox?after={after_cursor}&limit={limit}")
+            self.client.request(
+                "GET",
+                f"/v1/mailbox?after={after_cursor}&limit={limit}"
+                f"&collaboration_scope_id={self._scope_query()}",
+            )
         )
         if not isinstance(value, dict) or set(value) != {"items"} or not isinstance(value["items"], list):
             raise ValidationError("corporate mailbox response schema is invalid")
-        if any(not isinstance(item, dict) for item in value["items"]):
-            raise ValidationError("corporate mailbox item schema is invalid")
-        return value["items"]
+        items: list[dict[str, Any]] = []
+        for item in value["items"]:
+            if not isinstance(item, dict):
+                raise ValidationError("corporate mailbox item schema is invalid")
+            self._item_binding(item)
+            reference = self._response_obligation(item)
+            items.append(
+                dict(item)
+                | {
+                    "response_obligation": (
+                        reference.model_dump(mode="json")
+                        if reference is not None
+                        else None
+                    )
+                }
+            )
+        return items
 
     def reconcile_obligations(self, *, limit: int) -> dict[str, list[str]]:
         if not 1 <= limit <= 100:
             raise ValidationError("supervisor obligation reconciliation limit is invalid")
-        value = self._value(
-            self.client.request(
-                "POST",
-                "/v1/response-obligations/reconcile",
-                json_body={"limit": limit},
-            )
+        response = self.client.request(
+            "POST",
+            "/v1/response-obligations/reconcile",
+            json_body={
+                "collaboration_scope_id": self.collaboration_scope_id,
+                "limit": limit,
+            },
         )
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"recipient_committed", "expired"}
-            or any(
-                not isinstance(items, list)
-                or any(not isinstance(item, str) or not item for item in items)
-                for items in value.values()
+        self._value(response)
+        try:
+            parsed = ObligationReconciliationResult.model_validate_json(
+                response.content,
+                strict=True,
             )
-        ):
-            raise ValidationError("obligation reconciliation response schema is invalid")
-        return value
+        except Exception as exc:
+            raise ValidationError(
+                "obligation reconciliation response schema is invalid"
+            ) from exc
+        return {
+            "recipient_committed": list(parsed.recipient_committed),
+            "expired": list(parsed.expired),
+        }
 
     def obligation_inbox(self) -> dict[str, int]:
-        required = {
-            "unread_information",
-            "action_required",
-            "awaiting_peer",
-            "awaiting_human",
-            "overdue",
-            "failed",
-        }
-        value = self._value(self.client.request("GET", "/v1/response-obligations/inbox"))
-        if (
-            not isinstance(value, dict)
-            or set(value) != required
-            or any(type(item) is not int or item < 0 for item in value.values())
-        ):
-            raise ValidationError("obligation inbox response schema is invalid")
-        return value
+        response = self.client.request(
+            "GET",
+            f"/v1/response-obligations/inbox"
+            f"?collaboration_scope_id={self._scope_query()}",
+        )
+        self._value(response)
+        try:
+            parsed = ObligationInboxCounters.model_validate_json(
+                response.content,
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError("obligation inbox response schema is invalid") from exc
+        return parsed.model_dump(mode="json")
 
     def watch(self, *, after_cursor: int, wait_seconds: float) -> bool:
         """Wait for a content-free hint; authoritative bytes come from reconcile()."""
@@ -174,97 +227,90 @@ class AgentNetSupervisorCoreClient:
         if after_cursor < 0 or not 0.05 <= wait_seconds <= 30:
             raise ValidationError("supervisor mailbox watch bounds are invalid")
         wait_ms = max(50, min(30_000, int(wait_seconds * 1_000)))
-        value = self._value(
-            self.client.request(
-                "GET",
-                f"/v1/mailbox/watch?after={after_cursor}&wait_ms={wait_ms}",
-                timeout_seconds=wait_ms / 1_000 + 2,
-            )
+        response = self.client.request(
+            "GET",
+            f"/v1/mailbox/watch?after={after_cursor}&wait_ms={wait_ms}"
+            f"&collaboration_scope_id={self._scope_query()}",
+            timeout_seconds=wait_ms / 1_000 + 2,
         )
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"schema", "kind", "cursor_hint"}
-            or value["schema"] != "agentnet.mailbox-wake.v1"
-            or value["kind"] not in {"wake", "idle"}
-            or type(value["cursor_hint"]) is not int
-        ):
-            raise ValidationError("corporate mailbox wake schema is invalid")
-        if value["kind"] == "wake" and value["cursor_hint"] <= after_cursor:
+        self._value(response)
+        try:
+            parsed = MailboxWakeHint.model_validate_json(
+                response.content,
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError("corporate mailbox wake schema is invalid") from exc
+        if parsed.kind == "wake" and parsed.cursor_hint <= after_cursor:
             raise ValidationError("corporate mailbox wake cursor did not advance")
-        if value["kind"] == "idle" and value["cursor_hint"] != after_cursor:
+        if parsed.kind == "idle" and parsed.cursor_hint != after_cursor:
             raise ValidationError("corporate mailbox idle cursor changed")
-        return value["kind"] == "wake"
+        return parsed.kind == "wake"
 
-    def authorize_background(self, item: Mapping[str, Any]) -> dict[str, Any]:
-        event_id, cursor, envelope_digest = self._item_binding(item)
-        value = self._value(
-            self.client.request(
-                "POST",
-                "/v1/supervisor/executions/authorize",
-                json_body={
-                    "cursor": cursor,
-                    "envelope_digest": envelope_digest,
-                    "event_id": event_id,
-                },
-            )
+    def authorize_background(self, obligation_id: str) -> dict[str, Any]:
+        if not obligation_id or len(obligation_id) > 256:
+            raise ValidationError("background obligation identifier is invalid")
+        response = self.client.request(
+            "POST",
+            "/v1/supervisor/executions/authorize",
+            json_body={"obligation_id": obligation_id},
         )
-        if not isinstance(value, dict):
-            raise ValidationError("background authorization response schema is invalid")
-        return asdict(BackgroundTurnAuthorization.from_mapping(value))
+        self._value(response)
+        try:
+            parsed = SupervisorBackgroundAuthorization.model_validate_json(
+                response.content,
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError(
+                "background authorization response schema is invalid"
+            ) from exc
+        return parsed.model_dump(mode="json")
 
     def acknowledge_custody(
         self,
-        item: Mapping[str, Any],
+        obligation_id: str,
         authorization: BackgroundTurnAuthorization,
         *,
         local_queue_id: str,
     ) -> None:
-        event_id, cursor, envelope_digest = self._item_binding(item)
-        if (
-            event_id != authorization.event_id
-            or envelope_digest != authorization.envelope_digest
-            or not local_queue_id
-        ):
-            raise AuthorizationError("local custody does not bind the authorized mailbox item")
-        value = self._value(
-            self.client.request(
-                "POST",
-                "/v1/supervisor/executions/custody",
-                json_body={
-                    "authorization": asdict(authorization),
-                    "cursor": cursor,
-                    "local_queue_id": local_queue_id,
-                },
-            )
+        if not obligation_id or len(obligation_id) > 256 or not local_queue_id:
+            raise AuthorizationError("local custody obligation binding is invalid")
+        response = self.client.request(
+            "POST",
+            "/v1/supervisor/executions/custody",
+            json_body={
+                "authorization": asdict(authorization),
+                "obligation_id": obligation_id,
+                "local_queue_id": local_queue_id,
+            },
         )
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"custody_receipt_id", "duplicate", "event_id", "state"}
-            or value["event_id"] != event_id
-            or value["state"] not in {"local_custody", "result_uploaded"}
-        ):
-            raise ValidationError("corporate custody receipt schema is invalid")
+        self._value(response)
+        try:
+            receipt = SupervisorCustodyReceipt.model_validate_json(
+                response.content,
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError("corporate custody receipt schema is invalid") from exc
+        if receipt.event_id != authorization.event_id:
+            raise ValidationError("corporate custody receipt crossed its event binding")
 
     def release_task_payload(
         self,
-        item: Mapping[str, Any],
+        obligation_id: str,
         authorization: BackgroundTurnAuthorization,
         *,
         local_queue_id: str,
     ) -> dict[str, Any]:
-        event_id, cursor, envelope_digest = self._item_binding(item)
-        if (
-            event_id != authorization.event_id
-            or envelope_digest != authorization.envelope_digest
-            or not local_queue_id
-        ):
-            raise AuthorizationError("task payload release crossed its exact local custody")
+        if not obligation_id or len(obligation_id) > 256 or not local_queue_id:
+            raise AuthorizationError("task payload release obligation binding is invalid")
         response = self.client.request(
             "POST",
             "/v1/supervisor/executions/payload-release",
             json_body={
                 "authorization": asdict(authorization),
-                "cursor": cursor,
+                "obligation_id": obligation_id,
                 "local_queue_id": local_queue_id,
             },
         )
@@ -309,9 +355,9 @@ class AgentNetSupervisorCoreClient:
             not isinstance(value, dict)
             or set(value) != required
             or value["schema"] != "agentnet.supervisor.task-payload-release.v1"
-            or value["event_id"] != event_id
+            or value["event_id"] != authorization.event_id
             or value["recipient_harness_id"] != authorization.harness_id
-            or value["envelope_digest"] != envelope_digest
+            or value["envelope_digest"] != authorization.envelope_digest
             or value["classification"] != authorization.classification
             or value["task_grant_id"] != authorization.task_grant_id
             or value["policy_decision_id"] != authorization.decision_id
@@ -343,32 +389,26 @@ class AgentNetSupervisorCoreClient:
         }:
             raise ValidationError("local supervisor result schema is invalid")
         authorization_raw = self._historical_authorization(result["authorization"])
-        value = self._value(
-            self.client.request(
-                "POST",
-                "/v1/supervisor/executions/result",
-                json_body={
-                    "authorization": authorization_raw,
-                    "native_result": result["native_result"],
-                    "source_queue_id": result["source_queue_id"],
-                },
-            )
+        response = self.client.request(
+            "POST",
+            "/v1/supervisor/executions/result",
+            json_body={
+                "authorization": authorization_raw,
+                "native_result": result["native_result"],
+                "source_queue_id": result["source_queue_id"],
+            },
         )
+        self._value(response)
+        try:
+            receipt = SupervisorResultReceipt.model_validate_json(
+                response.content,
+                strict=True,
+            )
+        except Exception as exc:
+            raise ValidationError("corporate result receipt schema is invalid") from exc
         if (
-            not isinstance(value, dict)
-            or set(value)
-            != {
-                "duplicate",
-                "event_id",
-                "provenance",
-                "result_digest",
-                "result_receipt_id",
-                "state",
-            }
-            or value["event_id"] != authorization_raw["event_id"]
-            or value["state"] != "result_uploaded"
-            or not isinstance(value["provenance"], dict)
-            or value["provenance"].get("authority_effect") != "none"
+            receipt.event_id != authorization_raw["event_id"]
+            or receipt.provenance.get("authority_effect") != "none"
         ):
             raise ValidationError("corporate result receipt schema is invalid")
 
@@ -445,4 +485,4 @@ class AgentNetSupervisorCoreClient:
         return value
 
 
-__all__ = ["AgentNetSupervisorCoreClient"]
+__all__ = ["AgentNetC0PilotCoreClient", "AgentNetSupervisorCoreClient"]

@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 from agentnet.errors import GateBlocked
+from agentnet.storage.artifact_transfer_schema import (
+    ARTIFACT_TRANSFER_REQUIRED_INDEXES,
+    ARTIFACT_TRANSFER_REQUIRED_TABLES,
+    ARTIFACT_TRANSFER_SCHEMA_VERSION,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,6 +731,17 @@ def expected_catalog(migrations: Sequence[Any]) -> CatalogSpec:
             if statement_digest in _CATALOG_NEUTRAL_MIGRATION_DML_SHA256:
                 continue
             raise ValueError(f"unsupported migration statement: {statement[:80]}")
+    if any(
+        getattr(migration, "version", None) == ARTIFACT_TRANSFER_SCHEMA_VERSION
+        for migration in migrations
+    ):
+        missing_tables = ARTIFACT_TRANSFER_REQUIRED_TABLES - tables
+        missing_indexes = ARTIFACT_TRANSFER_REQUIRED_INDEXES - {
+            index_name for index_name, _definition in indexes
+        }
+        if missing_tables or missing_indexes:
+            raise ValueError("schema-v7 artifact transfer catalog is incomplete")
+
 
     return CatalogSpec(
         tables=frozenset(tables),

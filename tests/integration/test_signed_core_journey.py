@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 import pytest
@@ -13,14 +13,23 @@ from agentnet.approval import (
     TrustedApprover,
     create_independent_approval_receipt,
 )
-from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.http_api import create_app
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
 from agentnet.organization import RELATIONSHIP_CONSENT_PURPOSE
-from agentnet.protocol.models import Relationship
+from agentnet.protocol.models import Classification, Relationship
 from agentnet.security.dpop import create_request_proof
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
@@ -58,6 +67,64 @@ def _allow(core: CommunicationCore, actor, action: str, resource: str) -> None:
             revision=1,
         )
     )
+
+def _collaboration_scope(
+    core: CommunicationCore,
+    *,
+    owner,
+    members,
+    actions: tuple[str, ...],
+    resources: tuple[str, ...],
+    classifications: tuple[Classification, ...],
+) -> str:
+    policy = LocalConformancePolicyEngine(core.store)
+    revision = policy.current_policy_revision(owner)
+    domain = core.store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope-signed-journey-{uuid4()}",
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=tuple(sorted(actions)),
+        allowed_resource_prefixes=tuple(sorted(resources)),
+        allowed_classifications=tuple(
+            sorted(classifications, key=lambda value: value.value)
+        ),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=owner,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    ).scope_id
 
 
 @pytest.mark.anyio
@@ -118,6 +185,38 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
             "conversation.response_obligation.transition",
         ):
             _allow(core, actor, action, f"conversation:{conversation_id}")
+    denied_task_idempotency = "signed-disabled-artifact-task-0001"
+    task_idempotency = "signed-communication-only-task-0001"
+    task_resources = tuple(
+        sorted(
+            f"task:{uuid5(NAMESPACE_URL, f'agentnet:task:{laptop.domain_id}:{laptop.harness_id}:{idempotency_key}')}"
+            for idempotency_key in (
+                denied_task_idempotency,
+                task_idempotency,
+            )
+        )
+    )
+    scope_id = _collaboration_scope(
+        core,
+        owner=laptop,
+        members=(laptop, server),
+        actions=(
+            "message.acknowledge",
+            "message.read",
+            "message.send",
+            "obligation.create",
+            "obligation.respond",
+            "task.accept",
+            "task.propose",
+        ),
+        resources=(
+            "conversation:direct",
+            f"conversation:{conversation_id}",
+            *task_resources,
+        ),
+        classifications=(Classification.C0_PUBLIC,),
+    )
+    mailbox_query = f"collaboration_scope_id={scope_id}"
     relationship = Relationship(
         relationship_id="signed-communication-only",
         revision=1,
@@ -146,6 +245,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         base_url="http://127.0.0.1",
     ) as client:
         denied_artifact_request = {
+            "collaboration_scope_id": scope_id,
             "recipients": [server.harness_id],
             "payload": {"text": "must never reach custody"},
             "idempotency_key": f"disabled-artifact-message-{uuid4()}",
@@ -181,13 +281,21 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert denied_artifact.status_code == 503, denied_artifact.text
         assert denied_artifact.json()["gate"] == "artifacts_disabled"
         empty_mailbox = await client.get(
-            "/v1/mailbox",
-            headers=_signed(server_key, server, "GET", "/v1/mailbox", b""),
+            f"/v1/mailbox?{mailbox_query}",
+            headers=_signed(
+                server_key,
+                server,
+                "GET",
+                "/v1/mailbox",
+                b"",
+                query=mailbox_query,
+            ),
         )
         assert empty_mailbox.status_code == 200, empty_mailbox.text
         assert empty_mailbox.json()["items"] == []
 
         message_request = {
+            "collaboration_scope_id": scope_id,
             "recipients": [server.harness_id],
             "payload": {
                 "text": "native journey delivery",
@@ -222,8 +330,15 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert duplicate.json()["envelope_digest"] == accepted_value["envelope_digest"]
 
         mailbox = await client.get(
-            "/v1/mailbox",
-            headers=_signed(server_key, server, "GET", "/v1/mailbox", b""),
+            f"/v1/mailbox?{mailbox_query}",
+            headers=_signed(
+                server_key,
+                server,
+                "GET",
+                "/v1/mailbox",
+                b"",
+                query=mailbox_query,
+            ),
         )
         assert mailbox.status_code == 200, mailbox.text
         items = mailbox.json()["items"]
@@ -235,7 +350,12 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert event["actor"]["principal_id"] != message_request["payload"]["principal_id"]
 
         ack_path = f"/v1/mailbox/{accepted_value['event_id']}/acknowledge"
-        ack_body = canonical_json({"envelope_digest": accepted_value["envelope_digest"]})
+        ack_body = canonical_json(
+            {
+                "collaboration_scope_id": scope_id,
+                "envelope_digest": accepted_value["envelope_digest"],
+            }
+        )
         acknowledged = await client.post(
             ack_path,
             content=ack_body,
@@ -315,6 +435,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert activated.json()["relationship"]["lifecycle_state"] == "active"
 
         task_template = {
+            "collaboration_scope_id": scope_id,
             "recipient_harness_id": server.harness_id,
             "task_type": "research",
             "resources": ["catalog:communication-only"],
@@ -328,7 +449,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         denied_task_request = {
             **task_template,
             "released_artifacts": denied_artifact_request["released_artifacts"],
-            "idempotency_key": "signed-disabled-artifact-task-0001",
+            "idempotency_key": denied_task_idempotency,
         }
         denied_task_body = canonical_json(denied_task_request)
         denied_task = await client.post(
@@ -351,7 +472,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         task_request = {
             **task_template,
             "released_artifacts": [],
-            "idempotency_key": "signed-communication-only-task-0001",
+            "idempotency_key": task_idempotency,
         }
         task_body = canonical_json(task_request)
         assigned = await client.post(
@@ -374,8 +495,15 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert assigned.json()["effect_authorized"] is False
         task_event_id = assigned.json()["event_id"]
         task_mailbox = await client.get(
-            "/v1/mailbox",
-            headers=_signed(server_key, server, "GET", "/v1/mailbox", b""),
+            f"/v1/mailbox?{mailbox_query}",
+            headers=_signed(
+                server_key,
+                server,
+                "GET",
+                "/v1/mailbox",
+                b"",
+                query=mailbox_query,
+            ),
         )
         task_items = [
             item
@@ -389,6 +517,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
 
         create_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "conversation_id": conversation_id,
                 "member_harness_ids": [server.harness_id],
                 "classification": "C0",
@@ -407,6 +536,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         action_path = f"/v1/conversations/{conversation_id}/actions"
         request_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "recipients": [server.harness_id],
                 "thread_id": "thread:native-journey",
                 "action": {
@@ -432,8 +562,15 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert obligation["state"] == "created"
 
         request_mailbox = await client.get(
-            "/v1/mailbox",
-            headers=_signed(server_key, server, "GET", "/v1/mailbox", b""),
+            f"/v1/mailbox?{mailbox_query}",
+            headers=_signed(
+                server_key,
+                server,
+                "GET",
+                "/v1/mailbox",
+                b"",
+                query=mailbox_query,
+            ),
         )
         assert request_mailbox.status_code == 200, request_mailbox.text
         request_items = [
@@ -446,7 +583,10 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
 
         request_ack_path = f"/v1/mailbox/{request_event_id}/acknowledge"
         request_ack_body = canonical_json(
-            {"envelope_digest": requested.json()["envelope_digest"]}
+            {
+                "collaboration_scope_id": scope_id,
+                "envelope_digest": requested.json()["envelope_digest"],
+            }
         )
         request_ack = await client.post(
             request_ack_path,
@@ -466,29 +606,44 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert request_ack.json()["fact"] == "recipient_committed"
         assert request_ack.json()["duplicate"] is False
 
+        obligation_inbox_query = f"collaboration_scope_id={scope_id}"
         obligation_inbox = await client.get(
-            "/v1/response-obligations/inbox",
+            f"/v1/response-obligations/inbox?{obligation_inbox_query}",
             headers=_signed(
                 server_key,
                 server,
                 "GET",
                 "/v1/response-obligations/inbox",
                 b"",
+                query=obligation_inbox_query,
             ),
         )
         assert obligation_inbox.status_code == 200, obligation_inbox.text
         assert obligation_inbox.json()["action_required"] == 1
 
         show_path = f"/v1/response-obligations/{obligation_id}"
+        show_query = f"collaboration_scope_id={scope_id}"
         shown = await client.get(
-            show_path,
-            headers=_signed(laptop_key, laptop, "GET", show_path, b""),
+            f"{show_path}?{show_query}",
+            headers=_signed(
+                laptop_key,
+                laptop,
+                "GET",
+                show_path,
+                b"",
+                query=show_query,
+            ),
         )
         assert shown.status_code == 200, shown.text
         request_digest = shown.json()["request_payload_digest"]
 
         transition_path = f"/v1/response-obligations/{obligation_id}/transition"
-        transition_body = canonical_json({"to_state": "acknowledged"})
+        transition_body = canonical_json(
+            {
+                "collaboration_scope_id": scope_id,
+                "to_state": "acknowledged",
+            }
+        )
         progressed = await client.post(
             transition_path,
             content=transition_body,
@@ -502,6 +657,7 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
 
         response_body = canonical_json(
             {
+                "collaboration_scope_id": scope_id,
                 "recipients": [laptop.harness_id],
                 "thread_id": "thread:native-journey",
                 "action": {
@@ -526,7 +682,9 @@ async def test_signed_http_core_journey_composes_delivery_ack_and_response_oblig
         assert completed.status_code == 202, completed.text
         assert completed.json()["response_obligation"]["state"] == "completed"
 
-        query = "role=requester&limit=10"
+        query = (
+            f"role=requester&limit=10&collaboration_scope_id={scope_id}"
+        )
         listed = await client.get(
             f"/v1/response-obligations?{query}",
             headers=_signed(

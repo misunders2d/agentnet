@@ -10,7 +10,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError as PydanticValidationError,
+    field_validator,
+)
 from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
@@ -37,6 +43,7 @@ from agentnet.gateways.a2a_service import (
 from agentnet.identity_admin_http import create_identity_admin_routes
 from agentnet.invitation_http import create_internal_invitation_routes
 from agentnet.identity.recovery import OIDCCredentialRecoveryCoordinator
+from agentnet.messaging.obligation import MailboxResponseObligation
 from agentnet.organization.assignment import AssignmentRequest
 from agentnet.organization.conflicts import TaskExecutionIntent
 from agentnet.protocol.models import Classification, ReleasedArtifactBinding
@@ -84,6 +91,8 @@ class ProtectedResponseHeadersMiddleware:
 class MessageBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
+
     recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
     payload: dict[str, Any]
     idempotency_key: str = Field(min_length=16, max_length=256)
@@ -94,14 +103,52 @@ class MessageBody(BaseModel):
     expected_room_control_sequence: int | None = Field(default=None, ge=1)
 
 
+class RecipientResolveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1, max_length=256)
+
+
+class ExactRecipientScopeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
+    classification: Classification = Classification.C1_INTERNAL
+
+    @field_validator("recipients")
+    @classmethod
+    def exact_unique_recipients(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if (
+            len(value) != len(set(value))
+            or any(not recipient or len(recipient) > 256 for recipient in value)
+        ):
+            raise ValueError("exact recipients must be a bounded unique tuple")
+        return value
+
+
+def _required_collaboration_scope_id(request: Request) -> str:
+    values = request.query_params.getlist("collaboration_scope_id")
+    if (
+        len(values) != 1
+        or not values[0]
+        or len(values[0]) > 256
+        or any(ord(character) < 0x21 for character in values[0])
+    ):
+        raise ValidationError("one exact collaboration scope is required")
+    return values[0]
+
+
 class MailboxAcknowledgeBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     envelope_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class AssignmentBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
+
 
     recipient_harness_id: str
     task_type: str
@@ -120,6 +167,7 @@ class AssignmentBody(BaseModel):
 
 class ConversationCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     conversation_id: str = Field(min_length=1, max_length=256)
     member_harness_ids: tuple[str, ...] = Field(min_length=1, max_length=999)
@@ -128,6 +176,7 @@ class ConversationCreateBody(BaseModel):
 
 class ConversationActionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     recipients: tuple[str, ...] = Field(min_length=1, max_length=1000)
     thread_id: str = Field(min_length=1, max_length=256)
@@ -137,6 +186,7 @@ class ConversationActionBody(BaseModel):
 
 class ObligationTransitionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     to_state: str = Field(min_length=1, max_length=64)
     reason: str = Field(default="recipient_update", min_length=1, max_length=128)
@@ -145,6 +195,7 @@ class ObligationTransitionBody(BaseModel):
 
 class ObligationCancelBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     reason_code: str = Field(default="requester_canceled", min_length=1, max_length=128)
     expected_revision: int | None = Field(default=None, ge=1)
@@ -152,6 +203,7 @@ class ObligationCancelBody(BaseModel):
 
 class ObligationReconcileBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collaboration_scope_id: str = Field(min_length=1, max_length=256)
 
     limit: int = Field(default=100, ge=1, le=1000)
 
@@ -175,6 +227,26 @@ async def _body_and_actor(request: Request, core: CommunicationCore) -> tuple[by
     body, context = await authenticate_proof_request(request, core)
     return body, context.actor
 
+def _mailbox_http_item(value: dict[str, Any]) -> dict[str, Any]:
+    """Serialize the exact optional content-free obligation reference."""
+
+    if "response_obligation" not in value:
+        raise ValidationError("mailbox item response obligation binding is missing")
+    result = dict(value)
+    reference = value["response_obligation"]
+    if reference is None:
+        return result
+    try:
+        result["response_obligation"] = MailboxResponseObligation.model_validate(
+            reference,
+            strict=True,
+        ).model_dump(mode="json")
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "mailbox item response obligation binding is invalid"
+        ) from exc
+    return result
+
 
 def create_app(core: CommunicationCore) -> Starlette:
     a2a_service: PersistentA2AService | None = None
@@ -195,11 +267,38 @@ def create_app(core: CommunicationCore) -> Starlette:
         status = core.recovery_status(record_observation=False)
         return JSONResponse(status, status_code=200 if status["ready"] else 503)
 
+    async def recipient_resolve(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = RecipientResolveBody.model_validate_json(body)
+        resolved = core.recipient_resolver.resolve(actor=actor, query=parsed.query)
+        return JSONResponse(
+            {"items": [endpoint.model_dump(mode="json") for endpoint in resolved]}
+        )
+
+    async def exact_recipient_scope(request: Request) -> Response:
+        body, actor = await _body_and_actor(request, core)
+        parsed = ExactRecipientScopeBody.model_validate_json(body)
+        scope = core.collaboration_scopes.require(
+            actor=actor,
+            scope_id=None,
+            action="message.send",
+            resource="conversation:direct",
+            target_harness_ids=parsed.recipients,
+            classification=parsed.classification,
+        )
+        return JSONResponse(
+            {
+                "recipient_harness_ids": list(parsed.recipients),
+                "scope_id": scope.scope_id,
+            }
+        )
+
     async def send_message(request: Request) -> Response:
         body, actor = await _body_and_actor(request, core)
         parsed = MessageBody.model_validate_json(body)
         result = core.send_message(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             recipients=parsed.recipients,
             payload=parsed.payload,
             idempotency_key=parsed.idempotency_key,
@@ -213,18 +312,28 @@ def create_app(core: CommunicationCore) -> Starlette:
 
     async def mailbox(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
+        if set(request.query_params) - {"after", "limit", "collaboration_scope_id"}:
+            raise ValidationError("mailbox query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
         try:
             after = int(request.query_params.get("after", "0"))
             limit = int(request.query_params.get("limit", "100"))
         except ValueError as exc:
             raise ValidationError("mailbox cursor/limit must be integers") from exc
-        return JSONResponse({"items": core.mailbox(actor=actor, after_cursor=after, limit=limit)})
+        items = core.mailbox(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            after_cursor=after,
+            limit=limit,
+        )
+        return JSONResponse({"items": [_mailbox_http_item(item) for item in items]})
 
     async def mailbox_acknowledge(request: Request) -> Response:
         body, actor = await _body_and_actor(request, core)
         parsed = MailboxAcknowledgeBody.model_validate_json(body)
         return JSONResponse(
             core.acknowledge_mailbox(
+                collaboration_scope_id=parsed.collaboration_scope_id,
                 actor=actor,
                 event_id=request.path_params["event_id"],
                 envelope_digest=parsed.envelope_digest,
@@ -244,10 +353,14 @@ def create_app(core: CommunicationCore) -> Starlette:
         query_items = request.query_params.multi_items()
         query_keys = [key for key, _value in query_items]
         if (
-            any(key not in {"after", "wait_ms"} for key in query_keys)
+            any(
+                key not in {"after", "wait_ms", "collaboration_scope_id"}
+                for key in query_keys
+            )
             or len(query_keys) != len(set(query_keys))
         ):
             raise ValidationError("mailbox watch query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
         raw_after = request.query_params.get("after", "0")
         raw_wait_ms = request.query_params.get("wait_ms", "5000")
         if any(
@@ -277,7 +390,12 @@ def create_app(core: CommunicationCore) -> Starlette:
         )
         try:
             # Register-before-read closes the query-vs-subscribe race.
-            items = core.mailbox(actor=actor, after_cursor=after, limit=1)
+            items = core.mailbox(
+                actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
+                after_cursor=after,
+                limit=1,
+            )
             if not items:
                 try:
                     await asyncio.wait_for(wake.wait(), timeout=wait_ms / 1_000)
@@ -285,7 +403,12 @@ def create_app(core: CommunicationCore) -> Starlette:
                     pass
                 # The wake is never authorization.  Re-run current policy and
                 # credential checks, then derive the hint only from durable state.
-                items = core.mailbox(actor=actor, after_cursor=after, limit=1)
+                items = core.mailbox(
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    after_cursor=after,
+                    limit=1,
+                )
         finally:
             core.mailboxes.unsubscribe_content_free_wake(subscription_id)
 
@@ -307,6 +430,7 @@ def create_app(core: CommunicationCore) -> Starlette:
         parsed = AssignmentBody.model_validate_json(body)
         assignment = AssignmentRequest(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             recipient_harness_id=parsed.recipient_harness_id,
             task_type=parsed.task_type,
             resources=parsed.resources,
@@ -332,6 +456,7 @@ def create_app(core: CommunicationCore) -> Starlette:
         parsed = ConversationCreateBody.model_validate_json(body)
         result = core.create_conversation(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             conversation_id=parsed.conversation_id,
             member_harness_ids=parsed.member_harness_ids,
             classification=parsed.classification,
@@ -343,6 +468,7 @@ def create_app(core: CommunicationCore) -> Starlette:
         parsed = ConversationActionBody.model_validate_json(body)
         result = core.post_conversation_action(
             actor=actor,
+            collaboration_scope_id=parsed.collaboration_scope_id,
             recipients=parsed.recipients,
             conversation_id=request.path_params["conversation_id"],
             thread_id=parsed.thread_id,
@@ -353,6 +479,9 @@ def create_app(core: CommunicationCore) -> Starlette:
 
     async def conversation_thread(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
+        if set(request.query_params) - {"collaboration_scope_id", "limit"}:
+            raise ValidationError("conversation thread query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
         try:
             limit = int(request.query_params.get("limit", "100"))
         except ValueError as exc:
@@ -361,6 +490,7 @@ def create_app(core: CommunicationCore) -> Starlette:
             {
                 "items": core.conversation_thread(
                     actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
                     conversation_id=request.path_params["conversation_id"],
                     thread_id=request.path_params["thread_id"],
                     limit=limit,
@@ -370,15 +500,37 @@ def create_app(core: CommunicationCore) -> Starlette:
 
     async def response_obligation_inbox(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
-        return JSONResponse(core.response_obligation_inbox(actor=actor))
+        if set(request.query_params) - {"collaboration_scope_id"}:
+            raise ValidationError("obligation inbox query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
+        return JSONResponse(
+            core.response_obligation_inbox(
+                actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
+            )
+        )
 
     async def response_obligation_reconcile(request: Request) -> Response:
         body, actor = await _body_and_actor(request, core)
-        parsed = ObligationReconcileBody.model_validate_json(body or b"{}")
-        return JSONResponse(core.response_obligation_reconcile(actor=actor, limit=parsed.limit))
+        parsed = ObligationReconcileBody.model_validate_json(body)
+        return JSONResponse(
+            core.response_obligation_reconcile(
+                actor=actor,
+                collaboration_scope_id=parsed.collaboration_scope_id,
+                limit=parsed.limit,
+            )
+        )
 
     async def response_obligation_list(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
+        if set(request.query_params) - {
+            "collaboration_scope_id",
+            "limit",
+            "role",
+            "state",
+        }:
+            raise ValidationError("obligation list query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
         role = request.query_params.get("role", "any")
         states = tuple(
             value for value in request.query_params.getlist("state") if value
@@ -391,6 +543,7 @@ def create_app(core: CommunicationCore) -> Starlette:
             {
                 "items": core.response_obligation_list(
                     actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
                     role=role,
                     states=states,
                     limit=limit,
@@ -400,9 +553,13 @@ def create_app(core: CommunicationCore) -> Starlette:
 
     async def response_obligation_get(request: Request) -> Response:
         _body, actor = await _body_and_actor(request, core)
+        if set(request.query_params) - {"collaboration_scope_id"}:
+            raise ValidationError("obligation get query schema is invalid")
+        collaboration_scope_id = _required_collaboration_scope_id(request)
         return JSONResponse(
             core.response_obligation(
                 actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
                 obligation_id=request.path_params["obligation_id"],
             )
         )
@@ -412,6 +569,7 @@ def create_app(core: CommunicationCore) -> Starlette:
         parsed = ObligationTransitionBody.model_validate_json(body)
         return JSONResponse(
             core.response_obligation_transition(
+                collaboration_scope_id=parsed.collaboration_scope_id,
                 actor=actor,
                 obligation_id=request.path_params["obligation_id"],
                 to_state=parsed.to_state,
@@ -425,6 +583,7 @@ def create_app(core: CommunicationCore) -> Starlette:
         parsed = ObligationCancelBody.model_validate_json(body)
         return JSONResponse(
             core.response_obligation_cancel(
+                collaboration_scope_id=parsed.collaboration_scope_id,
                 actor=actor,
                 obligation_id=request.path_params["obligation_id"],
                 reason_code=parsed.reason_code,
@@ -515,6 +674,12 @@ def create_app(core: CommunicationCore) -> Starlette:
         Route("/readyz", ready, methods=["GET"]),
         Route("/recoveryz", recovery, methods=["GET"]),
         Route("/v1/console/server-status", publish_console_status, methods=["POST"]),
+        Route("/v1/recipients/resolve", recipient_resolve, methods=["POST"]),
+        Route(
+            "/v1/recipients/exact-scope",
+            exact_recipient_scope,
+            methods=["POST"],
+        ),
         Route("/v1/messages", send_message, methods=["POST"]),
         Route("/v1/mailbox", mailbox, methods=["GET"]),
         Route("/v1/mailbox/watch", mailbox_watch, methods=["GET"]),

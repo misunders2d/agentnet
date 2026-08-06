@@ -221,6 +221,25 @@ class ArtifactScanner(Protocol):
     ) -> LocalPrefilterResultV1: ...
 
 
+class MaintainedArtifactScanner(Protocol):
+    """Scanner capable of issuing release-authoritative artifact evidence."""
+
+    def scan(
+        self,
+        *,
+        artifact_id: str,
+        classification: Literal["C0", "C1", "C2", "C3"],
+        ciphertext_digest: str,
+        object_key: str,
+        object_version: str,
+        plaintext_digest: str,
+        policy_revision: int,
+        content: bytes,
+        issued_at: int,
+        expires_at: int,
+    ) -> ArtifactScanAttestationV1: ...
+
+
 class LocalPrefilter:
     scanner_id = "agentnet.local-prefilter"
     scanner_version = "4"
@@ -315,6 +334,7 @@ __all__ = [
     "ArtifactScanAttestationV1",
     "ArtifactScanner",
     "LocalPrefilter",
+    "MaintainedArtifactScanner",
     "LocalPrefilterResultV1",
     "ScannerTrustPolicy",
 ]

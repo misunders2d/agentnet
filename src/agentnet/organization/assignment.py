@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agentnet.approval.service import IndependentApprovalVerifier
 from agentnet.authorization.decision import AuthorizationDecision, DecisionRecorder
 from agentnet.authorization.grants import epoch_seconds
+from agentnet.authorization.communication_scope_service import CollaborationScopeService
 from agentnet.authorization.policy import PolicyEngine, validate_actor_state
 from agentnet.errors import AuthorizationError, ConflictError, IdempotencyConflict, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
@@ -64,6 +65,7 @@ class AssignmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     actor: VerifiedActor
+    collaboration_scope_id: str = Field(min_length=1)
     recipient_harness_id: str = Field(min_length=1)
     task_type: str = Field(min_length=1)
     resources: frozenset[str] = Field(min_length=1)
@@ -167,6 +169,7 @@ class AssignmentService:
         self,
         store: StoreBackend,
         *,
+        collaboration_scopes: CollaborationScopeService,
         mailbox: MailboxService | None = None,
         policy: PolicyEngine | None = None,
         approval_verifier: IndependentApprovalVerifier | None = None,
@@ -174,7 +177,15 @@ class AssignmentService:
         outage_gate: OutageGate | None = None,
     ) -> None:
         self.store = store
+        self.collaboration_scopes = collaboration_scopes
         self.mailbox = mailbox
+        if (
+            mailbox is not None
+            and mailbox.collaboration_scopes is not collaboration_scopes
+        ):
+            raise ValueError(
+                "assignment and mailbox must share one collaboration scope service"
+            )
         self.policy = policy
         self.approval_verifier = approval_verifier
         self.recorder = DecisionRecorder(store)
@@ -199,6 +210,34 @@ class AssignmentService:
                 )
             }
         )
+
+
+    def _require_task_scope(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        request: AssignmentRequest,
+        event: EventEnvelope,
+        action: str,
+    ) -> Any:
+        if self.mailbox is None:
+            raise AuthorizationError("task custody requires the composed mailbox service")
+        context = self.mailbox._collaboration_context(event.payload)
+        if context["collaboration_scope_id"] != request.collaboration_scope_id:
+            raise AuthorizationError("task collaboration scope authorization failed")
+        scope = self.collaboration_scopes.require_in_transaction(
+            connection,
+            actor=actor,
+            scope_id=request.collaboration_scope_id,
+            action=action,
+            resource=f"task:{event.event_id}",
+            target_harness_ids=(request.recipient_harness_id,),
+            classification=event.classification,
+        )
+        if scope.authorization_context() != context:
+            raise AuthorizationError("task collaboration scope authorization failed")
+        return scope
 
     @staticmethod
     def _relationship_digest(row: Any | None) -> str:
@@ -318,6 +357,7 @@ class AssignmentService:
         *,
         when: datetime,
         deadline_anchor: datetime | None = None,
+        collaboration_scope: Any | None = None,
     ) -> _Evaluation:
         if self.outage_gate is not None:
             self.outage_gate.require_low_risk_continuity()
@@ -391,6 +431,11 @@ class AssignmentService:
             },
             context={
                 "request": request.context,
+                "authorization_context": (
+                    collaboration_scope.authorization_context()
+                    if collaboration_scope is not None
+                    else None
+                ),
                 "data_classes": sorted(value.value for value in request.data_classes),
                 "tools": sorted(request.tools),
                 "budget": request.budget,
@@ -750,6 +795,13 @@ class AssignmentService:
         request = self._canonical_request(request)
         event = self._normalize_event_clock(event, when=when)
         self._validate_submission(request, event, ingress)
+        proposal_scope = self._require_task_scope(
+            connection,
+            actor=request.actor,
+            request=request,
+            event=event,
+            action="task.propose",
+        )
         if request.deadline is not None and request.deadline <= when:
             raise ValidationError("task custody deadline must be in the future")
         now = epoch_seconds(when)
@@ -763,6 +815,7 @@ class AssignmentService:
             request,
             when=when,
             deadline_anchor=event.created_at,
+            collaboration_scope=proposal_scope,
         )
         decision = evaluation.decision
         relationship_digest = evaluation.relationship_digest
@@ -859,6 +912,13 @@ class AssignmentService:
             }
 
         if decision.fact is DeliveryFact.ACCEPTED_QUEUED:
+            acceptance_scope = self._require_task_scope(
+                connection,
+                actor=request.actor,
+                request=request,
+                event=event,
+                action="task.accept",
+            )
             accepted = self.mailbox._accept_in_transaction(
                 connection,
                 event,
@@ -902,6 +962,7 @@ class AssignmentService:
                 connection,
                 {
                     "action": "task_custody.accepted_queued",
+                    "authorization_context": acceptance_scope.authorization_context(),
                     "event_id": accepted["event_id"],
                     "policy_decision_id": decision.policy_decision_id,
                     "relationship_id": decision.relationship_id,
@@ -985,6 +1046,7 @@ class AssignmentService:
                 "proposal_id": proposal_id,
                 "recipient_authority_id": evaluation.recipient_authority_id,
                 "request_digest": request_digest,
+                "authorization_context": proposal_scope.authorization_context(),
             },
         )
         return decision.model_dump(mode="json") | {
@@ -1259,6 +1321,13 @@ class AssignmentService:
                 request_digest=row["request_digest"],
                 revision=expected_revision + 1,
             )
+        acceptance_scope = self._require_task_scope(
+            connection,
+            actor=decision_actor,
+            request=request,
+            event=event,
+            action="task.accept",
+        )
         accepted = self.mailbox._accept_in_transaction(
             connection,
             event,
@@ -1326,6 +1395,7 @@ class AssignmentService:
             connection,
             {
                 "action": "task_custody.resumed",
+                "authorization_context": acceptance_scope.authorization_context(),
                 "approval_digest": approval_digest,
                 "decision_method": decision_method,
                 "event_id": accepted["event_id"],
@@ -1528,6 +1598,7 @@ class AssignmentService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         limit: int = 100,
         when: datetime | None = None,
     ) -> list[dict[str, Any]]:
@@ -1554,23 +1625,42 @@ class AssignmentService:
             if denial is not None:
                 raise AuthorizationError("task proposal owner is not current")
             rows = connection.execute(
-                """SELECT proposal_id,request_digest,revision,expires_at,redacted_summary_json
-                     FROM task_custody_proposals
+                """SELECT proposal_id FROM task_custody_proposals
                     WHERE domain_id=? AND recipient_authority_id=? AND state='pending'
                       AND expires_at>?
-                    ORDER BY created_at,proposal_id LIMIT ?""",
-                (actor.domain_id, authority_id, epoch_seconds(now), limit),
+                    ORDER BY created_at,proposal_id LIMIT 1000""",
+                (actor.domain_id, authority_id, epoch_seconds(now)),
             ).fetchall()
-            return [
-                {
-                    "proposal_id": row["proposal_id"],
-                    "request_digest": row["request_digest"],
-                    "revision": int(row["revision"]),
-                    "expires_at": datetime.fromtimestamp(row["expires_at"], UTC).isoformat(),
-                    "summary": json.loads(row["redacted_summary_json"]),
-                }
-                for row in rows
-            ]
+            result: list[dict[str, Any]] = []
+            for candidate in rows:
+                row, request, event, _continuation = self._load_exact(
+                    connection,
+                    str(candidate["proposal_id"]),
+                )
+                if request.collaboration_scope_id != collaboration_scope_id:
+                    continue
+                self._require_task_scope(
+                    connection,
+                    actor=actor,
+                    request=request,
+                    event=event,
+                    action="task.accept",
+                )
+                result.append(
+                    {
+                        "proposal_id": row["proposal_id"],
+                        "request_digest": row["request_digest"],
+                        "revision": int(row["revision"]),
+                        "expires_at": datetime.fromtimestamp(
+                            row["expires_at"],
+                            UTC,
+                        ).isoformat(),
+                        "summary": json.loads(row["redacted_summary_json"]),
+                    }
+                )
+                if len(result) == limit:
+                    break
+            return result
 
     def pending_conflicts_for_owner(
         self,

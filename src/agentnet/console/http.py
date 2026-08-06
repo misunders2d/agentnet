@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import ipaddress
 import json
 from importlib.resources import files
-from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from typing import Any, Protocol
+from urllib.parse import parse_qs, quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
 from starlette.applications import Starlette
@@ -18,13 +19,23 @@ from starlette.routing import Route
 from agentnet.authorization.policy import OperationClass
 
 from agentnet.console.headers import protected_headers
+from agentnet.console.models import InvitationContinuationResult, InvitationCreationForm
 from agentnet.console.mutations import ConsoleMutationService
 from agentnet.console.read_service import ConsoleReadService
 from agentnet.console.render import ConsoleRenderer
 from agentnet.console.session import ConsoleOIDCCoordinator, ConsoleSessionService, ConsoleSessionStatus
+from agentnet.identity.invitation_links import InvitationLinkService, InvitationUnavailable
+from agentnet.identity.onboarding_prompt import build_onboarding_prompt
 from agentnet.identity.sponsored_enrollment import SponsoredEnrollmentService
 from agentnet.core.app import CommunicationCore
-from agentnet.errors import AuthenticationError, AuthorizationError, ExtensionError, GateBlocked, ValidationError
+from agentnet.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    ExtensionError,
+    GateBlocked,
+    ValidationError,
+)
 from agentnet.http_auth import authenticate_proof_request
 
 SESSION_COOKIE = "__Host-agentnet_console"
@@ -45,6 +56,17 @@ class _SponsoredCandidateBegin(BaseModel):
     binding_assurance: str = Field(pattern=r"^(os_bound|hardware_bound)$")
     public_key_pem: str = Field(min_length=128, max_length=16_384)
     idempotency_key: str = Field(min_length=16, max_length=128)
+
+
+class InvitationContinuationService(Protocol):
+    """Package-owned boundary that performs verified invitation continuation."""
+
+    def continue_with_work_account(
+        self,
+        *,
+        opaque_token: str,
+        source_fingerprint: str,
+    ) -> InvitationContinuationResult: ...
 
 def _asset(name: str) -> bytes:
     return files("agentnet.console").joinpath("static", name).read_bytes()
@@ -73,26 +95,67 @@ def create_console_app(
     sessions: ConsoleSessionService | None = None,
     read_service: ConsoleReadService | None = None,
     mutation_service: ConsoleMutationService | None = None,
+    invitation_links: InvitationLinkService | None = None,
     public_origin: str | None = None,
     oidc: ConsoleOIDCCoordinator | None = None,
     sponsored_enrollment: SponsoredEnrollmentService | None = None,
+    invitation_continuation: InvitationContinuationService | None = None,
+    invitation_authorization_origins: frozenset[str] = frozenset(),
 ) -> Starlette:
     if core is not None:
         console = core.config.admin_console
         sessions = core.console_sessions
         read_service = core.console_reads
         mutation_service = core.console_mutations
+        invitation_links = core.invitation_links
         oidc = core.console_oidc
         sponsored_enrollment = core.sponsored_enrollment
+        invitation_continuation = getattr(core, "invitation_continuation", None)
+        if oidc is not None:
+            invitation_authorization_origins = frozenset(
+                oidc.provider.config.allowed_endpoint_origins
+            )
         public_origin = console.public_origin if console is not None else None
-    if sessions is None or read_service is None or mutation_service is None or public_origin is None:
+    if (
+        sessions is None
+        or read_service is None
+        or mutation_service is None
+        or invitation_links is None
+        or public_origin is None
+    ):
         raise GateBlocked("admin_console", "admin console services are not configured")
     origin = public_origin.rstrip("/")
     parsed_origin = urlsplit(origin)
+    try:
+        literal_address = ipaddress.ip_address(parsed_origin.hostname or "")
+    except ValueError:
+        literal_address = None
+    if (
+        parsed_origin.scheme != "https"
+        or not parsed_origin.hostname
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_origin.path
+        or parsed_origin.query
+        or parsed_origin.fragment
+        or parsed_origin.hostname.casefold() == "localhost"
+        or (
+            literal_address is not None
+            and (
+                literal_address.is_loopback
+                or literal_address.is_private
+                or literal_address.is_unspecified
+            )
+        )
+    ):
+        raise GateBlocked(
+            "admin_console",
+            "public invitation onboarding requires canonical public HTTPS",
+        )
     expected_host = parsed_origin.netloc
     css = _asset("console.css")
     javascript = _asset("console.js")
-    asset_version = hashlib.sha256(css).hexdigest()
+    asset_version = hashlib.sha256(css + b"\0" + javascript).hexdigest()
     renderer = ConsoleRenderer(
         asset_version=asset_version,
         approval_origin=mutation_service.approval_public_origin,
@@ -102,6 +165,11 @@ def create_console_app(
         supplied = request.headers.get("origin", "")
         if supplied != origin:
             raise AuthorizationError("console mutation denied")
+
+    def require_public_invitation_origin(request: Request) -> None:
+        supplied = request.headers.get("origin", "")
+        if supplied not in {origin, "null"}:
+            raise AuthorizationError("invitation continuation denied")
 
     def require_host(request: Request) -> None:
         if request.headers.get("host", "").casefold() != expected_host.casefold():
@@ -150,6 +218,25 @@ def create_console_app(
     def page_response(document: str, *, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(document, status_code=status_code, headers=protected_headers())
 
+    def public_headers() -> dict[str, str]:
+        return protected_headers(
+            {
+                "Content-Security-Policy": "; ".join(
+                    (
+                        "default-src 'none'",
+                        "base-uri 'none'",
+                        "form-action 'self'",
+                        "frame-ancestors 'none'",
+                        "script-src 'self'",
+                        "style-src 'self'",
+                    )
+                )
+            }
+        )
+
+    def public_page_response(document: str, *, status_code: int = 200) -> HTMLResponse:
+        return HTMLResponse(document, status_code=status_code, headers=public_headers())
+
     def mutation_authorizer(request: Request):
         session_token = request.cookies.get(SESSION_COOKIE, "")
 
@@ -190,6 +277,76 @@ def create_console_app(
                 "Content-Security-Policy": "default-src 'none'",
                 "X-Content-Type-Options": "nosniff",
             },
+        )
+
+    def unavailable_invitation_response() -> HTMLResponse:
+        return public_page_response(
+            renderer.public_invitation_unavailable(),
+            status_code=410,
+        )
+
+    def source_fingerprint(request: Request) -> str:
+        if request.client is None or not request.client.host:
+            raise AuthenticationError("invitation source transport is unavailable")
+        return hashlib.sha256(request.client.host.casefold().encode("utf-8")).hexdigest()
+
+    async def public_invitation(request: Request) -> Response:
+        require_host(request)
+        opaque_token = request.path_params["opaque_token"]
+        try:
+            summary = invitation_links.inspect_public(opaque_token=opaque_token)
+        except InvitationUnavailable:
+            return unavailable_invitation_response()
+        prompt = build_onboarding_prompt(summary)
+        continue_path = f"/join/{quote(opaque_token, safe='')}/continue"
+        return public_page_response(
+            renderer.public_invitation(
+                prompt=prompt,
+                continue_path=continue_path,
+            )
+        )
+
+    async def continue_public_invitation(request: Request) -> Response:
+        opaque_token = request.path_params["opaque_token"]
+        try:
+            require_public_invitation_origin(request)
+            form = await parsed_form(request, same_origin=False)
+            if form:
+                raise ValidationError("invitation continuation accepts no browser fields")
+            invitation_links.inspect_public(opaque_token=opaque_token)
+            if invitation_continuation is None:
+                raise InvitationUnavailable()
+            result = InvitationContinuationResult.model_validate(
+                invitation_continuation.continue_with_work_account(
+                    opaque_token=opaque_token,
+                    source_fingerprint=source_fingerprint(request),
+                )
+            )
+        except (
+            InvitationUnavailable,
+            AuthenticationError,
+            AuthorizationError,
+            ConflictError,
+            PydanticValidationError,
+        ):
+            return unavailable_invitation_response()
+        if result.state == "authorization_required":
+            authorization_url = str(result.authorization_url)
+            parsed = urlsplit(authorization_url)
+            authorization_origin = f"{parsed.scheme}://{parsed.netloc}".casefold()
+            allowed_origins = {
+                value.rstrip("/").casefold()
+                for value in invitation_authorization_origins
+            }
+            if authorization_origin not in allowed_origins:
+                return unavailable_invitation_response()
+            return RedirectResponse(
+                authorization_url,
+                status_code=303,
+                headers=public_headers(),
+            )
+        return public_page_response(
+            renderer.public_invitation_status(state=result.state)
         )
 
     async def home(request: Request) -> Response:
@@ -400,6 +557,95 @@ def create_console_app(
         response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
         del status
         return response
+
+    async def new_invitation(request: Request) -> Response:
+        status = session_for(request)
+        spaces = mutation_service.invitation_scopes(actor=status.actor)
+        return page_response(
+            renderer.invitation_new(
+                spaces=tuple((item.scope_id, item.display_name) for item in spaces),
+                authorize_mutation=mutation_authorizer(request),
+                fresh_at=sessions.clock(),
+            )
+        )
+
+    async def create_invitation(request: Request) -> Response:
+        status, form = await review_form(request)
+        values = {
+            "email": _single(form, "email", required=False),
+            "scope_id": _single(form, "scope_id", required=False),
+            "permissions": tuple(form.get("permissions", [])),
+        }
+        if set(form) != {"email", "scope_id", "permissions"}:
+            raise ValidationError("Invitation details are invalid")
+        try:
+            parsed = InvitationCreationForm.model_validate(values, strict=True)
+        except PydanticValidationError:
+            return page_response(
+                renderer.invitation_new(
+                    spaces=tuple(
+                        (item.scope_id, item.display_name)
+                        for item in mutation_service.invitation_scopes(actor=status.actor)
+                    ),
+                    authorize_mutation=mutation_authorizer(request),
+                    fresh_at=sessions.clock(),
+                    values=values,
+                    error="Check the work email, space, and allowed actions.",
+                ),
+                status_code=400,
+            )
+        invitation_id, _ = mutation_service.issue_invitation(
+            actor=status.actor,
+            form=parsed,
+            submission_id=status.session_id,
+        )
+        return RedirectResponse(
+            f"/invitations/{invitation_id}",
+            status_code=303,
+            headers=protected_headers(),
+        )
+
+    async def invitation_detail(request: Request) -> Response:
+        status = session_for(request)
+        invitation_id = request.path_params["invitation_id"]
+        if not 16 <= len(invitation_id) <= 128:
+            raise AuthenticationError("console invitation denied")
+        detail = mutation_service.invitation_detail(
+            actor=status.actor,
+            invitation_id=invitation_id,
+        )
+        return page_response(
+            renderer.invitation_detail(
+                work_email=detail.work_email,
+                space=detail.space,
+                permissions=detail.permissions,
+                invitation_url=detail.invitation_url,
+                qr_svg=detail.qr_svg,
+                expires_at=detail.expires_at,
+                revoked=detail.revoked,
+                revoke_path=f"/invitations/{invitation_id}/revoke",
+                authorize_mutation=mutation_authorizer(request),
+                fresh_at=sessions.clock(),
+            )
+        )
+
+    async def revoke_invitation(request: Request) -> Response:
+        status, form = await mutation_form(request)
+        if set(form) != {"mutation_token"}:
+            raise ValidationError("Invitation revocation is invalid")
+        invitation_id = request.path_params["invitation_id"]
+        if not 16 <= len(invitation_id) <= 128:
+            raise AuthenticationError("console invitation denied")
+        mutation_service.revoke_invitation(
+            actor=status.actor,
+            invitation_id=invitation_id,
+        )
+        return RedirectResponse(
+            f"/invitations/{invitation_id}",
+            status_code=303,
+            headers=protected_headers(),
+        )
+
 
     async def review_enrollment(request: Request) -> Response:
         status, form = await review_form(request)
@@ -617,6 +863,12 @@ def create_console_app(
         ),
         Route("/v1/console/open", open_console, methods=["POST"]),
         Route("/v1/console/oidc/callback", oidc_callback, methods=["GET"]),
+        Route("/join/{opaque_token}", public_invitation, methods=["GET"]),
+        Route(
+            "/join/{opaque_token}/continue",
+            continue_public_invitation,
+            methods=["POST"],
+        ),
         Route("/v1/console/sign-out", sign_out, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/servers", servers_page, methods=["GET"]),
@@ -624,6 +876,10 @@ def create_console_app(
         Route("/approvals", approvals_page, methods=["GET"]),
         Route("/security", security_page, methods=["GET"]),
         Route("/activity", activity_page, methods=["GET"]),
+        Route("/invitations/new", new_invitation, methods=["GET"]),
+        Route("/invitations", create_invitation, methods=["POST"]),
+        Route("/invitations/{invitation_id}", invitation_detail, methods=["GET"]),
+        Route("/invitations/{invitation_id}/revoke", revoke_invitation, methods=["POST"]),
         Route("/enrollments/review", review_enrollment, methods=["POST"]),
         Route("/enrollments", create_enrollment, methods=["POST"]),
         Route("/harnesses/{harness_id}/revoke", revoke_harness, methods=["POST"]),
@@ -639,4 +895,9 @@ def create_console_app(
     return Starlette(routes=routes, exception_handlers={ExtensionError: extension_error})
 
 
-__all__ = ["PREAUTH_COOKIE", "SESSION_COOKIE", "create_console_app"]
+__all__ = [
+    "PREAUTH_COOKIE",
+    "SESSION_COOKIE",
+    "InvitationContinuationService",
+    "create_console_app",
+]

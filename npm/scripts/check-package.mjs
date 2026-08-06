@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const resolvedRoot = realpathSync(root);
 const fail = (message) => {
   console.error(`npm package check: FAIL - ${message}`);
   process.exitCode = 1;
@@ -38,6 +39,10 @@ const requiredPublishedFiles = [
   "skills/**/*.md",
   "skills/**/*.json",
   "tests/fixtures/**/*.json",
+  "npm/**/*.mjs",
+  "pyproject.toml",
+  "src/**/*.py",
+  "uv.lock",
 ];
 for (const relative of requiredPublishedFiles) {
   if (!metadata.files?.includes(relative)) fail(`published files exclude ${relative}`);
@@ -73,6 +78,9 @@ for (const relative of [
   "docs/assets/agentnet-overview.png",
   "uv.lock",
   "pyproject.toml",
+  "src/agentnet/__main__.py",
+  "src/agentnet/cli.py",
+  "src/agentnet/operations/client_setup.py",
   "npm/bin/agentnet.mjs",
   "npm/lib/platform.mjs",
   "npm/lib/windows-runtime-acl.ps1",
@@ -93,10 +101,21 @@ for (const relative of [
   "src/agentnet/adapters/pi.py",
   "src/agentnet/adapters/antigravity.py",
 ]) {
+  const target = path.join(root, relative);
+  let resolved;
   try {
-    accessSync(path.join(root, relative), constants.R_OK);
+    accessSync(target, constants.R_OK);
+    resolved = realpathSync(target);
   } catch {
     fail(`required package file missing: ${relative}`);
+    continue;
+  }
+  const relativeToPackage = path.relative(resolvedRoot, resolved);
+  if (
+    lstatSync(target).isSymbolicLink() || relativeToPackage === ".." ||
+    relativeToPackage.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToPackage)
+  ) {
+    fail(`required package file escapes package root: ${relative}`);
   }
 }
 
@@ -333,6 +352,40 @@ if (!launcherText.includes('"3.13.13"') || launcherText.includes('">=3.13,<3.15"
 }
 if (!launcherText.includes("minimumUvVersion = [0, 11, 28]")) {
   fail("npm launcher does not enforce the minimum supported uv version");
+}
+if (!pyproject.includes('agentnet = "agentnet.cli:main"')) {
+  fail("packaged Python command entry point is missing");
+}
+for (const marker of [
+  'const packagedSetup = userArguments[0] === "setup"',
+  "runtimeRoot = packagedSetup",
+  '"--managed-python"',
+  '"--no-active"',
+  '"--no-config"',
+  '"python",',
+  '"-I",',
+  '"-B",',
+  '"-m",',
+  '"agentnet",',
+  '"UV_PYTHON_INSTALL_DIR"',
+  "delete inheritedEnvironment[name]",
+  "AgentNet setup could not access its package-owned Python runtime.",
+]) {
+  if (!launcherText.includes(marker)) {
+    fail(`npm launcher is missing package-owned setup runtime marker: ${marker}`);
+  }
+}
+if (
+  !/runtimeRoot = packagedSetup\s+\? packageOwnedRuntime\s+: process\.env\.AGENTNET_NPM_RUNTIME_DIR/u
+    .test(launcherText)
+) {
+  fail("setup runtime can escape the package-owned runtime root");
+}
+if (
+  !/if \(packagedSetup\) \{\s+uvArguments\.push\(\s+"--managed-python",\s+"--no-active",\s+"--no-config",\s+"python",\s+"-I",\s+"-B",\s+"-m",\s+"agentnet",\s+\.\.\.userArguments,/u
+    .test(launcherText)
+) {
+  fail("setup command does not invoke the isolated packaged Python module");
 }
 for (const marker of [
   "privilegedSetupApply",

@@ -287,17 +287,84 @@ EOF
 cat >"$INPUTS/approvers.json" <<'EOF'
 {"approvers":[{"principal_id":"owner-principal","authority_kind":"human","domain_id":"agentnet.test","allowed_purposes":["authorization.bootstrap_plan.approve","authorization.communication_scope.approve","authorization.elevation.approve","identity.credential.recover.approve","identity.enrollment.approve","identity.harness.revoke.approve","organization.relationship.accept"],"oidc_issuer":"https://accounts.example","oidc_subject":"owner-subject"}]}
 EOF
+# Synthetic maintained-ClamAV configuration. Setup validates the pinned
+# configuration only; this is not maintained-scanner runtime evidence and
+# promotes no artifact gate.
+SCANNER_ID="ordinary-server-e2e-scanner"
+SCANNER_KEY_EPOCH=1
+SCANNER_ENGINE_VERSION="1.0.7"
+SCANNER_SIGNATURE_VERSION="27000"
+SCANNER_SIGNATURE_UPDATED_AT="$(date -u +%s)"
+SCANNER_SIGNATURE_MAX_AGE_SECONDS=86400
+SCANNER_ENDPOINT="unix:///var/run/clamav/clamd.ctl"
 openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/scanner.key" >/dev/null 2>&1
 openssl ec -in "$WORK/scanner.key" -pubout -out "$WORK/scanner.pub" >/dev/null 2>&1
-python3 - "$WORK/scanner.pub" "$INPUTS/scanner-trust.json" <<'PY'
+cat >>"$INPUTS/core.env" <<EOF
+AGENTNET_CLAMAV_ENDPOINT=$SCANNER_ENDPOINT
+AGENTNET_CLAMAV_SCANNER_ID=$SCANNER_ID
+AGENTNET_CLAMAV_KEY_EPOCH=$SCANNER_KEY_EPOCH
+AGENTNET_CLAMAV_SIGNING_KEY_FILE=$INPUTS/scanner.key
+AGENTNET_CLAMAV_ENGINE_VERSION=$SCANNER_ENGINE_VERSION
+AGENTNET_CLAMAV_SIGNATURE_VERSION=$SCANNER_SIGNATURE_VERSION
+AGENTNET_CLAMAV_SIGNATURE_UPDATED_AT=$SCANNER_SIGNATURE_UPDATED_AT
+AGENTNET_CLAMAV_SIGNATURE_MAX_AGE_SECONDS=$SCANNER_SIGNATURE_MAX_AGE_SECONDS
+EOF
+cp "$WORK/scanner.key" "$INPUTS/scanner.key"
+# The pinned digests must equal exactly what the installed release derives, so
+# they are computed by the installed package runtime, not repository source.
+env PATH="$RUNTIME_PATH" NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+  "$RUNTIME_NODE" "$RUNTIME_LAUNCHER" --version >/dev/null
+PACKAGE_INSTALL_ID="$(printf '%s' "$RUNTIME_PACKAGE_ROOT" | sha256sum | cut -c1-12)"
+PACKAGE_VERSION="$(jq -r '.version' "$RUNTIME_PACKAGE_ROOT/package.json")"
+PACKAGE_RUNTIME_PYTHON="$HOME/.local/state/agentnet/npm-runtime/$PACKAGE_VERSION-$PACKAGE_INSTALL_ID/bin/python"
+[[ -x "$PACKAGE_RUNTIME_PYTHON" ]]
+"$PACKAGE_RUNTIME_PYTHON" - \
+  "$WORK/scanner.pub" "$INPUTS/scanner-trust.json" "$SCANNER_ID" "$SCANNER_KEY_EPOCH" \
+  "$SCANNER_ENDPOINT" "$SCANNER_ENGINE_VERSION" "$SCANNER_SIGNATURE_VERSION" \
+  "$SCANNER_SIGNATURE_UPDATED_AT" "$SCANNER_SIGNATURE_MAX_AGE_SECONDS" <<'PY'
 import json, pathlib, sys
-public_key = pathlib.Path(sys.argv[1]).read_text()
-pathlib.Path(sys.argv[2]).write_text(json.dumps({
-    "trusted_public_keys": {"scanner-key": public_key},
-    "required_engine": "synthetic-scanner",
-    "required_rules_digest": "a" * 64,
-    "required_profile_digest": "b" * 64,
-}))
+
+from agentnet.artifacts.clamav import (
+    ScannerEndpoint,
+    clamav_profile_digest,
+    clamav_rules_digest,
+)
+
+(
+    public_key_path,
+    trust_path,
+    scanner_id,
+    key_epoch,
+    endpoint_uri,
+    engine_version,
+    signature_version,
+    signature_updated_at,
+    signature_max_age_seconds,
+) = sys.argv[1:10]
+public_key = pathlib.Path(public_key_path).read_text()
+rules_digest = clamav_rules_digest(
+    signature_version=signature_version,
+    signature_updated_at=int(signature_updated_at),
+)
+profile_digest = clamav_profile_digest(
+    endpoint=ScannerEndpoint.from_uri(endpoint_uri),
+    engine_version=engine_version,
+    timeout_seconds=30.0,
+    max_bytes=16_777_216,
+    max_response_bytes=4_096,
+    max_signature_age_seconds=int(signature_max_age_seconds),
+)
+pathlib.Path(trust_path).write_text(
+    json.dumps(
+        {
+            "trusted_public_keys": {f"{scanner_id}:{int(key_epoch)}": public_key},
+            "required_engine": "clamav",
+            "required_rules_digest": rules_digest,
+            "required_profile_digest": profile_digest,
+        },
+        sort_keys=True,
+    )
+)
 PY
 cat >"$INPUTS/server-setup.json" <<EOF
 {"schema":"agentnet.server-setup.request.v1","profile":"always_on_server_agent","domain_id":"agentnet.test","service_audience":"urn:agentnet:agentnet.test:corporate-api","runtime_instance_id":"ordinary-server-e2e","core_public_origin":"https://core.agentnet.test","approval_public_origin":"https://approval.agentnet.test","database_url":"postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet","database_url_env":"AGENTNET_DATABASE_URL","core_environment_file":"$INPUTS/core.env","approval_environment_file":"$INPUTS/approval.env","oidc_provider_file":"$INPUTS/core-oidc.json","approval_owner_oidc_file":"$INPUTS/approval-owner-oidc.json","approval_approvers_file":"$INPUTS/approvers.json","scanner_trust_file":"$INPUTS/scanner-trust.json","approval_approver_principal_id":"owner-principal","approval_verifier_id":"approval.agentnet.test"}

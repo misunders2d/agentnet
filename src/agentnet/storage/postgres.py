@@ -22,6 +22,23 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
 from agentnet.errors import GateBlocked, IdempotencyConflict, ReplayError, ValidationError
+from agentnet.storage.artifact_transfer_schema import (
+    ARTIFACT_TRANSFER_REQUIRED_INDEXES,
+    ARTIFACT_TRANSFER_REQUIRED_TABLES,
+)
+from agentnet.storage.collaboration_scope_schema import (
+    COLLABORATION_SCOPE_REQUIRED_INDEXES,
+    COLLABORATION_SCOPE_REQUIRED_TABLES,
+)
+from agentnet.storage.release_v7_schema import migrate_v6_communication_scopes
+from agentnet.storage.endpoint_lifecycle_schema import (
+    ENDPOINT_LIFECYCLE_REQUIRED_INDEXES,
+    ENDPOINT_LIFECYCLE_REQUIRED_TABLES,
+)
+from agentnet.storage.invitation_link_schema import (
+    INVITATION_LINK_REQUIRED_INDEXES,
+    INVITATION_LINK_REQUIRED_TABLES,
+)
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import canonical_json
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS, Migration
@@ -309,20 +326,15 @@ def validate_applied_migrations(
 
 
 
-_S6_RELATIONS = frozenset(
-    {
-        "communication_scopes",
-        "communication_scope_items",
-        "idx_communication_scopes_current",
-        "idx_communication_scope_items_entitlement_harness",
-        "console_session_challenges",
-        "console_browser_sessions",
-        "console_oidc_transactions",
-        "console_server_status",
-        "console_enrollment_intents",
-        "console_enrollment_candidates",
-        "console_mutations",
-    }
+_S7_RELATIONS = frozenset().union(
+    ARTIFACT_TRANSFER_REQUIRED_INDEXES,
+    ARTIFACT_TRANSFER_REQUIRED_TABLES,
+    COLLABORATION_SCOPE_REQUIRED_INDEXES,
+    COLLABORATION_SCOPE_REQUIRED_TABLES,
+    ENDPOINT_LIFECYCLE_REQUIRED_INDEXES,
+    ENDPOINT_LIFECYCLE_REQUIRED_TABLES,
+    INVITATION_LINK_REQUIRED_INDEXES,
+    INVITATION_LINK_REQUIRED_TABLES,
 )
 
 _S4_TABLES = frozenset(
@@ -482,10 +494,10 @@ def apply_postgres_migrations(connection: Any) -> int:
                     "schema_migration_history",
                     "an empty PostgreSQL migration catalog is not a released schema",
                 )
-            if current == 5 and relation_names & _S6_RELATIONS:
+            if current == 6 and relation_names & _S7_RELATIONS:
                 raise GateBlocked(
-                    "schema_s6_partial",
-                    "PostgreSQL v5 contains unsupported partial S6 relations",
+                    "schema_s7_partial",
+                    "PostgreSQL v6 contains unsupported partial S7 relations",
                 )
             require_exact_postgres_catalog(connection, migrations=MIGRATIONS[:current])
         else:
@@ -505,6 +517,8 @@ def apply_postgres_migrations(connection: Any) -> int:
                 continue
             for statement in split_migration_statements(migration.sql):
                 connection.execute(statement)
+            if migration.version == 7 and current == 6:
+                migrate_v6_communication_scopes(connection, postgres=True)
             connection.execute(
                 "INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES(%s,%s,%s,%s)",
                 (migration.version, migration.name, migration.checksum, int(time.time())),

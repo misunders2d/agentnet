@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticVa
 from agentnet.client import AgentNetClient
 from agentnet.errors import GateBlocked, ValidationError
 from agentnet.security.signatures import P256KeyPair
-from agentnet.supervisor.client import AgentNetSupervisorCoreClient
+from agentnet.supervisor.client import AgentNetC0PilotCoreClient
 
 
 class C0PilotResponderConfig(BaseModel):
@@ -163,7 +163,7 @@ def _client(
     credential_path: Path,
     *,
     transport: httpx.BaseTransport | None,
-) -> tuple[AgentNetClient, AgentNetSupervisorCoreClient]:
+) -> tuple[AgentNetClient, AgentNetC0PilotCoreClient]:
     try:
         key = P256KeyPair.from_private_pem(
             _credential_file(credential_path, label="C0 responder credential")
@@ -179,7 +179,7 @@ def _client(
         audience=config.audience,
         transport=transport,
     )
-    return client, AgentNetSupervisorCoreClient(client)
+    return client, AgentNetC0PilotCoreClient(client)
 
 
 def check_c0_responder(

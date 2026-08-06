@@ -14,6 +14,11 @@ from agentnet.bindings.ipc import (
     WindowsNamedPipeIPCServer,
     accepted_windows_pipe_peer,
 )
+from agentnet.bindings.mcp_bootstrap import (
+    _require_canonical_tool_request,
+    _require_exact_bound_peer,
+)
+from agentnet.bindings.tools import CANONICAL_TOOL_NAMES
 from agentnet.errors import AuthenticationError, ValidationError
 from agentnet.security.signatures import canonical_json
 from agentnet.windows_security import (
@@ -60,6 +65,16 @@ class WindowsMCPBootstrapServer:
         self._guard = threading.Lock()
         self._startup_error: BaseException | None = None
 
+    @property
+    def canonical_tool_names(self) -> tuple[str, ...]:
+        return CANONICAL_TOOL_NAMES
+
+    @staticmethod
+    def refresh_status() -> dict[str, str]:
+        """Report unsupported live refresh without mutating or restarting a harness."""
+
+        return {"state": "restart_required"}
+
     @staticmethod
     def _imports():
         return WindowsNamedPipeIPCServer._imports()
@@ -98,7 +113,7 @@ class WindowsMCPBootstrapServer:
             raise ValidationError("MCP bootstrap frame is invalid") from exc
         if not isinstance(value, dict) or canonical_json(value) != raw:
             raise ValidationError("MCP bootstrap frame must use exact canonical JSON")
-        return value
+        return _require_canonical_tool_request(value)
 
     @staticmethod
     def _write_frame(handle, value: dict[str, Any]) -> None:
@@ -108,7 +123,7 @@ class WindowsMCPBootstrapServer:
         _pywintypes, _win32con, _win32file, win32pipe, _winerror = self._imports()
         try:
             peer = accepted_windows_pipe_peer(handle)
-            bound = self.bind_peer(peer)
+            bound = _require_exact_bound_peer(self.bind_peer(peer))
             self._write_frame(
                 handle,
                 {

@@ -67,6 +67,8 @@ def test_clean_worker_inherits_no_user_home_workspace_proxy_plugin_or_secret_env
         private_auth.mkdir(mode=0o700)
         private_file = private_auth / "auth.json"
         private_file.write_text('{"fixture":"private"}\n', encoding="utf-8")
+        if harness == "antigravity":
+            (spec.home_dir / ".gemini").rename(private_auth / ".gemini")
         os.chmod(private_file, 0o600)
         auth = PreprovisionedPrivateAuth(harness, private_auth)
     runtime = contract_clean_runtime_factory(spec, auth, request_timeout_seconds=1)

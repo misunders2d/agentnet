@@ -1,4 +1,4 @@
-name: Released marker rejection E2E
+name: Ordinary server 0.1.44 to 0.1.45 upgrade E2E
 
 on:
   workflow_call:
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   released-upgrade-chain:
-    name: Ubuntu 24.04 / PostgreSQL 18 / 0.1.38 marker rejected
+    name: Ubuntu 24.04 / PostgreSQL 18 / schema 6 to 7
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -67,11 +67,11 @@ jobs:
           python-version: "3.13.13"
           enable-cache: false
 
-      - name: Install PostgreSQL 18 and local route dependencies
+      - name: Install PostgreSQL 18 and disposable route dependencies
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-common nginx jq openssl ca-certificates
+          sudo apt-get install -y postgresql-common nginx jq openssl ca-certificates iproute2
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get update
           sudo apt-get install -y postgresql-18
@@ -81,7 +81,7 @@ jobs:
           sudo pg_createcluster 18 main --port 5432 --start
           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
 
-      - name: Prove exact released marker is rejected
+      - name: Prove exact released-to-candidate upgrade and rollback
         shell: bash
         run: scripts/ci/ordinary-server-upgrade-e2e.sh
 
@@ -97,6 +97,7 @@ jobs:
           ! getent group agentnet-approval >/dev/null
           ! getent group agentnet-c0 >/dev/null
           ! compgen -G '/opt/agentnet-upgrade-e2e-*' >/dev/null
+          ! pgrep -f '/opt/agentnet-upgrade-e2e-' >/dev/null
           for path in \
             /var/lib/agentnet \
             /var/lib/agentnet-approval \
@@ -122,3 +123,4 @@ jobs:
           ! sudo grep -Fq '# agentnet-upgrade-e2e' "$HBA_FILE"
           [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_roles WHERE rolname='agentnet'")" == "0" ]]
           [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_database WHERE datname='agentnet'")" == "0" ]]
+          ! sudo ss -H -ltnp '( sport = :8080 or sport = :8090 )' | grep -Fq agentnet

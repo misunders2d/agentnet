@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from agentnet.errors import GateBlocked
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS
-from agentnet.storage.sqlite import SCHEMA_V5, SQLiteStore
+from agentnet.storage.sqlite import SCHEMA_V5, SCHEMA_V6, SQLiteStore
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "bootstrap_plan_golden_vector.json"
@@ -24,6 +25,29 @@ REQUIRED_PLAN_TABLES = {
     "c0_plan_guard_entitlements",
     "c0_pilot_attempts",
     "c0_pilot_facts",
+}
+
+PRESERVED_V6_TABLES = {
+    "communication_scopes",
+    "communication_scope_items",
+    "console_session_challenges",
+    "console_oidc_transactions",
+    "console_browser_sessions",
+    "console_mutation_authorizations",
+    "console_server_status",
+    "console_enrollment_intents",
+    "console_enrollment_reviews",
+    "console_enrollment_candidates",
+    "console_mutations",
+}
+REQUIRED_V7_TABLES = {
+    "endpoint_lifecycle",
+    "collaboration_scopes",
+    "collaboration_scope_members",
+    "artifact_transfers",
+    "artifact_transfer_recipients",
+    "invitation_links",
+    "invitation_link_failures",
 }
 
 
@@ -210,17 +234,57 @@ def test_bootstrap_state_machine_keeps_s4_guard_pending_until_s5() -> None:
     )
 
 
-def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -> None:
+def _initialize_schema_fixture(
+    path: Path,
+    *,
+    schema: str,
+    version: int,
+    catalog: list[tuple[int, str, str]],
+) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(schema)
+        connection.execute(
+            "INSERT INTO metadata(key,value) VALUES('schema_version',?)",
+            (str(version),),
+        )
+        connection.executemany(
+            "INSERT INTO installed_migration_catalog(version,name,checksum) VALUES(?,?,?)",
+            catalog,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    path.chmod(0o600)
+
+
+def _migration_catalog(
+    count: int,
+) -> list[tuple[int, str, str]]:
+    return [
+        (migration.version, migration.name, migration.checksum)
+        for migration in MIGRATIONS[:count]
+    ]
+
+
+def _assert_rejected_without_mutation(path: Path, *, match: str) -> None:
+    before = path.read_bytes()
+    with pytest.raises(GateBlocked, match=match):
+        SQLiteStore(path, LocalEnvelopeCipher(b"r" * 32))
+    assert path.read_bytes() == before
+
+
+def test_sqlite_clean_start_contains_complete_schema_v7_release(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "plan-schema.sqlite3", LocalEnvelopeCipher(b"p" * 32))
     try:
-        assert store.readiness()["schema_version"] == 6
+        assert store.readiness()["schema_version"] == 7
         tables = {
             str(row["name"])
             for row in store.fetch_all(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        assert REQUIRED_PLAN_TABLES <= tables
+        assert REQUIRED_PLAN_TABLES | PRESERVED_V6_TABLES | REQUIRED_V7_TABLES <= tables
         columns = {
             str(row["name"])
             for row in store.fetch_all("PRAGMA table_info(bootstrap_grant_plans)")
@@ -253,67 +317,272 @@ def test_sqlite_clean_start_contains_final_bounded_plan_schema(tmp_path: Path) -
         store.close()
 
 
-def test_sqlite_v5_migrates_atomically_to_v6_candidate_schema(tmp_path: Path) -> None:
-    path = tmp_path / "v5.sqlite3"
+def test_sqlite_v6_migrates_to_v7_and_preserves_existing_rows_and_catalog(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v6.sqlite3"
+    _initialize_schema_fixture(
+        path,
+        schema=SCHEMA_V6,
+        version=6,
+        catalog=_migration_catalog(6),
+    )
     connection = sqlite3.connect(path)
     try:
-        connection.executescript(SCHEMA_V5)
         connection.execute(
-            "INSERT INTO metadata(key,value) VALUES('schema_version','5')"
+            "INSERT INTO domains(domain_id,status,created_at) VALUES(?,?,?)",
+            ("domain-preserved", "active", 100),
+        )
+        connection.execute(
+            """INSERT INTO principals(
+                   principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at
+               ) VALUES(?,?,?,?,?,?,?)""",
+            (
+                "principal-preserved",
+                "domain-preserved",
+                "https://issuer.example",
+                "subject-preserved",
+                "person@example.test",
+                "active",
+                101,
+            ),
         )
         connection.executemany(
-            "INSERT INTO installed_migration_catalog(version,name,checksum) VALUES(?,?,?)",
+            """INSERT INTO harnesses(
+                   harness_id,domain_id,principal_id,kind,display_name,status,
+                   binding_assurance,capabilities_json,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?)""",
             [
-                (migration.version, migration.name, migration.checksum)
-                for migration in MIGRATIONS[:5]
+                (
+                    "harness-owner",
+                    "domain-preserved",
+                    "principal-preserved",
+                    "omp",
+                    "Owner",
+                    "active",
+                    "os_bound",
+                    "{}",
+                    102,
+                ),
+                (
+                    "harness-fresh",
+                    "domain-preserved",
+                    "principal-preserved",
+                    "pi",
+                    "Fresh",
+                    "active",
+                    "os_bound",
+                    "{}",
+                    103,
+                ),
             ],
+        )
+        connection.executemany(
+            """INSERT INTO credentials(
+                   credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            [
+                ("credential-owner", "harness-owner", "key-owner", "pem", "active", 1, 100, 999),
+                ("credential-fresh", "harness-fresh", "key-fresh", "pem", "active", 1, 100, 999),
+            ],
+        )
+        connection.execute(
+            """INSERT INTO communication_scopes(
+                   scope_id,profile,profile_version,domain_id,principal_id,
+                   owner_harness_id,fresh_harness_id,owner_credential_id,fresh_credential_id,
+                   owner_credential_epoch,fresh_credential_epoch,domain_revocation_epoch,
+                   policy_revision,actor_binding_json,canonical_scope_preimage_json,
+                   final_approval_transaction_json,scope_digest,transaction_digest,
+                   begin_idempotency_key_sha256,state,created_at,approval_expires_at,
+                   approval_create_idempotency_key,approval_create_request_digest
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "scope-preserved",
+                "same-principal-full-communication:v1",
+                1,
+                "domain-preserved",
+                "principal-preserved",
+                "harness-owner",
+                "harness-fresh",
+                "credential-owner",
+                "credential-fresh",
+                1,
+                1,
+                1,
+                1,
+                "{}",
+                "{}",
+                "{}",
+                "a" * 64,
+                "b" * 64,
+                "c" * 64,
+                "reserved",
+                110,
+                200,
+                "approval-key-preserved",
+                "d" * 64,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO console_enrollment_candidates(
+                   transaction_id,begin_idempotency_hash,begin_request_digest,state_hash,
+                   nonce_hash,continuation_hash,begin_response_encrypted,code_verifier_encrypted,
+                   candidate_harness_id,candidate_harness_kind,candidate_harness_name,
+                   candidate_binding_assurance,candidate_public_key_pem,candidate_key_id,
+                   state,created_at,updated_at,expires_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "candidate-preserved",
+                "e" * 64,
+                "f" * 64,
+                "1" * 64,
+                "2" * 64,
+                "3" * 64,
+                "encrypted-response",
+                "encrypted-verifier",
+                "candidate-harness",
+                "pi",
+                "Candidate",
+                "os_bound",
+                "public-key",
+                "k" * 43,
+                "waiting_oidc",
+                120,
+                120,
+                220,
+            ),
         )
         connection.commit()
     finally:
         connection.close()
-    path.chmod(0o600)
 
     store = SQLiteStore(path, LocalEnvelopeCipher(b"m" * 32))
     try:
-        assert store.readiness()["schema_version"] == 6
-        assert store.fetch_one(
-            "SELECT COUNT(*) AS n FROM communication_scopes"
-        )["n"] == 0
-        assert store.fetch_one(
-            "SELECT COUNT(*) AS n FROM communication_scope_items"
-        )["n"] == 0
-        assert store.fetch_one(
-            "SELECT COUNT(*) AS n FROM console_browser_sessions"
-        )["n"] == 0
+        assert store.readiness()["schema_version"] == 7
+        scope = store.fetch_one(
+            """SELECT scope_id,profile,state,owner_harness_id,fresh_harness_id
+               FROM communication_scopes WHERE scope_id=?""",
+            ("scope-preserved",),
+        )
+        assert scope is not None
+        assert dict(scope) == {
+            "scope_id": "scope-preserved",
+            "profile": "same-principal-full-communication:v1",
+            "state": "reserved",
+            "owner_harness_id": "harness-owner",
+            "fresh_harness_id": "harness-fresh",
+        }
+        candidate = store.fetch_one(
+            """SELECT transaction_id,candidate_harness_id,state
+               FROM console_enrollment_candidates WHERE transaction_id=?""",
+            ("candidate-preserved",),
+        )
+        assert candidate is not None
+        assert dict(candidate) == {
+            "transaction_id": "candidate-preserved",
+            "candidate_harness_id": "candidate-harness",
+            "state": "waiting_oidc",
+        }
+        assert [
+            (int(row["version"]), str(row["name"]), str(row["checksum"]))
+            for row in store.fetch_all(
+                "SELECT version,name,checksum FROM installed_migration_catalog ORDER BY version"
+            )
+        ] == _migration_catalog(7)
+        tables = {
+            str(row["name"])
+            for row in store.fetch_all(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        assert PRESERVED_V6_TABLES | REQUIRED_V7_TABLES <= tables
     finally:
         store.close()
 
 
-def test_postgres_catalog_preserves_public_v5_and_adds_combined_v6_candidate() -> None:
-    assert CURRENT_SCHEMA_VERSION == 6
-    migration = MIGRATIONS[3]
-    assert migration.version == 4
-    assert migration.name == "bounded_c0_bootstrap_plan"
+def test_sqlite_v5_catalog_is_outside_v6_v7_window_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v5.sqlite3"
+    _initialize_schema_fixture(
+        path,
+        schema=SCHEMA_V5,
+        version=5,
+        catalog=_migration_catalog(5),
+    )
+    _assert_rejected_without_mutation(path, match="exact supported N/N-1 migration window")
+
+
+def test_sqlite_future_catalog_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "future.sqlite3"
+    _initialize_schema_fixture(
+        path,
+        schema=SCHEMA_V6,
+        version=8,
+        catalog=[
+            *_migration_catalog(7),
+            (8, "future_schema", "8" * 64),
+        ],
+    )
+    _assert_rejected_without_mutation(path, match="newer than this extension")
+
+
+def test_sqlite_v6_tampered_catalog_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "tampered-v6.sqlite3"
+    catalog = _migration_catalog(6)
+    version, name, _checksum = catalog[-1]
+    catalog[-1] = (version, name, "0" * 64)
+    _initialize_schema_fixture(
+        path,
+        schema=SCHEMA_V6,
+        version=6,
+        catalog=catalog,
+    )
+    _assert_rejected_without_mutation(path, match="migration history checksum is invalid")
+
+
+def test_postgres_catalog_preserves_v1_to_v6_and_appends_immutable_v7() -> None:
+    assert CURRENT_SCHEMA_VERSION == 7
+    assert [(migration.version, migration.name) for migration in MIGRATIONS] == [
+        (1, "agentnet_first_release_schema"),
+        (2, "protected_task_payload_release"),
+        (3, "guided_oidc_enrollment_continuation"),
+        (4, "bounded_c0_bootstrap_plan"),
+        (5, "identity_begin_idempotency_and_credential_renewal"),
+        (6, "communication_scope_and_private_administration"),
+        (7, "communication_collaboration_release"),
+    ]
+    assert MIGRATIONS[0].checksum == (
+        "c472c4442fce9195580bd55d6f01d831f9ef34cb8cc34b8389b72b1c572d484f"
+    )
+    bootstrap_plan = MIGRATIONS[3]
     for table in REQUIRED_PLAN_TABLES:
-        assert f"CREATE TABLE IF NOT EXISTS {table}" in migration.sql
-    assert "canonical_plan_preimage_json" in migration.sql
-    assert "transaction_digest" in migration.sql
-    assert "issuer_kind TEXT NOT NULL CHECK (issuer_kind IN ('accepting_core','harness'))" in migration.sql
-    assert "storage_fact TEXT CHECK (storage_fact IS NULL OR storage_fact IN ('accepted_local','accepted_durable'))" in migration.sql
-    assert "issuer_kind='accepting_core' AND issuer_harness_id IS NULL" in migration.sql
-    assert "issuer_kind='harness' AND issuer_harness_id IS NOT NULL" in migration.sql
-    assert " INTEGER" not in migration.sql
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in bootstrap_plan.sql
+    assert "canonical_plan_preimage_json" in bootstrap_plan.sql
+    assert "transaction_digest" in bootstrap_plan.sql
+    assert (
+        "issuer_kind TEXT NOT NULL CHECK (issuer_kind IN ('accepting_core','harness'))"
+        in bootstrap_plan.sql
+    )
+    assert (
+        "storage_fact TEXT CHECK (storage_fact IS NULL OR storage_fact IN "
+        "('accepted_local','accepted_durable'))"
+        in bootstrap_plan.sql
+    )
+    assert "issuer_kind='accepting_core' AND issuer_harness_id IS NULL" in bootstrap_plan.sql
+    assert "issuer_kind='harness' AND issuer_harness_id IS NOT NULL" in bootstrap_plan.sql
     lifecycle = MIGRATIONS[4]
-    assert lifecycle.version == 5
-    assert lifecycle.name == "identity_begin_idempotency_and_credential_renewal"
     assert "begin_idempotency_key_hash" in lifecycle.sql
     assert "credential_renewal_requests" in lifecycle.sql
-    assert " INTEGER" not in lifecycle.sql
-    candidate = MIGRATIONS[5]
-    assert candidate.version == 6
-    assert candidate.name == "communication_scope_and_private_administration"
-    assert "communication_scopes" in candidate.sql
-    assert "communication_scope_items" in candidate.sql
-    assert "console_browser_sessions" in candidate.sql
-    assert "console_enrollment_intents" in candidate.sql
-    assert " INTEGER" not in candidate.sql
+    preserved_v6 = MIGRATIONS[5]
+    for table in PRESERVED_V6_TABLES:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in preserved_v6.sql
+    release_v7 = MIGRATIONS[6]
+    assert (
+        release_v7.checksum
+        == "cf8b758dd1f1ba5f674bfe7aa6de6966ddc7e5b2032c7381fa5c3a2faa54eb35"
+    )
+    for table in REQUIRED_V7_TABLES:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in release_v7.sql
+        assert all(table not in migration.sql for migration in MIGRATIONS[:6])
+    assert all(" INTEGER" not in migration.sql for migration in MIGRATIONS)

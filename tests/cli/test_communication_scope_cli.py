@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -267,27 +268,37 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _Client([])
-    actor = object()
+    initially_loaded_actor = object()
+    current_actor = object()
     loaded_paths: list[Path] = []
+    refreshed_paths: list[Path] = []
     calls: list[tuple[object, object, tuple[str, ...], Path | None, Path]] = []
 
     def load_identity(path: Path):
         loaded_paths.append(path)
-        return client, actor, object()
+        return client, initially_loaded_actor, object()
+
+    def load_current_identity(path: Path):
+        refreshed_paths.append(path)
+        return object(), current_actor, object()
 
     def run_gateway(
         loaded_client: object,
-        signing_context: object,
+        signing_context: Callable[[], object],
         command: tuple[str, ...],
         *,
         state_dir: Path | None = None,
         pi_extension: Path,
     ) -> int:
-        calls.append((loaded_client, signing_context, command, state_dir, pi_extension))
+        calls.append(
+            (loaded_client, signing_context(), command, state_dir, pi_extension)
+        )
         return 23
 
     monkeypatch.setattr(cli, "_load_identity_client", load_identity)
+    monkeypatch.setattr(cli, "_load_identity_profile", load_current_identity)
     monkeypatch.setattr(cli, "run_manager_gateway", run_gateway)
+    monkeypatch.chdir(tmp_path)
     state_dir = tmp_path / "manager"
     args = argparse.Namespace(
         identity="identity.json",
@@ -296,11 +307,13 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
     )
 
     assert cli.command_manager_run(args) == 23
-    assert loaded_paths == [Path("identity.json")]
+    identity_path = tmp_path / "identity.json"
+    assert loaded_paths == [identity_path]
+    assert refreshed_paths == [identity_path]
     assert calls == [
         (
             client,
-            actor,
+            current_actor,
             ("pi", "--print", "hello"),
             state_dir,
             cli.resolve_packaged_pi_extension(),

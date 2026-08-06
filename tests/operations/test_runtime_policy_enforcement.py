@@ -8,7 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 from agentnet.attention.policy import AttentionService
-from agentnet.authorization.policy import HumanEntitlement
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthorizationError, GateBlocked
 from agentnet.operations.config import ExtensionConfig
@@ -40,12 +45,73 @@ def _core(store, tmp_path: Path, *, recipient_limit: int = 1, retention_days: in
     )
     return CommunicationCore(config, store)
 
+def _collaboration_scope(
+    core: CommunicationCore,
+    *,
+    owner,
+    members,
+    classifications: tuple[Classification, ...],
+) -> str:
+    revision = core.policy.current_policy_revision(owner)
+    domain = core.store.fetch_one(
+        "SELECT revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope-runtime-policy-{uuid4()}",
+        scope_kind="personal" if len(members) == 1 else "direct" if len(members) == 2 else "shared",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=("message.send",),
+        allowed_resource_prefixes=("conversation:direct",),
+        allowed_classifications=tuple(
+            sorted(classifications, key=lambda value: value.value)
+        ),
+        policy_revision=revision,
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    core.policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = core.policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=revision,
+            context=core.collaboration_scopes.issuance_request(
+                actor=owner,
+                proposal=proposal,
+            ),
+        )
+    )
+    return core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    ).scope_id
+
 
 def test_runtime_enforces_policy_recipient_limit_and_retention(store, identity_factory, tmp_path: Path) -> None:
-    sender, _ = identity_factory()
+    sender, _ = identity_factory(binding_assurance="os_bound")
     first, _ = identity_factory()
     second, _ = identity_factory()
     core = _core(store, tmp_path)
+    scope_id = _collaboration_scope(
+        core,
+        owner=sender,
+        members=(sender, first, second),
+        classifications=(Classification.C0_PUBLIC,),
+    )
     core.policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
             domain_id=sender.domain_id,
@@ -57,6 +123,7 @@ def test_runtime_enforces_policy_recipient_limit_and_retention(store, identity_f
     )
     with pytest.raises(AuthorizationError, match="fanout"):
         core.send_message(
+            collaboration_scope_id=scope_id,
             actor=sender,
             recipients=(first.harness_id, second.harness_id),
             payload={"text": "too many recipients"},
@@ -64,6 +131,7 @@ def test_runtime_enforces_policy_recipient_limit_and_retention(store, identity_f
             classification=Classification.C0_PUBLIC,
         )
     result = core.send_message(
+        collaboration_scope_id=scope_id,
         actor=sender,
         recipients=(first.harness_id,),
         payload={"text": "bounded"},
@@ -78,11 +146,21 @@ def test_runtime_enforces_policy_recipient_limit_and_retention(store, identity_f
 
 
 def test_capability_configuration_never_grants_caller_authority_or_direct_c3(store, identity_factory, tmp_path: Path) -> None:
-    sender, _ = identity_factory()
+    sender, _ = identity_factory(binding_assurance="os_bound")
     recipient, _ = identity_factory()
     core = _core(store, tmp_path)
+    scope_id = _collaboration_scope(
+        core,
+        owner=sender,
+        members=(sender, recipient),
+        classifications=(
+            Classification.C0_PUBLIC,
+            Classification.C3_SEALED,
+        ),
+    )
     with pytest.raises(AuthorizationError):
         core.send_message(
+            collaboration_scope_id=scope_id,
             actor=sender,
             recipients=(recipient.harness_id,),
             payload={"text": "no entitlement"},
@@ -100,6 +178,7 @@ def test_capability_configuration_never_grants_caller_authority_or_direct_c3(sto
     )
     with pytest.raises(AuthorizationError):
         core.send_message(
+            collaboration_scope_id=scope_id,
             actor=sender,
             recipients=(recipient.harness_id,),
             payload={"text": "direct sealed data forbidden"},
@@ -108,28 +187,40 @@ def test_capability_configuration_never_grants_caller_authority_or_direct_c3(sto
         )
 
 
-def test_local_lab_lane_is_exactly_c0_and_does_not_open_c1(store, identity_factory, tmp_path: Path) -> None:
-    sender, _ = identity_factory()
-    recipient, _ = identity_factory()
+def test_local_lab_lane_is_exactly_c0_and_does_not_open_c1(store, tmp_path: Path) -> None:
     core = _core(store, tmp_path)
-    core.policy.bootstrap_entitlement_for_local_conformance(
-        HumanEntitlement(
-            domain_id=sender.domain_id,
-            principal_id=sender.principal_id,
-            action="message.send",
-            resource_pattern="*",
-            revision=1,
-        )
+    sender, _ = core.bootstrap_synthetic_identity(
+        harness_kind="codex",
+        display_name="sender",
     )
-    core.send_message(
+    recipient, _ = core.bootstrap_synthetic_identity(
+        harness_kind="pi",
+        display_name="recipient",
+    )
+    accepted = core.send_synthetic_message(
         actor=sender,
         recipients=(recipient.harness_id,),
         payload={"synthetic": True},
-        classification=Classification.C0_PUBLIC,
         idempotency_key=f"local-c0-{uuid4()}",
     )
-    with pytest.raises(AuthorizationError, match="binding_assurance"):
+    row = store.fetch_one(
+        "SELECT * FROM events WHERE event_id=?",
+        (accepted["event_id"],),
+    )
+    event, payload = core.mailboxes._validated_event_and_payload(row)
+    assert event.classification is Classification.C0_PUBLIC
+    synthetic_scope_id = payload["authorization_context"][
+        "collaboration_scope_id"
+    ]
+    assert synthetic_scope_id.startswith("synthetic-c0:")
+    assert store.fetch_one(
+        "SELECT COUNT(*) AS count FROM collaboration_scopes WHERE scope_id=?",
+        (synthetic_scope_id,),
+    )["count"] == 0
+
+    with pytest.raises(AuthorizationError):
         core.send_message(
+            collaboration_scope_id=synthetic_scope_id,
             actor=sender,
             recipients=(recipient.harness_id,),
             payload={"not": "an inert class"},
@@ -141,7 +232,7 @@ def test_local_lab_lane_is_exactly_c0_and_does_not_open_c1(store, identity_facto
 def test_core_event_snapshots_current_policy_revision_not_revision_one(
     store, identity_factory, tmp_path: Path
 ) -> None:
-    sender, _ = identity_factory()
+    sender, _ = identity_factory(binding_assurance="os_bound")
     recipient, _ = identity_factory()
     core = _core(store, tmp_path)
     with store.transaction() as connection:
@@ -149,6 +240,12 @@ def test_core_event_snapshots_current_policy_revision_not_revision_one(
             "UPDATE domains SET policy_revision=2 WHERE domain_id=?",
             (sender.domain_id,),
         )
+    scope_id = _collaboration_scope(
+        core,
+        owner=sender,
+        members=(sender, recipient),
+        classifications=(Classification.C0_PUBLIC,),
+    )
     core.policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
             domain_id=sender.domain_id,
@@ -160,6 +257,7 @@ def test_core_event_snapshots_current_policy_revision_not_revision_one(
     )
 
     result = core.send_message(
+        collaboration_scope_id=scope_id,
         actor=sender,
         recipients=(recipient.harness_id,),
         payload={"revision": 2},

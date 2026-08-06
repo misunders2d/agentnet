@@ -3,15 +3,23 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 import httpx
 from pydantic import ValidationError as PydanticValidationError
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    COLLABORATION_SCOPE_REVOKE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
 from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.authorization.grants import TaskGrantService
 from agentnet.authorization.policy import (
@@ -64,12 +72,202 @@ from agentnet.relay.service import (
 )
 from agentnet.relay.http import ServerAgentRelayClient, create_relay_app
 from agentnet.security.envelope import LocalEnvelopeCipher
-from agentnet.security.signatures import P256KeyPair, canonical_json
+from agentnet.security.signatures import P256KeyPair, canonical_digest, canonical_json
 from agentnet.storage.sqlite import SQLiteStore
 
 
 class InjectedRelayCrash(RuntimeError):
     pass
+
+
+_SOURCE_COLLABORATION_SCOPE_ID = "scope:server-agent-relay-source-contract"
+
+
+@dataclass(frozen=True, slots=True)
+class _RelayScopeSnapshot:
+    member_harness_ids: tuple[str, ...]
+    scope_id: str = _SOURCE_COLLABORATION_SCOPE_ID
+    revision: int = 1
+    policy_revision: int = 1
+    domain_revocation_epoch: int = 1
+    state: str = "active"
+    allowed_actions: tuple[str, ...] = (
+        "message.acknowledge",
+        "message.read",
+        "task.accept",
+        "task.propose",
+    )
+    allowed_resource_prefixes: tuple[str, ...] = ("conversation:", "task:")
+    allowed_classifications: tuple[Classification, ...] = (Classification.C0_PUBLIC,)
+    scope_digest: str = "c" * 64
+
+    def authorization_context(self) -> dict[str, object]:
+        return {
+            "collaboration_scope_id": self.scope_id,
+            "collaboration_scope_revision": self.revision,
+            "collaboration_scope_policy_revision": self.policy_revision,
+            "collaboration_scope_domain_revocation_epoch": self.domain_revocation_epoch,
+            "collaboration_scope_member_harness_ids": list(self.member_harness_ids),
+            "collaboration_scope_digest": self.scope_digest,
+        }
+
+
+class _RelayScopes:
+    """Source-domain scope double used only to admit the source event."""
+
+    def __init__(self, member_harness_ids: tuple[str, ...]) -> None:
+        self.snapshot = _RelayScopeSnapshot(
+            member_harness_ids=tuple(sorted(set(member_harness_ids)))
+        )
+
+    def get_for_actor(
+        self,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+    ) -> _RelayScopeSnapshot:
+        if (
+            scope_id != self.snapshot.scope_id
+            or actor.harness_id not in self.snapshot.member_harness_ids
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return self.snapshot
+
+    def require_in_transaction(
+        self,
+        _connection: object,
+        *,
+        actor: VerifiedActor,
+        scope_id: str,
+        action: str,
+        resource: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+    ) -> _RelayScopeSnapshot:
+        snapshot = self.get_for_actor(actor=actor, scope_id=scope_id)
+        if (
+            action not in snapshot.allowed_actions
+            or not resource.startswith(snapshot.allowed_resource_prefixes)
+            or not set(target_harness_ids).issubset(snapshot.member_harness_ids)
+            or classification not in snapshot.allowed_classifications
+        ):
+            raise AuthorizationError("collaboration scope authorization failed")
+        return snapshot
+
+    def require(self, **values: object) -> _RelayScopeSnapshot:
+        return self.require_in_transaction(None, **values)
+
+
+def _relay_local_event_id(packet_id: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"agentnet:server-relay:{packet_id}"))
+
+
+def _scope_authority(
+    *,
+    policy: LocalConformancePolicyEngine,
+    scopes: CollaborationScopeService,
+    actor: VerifiedActor,
+    action: str,
+    resource: str,
+    request: dict[str, object],
+) -> IssuanceAuthority:
+    revision = policy.current_policy_revision(actor)
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=actor.domain_id,
+            principal_id=actor.principal_id,
+            action=action,
+            resource_pattern=resource,
+            revision=revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=actor,
+            action=action,
+            resource=resource,
+            policy_revision=revision,
+            context=request,
+        )
+    )
+    return IssuanceAuthority(actor=actor, policy_decision_id=decision.decision_id)
+
+
+def _issue_target_scope(
+    *,
+    store: SQLiteStore,
+    policy: LocalConformancePolicyEngine,
+    scopes: CollaborationScopeService,
+    owner: VerifiedActor,
+    guest: VerifiedActor,
+    recipient: VerifiedActor,
+    actions: tuple[str, ...],
+    resources: tuple[str, ...],
+    classifications: tuple[Classification, ...] = (Classification.C0_PUBLIC,),
+    scope_id: str | None = None,
+) -> CollaborationScope:
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    assert domain is not None
+    proposal = CollaborationScopeProposal(
+        scope_id=scope_id or f"scope:server-agent-relay-target:{uuid4()}",
+        scope_kind="shared",
+        member_harness_ids=tuple(
+            sorted((owner.harness_id, guest.harness_id, recipient.harness_id))
+        ),
+        allowed_actions=tuple(sorted(actions)),
+        allowed_resource_prefixes=tuple(sorted(resources)),
+        allowed_classifications=tuple(sorted(classifications, key=lambda item: item.value)),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    return scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=_scope_authority(
+            policy=policy,
+            scopes=scopes,
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            request=scopes.issuance_request(actor=owner, proposal=proposal),
+        ),
+    )
+
+
+def _revoke_target_scope(pair, scope: CollaborationScope) -> CollaborationScope:
+    reason = "relay_scope_revoked"
+    request = pair["target_scopes"].revocation_request(
+        scope=scope,
+        expected_revision=scope.revision,
+        reason=reason,
+    )
+    return pair["target_scopes"].revoke(
+        actor=pair["target_actor"],
+        scope_id=scope.scope_id,
+        expected_revision=scope.revision,
+        reason=reason,
+        authority=_scope_authority(
+            policy=pair["target"].policy,
+            scopes=pair["target_scopes"],
+            actor=pair["target_actor"],
+            action=COLLABORATION_SCOPE_REVOKE_ACTION,
+            resource=f"scope:{scope.scope_id}",
+            request=request,
+        ),
+    )
+
+
+def _resign_packet(pair, packet: RelayPacket, **updates: object) -> RelayPacket:
+    fields = packet.model_dump(mode="json", exclude={"signature"})
+    fields.update(updates)
+    return RelayPacket(
+        **fields,
+        signature=pair["source_key"].sign("agentnet.server-relay.packet.v2", fields),
+    )
 
 
 def enrolled_identity(store: SQLiteStore, *, domain: str, label: str):
@@ -134,6 +332,7 @@ def build_pair(
     tmp_path: Path,
     *,
     event_type: EventType = EventType.MESSAGE,
+    conversation_id: str | None = None,
     released_artifacts: tuple[ReleasedArtifactBinding, ...] = (),
     grant_max_uses: int = 1,
 ):
@@ -204,8 +403,24 @@ def build_pair(
         key=bilateral_key,
         provisioned_state="active",
     )
-    source_mailbox = MailboxService(source_store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    target_mailbox = MailboxService(target_store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
+    scope_members = (
+        source_actor.harness_id,
+        target_actor.harness_id,
+        recipient.harness_id,
+        guest_actor.harness_id,
+    )
+    source_scopes = _RelayScopes(scope_members)
+    target_scopes = CollaborationScopeService(target_store)
+    source_mailbox = MailboxService(
+        source_store,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        collaboration_scopes=source_scopes,
+    )
+    target_mailbox = MailboxService(
+        target_store,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+        collaboration_scopes=target_scopes,
+    )
     source_policy = LocalConformancePolicyEngine(source_store)
     target_policy = LocalConformancePolicyEngine(target_store)
     source = ServerAgentRelayService(
@@ -259,14 +474,38 @@ def build_pair(
         actor=source_actor,
         event_type=event_type,
         classification=Classification.C0_PUBLIC,
-        payload={"message": "offline relay synthetic"},
+        payload={
+            "message": "offline relay synthetic",
+            "authorization_context": source_scopes.snapshot.authorization_context(),
+        },
         idempotency_key=f"source-relay-{uuid4()}",
         recipients=(source_actor.harness_id,),
         released_artifacts=released_artifacts,
+        conversation_id=conversation_id,
         task_id=f"relay-task-{uuid4()}" if event_type is EventType.TASK_ASSIGNMENT else None,
     )
     source_mailbox.accept(event)
     packet_id = source.new_packet_id()
+    target_resource = (
+        f"task:{_relay_local_event_id(packet_id)}"
+        if event_type is EventType.TASK_ASSIGNMENT
+        else f"conversation:{conversation_id or 'direct'}"
+    )
+    target_actions = (
+        ("message.acknowledge", "message.read", "task.accept", "task.propose")
+        if event_type is EventType.TASK_ASSIGNMENT
+        else ("message.acknowledge", "message.read", "message.send")
+    )
+    target_scope = _issue_target_scope(
+        store=target_store,
+        policy=target_policy,
+        scopes=target_scopes,
+        owner=target_actor,
+        guest=guest_actor,
+        recipient=recipient,
+        actions=target_actions,
+        resources=(target_resource,),
+    )
     resource, context = source.stage_binding(
         packet_id=packet_id,
         event_id=event.event_id,
@@ -274,6 +513,7 @@ def build_pair(
         target_recipient_id=recipient.harness_id,
         guest_pairwise_subject=pairwise_subject,
         target_grant_id=grant.grant_id,
+        target_collaboration_scope_id=target_scope.scope_id,
     )
     source_policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
@@ -306,12 +546,15 @@ def build_pair(
         "target_key": target_key,
         "recipient": recipient,
         "guest_actor": guest_actor,
+        "target_scope": target_scope,
         "event": event,
         "packet_id": packet_id,
         "pairwise_subject": pairwise_subject,
         "grant": grant,
         "authority": authority,
         "bilateral_key": bilateral_key,
+        "source_scopes": source_scopes,
+        "target_scopes": target_scopes,
     }
 
 
@@ -323,7 +566,15 @@ def staged(pair):
         target_recipient_id=pair["recipient"].harness_id,
         guest_pairwise_subject=pair["pairwise_subject"],
         target_grant_id=pair["grant"].grant_id,
+        target_collaboration_scope_id=pair["target_scope"].scope_id,
         authority=pair["authority"],
+    )
+
+
+def _target_inbox(pair) -> list[dict[str, object]]:
+    return pair["target"].mailbox.reconcile(
+        actor=pair["recipient"],
+        collaboration_scope_id=pair["target_scope"].scope_id,
     )
 
 
@@ -469,7 +720,12 @@ def stage_additional_message(pair, source: ServerAgentRelayService, *, label: st
         actor=pair["source_actor"],
         event_type=EventType.MESSAGE,
         classification=Classification.C0_PUBLIC,
-        payload={"message": label},
+        payload={
+            "message": label,
+            "authorization_context": pair[
+                "source_scopes"
+            ].snapshot.authorization_context(),
+        },
         idempotency_key=f"source-relay-{uuid4()}",
         recipients=(pair["source_actor"].harness_id,),
     )
@@ -482,6 +738,7 @@ def stage_additional_message(pair, source: ServerAgentRelayService, *, label: st
         target_recipient_id=pair["recipient"].harness_id,
         guest_pairwise_subject=pair["pairwise_subject"],
         target_grant_id=pair["grant"].grant_id,
+        target_collaboration_scope_id=pair["target_scope"].scope_id,
     )
     source.policy.bootstrap_entitlement_for_local_conformance(
         HumanEntitlement(
@@ -510,6 +767,7 @@ def stage_additional_message(pair, source: ServerAgentRelayService, *, label: st
         target_recipient_id=pair["recipient"].harness_id,
         guest_pairwise_subject=pair["pairwise_subject"],
         target_grant_id=pair["grant"].grant_id,
+        target_collaboration_scope_id=pair["target_scope"].scope_id,
         authority=IssuanceAuthority(
             actor=pair["source_actor"],
             policy_decision_id=decision.decision_id,
@@ -599,8 +857,24 @@ def test_two_ordinary_server_agents_relay_offline_then_reconnect_with_crash_reco
     pair = build_pair(tmp_path)
     try:
         packet = staged(pair)
+        assert packet.profile == "agentnet.server-relay.packet.v2"
+        assert packet.target_collaboration_scope_id == pair["target_scope"].scope_id
+        assert packet.source_event_digest == envelope_digest(pair["event"])
+        assert pair["target"].assignments.collaboration_scopes is pair[
+            "target"
+        ].mailbox.collaboration_scopes
+        source_packet_json = canonical_json(packet.model_dump(mode="json")).decode("utf-8")
+        assert pair["source_store"].fetch_one(
+            "SELECT packet_json FROM server_agent_relay_outbox WHERE packet_id=?",
+            (packet.packet_id,),
+        )["packet_json"] == source_packet_json
         assert pair["source"].pending_packets() == [packet]
         custody = pair["target"].accept(packet)
+        assert custody.local_event_id == _relay_local_event_id(packet.packet_id)
+        assert pair["target_store"].fetch_one(
+            "SELECT packet_json FROM server_agent_relay_inbox WHERE packet_id=?",
+            (packet.packet_id,),
+        )["packet_json"] == source_packet_json
         assert custody.fact == "accepted_local"
         assert pair["source"].record_receipt(custody)["state"] == "remote_accepted"
 
@@ -617,10 +891,175 @@ def test_two_ordinary_server_agents_relay_offline_then_reconnect_with_crash_reco
         committed = pair["target"].deliver(packet.packet_id)
         assert committed.fact == "recipient_committed"
         assert pair["source"].record_receipt(committed)["state"] == "recipient_committed"
-        inbox = pair["target"].mailbox.reconcile(pair["recipient"].harness_id)
+        inbox = _target_inbox(pair)
         assert len(inbox) == 1
-        assert inbox[0]["payload"] == {"message": "offline relay synthetic"}
+        assert inbox[0]["payload"]["message"] == "offline relay synthetic"
         assert inbox[0]["event"]["actor"]["kind"] == "host_guest_harness"
+        target_context = pair["target_scope"].authorization_context()
+        assert inbox[0]["payload"]["authorization_context"] == target_context
+        assert (
+            inbox[0]["payload"]["authorization_context"]
+            != pair["event"].payload["authorization_context"]
+        )
+        assert inbox[0]["event"]["payload_digest"] == canonical_digest(inbox[0]["payload"])
+        assert pair["target_scope"].allowed_resource_prefixes == ("conversation:direct",)
+        assert "message.send" in pair["target_scope"].allowed_actions
+    finally:
+        pair["source_store"].close()
+        pair["target_store"].close()
+
+
+def test_relay_message_scope_uses_exact_source_conversation_resource(tmp_path: Path) -> None:
+    conversation_id = f"source-conversation-{uuid4()}"
+    pair = build_pair(tmp_path, conversation_id=conversation_id)
+    try:
+        packet = staged(pair)
+        assert pair["target_scope"].allowed_resource_prefixes == (
+            f"conversation:{conversation_id}",
+        )
+        pair["target"].accept(packet)
+        pair["target"].deliver(packet.packet_id)
+        inbox = _target_inbox(pair)
+        assert inbox[0]["event"]["conversation_id"] == conversation_id
+        assert (
+            inbox[0]["payload"]["authorization_context"]
+            == pair["target_scope"].authorization_context()
+        )
+    finally:
+        pair["source_store"].close()
+        pair["target_store"].close()
+
+
+def test_relay_packet_v2_strictly_rejects_v1_and_omitted_target_scope(tmp_path: Path) -> None:
+    pair = build_pair(tmp_path)
+    try:
+        packet = staged(pair)
+        fields = packet.model_dump(mode="json")
+        fields["profile"] = "agentnet.server-relay.packet.v1"
+        with pytest.raises(PydanticValidationError, match="profile"):
+            RelayPacket.model_validate(fields)
+        with pytest.raises(ValidationError, match="unknown signing purpose"):
+            pair["source_key"].sign(
+                "agentnet.server-relay.packet.v1",
+                packet.signed_fields(),
+            )
+
+        fields = packet.model_dump(mode="json")
+        fields.pop("target_collaboration_scope_id")
+        with pytest.raises(PydanticValidationError, match="target_collaboration_scope_id"):
+            RelayPacket.model_validate(fields)
+        with pytest.raises(AuthorizationError):
+            pair["source"].stage(
+                packet_id=pair["packet_id"],
+                event_id=pair["event"].event_id,
+                target_domain_id="beta.example",
+                target_recipient_id=pair["recipient"].harness_id,
+                guest_pairwise_subject=pair["pairwise_subject"],
+                target_grant_id=pair["grant"].grant_id,
+                target_collaboration_scope_id="scope:authority-digest-substitution",
+                authority=pair["authority"],
+            )
+    finally:
+        pair["source_store"].close()
+        pair["target_store"].close()
+
+
+@pytest.mark.parametrize(
+    "scope_case",
+    (
+        "missing",
+        "wrong_action",
+        "wrong_classification",
+        "wrong_recipient",
+        "wrong_resource",
+        "source_context",
+    ),
+)
+def test_relay_target_rejects_noncurrent_or_source_domain_scope(
+    tmp_path: Path,
+    scope_case: str,
+) -> None:
+    pair = build_pair(tmp_path)
+    try:
+        packet = staged(pair)
+        if scope_case.startswith("wrong_"):
+            scoped_recipient = pair["recipient"]
+            if scope_case == "wrong_recipient":
+                scoped_recipient, _ = enrolled_identity(
+                    pair["target_store"],
+                    domain="beta.example",
+                    label=f"wrong-relay-recipient-{uuid4().hex}",
+                )
+            wrong_scope = _issue_target_scope(
+                store=pair["target_store"],
+                policy=pair["target"].policy,
+                scopes=pair["target_scopes"],
+                owner=pair["target_actor"],
+                guest=pair["guest_actor"],
+                recipient=scoped_recipient,
+                actions=(
+                    ("message.acknowledge", "message.read")
+                    if scope_case == "wrong_action"
+                    else ("message.acknowledge", "message.read", "message.send")
+                ),
+                resources=(
+                    ("conversation:not-the-relayed-resource",)
+                    if scope_case == "wrong_resource"
+                    else ("conversation:direct",)
+                ),
+                classifications=(
+                    (Classification.C1_INTERNAL,)
+                    if scope_case == "wrong_classification"
+                    else (Classification.C0_PUBLIC,)
+                ),
+            )
+            scope_id = wrong_scope.scope_id
+        elif scope_case == "source_context":
+            scope_id = pair["event"].payload["authorization_context"][
+                "collaboration_scope_id"
+            ]
+        else:
+            scope_id = "scope:missing-target-relay-authority"
+        forged = _resign_packet(
+            pair,
+            packet,
+            target_collaboration_scope_id=scope_id,
+        )
+        with pytest.raises(AuthorizationError, match="collaboration scope"):
+            pair["target"].accept(forged)
+        assert pair["target_store"].fetch_one(
+            "SELECT 1 FROM server_agent_relay_inbox WHERE packet_id=?",
+            (packet.packet_id,),
+        ) is None
+        assert (
+            TaskGrantService(pair["target_store"]).uses_for_local_conformance(
+                pair["grant"].grant_id
+            )
+            == 0
+        )
+    finally:
+        pair["source_store"].close()
+        pair["target_store"].close()
+
+
+def test_relay_target_rejects_revoked_exact_scope_before_grant_use(tmp_path: Path) -> None:
+    pair = build_pair(tmp_path)
+    try:
+        packet = staged(pair)
+        revoked = _revoke_target_scope(pair, pair["target_scope"])
+        assert revoked.state == "revoked"
+        with pytest.raises(AuthorizationError, match="collaboration scope"):
+            pair["target"].accept(packet)
+        assert pair["target_store"].fetch_one(
+            "SELECT 1 FROM server_agent_relay_inbox WHERE packet_id=?",
+            (packet.packet_id,),
+        ) is None
+        assert (
+            TaskGrantService(pair["target_store"]).uses_for_local_conformance(
+                pair["grant"].grant_id
+            )
+            == 0
+        )
     finally:
         pair["source_store"].close()
         pair["target_store"].close()
@@ -658,6 +1097,7 @@ def test_relay_outbox_route_reserves_pressure_and_terminal_receipt_releases_once
                 target_recipient_id=recipient_id,
                 guest_pairwise_subject=pair["pairwise_subject"],
                 target_grant_id=pair["grant"].grant_id,
+                target_collaboration_scope_id=pair["target_scope"].scope_id,
             )
             decision = pair["source"].policy.require(
                 AuthorizationRequest(
@@ -677,6 +1117,7 @@ def test_relay_outbox_route_reserves_pressure_and_terminal_receipt_releases_once
                     target_recipient_id=recipient_id,
                     guest_pairwise_subject=pair["pairwise_subject"],
                     target_grant_id=pair["grant"].grant_id,
+                    target_collaboration_scope_id=pair["target_scope"].scope_id,
                     authority=IssuanceAuthority(
                         actor=pair["source_actor"],
                         policy_decision_id=decision.decision_id,
@@ -917,6 +1358,7 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
                 target_recipient_id=recipient_id,
                 guest_pairwise_subject=pairwise_subject,
                 target_grant_id=grant_id,
+                target_collaboration_scope_id=pair["target_scope"].scope_id,
             )
             beta_outbound.policy.bootstrap_entitlement_for_local_conformance(
                 HumanEntitlement(
@@ -945,6 +1387,7 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
                     target_recipient_id=recipient_id,
                     guest_pairwise_subject=pairwise_subject,
                     target_grant_id=grant_id,
+                    target_collaboration_scope_id=pair["target_scope"].scope_id,
                     authority=IssuanceAuthority(
                         actor=pair["target_actor"], policy_decision_id=decision.decision_id
                     ),
@@ -977,7 +1420,13 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
                     ServerAgentCapability.STORE_AND_FORWARD,
                 }
             ),
-            mailbox=MailboxService(gamma_store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL),
+            mailbox=MailboxService(
+                gamma_store,
+                acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+                collaboration_scopes=_RelayScopes(
+                    (gamma_actor.harness_id, gamma_recipient.harness_id)
+                ),
+            ),
             policy=LocalConformancePolicyEngine(gamma_store),
         )
         forged_packet_id = gamma.new_packet_id()
@@ -986,7 +1435,7 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
             {"event": relayed_guest_event.model_dump(mode="json")}, purpose=purpose
         )
         forged_fields = {
-            "profile": "agentnet.server-relay.packet.v1",
+            "profile": "agentnet.server-relay.packet.v2",
             "hop_count": 1,
             "max_hops": 1,
             "packet_id": forged_packet_id,
@@ -999,6 +1448,7 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
             "target_relay_harness_id": gamma_actor.harness_id,
             "target_recipient_id": gamma_recipient.harness_id,
             "target_grant_id": gamma_grant.grant_id,
+            "target_collaboration_scope_id": "scope:gamma-relay-target",
             "guest_pairwise_subject": gamma_pairwise_subject,
             "source_event_id": relayed_guest_event.event_id,
             "source_event_digest": envelope_digest(relayed_guest_event),
@@ -1008,7 +1458,7 @@ def test_three_domain_guest_event_cannot_relay_onward_or_back_home_even_with_reu
         }
         forged = RelayPacket(
             **forged_fields,
-            signature=pair["target_key"].sign("agentnet.server-relay.packet.v1", forged_fields),
+            signature=pair["target_key"].sign("agentnet.server-relay.packet.v2", forged_fields),
         )
         for _ in range(2):
             with pytest.raises(AuthorizationError, match="non-transitive federation forbids onward relay"):
@@ -1028,12 +1478,44 @@ def test_relay_task_stays_out_of_recipient_mailbox_until_exact_owner_approval(tm
     pair = build_pair(tmp_path, event_type=EventType.TASK_ASSIGNMENT)
     try:
         packet = staged(pair)
+        local_event_id = _relay_local_event_id(packet.packet_id)
+        assert pair["target_scope"].allowed_resource_prefixes == (f"task:{local_event_id}",)
+        assert {"task.propose", "task.accept"}.issubset(
+            pair["target_scope"].allowed_actions
+        )
         custody = pair["target"].accept(packet)
         assert custody.fact == "accepted_local"
-        assert pair["target"].mailbox.reconcile(pair["recipient"].harness_id) == []
-        proposals = pair["target"].assignments.pending_for_owner(actor=pair["recipient"])
+        assert _target_inbox(pair) == []
+        proposals = pair["target"].assignments.pending_for_owner(
+            actor=pair["recipient"],
+            collaboration_scope_id=pair["target_scope"].scope_id,
+        )
         assert len(proposals) == 1
         assert "offline relay synthetic" not in str(proposals[0])
+        proposal_row = pair["target_store"].fetch_one(
+            "SELECT request_encrypted,event_encrypted FROM task_custody_proposals WHERE proposal_id=?",
+            (proposals[0]["proposal_id"],),
+        )
+        assignment_request = pair["target_store"].cipher.decrypt_json(
+            proposal_row["request_encrypted"],
+            purpose=f"task-proposal-request:{proposals[0]['proposal_id']}",
+        )
+        assert (
+            assignment_request["collaboration_scope_id"]
+            == packet.target_collaboration_scope_id
+        )
+        local_task_event = pair["target_store"].cipher.decrypt_json(
+            proposal_row["event_encrypted"],
+            purpose=f"task-proposal-event:{proposals[0]['proposal_id']}",
+        )
+        assert local_task_event["event_id"] == local_event_id
+        assert (
+            local_task_event["payload"]["authorization_context"]
+            == pair["target_scope"].authorization_context()
+        )
+        assert local_task_event["payload_digest"] == canonical_digest(
+            local_task_event["payload"]
+        )
 
         still_pending = pair["target"].deliver(packet.packet_id)
         assert still_pending.fact == "accepted_local"
@@ -1047,7 +1529,7 @@ def test_relay_task_stays_out_of_recipient_mailbox_until_exact_owner_approval(tm
         )
         committed = pair["target"].deliver(packet.packet_id)
         assert committed.fact == "recipient_committed"
-        inbox = pair["target"].mailbox.reconcile(pair["recipient"].harness_id)
+        inbox = _target_inbox(pair)
         assert len(inbox) == 1
         assert inbox[0]["fact"] == DeliveryFact.ACCEPTED_QUEUED.value
         assert inbox[0]["payload"] is None
@@ -1072,7 +1554,7 @@ def test_relay_has_no_special_identity_and_revocation_blocks_pending_delivery(tm
             connection.execute("UPDATE credentials SET status='revoked' WHERE credential_id=?", (pair["guest_actor"].credential_id,))
         with pytest.raises(AuthorizationError, match="no longer current"):
             pair["target"].deliver(packet.packet_id)
-        assert pair["target"].mailbox.reconcile(pair["recipient"].harness_id) == []
+        assert _target_inbox(pair) == []
     finally:
         pair["source_store"].close()
         pair["target_store"].close()
@@ -1099,6 +1581,7 @@ def test_relay_capabilities_attenuate_but_do_not_replace_policy_or_grants(tmp_pa
                 target_recipient_id=pair["recipient"].harness_id,
                 guest_pairwise_subject=pair["pairwise_subject"],
                 target_grant_id=pair["grant"].grant_id,
+                target_collaboration_scope_id=pair["target_scope"].scope_id,
                 authority=pair["authority"],
             )
 
@@ -1161,9 +1644,7 @@ def test_relay_acceptance_crash_duplicate_tamper_and_pending_recovery(tmp_path: 
 
         pair["target"].recover_pending_inbox()
         assert pair["target"].pending_inbox() == []
-        assert pair["target"].mailbox.reconcile(pair["recipient"].harness_id)[0]["payload"] == {
-            "message": "offline relay synthetic"
-        }
+        assert _target_inbox(pair)[0]["payload"]["message"] == "offline relay synthetic"
     finally:
         pair["source_store"].close()
         pair["target_store"].close()
@@ -1312,6 +1793,7 @@ def test_versioned_peer_key_rotation_preserves_bounded_old_queue_and_uses_new_ke
             target_recipient_id=pair["recipient"].harness_id,
             guest_pairwise_subject=pair["pairwise_subject"],
             target_grant_id=pair["grant"].grant_id,
+            target_collaboration_scope_id=pair["target_scope"].scope_id,
             authority=pair["authority"],
         )
         delayed_old_packet = stage_additional_message(pair, source, label="delayed old key")
@@ -1514,6 +1996,7 @@ def test_compromise_revocation_quarantines_queued_packets_without_killing_replac
             target_recipient_id=pair["recipient"].harness_id,
             guest_pairwise_subject=pair["pairwise_subject"],
             target_grant_id=pair["grant"].grant_id,
+            target_collaboration_scope_id=pair["target_scope"].scope_id,
             authority=pair["authority"],
         )
         rotation = rotation_for(pair, now_state=now_state, old=old, new=new)
@@ -1863,7 +2346,11 @@ def test_sqlite_relay_cannot_be_configured_to_claim_accepted_durable(tmp_path: P
     store = SQLiteStore(tmp_path / "local.sqlite3", LocalEnvelopeCipher(b"l" * 32))
     try:
         with pytest.raises(ValueError, match="verified storage boundary"):
-            MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_DURABLE)
+            MailboxService(
+                store,
+                acceptance_fact=DeliveryFact.ACCEPTED_DURABLE,
+                collaboration_scopes=_RelayScopes(()),
+            )
     finally:
         store.close()
 
@@ -1923,9 +2410,7 @@ async def test_mounted_two_server_agent_offline_relay_round_trip_and_restart(tmp
             result = await source_client.send_receipt(committed[0])
         assert result["state"] == "recipient_committed"
         assert restarted_source.recover_pending_outbox() == []
-        assert pair["target"].mailbox.reconcile(pair["recipient"].harness_id)[0]["payload"] == {
-            "message": "offline relay synthetic"
-        }
+        assert _target_inbox(pair)[0]["payload"]["message"] == "offline relay synthetic"
 
         with pytest.raises(ValidationError, match="require HTTPS"):
             ServerAgentRelayClient(

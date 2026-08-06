@@ -7,6 +7,18 @@ from uuid import uuid4
 
 import pytest
 
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScope,
+    CollaborationScopeProposal,
+    CollaborationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import (
+    AuthorizationRequest,
+    HumanEntitlement,
+    LocalConformancePolicyEngine,
+)
 from agentnet.errors import AuthorizationError, ConflictError, IdempotencyConflict, ValidationError
 from agentnet.authorization.grants import TaskGrantService
 from agentnet.identity.workload import RegisteredWorkloadCredential, WorkloadTransitionProof
@@ -23,12 +35,108 @@ from agentnet.protocol.models import (
 )
 from agentnet.provenance import OriginKind, ProvenanceService, ReviewState, ScanState
 
+_MAILBOX_ACTIONS = ("message.acknowledge", "message.read", "message.send")
+
+
+def _mailbox_scope(
+    store,
+    *,
+    owner,
+    members,
+    classifications=(Classification.C1_INTERNAL,),
+) -> tuple[CollaborationScopeService, CollaborationScope]:
+    scopes = CollaborationScopeService(store)
+    policy = LocalConformancePolicyEngine(store)
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (owner.domain_id,),
+    )
+    proposal = CollaborationScopeProposal(
+        scope_id=f"scope:delivery-mailbox:{uuid4()}",
+        scope_kind="personal" if len(members) == 1 else "direct" if len(members) == 2 else "shared",
+        member_harness_ids=tuple(sorted(member.harness_id for member in members)),
+        allowed_actions=_MAILBOX_ACTIONS,
+        allowed_resource_prefixes=("conversation:",),
+        allowed_classifications=tuple(sorted(classifications, key=lambda value: value.value)),
+        policy_revision=int(domain["policy_revision"]),
+        domain_revocation_epoch=int(domain["revocation_epoch"]),
+    )
+    resource = f"scope:{proposal.scope_id}"
+    policy.bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=resource,
+            revision=proposal.policy_revision,
+        )
+    )
+    decision = policy.require(
+        AuthorizationRequest(
+            actor=owner,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource=resource,
+            policy_revision=proposal.policy_revision,
+            context=scopes.issuance_request(actor=owner, proposal=proposal),
+        )
+    )
+    scope = scopes.issue(
+        actor=owner,
+        proposal=proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=decision.decision_id,
+        ),
+    )
+    return scopes, scope
+
+
+def _scoped_event(
+    scope: CollaborationScope,
+    *,
+    payload: dict[str, object],
+    **values,
+):
+    return new_event(
+        **values,
+        payload=payload | {"authorization_context": scope.authorization_context()},
+        policy_revision=scope.policy_revision,
+    )
+
+
+def _isolated_recipient_validation_context(
+    store,
+    *,
+    sender,
+    recipient_id: str,
+) -> dict[str, object]:
+    domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (sender.domain_id,),
+    )
+    return {
+        "collaboration_scope_id": f"scope:recipient-validation:{uuid4()}",
+        "collaboration_scope_revision": 1,
+        "collaboration_scope_policy_revision": int(domain["policy_revision"]),
+        "collaboration_scope_domain_revocation_epoch": int(domain["revocation_epoch"]),
+        "collaboration_scope_member_harness_ids": sorted(
+            {sender.harness_id, recipient_id}
+        ),
+        "collaboration_scope_digest": "0" * 64,
+    }
+
 
 def test_offline_store_forward_and_exact_duplicate(store, identity_factory) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -50,8 +158,14 @@ def test_offline_store_forward_and_exact_duplicate(store, identity_factory) -> N
     assert link is not None
     assert link["provenance_digest"] == accepted["provenance"]["provenance_digest"]
     assert link["object_type"] == "event"
-    rows = mailbox.reconcile(recipient.harness_id)
-    assert rows[0]["payload"] == {"text": "hello"}
+    rows = mailbox.reconcile(
+        actor=recipient,
+        collaboration_scope_id=scope.scope_id,
+    )
+    assert rows[0]["payload"] == {
+        "text": "hello",
+        "authorization_context": scope.authorization_context(),
+    }
     assert rows[0]["fact"] == "accepted_local"
     assert rows[0]["provenance"] == accepted["provenance"]
 
@@ -62,8 +176,10 @@ def test_causal_child_uses_exact_server_resolved_parent_provenance(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store)
-    parent = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    parent = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -73,7 +189,8 @@ def test_causal_child_uses_exact_server_resolved_parent_provenance(
         recipients=(recipient.harness_id,),
     )
     parent_result = mailbox.accept(parent)
-    child = new_event(
+    child = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=recipient,
         event_type=EventType.MESSAGE,
@@ -101,7 +218,8 @@ def test_causal_child_uses_exact_server_resolved_parent_provenance(
     assert record.allowed_sinks.sinks == tuple(sorted((sender.harness_id, recipient.harness_id)))
     assert mailbox.accept(child)["provenance"] == accepted["provenance"]
 
-    other_parent = new_event(
+    other_parent = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -111,7 +229,8 @@ def test_causal_child_uses_exact_server_resolved_parent_provenance(
         recipients=(recipient.harness_id,),
     )
     mailbox.accept(other_parent)
-    changed_retry = new_event(
+    changed_retry = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=recipient,
         event_type=EventType.MESSAGE,
@@ -134,8 +253,15 @@ def test_causal_provenance_failures_leave_no_child_custody(
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
     outsider, _ = identity_factory(kind="claude")
-    mailbox = MailboxService(store)
-    parent = new_event(
+    scopes, scope = _mailbox_scope(
+        store,
+        owner=sender,
+        members=(sender, recipient, outsider),
+        classifications=(Classification.C1_INTERNAL, Classification.C2_RESTRICTED),
+    )
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    parent = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -149,7 +275,8 @@ def test_causal_provenance_failures_leave_no_child_custody(
         recipients=(recipient.harness_id,),
     )
     mailbox.accept(parent)
-    child = new_event(
+    child = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=recipient,
         event_type=EventType.MESSAGE,
@@ -178,9 +305,15 @@ def test_lost_response_retry_converges_on_client_stable_canonical_intent(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
     key = f"message-{uuid4()}"
-    first = new_event(
+    first = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -191,7 +324,8 @@ def test_lost_response_retry_converges_on_client_stable_canonical_intent(
         retention_delete_at=datetime.now(UTC) + timedelta(days=1),
     )
     accepted = mailbox.accept(first)
-    retry = new_event(
+    retry = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -211,7 +345,15 @@ def test_lost_response_retry_converges_on_client_stable_canonical_intent(
     assert duplicate["event_id"] == accepted["event_id"]
     assert duplicate["envelope_digest"] == accepted["envelope_digest"]
     assert duplicate["provenance"] == accepted["provenance"]
-    assert len(mailbox.reconcile(recipient.harness_id)) == 1
+    assert (
+        len(
+            mailbox.reconcile(
+                actor=recipient,
+                collaboration_scope_id=scope.scope_id,
+            )
+        )
+        == 1
+    )
 
 
 def test_event_and_provenance_roll_back_together_and_missing_link_fails_closed(
@@ -220,8 +362,10 @@ def test_event_and_provenance_roll_back_together_and_missing_link_fails_closed(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store)
-    rolled_back = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(store, collaboration_scopes=scopes)
+    rolled_back = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -243,7 +387,8 @@ def test_event_and_provenance_roll_back_together_and_missing_link_fails_closed(
         (rolled_back.event_id,),
     ) is None
 
-    accepted = new_event(
+    accepted = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -259,7 +404,10 @@ def test_event_and_provenance_roll_back_together_and_missing_link_fails_closed(
             (accepted.event_id,),
         )
     with pytest.raises(ConflictError, match="mandatory provenance"):
-        mailbox.reconcile(recipient.harness_id)
+        mailbox.reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )
 
 
 def test_content_free_watch_wakes_only_for_a_committed_durable_cursor(
@@ -269,8 +417,14 @@ def test_content_free_watch_wakes_only_for_a_committed_durable_cursor(
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
     unrelated, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -292,7 +446,10 @@ def test_content_free_watch_wakes_only_for_a_committed_durable_cursor(
 
     assert woke.wait(timeout=1)
     assert unrelated_woke.is_set() is False
-    assert mailbox.reconcile(recipient.harness_id)[0]["cursor"] == 1
+    assert mailbox.reconcile(
+        actor=recipient,
+        collaboration_scope_id=scope.scope_id,
+    )[0]["cursor"] == 1
 
 
 def test_rolled_back_acceptance_can_only_cause_a_false_wake_not_cursor_advance(
@@ -301,8 +458,14 @@ def test_rolled_back_acceptance_can_only_cause_a_false_wake_not_cursor_advance(
 ) -> None:
     sender, _ = identity_factory(kind="codex")
     recipient, _ = identity_factory(kind="pi")
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -320,15 +483,27 @@ def test_rolled_back_acceptance_can_only_cause_a_false_wake_not_cursor_advance(
     mailbox.unsubscribe_content_free_wake(subscription_id)
 
     assert woke.wait(timeout=1)
-    assert mailbox.reconcile(recipient.harness_id) == []
+    assert (
+        mailbox.reconcile(
+            actor=recipient,
+            collaboration_scope_id=scope.scope_id,
+        )
+        == []
+    )
 
 
 def test_same_key_different_digest_is_security_conflict(store, identity_factory) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
     key = f"message-{uuid4()}"
-    first = new_event(
+    first = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -338,7 +513,8 @@ def test_same_key_different_digest_is_security_conflict(store, identity_factory)
         recipients=(recipient.harness_id,),
     )
     mailbox.accept(first)
-    second = new_event(
+    second = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -354,8 +530,14 @@ def test_same_key_different_digest_is_security_conflict(store, identity_factory)
 def test_terminal_state_cannot_reopen(store, identity_factory, workload_factory) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -404,8 +586,14 @@ def test_acceptance_receipt_is_owned_by_typed_storage_boundary_not_fabricated_ac
 ) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -442,8 +630,18 @@ def test_expire_due_fails_closed_without_every_exact_dispatcher_proof(
     sender, _ = identity_factory()
     recipients = [identity_factory()[0], identity_factory()[0]]
     expiry_now = datetime.now(UTC) + timedelta(seconds=2)
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(
+        store,
+        owner=sender,
+        members=(sender, *recipients),
+    )
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -479,8 +677,20 @@ def test_expire_due_fails_closed_without_every_exact_dispatcher_proof(
     with pytest.raises(AuthorizationError, match="exact event and recipient"):
         mailbox.expire_due(authoritative_now=expiry_now, authorizations=one_authorization)
 
-    assert [row["fact"] for row in mailbox.reconcile(first)] == [DeliveryFact.ACCEPTED_LOCAL.value]
-    assert [row["fact"] for row in mailbox.reconcile(recipients[1].harness_id)] == [
+    assert [
+        row["fact"]
+        for row in mailbox.reconcile(
+            actor=recipients[0],
+            collaboration_scope_id=scope.scope_id,
+        )
+    ] == [DeliveryFact.ACCEPTED_LOCAL.value]
+    assert [
+        row["fact"]
+        for row in mailbox.reconcile(
+            actor=recipients[1],
+            collaboration_scope_id=scope.scope_id,
+        )
+    ] == [
         DeliveryFact.ACCEPTED_LOCAL.value
     ]
 
@@ -491,8 +701,14 @@ def test_receipt_fact_owner_is_derived_from_exact_recipient_or_fixed_workload(
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
     outsider, _ = identity_factory()
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -562,8 +778,14 @@ def test_recipient_cannot_fabricate_effect_completion_and_remote_facts_fail_clos
 ) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
-    mailbox = MailboxService(store, acceptance_fact=DeliveryFact.ACCEPTED_LOCAL)
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    mailbox = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+        acceptance_fact=DeliveryFact.ACCEPTED_LOCAL,
+    )
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -694,11 +916,19 @@ def test_recipient_cannot_fabricate_effect_completion_and_remote_facts_fail_clos
 def test_post_revocation_history_policy_bounds_new_acceptance_retention(store, identity_factory) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory()
+    scopes, scope = _mailbox_scope(
+        store,
+        owner=sender,
+        members=(sender, recipient),
+        classifications=(Classification.C0_PUBLIC,),
+    )
     mailbox = MailboxService(
         store,
+        collaboration_scopes=scopes,
         revocation_policy=RevocationPolicy(accepted_history_max_retention_days=1),
     )
-    event = new_event(
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -729,17 +959,29 @@ def test_acceptance_rejects_nonexistent_cross_domain_revoked_or_stale_recipient_
     elif recipient_case == "stale_key":
         with store.transaction() as connection:
             connection.execute("UPDATE harnesses SET credential_epoch=2 WHERE harness_id=?", (recipient_id,))
+    context = _isolated_recipient_validation_context(
+        store,
+        sender=sender,
+        recipient_id=recipient_id,
+    )
     event = new_event(
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
         classification=Classification.C1_INTERNAL,
-        payload={"text": "must not become orphaned custody"},
+        payload={
+            "text": "must not become orphaned custody",
+            "authorization_context": context,
+        },
         idempotency_key=f"invalid-recipient-{uuid4()}",
         recipients=(recipient_id,),
+        policy_revision=int(context["collaboration_scope_policy_revision"]),
     )
     with pytest.raises(AuthorizationError, match="current enrolled"):
-        MailboxService(store).accept(event)
+        MailboxService(
+            store,
+            collaboration_scopes=CollaborationScopeService(store),
+        ).accept(event)
     assert store.fetch_one("SELECT COUNT(*) AS count FROM events")["count"] == 0
     assert store.fetch_one("SELECT COUNT(*) AS count FROM recipients")["count"] == 0
 
@@ -749,7 +991,9 @@ def test_acceptance_encrypts_exact_recipient_snapshot_and_offline_is_valid(
 ) -> None:
     sender, _ = identity_factory()
     recipient, _ = identity_factory(kind="pi")
-    event = new_event(
+    scopes, scope = _mailbox_scope(store, owner=sender, members=(sender, recipient))
+    event = _scoped_event(
+        scope,
         domain_id=sender.domain_id,
         actor=sender,
         event_type=EventType.MESSAGE,
@@ -758,7 +1002,10 @@ def test_acceptance_encrypts_exact_recipient_snapshot_and_offline_is_valid(
         idempotency_key=f"recipient-snapshot-{uuid4()}",
         recipients=(recipient.harness_id,),
     )
-    accepted = MailboxService(store).accept(event)
+    accepted = MailboxService(
+        store,
+        collaboration_scopes=scopes,
+    ).accept(event)
     assert accepted["fact"] == "accepted_local"
     row = store.fetch_one(
         "SELECT * FROM recipient_address_snapshots WHERE event_id=? AND recipient_id=?",

@@ -24,14 +24,18 @@ from agentnet.authorization.bootstrap_plan_service import (
     BootstrapPlanService,
     BootstrapPlanTerminalError,
 )
-from agentnet.authorization.c0_pilot_service import C0PilotService
+from agentnet.authorization.communication_scope_service import CollaborationScopeService
+from agentnet.authorization.c0_pilot_service import (
+    C0PilotService,
+    _bootstrap_c0_authorization_context,
+)
 from agentnet.authorization.policy import AuthorizationRequest, C0GuardedOperation, PolicyEngine
 from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.events import new_event
 from agentnet.protocol.models import Classification, EventType
-from agentnet.security.signatures import P256KeyPair, canonical_json
+from agentnet.security.signatures import P256KeyPair, canonical_digest, canonical_json
 
 
 NOW = 1_800_000_000
@@ -956,6 +960,77 @@ def test_completion_reservation_survives_retrieval_failure_and_conflicting_key(b
     assert bootstrap_stack.client.retrieve_calls == 2
 
 
+def _c0_mailbox(store) -> MailboxService:
+    return MailboxService(
+        store,
+        collaboration_scopes=CollaborationScopeService(store),
+    )
+
+def _protected_c0_context_row(store):
+    return store.fetch_one(
+        """SELECT p.plan_id,p.owner_harness_id,p.fresh_harness_id,p.policy_revision,
+                  p.domain_revocation_epoch,g.guard_id,g.expires_at AS guard_expires_at,
+                  g.request_payload_json,g.request_payload_digest,
+                  g.reply_payload_json,g.reply_payload_digest
+             FROM bootstrap_grant_plans p
+             JOIN c0_plan_guards g ON g.plan_id=p.plan_id"""
+    )
+
+
+def test_bootstrap_c0_authorization_context_binds_every_protected_input() -> None:
+    row = {
+        "plan_id": "plan-a",
+        "guard_id": "guard-a",
+        "owner_harness_id": "harness-z",
+        "fresh_harness_id": "harness-a",
+        "policy_revision": 7,
+        "domain_revocation_epoch": 3,
+        "guard_expires_at": NOW + 300,
+        "request_payload_digest": "1" * 64,
+        "reply_payload_digest": "2" * 64,
+    }
+    context = _bootstrap_c0_authorization_context(row)
+    assert context == {
+        "collaboration_scope_id": "bootstrap-c0:plan-a:guard-a",
+        "collaboration_scope_revision": 1,
+        "collaboration_scope_policy_revision": 7,
+        "collaboration_scope_domain_revocation_epoch": 3,
+        "collaboration_scope_member_harness_ids": ["harness-a", "harness-z"],
+        "collaboration_scope_digest": canonical_digest(
+            {
+                "schema": "agentnet.bootstrap-c0.authorization-context.v1",
+                "plan_id": "plan-a",
+                "guard_id": "guard-a",
+                "collaboration_scope_id": "bootstrap-c0:plan-a:guard-a",
+                "collaboration_scope_revision": 1,
+                "collaboration_scope_policy_revision": 7,
+                "collaboration_scope_domain_revocation_epoch": 3,
+                "collaboration_scope_member_harness_ids": ["harness-a", "harness-z"],
+                "guard_expires_at": NOW + 300,
+                "request_payload_digest": "1" * 64,
+                "reply_payload_digest": "2" * 64,
+            }
+        ),
+    }
+    mutations = {
+        "plan_id": "plan-b",
+        "guard_id": "guard-b",
+        "owner_harness_id": "harness-y",
+        "fresh_harness_id": "harness-b",
+        "policy_revision": 8,
+        "domain_revocation_epoch": 4,
+        "guard_expires_at": NOW + 301,
+        "request_payload_digest": "3" * 64,
+        "reply_payload_digest": "4" * 64,
+    }
+    for field, value in mutations.items():
+        changed = row | {field: value}
+        assert (
+            _bootstrap_c0_authorization_context(changed)["collaboration_scope_digest"]
+            != context["collaboration_scope_digest"]
+        )
+
+
 def _commit_c0_plan(bootstrap_stack) -> tuple[C0PilotService, VerifiedActor]:
     begin_key = "bootstrap-c0-service-begin-key"
     bootstrap_stack.service.begin(
@@ -998,7 +1073,7 @@ def _commit_c0_plan(bootstrap_stack) -> tuple[C0PilotService, VerifiedActor]:
         C0PilotService(
             bootstrap_stack.store,
             PolicyEngine(bootstrap_stack.store),
-            MailboxService(bootstrap_stack.store),
+            _c0_mailbox(bootstrap_stack.store),
             clock=lambda: NOW + 1,
         ),
         owner,
@@ -1036,6 +1111,47 @@ def test_active_bootstrap_entitlements_never_escape_generic_policy(bootstrap_sta
     assert generic_revoke.allowed is False
     assert generic_revoke.reason == "no_positive_human_entitlement"
 
+@pytest.mark.parametrize("direction", ("request", "reply"), ids=("request", "reply"))
+def test_c0_payload_authorization_context_collision_fails_closed(
+    bootstrap_stack, direction: str
+) -> None:
+    service, owner = _commit_c0_plan(bootstrap_stack)
+    protected = _protected_c0_context_row(bootstrap_stack.store)
+    payload = json.loads(protected[f"{direction}_payload_json"])
+    payload["authorization_context"] = {"collaboration_scope_id": "caller-controlled"}
+    payload_json = canonical_json(payload).decode("utf-8")
+    with bootstrap_stack.store.transaction() as connection:
+        connection.execute(
+            f"""UPDATE c0_plan_guards
+                   SET {direction}_payload_json=?,{direction}_payload_digest=?""",
+            (payload_json, canonical_digest(payload)),
+        )
+
+    if direction == "reply":
+        assert service.start(actor=bootstrap_stack.actor)["status"] == "waiting_owner"
+        operation = lambda: service.respond(actor=owner)
+        expected_events = 1
+        expected_facts = 1
+        expected_uses = (0, 1)
+    else:
+        operation = lambda: service.start(actor=bootstrap_stack.actor)
+        expected_events = 0
+        expected_facts = 0
+        expected_uses = (1, 1)
+    with pytest.raises(AuthorizationError, match="cannot supply authorization_context"):
+        operation()
+
+    assert bootstrap_stack.store.fetch_one("SELECT COUNT(*) AS n FROM events")["n"] == expected_events
+    assert (
+        bootstrap_stack.store.fetch_one("SELECT COUNT(*) AS n FROM c0_pilot_facts")["n"]
+        == expected_facts
+    )
+    guard = bootstrap_stack.store.fetch_one(
+        "SELECT state,request_remaining_uses,reply_remaining_uses FROM c0_plan_guards"
+    )
+    assert guard["state"] == ("active" if direction == "reply" else "pending")
+    assert (guard["request_remaining_uses"], guard["reply_remaining_uses"]) == expected_uses
+
 
 def test_c0_round_trip_is_idempotent_and_revokes_exact_five(bootstrap_stack) -> None:
     service, owner = _commit_c0_plan(bootstrap_stack)
@@ -1052,6 +1168,28 @@ def test_c0_round_trip_is_idempotent_and_revokes_exact_five(bootstrap_stack) -> 
     assert service.respond(actor=owner)["status"] == "COMPLETED_C0_ROUND_TRIP"
 
     assert bootstrap_stack.store.fetch_one("SELECT COUNT(*) AS n FROM events")["n"] == 2
+    protected = _protected_c0_context_row(bootstrap_stack.store)
+    expected_context = _bootstrap_c0_authorization_context(protected)
+    for event_row in bootstrap_stack.store.fetch_all("SELECT * FROM events"):
+        event, payload = service.mailbox._validated_event_and_payload(event_row)
+        assert payload["authorization_context"] == expected_context
+        direction = (
+            "request"
+            if event.actor.harness_id == bootstrap_stack.actor.harness_id
+            else "reply"
+        )
+        unbound_payload = dict(payload)
+        del unbound_payload["authorization_context"]
+        assert canonical_digest(unbound_payload) == protected[f"{direction}_payload_digest"]
+        assert event.payload_digest == canonical_digest(payload)
+        assert event.payload_digest != protected[f"{direction}_payload_digest"]
+    scope_id = expected_context["collaboration_scope_id"]
+    assert bootstrap_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM collaboration_scopes WHERE scope_id=?",
+        (scope_id,),
+    )["n"] == 0
+    with pytest.raises(AuthorizationError):
+        service.mailbox.reconcile(actor=owner, collaboration_scope_id=scope_id)
     facts = bootstrap_stack.store.fetch_all(
         "SELECT * FROM c0_pilot_facts ORDER BY fact_kind"
     )
@@ -1113,7 +1251,7 @@ def test_c0_restart_and_response_loss_converge_across_all_three_phases(bootstrap
     restarted_owner = C0PilotService(
         bootstrap_stack.store,
         PolicyEngine(bootstrap_stack.store),
-        MailboxService(bootstrap_stack.store),
+        _c0_mailbox(bootstrap_stack.store),
         clock=lambda: NOW + 2,
     )
     assert restarted_owner.start(actor=bootstrap_stack.actor)["status"] == "waiting_owner"
@@ -1122,7 +1260,7 @@ def test_c0_restart_and_response_loss_converge_across_all_three_phases(bootstrap
     restarted_fresh = C0PilotService(
         bootstrap_stack.store,
         PolicyEngine(bootstrap_stack.store),
-        MailboxService(bootstrap_stack.store),
+        _c0_mailbox(bootstrap_stack.store),
         clock=lambda: NOW + 3,
     )
     assert restarted_fresh.respond(actor=owner)["status"] == "waiting_fresh"
@@ -1131,7 +1269,7 @@ def test_c0_restart_and_response_loss_converge_across_all_three_phases(bootstrap
     final_reader = C0PilotService(
         bootstrap_stack.store,
         PolicyEngine(bootstrap_stack.store),
-        MailboxService(bootstrap_stack.store),
+        _c0_mailbox(bootstrap_stack.store),
         clock=lambda: NOW + 4,
     )
     assert final_reader.status(actor=owner)["status"] == "COMPLETED_C0_ROUND_TRIP"
@@ -1342,7 +1480,13 @@ def test_c0_reads_and_acknowledges_only_fact_linked_mailbox_events(bootstrap_sta
         actor=bootstrap_stack.actor,
         event_type=EventType.MESSAGE,
         classification=Classification.C0_PUBLIC,
-        payload={"schema": "unrelated.test.v1", "value": "not-pilot"},
+        payload={
+            "schema": "unrelated.test.v1",
+            "value": "not-pilot",
+            "authorization_context": _bootstrap_c0_authorization_context(
+                _protected_c0_context_row(bootstrap_stack.store)
+            ),
+        },
         idempotency_key="unrelated-owner-mailbox-key",
         recipients=(owner.harness_id,),
         delivery_expires_at=boundary,
@@ -1359,7 +1503,13 @@ def test_c0_reads_and_acknowledges_only_fact_linked_mailbox_events(bootstrap_sta
         actor=owner,
         event_type=EventType.MESSAGE,
         classification=Classification.C0_PUBLIC,
-        payload={"schema": "unrelated.test.v1", "value": "not-pilot"},
+        payload={
+            "schema": "unrelated.test.v1",
+            "value": "not-pilot",
+            "authorization_context": _bootstrap_c0_authorization_context(
+                _protected_c0_context_row(bootstrap_stack.store)
+            ),
+        },
         idempotency_key="unrelated-fresh-mailbox-key",
         recipients=(bootstrap_stack.actor.harness_id,),
         delivery_expires_at=boundary,
@@ -1400,7 +1550,7 @@ def test_c0_expiry_invalidates_active_attempt_without_revoking_or_reactivating(b
     expired_reader = C0PilotService(
         bootstrap_stack.store,
         PolicyEngine(bootstrap_stack.store),
-        MailboxService(bootstrap_stack.store),
+        _c0_mailbox(bootstrap_stack.store),
         clock=lambda: expires_at + 1,
     )
 
@@ -1429,7 +1579,7 @@ def test_c0_committed_terminal_result_survives_guard_ttl_without_restoring_autho
     later = C0PilotService(
         bootstrap_stack.store,
         PolicyEngine(bootstrap_stack.store),
-        MailboxService(bootstrap_stack.store),
+        _c0_mailbox(bootstrap_stack.store),
         clock=lambda: expires_at + 1,
     )
 

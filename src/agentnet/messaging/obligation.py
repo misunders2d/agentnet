@@ -22,6 +22,10 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError as JsonSchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from agentnet.authorization.communication_scope_service import (
+    CollaborationScope,
+    CollaborationScopeService,
+)
 
 from agentnet.authorization.policy import (
     AuthorizationRequest,
@@ -31,13 +35,24 @@ from agentnet.authorization.policy import (
 )
 from agentnet.errors import AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
-from agentnet.protocol.models import Classification, DeliveryFact
+from agentnet.protocol.models import Classification, DeliveryFact, EventEnvelope
+from agentnet.messaging.events import envelope_digest, validate_event_digest
 from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 from agentnet.storage.response_obligation_schema import require_response_obligation_schema
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_AUTHORIZATION_CONTEXT_KEYS = frozenset(
+    {
+        "collaboration_scope_id",
+        "collaboration_scope_revision",
+        "collaboration_scope_policy_revision",
+        "collaboration_scope_domain_revocation_epoch",
+        "collaboration_scope_member_harness_ids",
+        "collaboration_scope_digest",
+    }
+)
 
 ObligationState = Literal[
     "created",
@@ -82,6 +97,24 @@ OBLIGATION_TRANSITIONS: dict[str, frozenset[str]] = {
 RECIPIENT_ASSERTABLE_STATES: frozenset[str] = frozenset(
     {"recipient_committed", "acknowledged", "in_progress", "pending_human", "blocked"}
 )
+
+BACKGROUND_WAKE_STATES: frozenset[str] = frozenset(
+    {"created", "recipient_committed", "acknowledged", "in_progress"}
+)
+
+
+class MailboxResponseObligation(BaseModel):
+    """Content-free current obligation reference exposed with one mailbox item."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    obligation_id: str = Field(min_length=1, max_length=256)
+    responsible_harness_id: str = Field(min_length=1, max_length=256)
+    state: ObligationState
+
+    @property
+    def actionable_for_background_wake(self) -> bool:
+        return self.state in BACKGROUND_WAKE_STATES
 
 # Durable mailbox facts that prove the recipient committed request custody.
 _COMMITTED_DELIVERY_FACTS: frozenset[str] = frozenset(
@@ -225,10 +258,16 @@ def _row_view(row: Any) -> dict[str, Any]:
 class ResponseObligationService:
     """Durable request/answer ownership with fail-closed typed closure."""
 
-    def __init__(self, store: StoreBackend, policy: PolicyEngine) -> None:
+    def __init__(
+        self,
+        store: StoreBackend,
+        policy: PolicyEngine,
+        collaboration_scopes: CollaborationScopeService,
+    ) -> None:
         require_response_obligation_schema(store)
         self.store = store
         self.policy = policy
+        self.collaboration_scopes = collaboration_scopes
 
     # -- shared validation -------------------------------------------------
 
@@ -288,6 +327,231 @@ class ResponseObligationService:
         if row is None:
             raise AuthorizationError("response obligation is unavailable")
         return row
+
+    def _load_event(self, connection: Any, event_id: str) -> EventEnvelope:
+        stored = connection.execute(
+            """SELECT event_id,envelope_json,envelope_digest,payload_encrypted
+                 FROM events WHERE event_id=?""",
+            (event_id,),
+        ).fetchone()
+        if stored is None:
+            raise ConflictError("response obligation request binding is invalid")
+        try:
+            raw_metadata = str(stored["envelope_json"])
+            metadata = json.loads(raw_metadata)
+            if (
+                not isinstance(metadata, dict)
+                or canonical_json(metadata).decode("utf-8") != raw_metadata
+            ):
+                raise ValueError("event metadata is not canonical")
+            payload = self.store.decrypted_payload(
+                str(stored["payload_encrypted"]),
+                str(stored["event_id"]),
+            )
+            event = EventEnvelope.model_validate_json(
+                canonical_json(metadata | {"payload": payload}),
+                strict=True,
+            )
+            validate_event_digest(event)
+            if envelope_digest(event) != stored["envelope_digest"]:
+                raise ValueError("event envelope digest changed")
+        except Exception:
+            raise ConflictError("response obligation request binding is invalid") from None
+        return event
+
+    def _load_request_event(self, connection: Any, row: Any) -> EventEnvelope:
+        event = self._load_event(connection, str(row["request_event_id"]))
+        if (
+            event.event_id != row["request_event_id"]
+            or event.domain_id != row["domain_id"]
+            or event.conversation_id != row["conversation_id"]
+            or event.thread_id != row["thread_id"]
+            or event.payload_digest != row["request_payload_digest"]
+            or envelope_digest(event) != row["request_envelope_digest"]
+            or event.actor.harness_id != row["requester_harness_id"]
+            or row["responsible_harness_id"] not in event.recipients
+        ):
+            raise ConflictError("response obligation request binding is invalid")
+        return event
+
+    @staticmethod
+    def _authorization_context(event: EventEnvelope) -> dict[str, object]:
+        context = event.payload.get("authorization_context")
+        if not isinstance(context, dict) or frozenset(context) != _AUTHORIZATION_CONTEXT_KEYS:
+            raise ConflictError("response obligation request binding is invalid")
+        members = context.get("collaboration_scope_member_harness_ids")
+        integer_fields = (
+            "collaboration_scope_revision",
+            "collaboration_scope_policy_revision",
+            "collaboration_scope_domain_revocation_epoch",
+        )
+        if (
+            not isinstance(context.get("collaboration_scope_id"), str)
+            or not context["collaboration_scope_id"]
+            or not isinstance(context.get("collaboration_scope_digest"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", str(context["collaboration_scope_digest"]))
+            or any(
+                not isinstance(context.get(field), int)
+                or isinstance(context.get(field), bool)
+                or int(context[field]) < 1
+                for field in integer_fields
+            )
+            or not isinstance(members, list)
+            or not members
+            or any(not isinstance(member, str) or not member for member in members)
+            or members != sorted(set(members))
+        ):
+            raise ConflictError("response obligation request binding is invalid")
+        return context
+
+    def _require_event_scope(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        event: EventEnvelope,
+        action: str,
+        resource: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+        now: int,
+    ) -> CollaborationScope:
+        context = self._authorization_context(event)
+        if context["collaboration_scope_id"] != collaboration_scope_id:
+            raise AuthorizationError("response obligation is unavailable")
+        scope = self.collaboration_scopes.require_in_transaction(
+            connection,
+            actor=actor,
+            scope_id=collaboration_scope_id,
+            action=action,
+            resource=resource,
+            target_harness_ids=target_harness_ids,
+            classification=classification,
+            when=datetime.fromtimestamp(now, UTC),
+        )
+        if context != scope.authorization_context():
+            raise AuthorizationError("response obligation is unavailable")
+        return scope
+
+    def _require_row_scope(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        row: Any,
+        action: str,
+        target_harness_ids: tuple[str, ...],
+        classification: Classification,
+        now: int,
+    ) -> CollaborationScope:
+        event = self._load_request_event(connection, row)
+        return self._require_event_scope(
+            connection,
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            event=event,
+            action=action,
+            resource=f"conversation:{row['conversation_id']}",
+            target_harness_ids=target_harness_ids,
+            classification=classification,
+            now=now,
+        )
+
+    def _preflight_scope(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        action: str,
+    ) -> CollaborationScope:
+        scope = self.collaboration_scopes.get_for_actor(
+            actor=actor,
+            scope_id=collaboration_scope_id,
+        )
+        if not scope.allowed_resource_prefixes or not scope.allowed_classifications:
+            raise AuthorizationError("collaboration scope does not authorize the operation")
+        return self.collaboration_scopes.require(
+            actor=actor,
+            scope_id=collaboration_scope_id,
+            action=action,
+            resource=scope.allowed_resource_prefixes[0],
+            target_harness_ids=(),
+            classification=scope.allowed_classifications[0],
+        )
+
+    def require_background_wake_in_transaction(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        event_id: str,
+        envelope_digest_value: str,
+        now: int | None = None,
+    ) -> MailboxResponseObligation:
+        """Recheck one exact recipient-actionable obligation before worker launch."""
+
+        now = int(time.time()) if now is None else now
+        if actor.harness_id is None:
+            raise AuthorizationError("response obligation is unavailable")
+        rows = connection.execute(
+            """SELECT * FROM response_obligations
+                WHERE request_event_id=? AND responsible_harness_id=?
+                ORDER BY obligation_id LIMIT 2""",
+            (event_id, actor.harness_id),
+        ).fetchall()
+        if len(rows) != 1:
+            raise AuthorizationError("response obligation is unavailable")
+        row = rows[0]
+        event = self._load_request_event(connection, row)
+        if (
+            event.event_id != event_id
+            or envelope_digest(event) != envelope_digest_value
+            or not bool(row["response_required"])
+            or str(row["state"]) not in BACKGROUND_WAKE_STATES
+            or (
+                row["deadline_at"] is not None
+                and int(row["deadline_at"]) <= now
+            )
+        ):
+            raise AuthorizationError("response obligation is unavailable")
+        classification = self._classification(connection, str(row["conversation_id"]))
+        authority_id, policy_revision = self._require_current_actor(
+            connection,
+            actor,
+            now=now,
+            classification=classification,
+        )
+        if (
+            str(row["responsible_authority_id"]) != authority_id
+            or str(row["domain_id"]) != actor.domain_id
+        ):
+            raise AuthorizationError("response obligation is unavailable")
+        authorization_context = self._authorization_context(event)
+        scope = self._require_event_scope(
+            connection,
+            actor=actor,
+            collaboration_scope_id=str(
+                authorization_context["collaboration_scope_id"]
+            ),
+            event=event,
+            action="obligation.respond",
+            resource=f"conversation:{row['conversation_id']}",
+            target_harness_ids=(),
+            classification=classification,
+            now=now,
+        )
+        if (
+            scope.policy_revision != policy_revision
+            or int(row["policy_revision"]) != policy_revision
+        ):
+            raise AuthorizationError("response obligation is unavailable")
+        return MailboxResponseObligation(
+            obligation_id=str(row["obligation_id"]),
+            responsible_harness_id=str(row["responsible_harness_id"]),
+            state=str(row["state"]),
+        )
 
     def _decide(
         self,
@@ -409,6 +673,7 @@ class ResponseObligationService:
         connection: Any,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         requester_authority_id: str,
         spec: ResponseObligationSpec,
         request_event: Any,
@@ -427,6 +692,20 @@ class ResponseObligationService:
             raise ValidationError("a response obligation cannot name its requester as responsible")
         if spec.deadline_at is not None and int(spec.deadline_at.timestamp()) <= now:
             raise ValidationError("response obligation deadline must be in the future")
+        obligation_id = obligation_id_for(request_event.event_id, responsible_harness_id)
+        collaboration_scope = self._require_event_scope(
+            connection,
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            event=request_event,
+            action="obligation.create",
+            resource=f"conversation:{request_event.conversation_id}",
+            target_harness_ids=(responsible_harness_id,),
+            classification=classification,
+            now=now,
+        )
+        if policy_revision != collaboration_scope.policy_revision:
+            raise AuthorizationError("response obligation policy revision is stale")
         self._decide(
             connection,
             actor=actor,
@@ -435,13 +714,13 @@ class ResponseObligationService:
             revision=policy_revision,
             classification=classification,
             context={
+                "authorization_context": collaboration_scope.authorization_context(),
                 "request_event_id": request_event.event_id,
                 "request_digest": request_event.payload_digest,
                 "responsible_harness_id": responsible_harness_id,
             },
             now=now,
         )
-        obligation_id = obligation_id_for(request_event.event_id, responsible_harness_id)
         connection.execute(
             """INSERT INTO response_obligations(
                 obligation_id,domain_id,conversation_id,thread_id,request_event_id,
@@ -481,6 +760,7 @@ class ResponseObligationService:
             connection,
             {
                 "action": "response_obligation.created",
+                "authorization_context": collaboration_scope.authorization_context(),
                 "obligation_id": obligation_id,
                 "conversation_id": request_event.conversation_id,
                 "request_event_id": request_event.event_id,
@@ -500,6 +780,7 @@ class ResponseObligationService:
         connection: Any,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         responder_authority_id: str,
         obligation_id: str,
         request_event_id: str,
@@ -510,6 +791,17 @@ class ResponseObligationService:
         """Bind the response to the exact open obligation before acceptance."""
 
         row = self._load_for_update(connection, obligation_id)
+        classification = self._classification(connection, row["conversation_id"])
+        self._require_row_scope(
+            connection,
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            row=row,
+            action="obligation.respond",
+            target_harness_ids=(str(row["requester_harness_id"]),),
+            classification=classification,
+            now=int(time.time()),
+        )
         if (
             row["conversation_id"] != conversation_id
             or row["thread_id"] != thread_id
@@ -564,6 +856,7 @@ class ResponseObligationService:
         *,
         row: Any,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         outcome: Literal["completed", "failed"],
         response_event_id: str,
         response_payload_digest: str,
@@ -571,6 +864,16 @@ class ResponseObligationService:
         now: int,
     ) -> dict[str, Any]:
         classification = self._classification(connection, row["conversation_id"])
+        self._require_row_scope(
+            connection,
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            row=row,
+            action="obligation.respond",
+            target_harness_ids=(str(row["requester_harness_id"]),),
+            classification=classification,
+            now=now,
+        )
         authority_id, revision = self._require_current_actor(
             connection,
             actor,
@@ -625,6 +928,7 @@ class ResponseObligationService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         obligation_id: str,
         to_state: str,
         reason: str = "recipient_update",
@@ -641,6 +945,16 @@ class ResponseObligationService:
         with self.store.transaction() as connection:
             row = self._load_for_update(connection, obligation_id)
             classification = self._classification(connection, row["conversation_id"])
+            self._require_row_scope(
+                connection,
+                actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
+                row=row,
+                action="obligation.respond",
+                target_harness_ids=(str(row["requester_harness_id"]),),
+                classification=classification,
+                now=now,
+            )
             authority_id, revision = self._require_current_actor(
                 connection, actor, now=now, classification=classification
             )
@@ -699,6 +1013,7 @@ class ResponseObligationService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         obligation_id: str,
         reason_code: str = "requester_canceled",
         expected_revision: int | None = None,
@@ -709,6 +1024,16 @@ class ResponseObligationService:
         with self.store.transaction() as connection:
             row = self._load_for_update(connection, obligation_id)
             classification = self._classification(connection, row["conversation_id"])
+            self._require_row_scope(
+                connection,
+                actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
+                row=row,
+                action="obligation.respond",
+                target_harness_ids=(str(row["responsible_harness_id"]),),
+                classification=classification,
+                now=now,
+            )
             authority_id, revision = self._require_current_actor(
                 connection, actor, now=now, classification=classification
             )
@@ -752,6 +1077,7 @@ class ResponseObligationService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         limit: int = 100,
         authoritative_now: datetime | None = None,
     ) -> dict[str, Any]:
@@ -771,6 +1097,11 @@ class ResponseObligationService:
 
         if not 1 <= limit <= 1000:
             raise ValidationError("reconcile limit must be between 1 and 1000")
+        self._preflight_scope(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            action="obligation.respond",
+        )
         now = int((authoritative_now or datetime.now(UTC)).timestamp())
         committed: list[str] = []
         expired: list[str] = []
@@ -804,6 +1135,12 @@ class ResponseObligationService:
                 ),
             ).fetchall()
             for row in pending_commit:
+                request_event = self._load_request_event(connection, row)
+                if (
+                    self._authorization_context(request_event)["collaboration_scope_id"]
+                    != collaboration_scope_id
+                ):
+                    continue
                 delivery = connection.execute(
                     "SELECT current_fact FROM recipients WHERE event_id=? AND recipient_id=?",
                     (row["request_event_id"], row["responsible_harness_id"]),
@@ -814,6 +1151,17 @@ class ResponseObligationService:
                 ):
                     continue
                 classification = self._classification(connection, row["conversation_id"])
+                self._require_event_scope(
+                    connection,
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    event=request_event,
+                    action="obligation.respond",
+                    resource=f"conversation:{row['conversation_id']}",
+                    target_harness_ids=(),
+                    classification=classification,
+                    now=now,
+                )
                 _current_authority_id, revision = self._require_current_actor(
                     connection,
                     actor,
@@ -857,7 +1205,24 @@ class ResponseObligationService:
                 (actor.domain_id, authority_id, actor.harness_id, now, limit),
             ).fetchall()
             for row in overdue:
+                request_event = self._load_request_event(connection, row)
+                if (
+                    self._authorization_context(request_event)["collaboration_scope_id"]
+                    != collaboration_scope_id
+                ):
+                    continue
                 classification = self._classification(connection, row["conversation_id"])
+                self._require_event_scope(
+                    connection,
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    event=request_event,
+                    action="obligation.respond",
+                    resource=f"conversation:{row['conversation_id']}",
+                    target_harness_ids=(),
+                    classification=classification,
+                    now=now,
+                )
                 _current_authority_id, revision = self._require_current_actor(
                     connection,
                     actor,
@@ -899,6 +1264,7 @@ class ResponseObligationService:
                     {
                         "action": "response_obligation.reconciled",
                         "actor": actor.audit_view(),
+                        "collaboration_scope_id": collaboration_scope_id,
                         "recipient_committed": committed,
                         "expired": expired,
                         "clock": now,
@@ -935,7 +1301,14 @@ class ResponseObligationService:
             return "responsible", revision, classification
         raise AuthorizationError("response obligation is unavailable")
 
-    def get(self, *, actor: VerifiedActor, obligation_id: str) -> dict[str, Any]:
+    def get(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        obligation_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
         with self.store.transaction(immediate=False) as connection:
             row = connection.execute(
                 "SELECT * FROM response_obligations WHERE obligation_id=?",
@@ -944,6 +1317,16 @@ class ResponseObligationService:
             if row is None:
                 raise AuthorizationError("response obligation is unavailable")
             role, revision, classification = self._require_party(connection, actor, row)
+            collaboration_scope = self._require_row_scope(
+                connection,
+                actor=actor,
+                collaboration_scope_id=collaboration_scope_id,
+                row=row,
+                action="message.read",
+                target_harness_ids=(),
+                classification=classification,
+                now=now,
+            )
             self._decide(
                 connection,
                 actor=actor,
@@ -951,8 +1334,12 @@ class ResponseObligationService:
                 resource=f"conversation:{row['conversation_id']}",
                 revision=revision,
                 classification=classification,
-                context={"obligation_id": obligation_id, "exposure": "get"},
-                now=int(time.time()),
+                context={
+                    "authorization_context": collaboration_scope.authorization_context(),
+                    "obligation_id": obligation_id,
+                    "exposure": "get",
+                },
+                now=now,
             )
             transitions = connection.execute(
                 """SELECT revision,from_state,to_state,detail_json,response_event_id,created_at
@@ -979,6 +1366,7 @@ class ResponseObligationService:
         self,
         *,
         actor: VerifiedActor,
+        collaboration_scope_id: str,
         role: Literal["requester", "responsible", "any"] = "any",
         states: tuple[str, ...] = (),
         limit: int = 100,
@@ -988,11 +1376,17 @@ class ResponseObligationService:
         known_states = set(OBLIGATION_TRANSITIONS) | OBLIGATION_TERMINAL_STATES
         if any(state not in known_states for state in states):
             raise ValidationError("obligation list names an unknown state")
+        self._preflight_scope(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            action="message.read",
+        )
+        now = int(time.time())
         with self.store.transaction(immediate=False) as connection:
             authority_id, _revision = self._require_current_actor(
                 connection,
                 actor,
-                now=int(time.time()),
+                now=now,
                 classification=Classification.C0_PUBLIC,
             )
             clauses = ["domain_id=?"]
@@ -1014,22 +1408,45 @@ class ResponseObligationService:
             if states:
                 clauses.append(f"state IN ({','.join('?' for _ in states)})")
                 parameters.extend(states)
-            parameters.append(limit)
-            rows = connection.execute(
+            candidates = connection.execute(
                 f"""SELECT * FROM response_obligations WHERE {' AND '.join(clauses)}
-                    ORDER BY created_at,obligation_id LIMIT ?""",
+                    ORDER BY created_at,obligation_id""",
                 tuple(parameters),
             ).fetchall()
-            for conversation_id in dict.fromkeys(
-                str(row["conversation_id"]) for row in rows
-            ):
-                classification = self._classification(connection, conversation_id)
+            rows: list[Any] = []
+            conversations: dict[str, tuple[int, Classification]] = {}
+            for row in candidates:
+                request_event = self._load_request_event(connection, row)
+                if (
+                    self._authorization_context(request_event)["collaboration_scope_id"]
+                    != collaboration_scope_id
+                ):
+                    continue
+                classification = self._classification(connection, row["conversation_id"])
+                collaboration_scope = self._require_event_scope(
+                    connection,
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    event=request_event,
+                    action="message.read",
+                    resource=f"conversation:{row['conversation_id']}",
+                    target_harness_ids=(),
+                    classification=classification,
+                    now=now,
+                )
                 _current_authority_id, revision = self._require_current_actor(
                     connection,
                     actor,
-                    now=int(time.time()),
+                    now=now,
                     classification=classification,
                 )
+                conversations[str(row["conversation_id"])] = (revision, classification)
+                if collaboration_scope.policy_revision != revision:
+                    raise AuthorizationError("response obligation policy revision is stale")
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+            for conversation_id, (revision, classification) in conversations.items():
                 self._decide(
                     connection,
                     actor=actor,
@@ -1038,25 +1455,44 @@ class ResponseObligationService:
                     revision=revision,
                     classification=classification,
                     context={
+                        "collaboration_scope_id": collaboration_scope_id,
                         "exposure": "list",
                         "role": role,
                         "states": list(states),
                         "limit": limit,
                     },
-                    now=int(time.time()),
+                    now=now,
                 )
             return [_row_view(row) for row in rows]
 
-    def inbox(self, *, actor: VerifiedActor, now: int | None = None) -> dict[str, int]:
-        """Privacy-safe counters distinguishing why attention is needed.
-
-        Counters are derived, content-free, and never mutate state.  ``overdue``
-        intentionally overlaps ``action_required``/``awaiting_peer``: an overdue
-        item stays owned until it is answered, canceled, or expired.
-        """
+    def inbox(
+        self,
+        *,
+        actor: VerifiedActor,
+        collaboration_scope_id: str,
+        now: int | None = None,
+    ) -> dict[str, int]:
+        """Return content-free counters from exactly one current collaboration scope."""
 
         now = int(time.time()) if now is None else now
-        open_states = ("created", "recipient_committed", "acknowledged", "in_progress", "blocked")
+        self._preflight_scope(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+            action="message.read",
+        )
+        open_states = {
+            "created",
+            "recipient_committed",
+            "acknowledged",
+            "in_progress",
+            "blocked",
+        }
+        action_required = 0
+        awaiting_peer = 0
+        awaiting_human = 0
+        overdue = 0
+        failed = 0
+        unread_information = 0
         with self.store.transaction(immediate=False) as connection:
             authority_id, _revision = self._require_current_actor(
                 connection,
@@ -1064,14 +1500,14 @@ class ResponseObligationService:
                 now=now,
                 classification=Classification.C0_PUBLIC,
             )
-            obligation_conversations = connection.execute(
-                """SELECT DISTINCT conversation_id FROM response_obligations
+            candidates = connection.execute(
+                """SELECT * FROM response_obligations
                     WHERE domain_id=?
                       AND (
                           (requester_authority_id=? AND requester_harness_id=?)
                           OR (responsible_authority_id=? AND responsible_harness_id=?)
                       )
-                    ORDER BY conversation_id""",
+                    ORDER BY created_at,obligation_id""",
                 (
                     actor.domain_id,
                     authority_id,
@@ -1080,15 +1516,56 @@ class ResponseObligationService:
                     actor.harness_id,
                 ),
             ).fetchall()
-            for conversation_row in obligation_conversations:
-                conversation_id = str(conversation_row["conversation_id"])
-                classification = self._classification(connection, conversation_id)
+            conversations: dict[str, tuple[int, Classification]] = {}
+            for row in candidates:
+                request_event = self._load_request_event(connection, row)
+                if (
+                    self._authorization_context(request_event)["collaboration_scope_id"]
+                    != collaboration_scope_id
+                ):
+                    continue
+                classification = self._classification(connection, row["conversation_id"])
+                self._require_event_scope(
+                    connection,
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    event=request_event,
+                    action="message.read",
+                    resource=f"conversation:{row['conversation_id']}",
+                    target_harness_ids=(),
+                    classification=classification,
+                    now=now,
+                )
                 _current_authority_id, revision = self._require_current_actor(
                     connection,
                     actor,
                     now=now,
                     classification=classification,
                 )
+                conversations[str(row["conversation_id"])] = (revision, classification)
+                state = str(row["state"])
+                requester = (
+                    row["requester_authority_id"] == authority_id
+                    and row["requester_harness_id"] == actor.harness_id
+                )
+                responsible = (
+                    row["responsible_authority_id"] == authority_id
+                    and row["responsible_harness_id"] == actor.harness_id
+                )
+                if bool(row["response_required"]) and state in open_states:
+                    action_required += int(responsible)
+                    awaiting_peer += int(requester)
+                if state == "pending_human":
+                    awaiting_human += 1
+                if (
+                    row["deadline_at"] is not None
+                    and int(row["deadline_at"]) <= now
+                    and state in open_states | {"pending_human"}
+                ):
+                    overdue += 1
+                if requester and state == "failed":
+                    failed += 1
+            for conversation_id, (revision, classification) in conversations.items():
                 self._decide(
                     connection,
                     actor=actor,
@@ -1096,16 +1573,14 @@ class ResponseObligationService:
                     resource=f"conversation:{conversation_id}",
                     revision=revision,
                     classification=classification,
-                    context={"exposure": "inbox"},
+                    context={
+                        "collaboration_scope_id": collaboration_scope_id,
+                        "exposure": "inbox",
+                    },
                     now=now,
                 )
-            def count(sql: str, parameters: tuple[Any, ...]) -> int:
-                row = connection.execute(sql, parameters).fetchone()
-                return int(row["total"]) if row is not None else 0
-
-            open_marks = ",".join("?" for _ in open_states)
-            unread_information = count(
-                f"""SELECT COUNT(*) AS total FROM recipients r
+            unread_candidates = connection.execute(
+                f"""SELECT r.event_id FROM recipients r
                      JOIN events e ON e.event_id=r.event_id
                     WHERE r.recipient_id=? AND e.domain_id=?
                       AND r.current_fact IN ({','.join('?' for _ in _UNSEEN_DELIVERY_FACTS)})
@@ -1113,63 +1588,35 @@ class ResponseObligationService:
                           SELECT 1 FROM response_obligations o
                            WHERE o.request_event_id=r.event_id
                              AND o.responsible_harness_id=r.recipient_id
-                      )""",
-                (actor.harness_id, actor.domain_id, *sorted(_UNSEEN_DELIVERY_FACTS)),
-            )
-            action_required = count(
-                f"""SELECT COUNT(*) AS total FROM response_obligations
-                    WHERE domain_id=? AND responsible_authority_id=?
-                      AND responsible_harness_id=? AND response_required=1
-                      AND state IN ({open_marks})""",
-                (actor.domain_id, authority_id, actor.harness_id, *open_states),
-            )
-            awaiting_peer = count(
-                f"""SELECT COUNT(*) AS total FROM response_obligations
-                    WHERE domain_id=? AND requester_authority_id=? AND requester_harness_id=?
-                      AND response_required=1
-                      AND state IN ({open_marks})""",
-                (actor.domain_id, authority_id, actor.harness_id, *open_states),
-            )
-            awaiting_human = count(
-                """SELECT COUNT(*) AS total FROM response_obligations
-                   WHERE domain_id=? AND state='pending_human'
-                     AND (
-                         (requester_authority_id=? AND requester_harness_id=?)
-                         OR (responsible_authority_id=? AND responsible_harness_id=?)
-                     )""",
-                (
-                    actor.domain_id,
-                    authority_id,
-                    actor.harness_id,
-                    authority_id,
-                    actor.harness_id,
-                ),
-            )
-            overdue = count(
-                f"""SELECT COUNT(*) AS total FROM response_obligations
-                    WHERE domain_id=?
-                      AND (
-                          (requester_authority_id=? AND requester_harness_id=?)
-                          OR (responsible_authority_id=? AND responsible_harness_id=?)
                       )
-                      AND deadline_at IS NOT NULL AND deadline_at<=?
-                      AND state IN ({open_marks},'pending_human')""",
-                (
-                    actor.domain_id,
-                    authority_id,
-                    actor.harness_id,
-                    authority_id,
-                    actor.harness_id,
-                    now,
-                    *open_states,
-                ),
-            )
-            failed = count(
-                """SELECT COUNT(*) AS total FROM response_obligations
-                   WHERE domain_id=? AND requester_authority_id=? AND requester_harness_id=?
-                     AND state='failed'""",
-                (actor.domain_id, authority_id, actor.harness_id),
-            )
+                    ORDER BY r.event_id""",
+                (actor.harness_id, actor.domain_id, *sorted(_UNSEEN_DELIVERY_FACTS)),
+            ).fetchall()
+            for candidate in unread_candidates:
+                event = self._load_event(connection, str(candidate["event_id"]))
+                if (
+                    self._authorization_context(event)["collaboration_scope_id"]
+                    != collaboration_scope_id
+                ):
+                    continue
+                action = "room.read" if event.room_id is not None else "message.read"
+                resource = (
+                    f"room:{event.room_id}"
+                    if event.room_id is not None
+                    else f"conversation:{event.conversation_id or 'direct'}"
+                )
+                self._require_event_scope(
+                    connection,
+                    actor=actor,
+                    collaboration_scope_id=collaboration_scope_id,
+                    event=event,
+                    action=action,
+                    resource=resource,
+                    target_harness_ids=(),
+                    classification=event.classification,
+                    now=now,
+                )
+                unread_information += 1
         return {
             "unread_information": unread_information,
             "action_required": action_required,
@@ -1181,9 +1628,11 @@ class ResponseObligationService:
 
 
 __all__ = [
+    "BACKGROUND_WAKE_STATES",
     "OBLIGATION_TERMINAL_STATES",
     "OBLIGATION_TRANSITIONS",
     "RECIPIENT_ASSERTABLE_STATES",
+    "MailboxResponseObligation",
     "ResponseObligationService",
     "ResponseObligationSpec",
     "obligation_id_for",

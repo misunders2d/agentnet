@@ -11,6 +11,7 @@ from agentnet.console.http import create_console_app
 from agentnet.console.mutations import ConsoleMutationService
 from agentnet.console.read_service import ConsoleReadService
 from agentnet.console.session import ConsoleSessionService
+from agentnet.identity.invitation_links import InvitationLinkService
 
 
 class _AllowConsoleReads:
@@ -62,15 +63,21 @@ def _client(store, identity_factory):
     issued = sessions.issue_for_verified_actor(actor=actor)
     reader = ConsoleReadService(store=store, require=authority.require)
     approvals = _ApprovalRecorder()
+    invitation_links = InvitationLinkService(
+        store,
+        public_base_url="https://console.example/join",
+    )
     mutations = ConsoleMutationService(
         store=store,
         approval_client=approvals,
+        invitation_links=invitation_links,
         require=authority.require,
     )
     app = create_console_app(
         sessions=sessions,
         read_service=reader,
         mutation_service=mutations,
+        invitation_links=invitation_links,
         public_origin="https://console.example",
     )
     client = TestClient(app, base_url="https://console.example")
@@ -219,7 +226,9 @@ def test_static_assets_are_local_and_session_is_not_exposed_to_javascript(store,
     assert "document.cookie" not in js.text
     assert "innerHTML" not in js.text
     assert issued.session_token not in client.get("/").text
-    assert hashlib.sha256(css.content).hexdigest() in client.get("/").text
+    assert hashlib.sha256(css.content + b"\0" + js.content).hexdigest() in client.get(
+        "/"
+    ).text
 
 
 def test_initial_enrollment_submit_only_renders_an_exact_review(

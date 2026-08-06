@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   accessSync,
   chmodSync,
@@ -31,6 +32,7 @@ const unrelated = path.join(temporary, "unrelated");
 const state = path.join(temporary, "state");
 const home = path.join(temporary, "home");
 const npmCache = path.join(temporary, "npm-cache");
+const upgradeState = path.join(state, "packaged-v0145-preserved-state.json");
 const timeout = 10 * 60 * 1000;
 const protectedServiceRoots = ["/home", "/root", "/run/user", "/tmp", "/var/tmp"];
 
@@ -177,9 +179,26 @@ const expectedBlockedSetupBlocker = (environment) => {
   return "service_executable_inaccessible";
 };
 
-const requirePackedLocalCommunication = (packageRoot, launcher, environment) => {
-  const runtime = path.join(temporary, "local-communication-runtime");
-  const workspace = path.join(temporary, "local-communication-workspace");
+const expectedV0145Journey = {
+  schema: "agentnet.v0145-user-journey.v1",
+  clean_install: true,
+  upgrade_preserved_state: true,
+  invitation_redeemed: true,
+  explicit_restart_observed: true,
+  tools_available: ["omp", "pi", "claude", "codex", "antigravity"],
+  message_state: "recipient_committed",
+  response_obligation_state: "completed",
+  file_state: "recipient_custody_recorded",
+  file_digest_match: true,
+  offline_queue_owner_exact: true,
+  sibling_reactions: 0,
+  foreground_turns_injected: 0,
+  residual_processes: 0,
+};
+
+const requirePackagedV0145UserJourney = (packageRoot, launcher, environment) => {
+  const runtime = path.join(temporary, "v0145-user-journey-runtime");
+  const workspace = path.join(temporary, "v0145-user-journey-workspace");
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   mkdirSync(workspace, { recursive: true, mode: 0o700 });
   const lifecycleEnvironment = {
@@ -196,20 +215,32 @@ const requirePackedLocalCommunication = (packageRoot, launcher, environment) => 
   }
   lifecycleEnvironment.NO_PROXY = "127.0.0.1,localhost";
   lifecycleEnvironment.no_proxy = "127.0.0.1,localhost";
-  run(
+  const completed = run(
     resolveCommand("uv", lifecycleEnvironment.PATH ?? "") ?? "uv",
     [
       "run", "--project", packageRoot, "--frozen", "--no-default-groups",
       "--python", "3.13.13", "python", "-B", "-I",
-      path.join(packageRoot, "scripts", "ci", "packaged_local_communication_e2e.py"),
+      path.join(packageRoot, "scripts", "ci", "packaged_v0145_user_journey.py"),
       "run", "--package-root", packageRoot, "--launcher", launcher,
-      "--workspace", workspace,
+      "--workspace", workspace, "--upgrade-state", upgradeState,
     ],
-    { cwd: unrelated, env: lifecycleEnvironment },
+    { cwd: unrelated, env: lifecycleEnvironment, capture: true },
   );
-  if (readdirSync(workspace).length !== 0) {
-    throw new Error("packaged local communication gate left workspace residue");
+  let report;
+  try {
+    report = JSON.parse(completed.stdout);
+  } catch {
+    process.stderr.write(completed.stdout ?? "");
+    process.stderr.write(completed.stderr ?? "");
+    throw new Error("packaged v0.1.45 journey did not return JSON");
   }
+  if (JSON.stringify(report) !== JSON.stringify(expectedV0145Journey)) {
+    throw new Error("packaged v0.1.45 journey returned an invalid report");
+  }
+  if (readdirSync(workspace).length !== 0) {
+    throw new Error("packaged v0.1.45 journey left workspace residue");
+  }
+  process.stdout.write(completed.stdout);
 };
 
 const requireBlockedSetup = (launcher, request, options) => {
@@ -343,14 +374,21 @@ try {
       throw new Error("installed verification mutated package tree contents");
     }
     run(launcher, ["server-agent", "setup", "--help"], { cwd: unrelated, env: environment });
+    if (generation === 1) {
+      writePrivate(upgradeState, {
+        schema: "agentnet.v0145-packed-upgrade-state.v1",
+        state_digest: createHash("sha256").update("packaged-v0145-preserved-state").digest("hex"),
+        installed_package_sha256: packageTreeAfterVerify,
+      });
+    }
 
     if (generation === 2) {
-      const packageTreeBeforeCommunication = stablePackageTreeSha256(packageRoot);
-      requirePackedLocalCommunication(packageRoot, launcher, environment);
+      const packageTreeBeforeJourney = stablePackageTreeSha256(packageRoot);
+      requirePackagedV0145UserJourney(packageRoot, launcher, environment);
       requireNoVerificationResidue(packageRoot);
-      const packageTreeAfterCommunication = stablePackageTreeSha256(packageRoot);
-      if (packageTreeAfterCommunication !== packageTreeBeforeCommunication) {
-        throw new Error("packaged local communication gate mutated package tree contents");
+      const packageTreeAfterJourney = stablePackageTreeSha256(packageRoot);
+      if (packageTreeAfterJourney !== packageTreeBeforeJourney) {
+        throw new Error("packaged v0.1.45 journey mutated package tree contents");
       }
     }
 

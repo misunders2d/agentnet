@@ -34,6 +34,9 @@ def test_verify_targets_packaged_tests_with_package_cwd(
                 "arguments": arguments,
                 "cwd": cwd,
                 "agentnet_package_root": env["AGENTNET_PACKAGE_ROOT"],
+                "agentnet_verification_install_root": env[
+                    "AGENTNET_VERIFICATION_INSTALL_ROOT"
+                ],
                 "hypothesis_storage": env["HYPOTHESIS_STORAGE_DIRECTORY"],
                 "pytest_addopts": env["PYTEST_ADDOPTS"],
                 "pytest_plugins_present": "PYTEST_PLUGINS" in env,
@@ -51,6 +54,7 @@ def test_verify_targets_packaged_tests_with_package_cwd(
     assert result == 7
     verification_root = Path(str(observed["cwd"]))
     assert Path(str(observed["agentnet_package_root"])) == verification_root
+    assert Path(str(observed["agentnet_verification_install_root"])) == tmp_path
     assert observed["arguments"] == [
         cli.sys.executable,
         "-m",

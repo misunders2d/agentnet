@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,13 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeCompleteRequest,
     CommunicationScopeStatusRequest,
 )
-from agentnet.authorization.communication_scope_service import CommunicationScopeService
+from agentnet.authorization.communication_scope_service import (
+    COLLABORATION_SCOPE_ISSUE_ACTION,
+    CollaborationScopeProposal,
+    CommunicationScopeService,
+)
+from agentnet.authorization.evidence import IssuanceAuthority
+from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
 from agentnet.bindings.tools import CanonicalToolDispatcher
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
@@ -177,10 +183,18 @@ def _scope_resolver(owner: VerifiedActor, server: VerifiedActor):
     return resolve
 
 
-def _mailbox_item(core: CommunicationCore, actor: VerifiedActor, event_id: str) -> dict[str, Any]:
+def _mailbox_item(
+    core: CommunicationCore,
+    actor: VerifiedActor,
+    collaboration_scope_id: str,
+    event_id: str,
+) -> dict[str, Any]:
     return next(
         item
-        for item in core.mailbox(actor=actor)
+        for item in core.mailbox(
+            actor=actor,
+            collaboration_scope_id=collaboration_scope_id,
+        )
         if item["event"]["event_id"] == event_id
     )
 
@@ -391,6 +405,74 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
     )
     core = CommunicationCore(config, store)
+    collaboration_scope_id = "scope:persistent-communication"
+    collaboration_scope_domain = store.fetch_one(
+        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+        (domain_id,),
+    )
+    assert collaboration_scope_domain is not None
+    collaboration_scope_proposal = CollaborationScopeProposal(
+        scope_id=collaboration_scope_id,
+        scope_kind="direct",
+        member_harness_ids=tuple(sorted((owner.harness_id, server.harness_id))),
+        allowed_actions=(
+            "message.acknowledge",
+            "message.read",
+            "message.send",
+            "obligation.create",
+            "obligation.respond",
+            "room.create",
+            "room.member.add",
+            "room.read",
+            "room.send",
+            "task.propose",
+        ),
+        allowed_resource_prefixes=(
+            "conversation:conversation:persistent-communication",
+            "conversation:direct",
+            "room:",
+            "task:",
+        ),
+        allowed_classifications=(Classification.C1_INTERNAL,),
+        canonical_references=(),
+        policy_revision=int(collaboration_scope_domain["policy_revision"]),
+        domain_revocation_epoch=int(collaboration_scope_domain["revocation_epoch"]),
+        expires_at=int(time.time()) + 3600,
+    )
+    collaboration_scope_request = core.collaboration_scopes.issuance_request(
+        actor=owner,
+        proposal=collaboration_scope_proposal,
+    )
+    LocalConformancePolicyEngine(store).bootstrap_entitlement_for_local_conformance(
+        HumanEntitlement(
+            domain_id=owner.domain_id,
+            principal_id=owner.principal_id,
+            action=COLLABORATION_SCOPE_ISSUE_ACTION,
+            resource_pattern=f"scope:{collaboration_scope_id}",
+            revision=int(collaboration_scope_domain["policy_revision"]),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    collaboration_scope_decision = core._require(
+        actor=owner,
+        action=COLLABORATION_SCOPE_ISSUE_ACTION,
+        resource=f"scope:{collaboration_scope_id}",
+        context=collaboration_scope_request,
+    )
+    collaboration_scope = core.collaboration_scopes.issue(
+        actor=owner,
+        proposal=collaboration_scope_proposal,
+        authority=IssuanceAuthority(
+            actor=owner,
+            policy_decision_id=collaboration_scope_decision.decision_id,
+        ),
+    )
+    assert collaboration_scope.scope_id == collaboration_scope_id
+    assert collaboration_scope.state == "active"
+    assert collaboration_scope.revision == 1
+    assert collaboration_scope.member_harness_ids == tuple(
+        sorted((owner.harness_id, server.harness_id))
+    )
 
     disabled_artifact = ReleasedArtifactBinding(
         artifact_id="00000000-0000-4000-8000-000000000001",
@@ -405,6 +487,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     with pytest.raises(AuthorizationError, match="communication_scope_request_mismatch"):
         core.send_message(
             actor=owner,
+            collaboration_scope_id=collaboration_scope.scope_id,
             recipients=(server.harness_id,),
             payload={"text": "artifact authority must stay disabled"},
             idempotency_key="persistent-artifact-denied-0001",
@@ -419,22 +502,25 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         with pytest.raises(AuthorizationError):
             core.send_message(
                 actor=actor,
+                collaboration_scope_id=collaboration_scope.scope_id,
                 recipients=(server.harness_id,),
                 payload={"text": "must not inherit communication authority"},
                 idempotency_key=key,
             )
 
     for recipient, label in ((sibling, "sibling"), (outsider, "outsider")):
-        with pytest.raises(AuthorizationError, match="communication_scope_request_mismatch"):
+        with pytest.raises(AuthorizationError):
             core.send_message(
                 actor=owner,
+                collaboration_scope_id=collaboration_scope.scope_id,
                 recipients=(recipient.harness_id,),
                 payload={"text": "approved scope must not reach an unbound same-domain harness"},
                 idempotency_key=f"persistent-{label}-recipient-denied-0001",
             )
-        with pytest.raises(AuthorizationError, match="communication_scope_request_mismatch"):
+        with pytest.raises(AuthorizationError):
             core.create_conversation(
                 actor=owner,
+                collaboration_scope_id=collaboration_scope.scope_id,
                 conversation_id=f"conversation:persistent-{label}-denied",
                 member_harness_ids=(recipient.harness_id,),
                 classification=Classification.C0_PUBLIC,
@@ -442,6 +528,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
 
     owner_to_server = core.send_message(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(server.harness_id,),
         payload={"text": "recover this after the server was offline"},
         idempotency_key="persistent-owner-server-0001",
@@ -449,14 +536,24 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     assert owner_to_server["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
     assert owner_to_server["fact"] != DeliveryFact.ACCEPTED_DURABLE.value
     assert set(owner_to_server).isdisjoint({"processing", "effect", "completed"})
-    recovered = _mailbox_item(core, server, owner_to_server["event_id"])
+    recovered = _mailbox_item(
+        core,
+        server,
+        collaboration_scope.scope_id,
+        owner_to_server["event_id"],
+    )
     assert recovered["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
     assert recovered["payload_available"] is True
-    assert recovered["payload"] == {"text": "recover this after the server was offline"}
+    assert recovered["payload"]["text"] == "recover this after the server was offline"
+    assert (
+        recovered["payload"]["authorization_context"]["collaboration_scope_id"]
+        == collaboration_scope.scope_id
+    )
     assert recovered["event"]["actor"]["harness_id"] == owner.harness_id
     assert recovered["event"]["actor"]["principal_id"] == principal_id
     server_ack = core.acknowledge_mailbox(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         event_id=owner_to_server["event_id"],
         envelope_digest=owner_to_server["envelope_digest"],
     )
@@ -465,15 +562,22 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
 
     server_to_owner = core.send_message(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(owner.harness_id,),
         payload={"text": "server reply recovered by owner"},
         idempotency_key="persistent-server-owner-0001",
     )
-    owner_recovered = _mailbox_item(core, owner, server_to_owner["event_id"])
+    owner_recovered = _mailbox_item(
+        core,
+        owner,
+        collaboration_scope.scope_id,
+        server_to_owner["event_id"],
+    )
     assert owner_recovered["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
     assert owner_recovered["event"]["actor"]["harness_id"] == server.harness_id
     owner_ack = core.acknowledge_mailbox(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         event_id=server_to_owner["event_id"],
         envelope_digest=server_to_owner["envelope_digest"],
     )
@@ -481,22 +585,42 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     assert set(owner_ack).isdisjoint({"processing", "effect", "completed"})
     owner_tools = CanonicalToolDispatcher(core, lambda: owner)
     server_tools = CanonicalToolDispatcher(core, lambda: server)
-    room = owner_tools.call("agentnet.room.create", {})
+    room = owner_tools.call(
+        "agentnet.room.create",
+        {"collaboration_scope_id": collaboration_scope.scope_id},
+    )
     member = owner_tools.call(
         "agentnet.room.member.add",
         {
+            "collaboration_scope_id": collaboration_scope.scope_id,
             "room_id": room["room_id"],
             "harness_id": server.harness_id,
             "role": "member",
         },
     )
     assert member["control_sequence"] == 2
-    server_room = server_tools.call("agentnet.room.get", {"room_id": room["room_id"]})
+    server_room = server_tools.call(
+        "agentnet.room.get",
+        {
+            "collaboration_scope_id": collaboration_scope.scope_id,
+            "room_id": room["room_id"],
+        },
+    )
+    for scope_bound_result in (room, member, server_room):
+        assert (
+            scope_bound_result["authorization_context"]["collaboration_scope_id"]
+            == collaboration_scope.scope_id
+        )
+        assert (
+            scope_bound_result["authorization_context"]["collaboration_scope_revision"]
+            == collaboration_scope.revision
+        )
     assert server_room["member_count"] == 2
     assert server_room["self_membership"]["role"] == "member"
     room_message = owner_tools.call(
         "agentnet.room.send",
         {
+            "collaboration_scope_id": collaboration_scope.scope_id,
             "room_id": room["room_id"],
             "recipients": [owner.harness_id, server.harness_id],
             "payload": {"text": "persistent room message"},
@@ -505,20 +629,31 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         },
     )
     assert room_message["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
-    room_delivery = _mailbox_item(core, server, room_message["event_id"])
+    room_delivery = _mailbox_item(
+        core,
+        server,
+        collaboration_scope.scope_id,
+        room_message["event_id"],
+    )
     assert room_delivery["event"]["room_id"] == room["room_id"]
-    assert room_delivery["payload"] == {"text": "persistent room message"}
+    assert room_delivery["payload"]["text"] == "persistent room message"
+    assert (
+        room_delivery["payload"]["authorization_context"]["collaboration_scope_id"]
+        == collaboration_scope.scope_id
+    )
 
     conversation_id = "conversation:persistent-communication"
     thread_id = "thread:persistent-communication"
     created = core.create_conversation(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         conversation_id=conversation_id,
         member_harness_ids=(server.harness_id,),
     )
     assert created["duplicate"] is False
     task_request = core.post_conversation_action(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(server.harness_id,),
         conversation_id=conversation_id,
         thread_id=thread_id,
@@ -532,6 +667,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     assert task_request["fact"] == "pending_human"
     requested = core.post_conversation_action(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(server.harness_id,),
         conversation_id=conversation_id,
         thread_id=thread_id,
@@ -546,8 +682,16 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     obligation_id = requested["response_obligation"]["obligation_id"]
     assert requested["response_obligation"]["state"] == "created"
 
-    owner_view = core.response_obligation(actor=owner, obligation_id=obligation_id)
-    server_view = core.response_obligation(actor=server, obligation_id=obligation_id)
+    owner_view = core.response_obligation(
+        actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
+        obligation_id=obligation_id,
+    )
+    server_view = core.response_obligation(
+        actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
+        obligation_id=obligation_id,
+    )
     assert owner_view["state"] == server_view["state"] == "created"
     assert owner_view["viewer_role"] == "requester"
     assert server_view["viewer_role"] == "responsible"
@@ -555,6 +699,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
 
     server_thread = core.conversation_thread(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         conversation_id=conversation_id,
         thread_id=thread_id,
     )
@@ -562,21 +707,35 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         entry for entry in server_thread if entry["event"]["event_id"] == requested["event_id"]
     )
     assert request_entry["payload"]["kind"] == "post"
-    obligation_delivery = _mailbox_item(core, server, requested["event_id"])
+    obligation_delivery = _mailbox_item(
+        core,
+        server,
+        collaboration_scope.scope_id,
+        requested["event_id"],
+    )
     assert obligation_delivery["fact"] == DeliveryFact.ACCEPTED_LOCAL.value
     obligation_ack = core.acknowledge_mailbox(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         event_id=requested["event_id"],
         envelope_digest=requested["envelope_digest"],
     )
     assert obligation_ack["fact"] == DeliveryFact.RECIPIENT_COMMITTED.value
 
-    reconciled = core.response_obligation_reconcile(actor=server)
+    reconciled = core.response_obligation_reconcile(
+        actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
+    )
     assert reconciled["recipient_committed"] == [obligation_id]
-    reconciled_view = core.response_obligation(actor=server, obligation_id=obligation_id)
+    reconciled_view = core.response_obligation(
+        actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
+        obligation_id=obligation_id,
+    )
     assert reconciled_view["state"] == "recipient_committed"
     progressed = core.response_obligation_transition(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         obligation_id=obligation_id,
         to_state="acknowledged",
         expected_revision=reconciled_view["revision"],
@@ -585,6 +744,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
 
     replied = core.post_conversation_action(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(owner.harness_id,),
         conversation_id=conversation_id,
         thread_id=thread_id,
@@ -598,6 +758,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     assert replied["action_kind"] == "reply"
     owner_thread = core.conversation_thread(
         actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
         conversation_id=conversation_id,
         thread_id=thread_id,
     )
@@ -609,6 +770,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
 
     terminal = core.post_conversation_action(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(owner.harness_id,),
         conversation_id=conversation_id,
         thread_id=thread_id,
@@ -623,7 +785,11 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         idempotency_key="persistent-obligation-response-0001",
     )
     assert terminal["response_obligation"]["state"] == "completed"
-    final_view = core.response_obligation(actor=owner, obligation_id=obligation_id)
+    final_view = core.response_obligation(
+        actor=owner,
+        collaboration_scope_id=collaboration_scope.scope_id,
+        obligation_id=obligation_id,
+    )
     assert final_view["state"] == "completed"
     assert final_view["response_event_id"] == terminal["event_id"]
 
@@ -641,13 +807,21 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
     with pytest.raises(AuthorizationError):
         core.send_message(
             actor=owner,
+            collaboration_scope_id=collaboration_scope.scope_id,
             recipients=(server.harness_id,),
             payload={"text": "revoked owner send must fail immediately"},
             idempotency_key="persistent-owner-revoked-0001",
         )
-    assert isinstance(core.mailbox(actor=owner), list)
+    assert isinstance(
+        core.mailbox(
+            actor=owner,
+            collaboration_scope_id=collaboration_scope.scope_id,
+        ),
+        list,
+    )
     unaffected_server_send = core.send_message(
         actor=server,
+        collaboration_scope_id=collaboration_scope.scope_id,
         recipients=(owner.harness_id,),
         payload={"text": "server send remains independently authorized"},
         idempotency_key="persistent-server-unaffected-0001",
@@ -665,6 +839,7 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         with pytest.raises(AuthorizationError):
             core.send_message(
                 actor=actor,
+                collaboration_scope_id=collaboration_scope.scope_id,
                 recipients=(recipient.harness_id,),
                 payload={"text": "stale communication scope must not survive a domain epoch bump"},
                 idempotency_key=key,
