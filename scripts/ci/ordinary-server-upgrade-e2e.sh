@@ -428,6 +428,21 @@ sudo -u agentnet env \
   "$PREFIX_0144/bin/node" "$(launcher "$PREFIX_0144")" --version >/dev/null
 sudo test -x "$PYTHON_0144"
 sudo test -x "$AGENTNET_0144"
+# The later enrolled-state apply starts the C0 responder under its own service
+# account. Warm that exact package runtime now so network/bootstrap latency
+# cannot consume the bounded systemd reconciliation window and masquerade as a
+# product start failure.
+C0_RUNTIME_0144="/var/lib/agentnet-c0/npm-runtime"
+sudo -u agentnet-c0 env \
+  HOME=/var/lib/agentnet-c0 \
+  XDG_STATE_HOME=/var/lib/agentnet-c0/.local/state \
+  XDG_CACHE_HOME=/var/lib/agentnet-c0/.cache \
+  PATH="$PREFIX_0144/bin:/usr/bin:/bin" \
+  AGENTNET_NPM_RUNTIME_DIR="$C0_RUNTIME_0144" \
+  AGENTNET_UV="$PREFIX_0144/bin/uv" \
+  NO_PROXY="$NO_PROXY_VALUE" no_proxy="$NO_PROXY_VALUE" \
+  "$PREFIX_0144/bin/node" "$(launcher "$PREFIX_0144")" --version >/dev/null
+sudo test -x "$C0_RUNTIME_0144/bin/agentnet"
 cat >"$WORK/seed-released-state.py" <<'PY'
 from __future__ import annotations
 
