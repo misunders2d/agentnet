@@ -672,7 +672,7 @@ sudo grep -Fxq 'OnUnitInactiveSec=1h' /etc/systemd/system/agentnet-credential-re
 assert_credential_renewal_recurs
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 
-# Managed listeners now belong only to the corrected package runtime.
+# Managed listeners now belong only to the corrected package runtime and unit cgroup.
 NEW_CORE_PID="$(sudo systemctl show agentnet-core.service --property=MainPID --value)"
 NEW_APPROVAL_PID="$(sudo systemctl show agentnet-approval.service --property=MainPID --value)"
 [[ "$NEW_CORE_PID" =~ ^[1-9][0-9]*$ && "$NEW_CORE_PID" != "$OLD_CORE_PID" ]]
@@ -681,8 +681,14 @@ NEW_APPROVAL_PID="$(sudo systemctl show agentnet-approval.service --property=Mai
 ! sudo test -e "/proc/$OLD_APPROVAL_PID"
 [[ "$(sudo ss -H -ltnp 'sport = :8080' | wc -l)" == "1" ]]
 [[ "$(sudo ss -H -ltnp 'sport = :8090' | wc -l)" == "1" ]]
-sudo ss -H -ltnp 'sport = :8080' | grep -Fq "pid=$NEW_CORE_PID"
-sudo ss -H -ltnp 'sport = :8090' | grep -Fq "pid=$NEW_APPROVAL_PID"
+CORE_SOCKET="$(sudo ss -H -ltnp 'sport = :8080')"
+APPROVAL_SOCKET="$(sudo ss -H -ltnp 'sport = :8090')"
+[[ "$CORE_SOCKET" =~ pid=([1-9][0-9]*) ]]
+CORE_LISTENER_PID="${BASH_REMATCH[1]}"
+[[ "$APPROVAL_SOCKET" =~ pid=([1-9][0-9]*) ]]
+APPROVAL_LISTENER_PID="${BASH_REMATCH[1]}"
+sudo grep -Fq '/system.slice/agentnet-core.service' "/proc/$CORE_LISTENER_PID/cgroup"
+sudo grep -Fq '/system.slice/agentnet-approval.service' "/proc/$APPROVAL_LISTENER_PID/cgroup"
 sudo sh -c 'tr "\0" "\n" <"/proc/$1/cmdline"' sh "$NEW_CORE_PID" | grep -Fq "$PREFIX_0145"
 sudo sh -c 'tr "\0" "\n" <"/proc/$1/cmdline"' sh "$NEW_APPROVAL_PID" | grep -Fq "$PREFIX_0145"
 ! sudo sh -c 'tr "\0" "\n" <"/proc/$1/environ"' sh "$NEW_CORE_PID" | grep -Fq "$PREFIX_0144"

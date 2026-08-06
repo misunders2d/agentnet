@@ -348,7 +348,7 @@ published and historical release evidence:
   tests report **252 passed**;
   the focused timer and exact-upgrade lane reports **10 passed**;
   the focused release lane reports **458 passed and 5 expected dedicated-
-  PostgreSQL skips**; and the releasable source corpus reports **2105 passed
+  PostgreSQL skips**; and the releasable source corpus reports **2106 passed
   and 21 expected platform/dedicated-PostgreSQL skips**. The packaged Ubuntu
   lane, recursive package/release-manifest verification, staging, publication,
   and higher-tier evidence remain pending. Affected IDs are
