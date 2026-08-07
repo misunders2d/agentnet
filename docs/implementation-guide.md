@@ -372,6 +372,9 @@ host trust visible to CPython `ssl.create_default_context()` with certificate an
 hostname verification; ambient `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE`
 are unsupported, fail closed before setup, and are removed from all four process-spawning service units; the fifth unit is the timer that invokes the hardened renewal service. Before owner enrollment, honest status is
 `waiting_owner_oidc_or_passkey`.
+Core keeps public authentication denials generic and records each fixed,
+content-free proof rejection reason at most once per process for operator
+diagnosis; request bodies and identity fields never enter that warning.
 
 Owner registration, workforce OIDC, WebAuthn UV, and exact server-harness
 enrollment remain explicit human ceremonies. Server-local manager stages remote
