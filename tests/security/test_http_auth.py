@@ -48,8 +48,13 @@ def test_http_auth_logs_fixed_reason_without_identity_or_body(caplog: pytest.Log
 
     client = TestClient(Starlette(routes=[Route("/protected", protected, methods=["POST"])]))
     with caplog.at_level(logging.WARNING, logger="agentnet.http_auth"):
-        with pytest.raises(AuthenticationError, match="request proof target mismatch"):
-            client.post("/protected", content=b"private-request-body", headers=PROOF_HEADERS)
+        for _ in range(2):
+            with pytest.raises(AuthenticationError, match="request proof target mismatch"):
+                client.post(
+                    "/protected",
+                    content=b"private-request-body",
+                    headers=PROOF_HEADERS,
+                )
 
     messages = [record.getMessage() for record in caplog.records]
     assert messages == [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from threading import Lock
 
 from starlette.requests import Request
 
@@ -13,6 +14,17 @@ from agentnet.security.dpop import proof_from_headers
 
 
 LOGGER = logging.getLogger(__name__)
+_AUTH_FAILURE_LOG_LOCK = Lock()
+_LOGGED_AUTH_FAILURE_REASONS: set[str] = set()
+
+
+def _log_auth_failure_once(exc: AuthenticationError) -> None:
+    reason = str(exc)
+    with _AUTH_FAILURE_LOG_LOCK:
+        if reason in _LOGGED_AUTH_FAILURE_REASONS:
+            return
+        _LOGGED_AUTH_FAILURE_REASONS.add(reason)
+    LOGGER.warning("AgentNet request authentication denied; reason=%s", reason)
 
 
 async def authenticate_proof_request(
@@ -45,7 +57,7 @@ async def authenticate_proof_request(
             caller_claims=None,
         )
     except AuthenticationError as exc:
-        LOGGER.warning("AgentNet request authentication denied; reason=%s", exc)
+        _log_auth_failure_once(exc)
         raise
     request.scope["agentnet.trusted_transport"] = context
     return body, context
