@@ -175,6 +175,76 @@ def load_supersession_journal(
     return journal
 
 
+def verify_recovery_provenance(
+    store: _AuditStore,
+    *,
+    terminal_raw: bytes,
+    journal_raw: bytes | None,
+    domain_id: str,
+    principal_id: str,
+    harness_id: str,
+    expected_previous_credential_id: str,
+    expected_previous_credential_epoch: int,
+    c0_terminal_credential_epoch: int,
+    c0_terminal_sha256: str,
+    prior_journal_sha256: str | None,
+) -> dict[str, object]:
+    """Fail closed unless a recovery request names the exact authoritative C0 chain."""
+
+    terminal = _terminal(terminal_raw)
+    terminal_digest = hashlib.sha256(terminal_raw).hexdigest()
+    if (
+        terminal.domain_id != domain_id
+        or terminal.harness_id != harness_id
+        or terminal_digest != c0_terminal_sha256
+    ):
+        raise _blocked("C0 recovery terminal provenance is invalid")
+    if prior_journal_sha256 is None:
+        if journal_raw is not None:
+            raise _blocked("C0 recovery unexpectedly supplied a supersession journal")
+        if (
+            terminal.credential_id != expected_previous_credential_id
+            or c0_terminal_credential_epoch != expected_previous_credential_epoch
+        ):
+            raise _blocked("C0 recovery predecessor does not match the terminal origin")
+        return {
+            "terminal_sha256": terminal_digest,
+            "terminal_credential_id": terminal.credential_id,
+            "terminal_credential_epoch": c0_terminal_credential_epoch,
+            "prior_journal_sha256": None,
+            "transition_count": 0,
+            "audit_records_verified": 0,
+        }
+    if journal_raw is None:
+        raise _blocked("C0 recovery supersession journal is missing")
+    journal = load_supersession_journal(
+        journal_raw,
+        terminal_raw=terminal_raw,
+        domain_id=domain_id,
+        principal_id=principal_id,
+        harness_id=harness_id,
+    )
+    if canonical_supersession_journal(journal) != journal_raw:
+        raise _blocked("C0 recovery supersession journal is not canonical")
+    journal_digest = hashlib.sha256(journal_raw).hexdigest()
+    if (
+        journal_digest != prior_journal_sha256
+        or journal.terminal_credential_epoch != c0_terminal_credential_epoch
+        or journal.current_credential
+        != (expected_previous_credential_id, expected_previous_credential_epoch)
+    ):
+        raise _blocked("C0 recovery supersession provenance does not match the request")
+    verified = verify_supersession_audit(store, journal)
+    return {
+        "terminal_sha256": terminal_digest,
+        "terminal_credential_id": terminal.credential_id,
+        "terminal_credential_epoch": journal.terminal_credential_epoch,
+        "prior_journal_sha256": journal_digest,
+        "transition_count": verified["transition_count"],
+        "audit_records_verified": verified["audit_records_verified"],
+    }
+
+
 def append_supersession(
     *,
     terminal_raw: bytes,

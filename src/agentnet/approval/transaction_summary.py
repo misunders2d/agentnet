@@ -240,31 +240,43 @@ def _validate_managed_server_credential_reauthorization(
     transaction: dict[str, Any],
     digest: str,
 ) -> dict[str, Any]:
-    _keys(
-        transaction,
-        {
-            "schema",
-            "approval_purpose",
-            "request_id",
-            "domain_id",
-            "principal_id",
-            "harness_id",
-            "expired_credential_id",
-            "expected_credential_epoch",
-            "expected_expired_at",
-            "expected_key_id",
-            "expected_binding_assurance",
-            "managed_config_sha256",
-            "managed_identity_sha256",
-            "maximum_new_credential_ttl_seconds",
-            "managed_profile",
-            "key_binding",
-            "old_credential_action",
-            "authority_granted",
-        },
-    )
+    schema = transaction.get("schema")
+    v2 = schema == "agentnet.managed-server-credential-reauthorization.v2"
+    keys = {
+        "schema",
+        "approval_purpose",
+        "request_id",
+        "domain_id",
+        "principal_id",
+        "harness_id",
+        "expired_credential_id",
+        "expected_credential_epoch",
+        "expected_expired_at",
+        "expected_key_id",
+        "expected_binding_assurance",
+        "managed_config_sha256",
+        "managed_identity_sha256",
+        "maximum_new_credential_ttl_seconds",
+        "managed_profile",
+        "key_binding",
+        "old_credential_action",
+        "authority_granted",
+    }
+    if v2:
+        keys.update(
+            {
+                "c0_terminal_credential_epoch",
+                "c0_terminal_sha256",
+                "prior_supersession_journal_sha256",
+            }
+        )
+    _keys(transaction, keys)
     if (
-        transaction["schema"] != "agentnet.managed-server-credential-reauthorization.v1"
+        schema
+        not in {
+            "agentnet.managed-server-credential-reauthorization.v1",
+            "agentnet.managed-server-credential-reauthorization.v2",
+        }
         or transaction["approval_purpose"] != _MANAGED_SERVER_REAUTHORIZATION_PURPOSE
         or not _string(transaction["request_id"])
         or not _string(transaction["domain_id"])
@@ -283,19 +295,49 @@ def _validate_managed_server_credential_reauthorization(
         or transaction["key_binding"] != "same_managed_key_with_fresh_possession_proof"
         or transaction["old_credential_action"] != "retire_without_extension"
         or transaction["authority_granted"] is not False
+        or (
+            v2
+            and (
+                not _positive_int(transaction["c0_terminal_credential_epoch"])
+                or transaction["c0_terminal_credential_epoch"]
+                > transaction["expected_credential_epoch"]
+                or not _sha256(transaction["c0_terminal_sha256"])
+                or (
+                    transaction["prior_supersession_journal_sha256"] is not None
+                    and not _sha256(transaction["prior_supersession_journal_sha256"])
+                )
+                or (
+                    transaction["c0_terminal_credential_epoch"]
+                    == transaction["expected_credential_epoch"]
+                )
+                != (transaction["prior_supersession_journal_sha256"] is None)
+            )
+        )
     ):
         raise _denied()
     hours = transaction["maximum_new_credential_ttl_seconds"] // 3_600
+    statements = [
+        "Server identity: existing managed server agent",
+        "Key custody: the existing managed key must prove fresh possession",
+        "Old credential: remains expired and is retired, never extended",
+        f"New credential lifetime: no more than {hours} hour{'s' if hours != 1 else ''}",
+        "Scope: same corporate owner, domain, harness, key, config, and identity",
+    ]
+    if v2:
+        statements.extend(
+            [
+                "C0 origin: exact immutable terminal evidence is bound",
+                (
+                    "Recovery history: exact prior supersession journal is bound"
+                    if transaction["prior_supersession_journal_sha256"] is not None
+                    else "Recovery history: first post-C0 supersession"
+                ),
+            ]
+        )
+    statements.append("Authority granted: none")
     return {
         "title": "Reauthorize an expired server-agent credential",
-        "statements": [
-            "Server identity: existing managed server agent",
-            "Key custody: the existing managed key must prove fresh possession",
-            "Old credential: remains expired and is retired, never extended",
-            f"New credential lifetime: no more than {hours} hour{'s' if hours != 1 else ''}",
-            "Scope: same corporate owner, domain, harness, key, config, and identity",
-            "Authority granted: none",
-        ],
+        "statements": statements,
         "advanced_digest": digest,
     }
 
@@ -703,7 +745,10 @@ def validate_and_summarize_approval_transaction(
     if (
         purpose == _MANAGED_SERVER_REAUTHORIZATION_PURPOSE
         and transaction.get("schema")
-        == "agentnet.managed-server-credential-reauthorization.v1"
+        in {
+            "agentnet.managed-server-credential-reauthorization.v1",
+            "agentnet.managed-server-credential-reauthorization.v2",
+        }
     ):
         return _validate_managed_server_credential_reauthorization(
             transaction,

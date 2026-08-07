@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -14,7 +16,7 @@ from agentnet.approval.service import (
 )
 from agentnet.client import proof_headers
 from agentnet.core.app import CommunicationCore
-from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError
+from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, GateBlocked
 from agentnet.http_api import create_app
 from agentnet.identity.credentials import (
     CREDENTIAL_ROTATION_POP_PURPOSE,
@@ -27,6 +29,7 @@ from agentnet.identity.credentials import (
     CredentialRotationService,
     ManagedServerCredentialReauthorizationRequest,
     ManagedServerCredentialReauthorizationService,
+    ManagedServerCredentialReauthorizationRequestV2,
 )
 from agentnet.operations.config import ExtensionConfig
 from agentnet.security.dpop import create_request_proof
@@ -279,6 +282,198 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
     with pytest.raises(ConflictError, match="expired binding changed"):
         recovery.reauthorize(request=drifted, approval=drifted_receipt)
 
+
+def test_managed_server_reauthorization_v1_vector_remains_frozen() -> None:
+    request = ManagedServerCredentialReauthorizationRequest(
+        request_id="00000000-0000-4000-8000-000000000001",
+        domain_id="corp.example",
+        principal_id="principal-1",
+        harness_id="harness-1",
+        expired_credential_id="credential-1",
+        expected_credential_epoch=1,
+        expected_expired_at=100,
+        expected_key_id="a" * 64,
+        expected_binding_assurance="os_bound",
+        managed_config_sha256="b" * 64,
+        managed_identity_sha256="c" * 64,
+        maximum_new_credential_ttl_seconds=86_400,
+        old_key_possession_signature="synthetic-signature",
+    )
+
+    assert hashlib.sha256(request.canonical_transaction).hexdigest() == (
+        "400778d5125c2dea012bae857d8dd4781fcff8fee6dc85197c54efc6938c2005"
+    )
+
+
+def test_managed_server_reauthorization_v2_binds_c0_provenance() -> None:
+    values = {
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "domain_id": "corp.example",
+        "principal_id": "principal-1",
+        "harness_id": "harness-1",
+        "expired_credential_id": "credential-1",
+        "expected_credential_epoch": 1,
+        "expected_expired_at": 100,
+        "expected_key_id": "a" * 64,
+        "expected_binding_assurance": "os_bound",
+        "managed_config_sha256": "b" * 64,
+        "c0_terminal_credential_epoch": 1,
+        "managed_identity_sha256": "c" * 64,
+        "maximum_new_credential_ttl_seconds": 86_400,
+        "old_key_possession_signature": "synthetic-signature",
+        "c0_terminal_sha256": "d" * 64,
+        "prior_supersession_journal_sha256": None,
+    }
+    request = ManagedServerCredentialReauthorizationRequestV2(**values)
+    changed = request.model_copy(update={"c0_terminal_sha256": "e" * 64})
+
+    assert request.schema_version == "agentnet.managed-server-credential-reauthorization.v2"
+    assert request.transaction_fields()["c0_terminal_sha256"] == "d" * 64
+    assert hashlib.sha256(request.canonical_transaction).digest() != hashlib.sha256(
+        changed.canonical_transaction
+    ).digest()
+    assert request.possession_fields()["transaction_sha256"] != changed.possession_fields()[
+        "transaction_sha256"
+    ]
+
+
+
+def test_v2_reauthorization_returns_authoritative_audit_hash(
+    store,
+    identity_factory,
+) -> None:
+    actor, key = identity_factory(binding_assurance="os_bound")
+    now = int(time.time())
+    expired_at = now - 1
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE credentials SET expires_at=? WHERE credential_id=?",
+            (expired_at, actor.credential_id),
+        )
+    signer = P256KeyPair.generate()
+    trusted = TrustedApprover(
+        principal_id=actor.principal_id,
+        domain_id=actor.domain_id,
+        signer_key_id=signer.thumbprint,
+        public_key_pem=signer.public_pem,
+        allowed_purposes=frozenset(
+            {MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE}
+        ),
+    )
+    verifier = IndependentApprovalVerifier(
+        {signer.thumbprint: trusted},
+        verifier_id="managed-server-recovery.example",
+    )
+    terminal_raw = (
+        json.dumps(
+            {
+                "schema": "agentnet.c0-pilot-responder.terminal.v1",
+                "status": "COMPLETED_C0_ROUND_TRIP",
+                "domain_id": actor.domain_id,
+                "harness_id": actor.harness_id,
+                "credential_id": actor.credential_id,
+            },
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
+    values = {
+        "request_id": str(uuid4()),
+        "domain_id": actor.domain_id,
+        "principal_id": actor.principal_id,
+        "harness_id": actor.harness_id,
+        "expired_credential_id": actor.credential_id,
+        "expected_credential_epoch": actor.credential_epoch,
+        "expected_expired_at": expired_at,
+        "expected_key_id": key.thumbprint,
+        "expected_binding_assurance": actor.binding_assurance,
+        "managed_config_sha256": "a" * 64,
+        "managed_identity_sha256": "b" * 64,
+        "maximum_new_credential_ttl_seconds": 86_400,
+        "c0_terminal_credential_epoch": actor.credential_epoch,
+        "c0_terminal_sha256": hashlib.sha256(terminal_raw).hexdigest(),
+        "prior_supersession_journal_sha256": None,
+    }
+    unsigned = ManagedServerCredentialReauthorizationRequestV2(
+        **values,
+        old_key_possession_signature="pending",
+    )
+    request = unsigned.model_copy(
+        update={
+            "old_key_possession_signature": key.sign(
+                MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                unsigned.possession_fields(),
+            )
+        }
+    )
+    receipt = create_independent_approval_receipt(
+        signer,
+        approver=trusted,
+        verifier_id=verifier.verifier_id,
+        approval_purpose=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical_transaction=request.canonical_transaction,
+        issued_at=now,
+        expires_at=now + 300,
+    )
+    service = ManagedServerCredentialReauthorizationService(
+        store,
+        verifier,
+        credential_ttl_seconds=86_400,
+        clock=lambda: now,
+    )
+    with pytest.raises(GateBlocked, match="terminal provenance"):
+        service.reauthorize(
+            request=request.model_copy(update={"c0_terminal_sha256": "d" * 64}),
+            approval=receipt,
+            c0_terminal_raw=terminal_raw,
+        )
+    assert store.fetch_one(
+        "SELECT status FROM credentials WHERE credential_id=?",
+        (actor.credential_id,),
+    )["status"] == "active"
+
+
+    result = service.reauthorize(
+        request=request,
+        approval=receipt,
+        c0_terminal_raw=terminal_raw,
+    )
+
+    assert result.schema_version == "agentnet.managed-server-credential-reauthorization-result.v2"
+    assert len(result.audit_record_hash) == 64
+    row = store.fetch_one(
+        "SELECT record_json FROM audit_log WHERE record_hash=?",
+        (result.audit_record_hash,),
+    )
+    assert row is not None
+    record = json.loads(row["record_json"])
+    assert record == {
+        "action": "credential.managed_server_reauthorized",
+        "request_id": request.request_id,
+        "domain_id": request.domain_id,
+        "principal_id": request.principal_id,
+        "harness_id": request.harness_id,
+        "old_credential_id": request.expired_credential_id,
+        "new_credential_id": result.credential_id,
+        "key_id": request.expected_key_id,
+        "new_credential_epoch": result.credential_epoch,
+        "previous_credential_epoch": request.expected_credential_epoch,
+        "terminal_credential_epoch": request.c0_terminal_credential_epoch,
+        "not_before": result.not_before,
+        "expires_at": result.expires_at,
+        "approval_receipt_id": receipt["receipt_id"],
+        "approval_receipt_digest": hashlib.sha256(canonical_json(receipt)).hexdigest(),
+        "transaction_digest": hashlib.sha256(request.canonical_transaction).hexdigest(),
+        "c0_terminal_sha256": request.c0_terminal_sha256,
+        "c0_supersession_sha256": request.prior_supersession_journal_sha256,
+    }
+    repeated = service.reauthorize(
+        request=request,
+        approval=receipt,
+        c0_terminal_raw=terminal_raw,
+    )
+    assert repeated.idempotent_repeat is True
+    assert repeated.audit_record_hash == result.audit_record_hash
 
 def test_rotation_atomically_retires_current_key_and_fences_replay_without_touching_sibling(
     store,

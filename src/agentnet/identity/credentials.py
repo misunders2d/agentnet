@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from agentnet.approval.service import (
 from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.outage import OutageGate
+from agentnet.operations.c0_credential_supersession import verify_recovery_provenance
 from agentnet.security.signatures import (
     b64url_encode,
     canonical_json,
@@ -152,6 +154,9 @@ MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE = (
 )
 MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_SCHEMA = (
     "agentnet.managed-server-credential-reauthorization.v1"
+)
+MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_SCHEMA_V2 = (
+    "agentnet.managed-server-credential-reauthorization.v2"
 )
 
 
@@ -434,6 +439,80 @@ class ManagedServerCredentialReauthorizationRequest(BaseModel):
         }
 
 
+class ManagedServerCredentialReauthorizationRequestV2(BaseModel):
+    """Post-C0 recovery bound to immutable terminal and journal provenance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.managed-server-credential-reauthorization.v2"
+    ] = Field(
+        default=MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_SCHEMA_V2,
+        alias="schema",
+    )
+    request_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
+    principal_id: str = Field(min_length=1, max_length=256)
+    harness_id: str = Field(min_length=1, max_length=256)
+    expired_credential_id: str = Field(min_length=1, max_length=256)
+    expected_credential_epoch: int = Field(ge=1)
+    expected_expired_at: int = Field(ge=1)
+    expected_key_id: str = Field(min_length=16, max_length=256)
+    expected_binding_assurance: Literal["os_bound", "hardware_bound"]
+    managed_config_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    managed_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    maximum_new_credential_ttl_seconds: int = Field(ge=3_600, le=604_800)
+    c0_terminal_credential_epoch: int = Field(ge=1)
+    c0_terminal_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prior_supersession_journal_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    old_key_possession_signature: str = Field(min_length=1, max_length=2_048)
+
+    def transaction_fields(self) -> dict[str, object]:
+        return {
+            "schema": self.schema_version,
+            "approval_purpose": MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+            "request_id": self.request_id,
+            "domain_id": self.domain_id,
+            "principal_id": self.principal_id,
+            "harness_id": self.harness_id,
+            "expired_credential_id": self.expired_credential_id,
+            "expected_credential_epoch": self.expected_credential_epoch,
+            "expected_expired_at": self.expected_expired_at,
+            "expected_key_id": self.expected_key_id,
+            "c0_terminal_credential_epoch": self.c0_terminal_credential_epoch,
+            "expected_binding_assurance": self.expected_binding_assurance,
+            "managed_config_sha256": self.managed_config_sha256,
+            "managed_identity_sha256": self.managed_identity_sha256,
+            "maximum_new_credential_ttl_seconds": self.maximum_new_credential_ttl_seconds,
+            "c0_terminal_sha256": self.c0_terminal_sha256,
+            "prior_supersession_journal_sha256": self.prior_supersession_journal_sha256,
+            "managed_profile": "always_on_server_agent",
+            "key_binding": "same_managed_key_with_fresh_possession_proof",
+            "old_credential_action": "retire_without_extension",
+            "authority_granted": False,
+        }
+
+    @property
+    def canonical_transaction(self) -> bytes:
+        return canonical_json(self.transaction_fields())
+
+    def possession_fields(self) -> dict[str, object]:
+        return {
+            "schema": MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+            "request_id": self.request_id,
+            "domain_id": self.domain_id,
+            "principal_id": self.principal_id,
+            "harness_id": self.harness_id,
+            "expired_credential_id": self.expired_credential_id,
+            "expected_credential_epoch": self.expected_credential_epoch,
+            "expected_key_id": self.expected_key_id,
+            "transaction_sha256": hashlib.sha256(self.canonical_transaction).hexdigest(),
+        }
+
+
 class ManagedServerCredentialReauthorizationResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -453,6 +532,40 @@ class ManagedServerCredentialReauthorizationResult(BaseModel):
     expires_at: int
     idempotent_repeat: bool
     authority_granted: Literal[False] = False
+
+
+class ManagedServerCredentialReauthorizationResultV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.managed-server-credential-reauthorization-result.v2"
+    ] = Field(
+        default="agentnet.managed-server-credential-reauthorization-result.v2",
+        alias="schema",
+    )
+    request_id: str
+    domain_id: str
+    principal_id: str
+    harness_id: str
+    previous_credential_id: str
+    credential_id: str
+    key_id: str
+    credential_epoch: int = Field(ge=2)
+    not_before: int
+    expires_at: int
+    audit_record_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotent_repeat: bool
+    authority_granted: Literal[False] = False
+
+
+ManagedServerCredentialReauthorizationRequestAny = (
+    ManagedServerCredentialReauthorizationRequest
+    | ManagedServerCredentialReauthorizationRequestV2
+)
+ManagedServerCredentialReauthorizationResultAny = (
+    ManagedServerCredentialReauthorizationResult
+    | ManagedServerCredentialReauthorizationResultV2
+)
 
 
 class ManagedServerCredentialReauthorizationService:
@@ -483,7 +596,7 @@ class ManagedServerCredentialReauthorizationService:
         self.clock = clock or (lambda: int(time.time()))
 
     @staticmethod
-    def _new_credential_id(request: ManagedServerCredentialReauthorizationRequest) -> str:
+    def _new_credential_id(request: ManagedServerCredentialReauthorizationRequestAny) -> str:
         transaction_sha256 = hashlib.sha256(request.canonical_transaction).hexdigest()
         return str(
             uuid5(
@@ -497,9 +610,9 @@ class ManagedServerCredentialReauthorizationService:
         self,
         connection: Any,
         *,
-        request: ManagedServerCredentialReauthorizationRequest,
+        request: ManagedServerCredentialReauthorizationRequestAny,
         credential_id: str,
-    ) -> ManagedServerCredentialReauthorizationResult | None:
+    ) -> ManagedServerCredentialReauthorizationResultAny | None:
         row = connection.execute(
             """SELECT c.credential_id,c.harness_id,c.key_id,c.public_key_pem,c.status,c.epoch,
                       c.not_before,c.expires_at,h.domain_id,h.principal_id,h.status AS harness_status,
@@ -540,32 +653,79 @@ class ManagedServerCredentialReauthorizationService:
             request.possession_fields(),
             request.old_key_possession_signature,
         )
-        return ManagedServerCredentialReauthorizationResult(
-            request_id=request.request_id,
-            domain_id=request.domain_id,
-            principal_id=request.principal_id,
-            harness_id=request.harness_id,
-            previous_credential_id=request.expired_credential_id,
-            credential_id=credential_id,
-            key_id=request.expected_key_id,
-            credential_epoch=request.expected_credential_epoch + 1,
-            not_before=int(row["not_before"]),
-            expires_at=int(row["expires_at"]),
-            idempotent_repeat=True,
-        )
+        result_fields = {
+            "request_id": request.request_id,
+            "domain_id": request.domain_id,
+            "principal_id": request.principal_id,
+            "harness_id": request.harness_id,
+            "previous_credential_id": request.expired_credential_id,
+            "credential_id": credential_id,
+            "key_id": request.expected_key_id,
+            "credential_epoch": request.expected_credential_epoch + 1,
+            "not_before": int(row["not_before"]),
+            "expires_at": int(row["expires_at"]),
+            "idempotent_repeat": True,
+        }
+        if isinstance(request, ManagedServerCredentialReauthorizationRequestV2):
+            transaction_digest = hashlib.sha256(request.canonical_transaction).hexdigest()
+            audit_hash: str | None = None
+            audit_rows = connection.execute(
+                "SELECT record_hash,record_json FROM audit_log ORDER BY sequence"
+            ).fetchall()
+            for audit_row in audit_rows:
+                try:
+                    record = json.loads(str(audit_row["record_json"]))
+                except (TypeError, ValueError):
+                    continue
+                if (
+                    isinstance(record, dict)
+                    and record.get("action") == "credential.managed_server_reauthorized"
+                    and record.get("request_id") == request.request_id
+                    and record.get("transaction_digest") == transaction_digest
+                    and record.get("c0_terminal_sha256") == request.c0_terminal_sha256
+                    and record.get("c0_supersession_sha256")
+                    == request.prior_supersession_journal_sha256
+                ):
+                    audit_hash = str(audit_row["record_hash"])
+                    break
+            if audit_hash is None:
+                raise ConflictError("managed-server reauthorization audit record is missing")
+            return ManagedServerCredentialReauthorizationResultV2(
+                **result_fields,
+                audit_record_hash=audit_hash,
+            )
+        return ManagedServerCredentialReauthorizationResult(**result_fields)
 
     def reauthorize(
         self,
         *,
-        request: ManagedServerCredentialReauthorizationRequest,
+        request: ManagedServerCredentialReauthorizationRequestAny,
         approval: Mapping[str, Any],
-    ) -> ManagedServerCredentialReauthorizationResult:
+        c0_terminal_raw: bytes | None = None,
+        c0_supersession_journal_raw: bytes | None = None,
+    ) -> ManagedServerCredentialReauthorizationResultAny:
         now = self.clock()
         if now < 0:
             raise ValidationError("managed-server credential reauthorization time is invalid")
         if request.maximum_new_credential_ttl_seconds != self.credential_ttl_seconds:
             raise ConflictError("approved managed-server credential TTL changed")
         credential_id = self._new_credential_id(request)
+        if isinstance(request, ManagedServerCredentialReauthorizationRequestV2):
+            if c0_terminal_raw is None:
+                raise ValidationError("managed-server reauthorization C0 terminal is missing")
+            verify_recovery_provenance(
+                self.store,
+                terminal_raw=c0_terminal_raw,
+                journal_raw=c0_supersession_journal_raw,
+                domain_id=request.domain_id,
+                principal_id=request.principal_id,
+                harness_id=request.harness_id,
+                expected_previous_credential_id=request.expired_credential_id,
+                expected_previous_credential_epoch=request.expected_credential_epoch,
+                c0_terminal_credential_epoch=request.c0_terminal_credential_epoch,
+                c0_terminal_sha256=request.c0_terminal_sha256,
+                prior_journal_sha256=request.prior_supersession_journal_sha256,
+            )
 
         with self.store.transaction() as connection:
             repeated = self._idempotent_result(
@@ -669,9 +829,31 @@ class ManagedServerCredentialReauthorizationService:
                 ),
             )
             consume_independent_approval(connection, receipt=verified)
-            self.store.append_audit(
-                connection,
-                {
+            if isinstance(request, ManagedServerCredentialReauthorizationRequestV2):
+                audit_record = {
+                    "action": "credential.managed_server_reauthorized",
+                    "request_id": request.request_id,
+                    "domain_id": request.domain_id,
+                    "principal_id": request.principal_id,
+                    "harness_id": request.harness_id,
+                    "old_credential_id": request.expired_credential_id,
+                    "new_credential_id": credential_id,
+                    "key_id": request.expected_key_id,
+                    "previous_credential_epoch": request.expected_credential_epoch,
+                    "new_credential_epoch": next_epoch,
+                    "not_before": now,
+                    "expires_at": expires_at,
+                    "approval_receipt_id": verified.receipt_id,
+                    "approval_receipt_digest": hashlib.sha256(
+                        canonical_json(dict(approval))
+                    ).hexdigest(),
+                    "transaction_digest": verified.transaction_digest,
+                    "c0_terminal_sha256": request.c0_terminal_sha256,
+                    "terminal_credential_epoch": request.c0_terminal_credential_epoch,
+                    "c0_supersession_sha256": request.prior_supersession_journal_sha256,
+                }
+            else:
+                audit_record = {
                     "action": "credential.managed_server_reauthorized",
                     "domain_id": request.domain_id,
                     "principal_id": request.principal_id,
@@ -689,22 +871,28 @@ class ManagedServerCredentialReauthorizationService:
                     "managed_config_sha256": request.managed_config_sha256,
                     "managed_identity_sha256": request.managed_identity_sha256,
                     "authority_granted": False,
-                },
-            )
+                }
+            audit_record_hash = self.store.append_audit(connection, audit_record)
 
-        return ManagedServerCredentialReauthorizationResult(
-            request_id=request.request_id,
-            domain_id=request.domain_id,
-            principal_id=request.principal_id,
-            harness_id=request.harness_id,
-            previous_credential_id=request.expired_credential_id,
-            credential_id=credential_id,
-            key_id=request.expected_key_id,
-            credential_epoch=next_epoch,
-            not_before=now,
-            expires_at=expires_at,
-            idempotent_repeat=False,
-        )
+        result_fields = {
+            "request_id": request.request_id,
+            "domain_id": request.domain_id,
+            "principal_id": request.principal_id,
+            "harness_id": request.harness_id,
+            "previous_credential_id": request.expired_credential_id,
+            "credential_id": credential_id,
+            "key_id": request.expected_key_id,
+            "credential_epoch": next_epoch,
+            "not_before": now,
+            "expires_at": expires_at,
+            "idempotent_repeat": False,
+        }
+        if isinstance(request, ManagedServerCredentialReauthorizationRequestV2):
+            return ManagedServerCredentialReauthorizationResultV2(
+                **result_fields,
+                audit_record_hash=audit_record_hash,
+            )
+        return ManagedServerCredentialReauthorizationResult(**result_fields)
 
 
 class CredentialRenewalRequest(BaseModel):

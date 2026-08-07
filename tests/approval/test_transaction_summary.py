@@ -13,6 +13,7 @@ from agentnet.errors import AuthenticationError
 from agentnet.identity.credentials import (
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
     ManagedServerCredentialReauthorizationRequest,
+    ManagedServerCredentialReauthorizationRequestV2,
 )
 
 
@@ -205,6 +206,45 @@ def test_bounded_plan_summary_rejects_wrong_digest_and_unknown_privileged_purpos
     rendered = json.dumps(recovery_summary, sort_keys=True)
     assert "managed-server-harness" not in rendered
     assert "expired-credential" not in rendered
+    reauthorization_v2 = ManagedServerCredentialReauthorizationRequestV2(
+        request_id="12345678-1234-4234-8234-123456789abd",
+        domain_id="corp.example",
+        principal_id="owner-principal",
+        harness_id="managed-server-harness",
+        expired_credential_id="expired-credential",
+        expected_credential_epoch=2,
+        expected_expired_at=1_800_000_000,
+        expected_key_id="managed-server-key-thumbprint",
+        expected_binding_assurance="os_bound",
+        managed_config_sha256="a" * 64,
+        managed_identity_sha256="b" * 64,
+        maximum_new_credential_ttl_seconds=86_400,
+        c0_terminal_credential_epoch=1,
+        c0_terminal_sha256="c" * 64,
+        prior_supersession_journal_sha256="d" * 64,
+        old_key_possession_signature="not-presented-to-browser",
+    )
+    v2_canonical = reauthorization_v2.canonical_transaction
+    v2_summary = validate_and_summarize_approval_transaction(
+        MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        v2_canonical,
+        hashlib.sha256(v2_canonical).hexdigest(),
+    )
+    assert "C0 origin: exact immutable terminal evidence is bound" in v2_summary[
+        "statements"
+    ]
+    assert "Recovery history: exact prior supersession journal is bound" in v2_summary[
+        "statements"
+    ]
+    changed_v2 = json.loads(v2_canonical)
+    changed_v2["c0_terminal_sha256"] = "not-a-digest"
+    changed_v2_canonical = _canonical(changed_v2)
+    with pytest.raises(AuthenticationError, match="approval request denied"):
+        validate_and_summarize_approval_transaction(
+            MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+            changed_v2_canonical,
+            hashlib.sha256(changed_v2_canonical).hexdigest(),
+        )
     changed = json.loads(reauthorization_canonical)
     changed["old_credential_action"] = "extend"
     changed_canonical = _canonical(changed)
