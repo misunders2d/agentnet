@@ -208,7 +208,8 @@ def _issue_exact_scope(
             resource=resource,
             policy_revision=revision,
             context=scopes.issuance_request(actor=sender, proposal=proposal),
-        )
+        ),
+        when=datetime.fromtimestamp(now, UTC),
     )
     scopes.issue(
         actor=sender,
