@@ -27,20 +27,21 @@ clean-install lane, which is the exact path operators follow.
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
-## Corrective `0.1.47` candidate
+## Corrective `0.1.48` candidate
 
-Candidate `0.1.47` supersedes the unpublished `0.1.46` candidate and adds only
-the exact `0.1.46→0.1.47` five-unit marker transition. One server had already
-committed an unpublished `0.1.46` marker before different corrected bytes were
-installed under the same version. AgentNet correctly rejected the changed
-request digest as same-version provenance drift. The new package version
-requires a fresh owner-approved plan digest and preserves the enrolled server
-identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle,
-communication state, and external prerequisites without database migration.
-The focused lane passed `544` tests with `5` expected dedicated-PostgreSQL
-skips; the broad releasable-source lane passed `2152` tests with `21` expected
-platform/dedicated-PostgreSQL skips. Recursive packed-package verification and
-publication remain pending; this note does not promote any requirement or gate.
+Candidate `0.1.48` supersedes unpublished `0.1.47`. It corrects post-C0
+terminal-credential lookup against the canonical identity schema by resolving
+domain/principal ownership through the credential's bound harness. Unknown or
+mismatched domain/principal/harness/epoch tuples remain rejected. The package
+also adds only the exact `0.1.47→0.1.48` five-unit marker transition required
+for a server already carrying the unpublished `0.1.47` marker. The transition
+preserves enrolled server identity/credential, schema-v7 PostgreSQL state,
+endpoint lifecycle, communication state, and external prerequisites without
+database migration. The focused lane passed `547` tests with `5` expected
+dedicated-PostgreSQL skips; the broad releasable-source lane passed `2155`
+tests with `21` expected platform/dedicated-PostgreSQL skips. Recursive
+packed-package verification and publication remain pending; this note does not
+promote any requirement or gate.
 
 ## Frozen release-input clarification
 

@@ -1,9 +1,9 @@
 # Release Manifest
 
 Snapshot: 2026-08-07
-Candidate: `agentnet 0.1.47`
+Candidate: `agentnet 0.1.48`
 Latest published package: `agentnet 0.1.45`
-Evidence profile: exact forward-only 0.1.46→0.1.47 stranded-marker correction with same-version provenance rejection preserved
+Evidence profile: canonical post-C0 credential lookup plus exact forward-only 0.1.47→0.1.48 marker correction
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `728d53fd307550ae8779d0715fa4a6d55f0c26d03b753756bb884b3f3b9baa24` |
-| `pyproject.toml` | SHA-256 `e3975da04895eca8c93443bbcc3c19c24f839e2775226358758376ead3dcfcc6` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `b48f887ed9d132f6da4dedd362a4018d8d4dd72e94391426eea1896a8aebc887` |
+| `pyproject.toml` | SHA-256 `21f1a05450cbf63b1297f5e37a412351180d0a92a8f4d3e7b55c82b610f57a41` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs

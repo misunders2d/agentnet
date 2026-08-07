@@ -239,8 +239,10 @@ def completed_c0_terminal_credential(
         else row["fresh_credential_epoch"]
     )
     credential = store.fetch_one(
-        """SELECT credential_id FROM credentials
-            WHERE domain_id=? AND principal_id=? AND harness_id=? AND epoch=?""",
+        """SELECT c.credential_id
+             FROM credentials c
+             JOIN harnesses h ON h.harness_id=c.harness_id
+            WHERE h.domain_id=? AND h.principal_id=? AND c.harness_id=? AND c.epoch=?""",
         (domain_id, principal_id, harness_id, epoch),
     )
     if credential is None:

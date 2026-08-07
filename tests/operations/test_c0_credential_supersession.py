@@ -9,6 +9,8 @@ from typing import Any, cast
 import pytest
 
 from agentnet.core.app import CommunicationCore
+from agentnet.security.envelope import LocalEnvelopeCipher
+from agentnet.storage.sqlite import SQLiteStore
 from agentnet.errors import GateBlocked
 from agentnet.operations.c0_credential_supersession import (
     C0CredentialSupersessionJournal,
@@ -412,6 +414,21 @@ class _TerminalAuditStore(_AuditStore):
         raise AssertionError(query)
 
 
+class _CanonicalCredentialStore(_TerminalAuditStore):
+    def __init__(self, store: SQLiteStore) -> None:
+        super().__init__([])
+        self.store = store
+
+    def fetch_one(
+        self,
+        query: str,
+        parameters: tuple[object, ...] = (),
+    ) -> dict[str, object] | None:
+        if "FROM c0_pilot_attempts" in query:
+            return super().fetch_one(query, parameters)
+        return cast(dict[str, object] | None, self.store.fetch_one(query, parameters))
+
+
 def _core(store: _AuditStore, data_dir: Path) -> Any:
     core = cast(Any, CommunicationCore.__new__(CommunicationCore))
     core.store = store
@@ -434,6 +451,45 @@ def test_completed_c0_terminal_credential_resolves_exact_epoch_binding() -> None
         principal_id=PRINCIPAL_ID,
         harness_id=HARNESS_ID,
     ) == ("credential-1", 1)
+
+
+def test_completed_c0_terminal_credential_uses_canonical_identity_schema(tmp_path: Path) -> None:
+    sqlite = SQLiteStore(tmp_path / "c0-terminal.sqlite3", LocalEnvelopeCipher(b"c" * 32))
+    try:
+        with sqlite.transaction() as connection:
+            connection.execute(
+                "INSERT INTO domains(domain_id,status,policy_revision,revocation_epoch,created_at) "
+                "VALUES(?, 'active', 1, 1, 1)",
+                (DOMAIN_ID,),
+            )
+            connection.execute(
+                """INSERT INTO principals(
+                       principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,status,created_at)
+                   VALUES(?,?, 'https://idp.example', 'subject-1', 'owner@example.test', 'active', 1)""",
+                (PRINCIPAL_ID, DOMAIN_ID),
+            )
+            connection.execute(
+                """INSERT INTO harnesses(
+                       harness_id,domain_id,principal_id,guest_id,kind,display_name,status,
+                       binding_assurance,capabilities_json,credential_epoch,created_at)
+                   VALUES(?,?,?,NULL,'pi','Owner','active','test','{}',1,1)""",
+                (HARNESS_ID, DOMAIN_ID, PRINCIPAL_ID),
+            )
+            connection.execute(
+                """INSERT INTO credentials(
+                       credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at)
+                   VALUES('credential-1',?,?,'synthetic-public-key','active',1,1,3600)""",
+                (HARNESS_ID, KEY_ID),
+            )
+
+        assert completed_c0_terminal_credential(
+            _CanonicalCredentialStore(sqlite),
+            domain_id=DOMAIN_ID,
+            principal_id=PRINCIPAL_ID,
+            harness_id=HARNESS_ID,
+        ) == ("credential-1", 1)
+    finally:
+        sqlite.close()
 
 
 def test_core_allows_unreplaced_terminal_credential_without_journal(tmp_path: Path) -> None:

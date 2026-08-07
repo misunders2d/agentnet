@@ -492,18 +492,18 @@ Activation still requires the user's explicit harness restart. It remains a
 fresh-install-only release because its `0.1.44→0.1.45` packaged upgrade lane
 did not pass.
 
-Candidate `0.1.47` supersedes the unpublished `0.1.46` candidate and adds only
-the exact forward-only `0.1.46→0.1.47` five-unit marker path. A server had
-already committed an unpublished `0.1.46` setup marker before different
-corrected bytes were installed under the same version; AgentNet correctly
-rejected that same-version request-digest drift. `0.1.47` gives the corrected
-bytes a distinct package identity and fresh owner-approved plan digest without
-weakening provenance validation. The transition preserves the enrolled server
-identity and credential, schema-v7 PostgreSQL, endpoint and communication
-state, and external prerequisites, and uses the existing journaled
-package-runtime replacement without database migration. The focused lane
-passes `544` tests with `5` expected dedicated-PostgreSQL skips, and the broad
-releasable-source lane passes `2152` tests with `21` expected
+Candidate `0.1.48` supersedes the unpublished `0.1.47` candidate. It corrects
+post-C0 terminal-credential resolution against the canonical schema:
+`credentials` remains harness/epoch scoped, while domain/principal ownership is
+resolved through the bound `harnesses` row. Unknown or mismatched
+domain/principal/harness/epoch tuples still fail closed. The candidate also adds
+only the exact forward-only `0.1.47→0.1.48` five-unit marker path required for a
+server already carrying the unpublished `0.1.47` marker. The transition
+preserves enrolled identity and credential state, schema-v7 PostgreSQL,
+endpoint and communication state, and external prerequisites, and uses the
+existing journaled package-runtime replacement without database migration. The
+focused lane passes `547` tests with `5` expected dedicated-PostgreSQL skips,
+and the broad releasable-source lane passes `2155` tests with `21` expected
 platform/dedicated-PostgreSQL skips. Recursive packed-package verification and
 publication remain pending. No requirement, production claim, or must-not-ship
 gate is promoted.

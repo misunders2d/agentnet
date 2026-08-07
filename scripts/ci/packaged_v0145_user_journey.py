@@ -130,8 +130,8 @@ def _assert_installed(package_root: Path) -> None:
     package_root = package_root.resolve()
     module_path = Path(agentnet.__file__).resolve()
     script_path = Path(__file__).resolve()
-    if agentnet.__version__ != "0.1.47" or CURRENT_SCHEMA_VERSION != 7:
-        raise RuntimeError("the installed candidate version or schema version is not v0.1.47/schema-v7")
+    if agentnet.__version__ != "0.1.48" or CURRENT_SCHEMA_VERSION != 7:
+        raise RuntimeError("the installed candidate version or schema version is not v0.1.48/schema-v7")
     if not module_path.is_relative_to(package_root):
         raise RuntimeError("AgentNet did not resolve from the selected installed package")
     if script_path != package_root / "scripts" / "ci" / script_path.name:
@@ -172,7 +172,7 @@ def _assert_portable_contracts(package_root: Path) -> dict[str, object]:
     return {
         "schema": _PORTABLE_SCHEMA,
         "installed_package": True,
-        "package_version": "0.1.47",
+        "package_version": "0.1.48",
         "schema_version": 7,
         "strict_schema_catalog": True,
         "mcp_bootstrap": True,

@@ -848,13 +848,14 @@ than HTTPX's bundled `certifi` default. On the Linux server profile this honors
 operator-installed system roots while the hardened units continue to remove
 caller-controlled CA environment overrides.
 
-Corrective `0.1.47` adds only the exact forward-only `0.1.46→0.1.47`
-five-unit marker edge. It exists because a server had already committed an
-unpublished `0.1.46` marker before corrected package bytes were installed under
-the same version; same-version request-digest drift remains rejected. The new
-version requires a fresh owner-approved plan digest, preserves schema v7 and
-all identity, credential, endpoint, communication, and external-prerequisite
-state, and uses the existing journaled package-runtime transition without a
-database migration.
+Corrective `0.1.48` resolves completed-C0 terminal credentials through the
+canonical identity relationship: the credential supplies harness and epoch,
+and its bound harness supplies domain and principal. The query returns only an
+exact four-part match; absence or mismatch remains fail-closed. No credential
+or identity table changes. The candidate adds only the exact forward-only
+`0.1.47→0.1.48` five-unit marker edge for a server already carrying the
+unpublished `0.1.47` marker. It preserves schema v7 and all identity,
+credential, endpoint, communication, and external-prerequisite state, and uses
+the existing journaled package-runtime transition without database migration.
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

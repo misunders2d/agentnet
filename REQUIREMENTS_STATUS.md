@@ -369,19 +369,21 @@ published and historical release evidence:
   `SEC-005`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement
   or must-not-ship gate is promoted.
 
-- Candidate `0.1.47` adds only the exact forward-only
-  `0.1.46→0.1.47` five-unit marker transition after an unpublished `0.1.46`
-  marker was committed before different corrected bytes were installed under
-  the same package version. Same-version request-digest drift remains rejected.
-  The new version and owner-approved plan digest preserve schema-v7 PostgreSQL,
-  enrolled identity/credential, endpoint, communication, and external-
-  prerequisite state without database migration. The focused lane reports
-  **544 passed and 5 expected dedicated-PostgreSQL skips**; the broad
-  releasable-source lane reports **2152 passed and 21 expected
-  platform/dedicated-PostgreSQL skips**. Recursive packed-package verification,
-  installed-host upgrade evidence, publication, and higher-tier evidence remain
-  pending. Affected IDs are `ID-009`, `SEC-007`, and `OPS-003`. No requirement
-  or must-not-ship gate is promoted.
+- Candidate `0.1.48` supersedes unpublished `0.1.47`. It resolves the
+  completed-C0 terminal credential from the canonical schema by joining the
+  harness/epoch-scoped credential to the exact domain/principal-bound harness;
+  missing or mismatched actor, harness, or epoch state remains fail-closed. It
+  adds only the exact forward-only `0.1.47→0.1.48` five-unit marker transition
+  for servers that already committed the unpublished `0.1.47` marker.
+  Schema-v7 PostgreSQL, enrolled identity/credential, endpoint, communication,
+  and external-prerequisite state remain unchanged; no database migration is
+  introduced. The focused lane reports **547 passed and 5 expected
+  dedicated-PostgreSQL skips**; the broad releasable-source lane reports
+  **2155 passed and 21 expected platform/dedicated-PostgreSQL skips**.
+  Recursive packed-package verification, installed-host upgrade evidence,
+  publication, and higher-tier evidence remain pending. Affected IDs are
+  `ID-006`, `ID-009`, `SEC-007`, and `OPS-003`. No requirement or
+  must-not-ship gate is promoted.
 
 
 
