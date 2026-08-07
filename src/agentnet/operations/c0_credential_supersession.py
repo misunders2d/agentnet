@@ -80,6 +80,12 @@ class _AuditStore(Protocol):
         parameters: tuple[object, ...] = (),
     ) -> list[Any]: ...
 
+    def fetch_one(
+        self,
+        query: str,
+        parameters: tuple[object, ...] = (),
+    ) -> Any | None: ...
+
 
 def _blocked(message: str) -> GateBlocked:
     return GateBlocked(_BLOCKER, message)
@@ -100,6 +106,34 @@ def _entry_digest(value: dict[str, object]) -> str:
 
 def canonical_supersession_journal(journal: C0CredentialSupersessionJournal) -> bytes:
     return canonical_json(journal.model_dump(mode="json", by_alias=True)) + b"\n"
+
+
+def _validate_internal_chain(journal: C0CredentialSupersessionJournal) -> None:
+    previous_id = journal.terminal_credential_id
+    previous_epoch = journal.terminal_credential_epoch
+    previous_entry_sha256 = journal.terminal_sha256
+    previous_key_id: str | None = None
+    for index, entry in enumerate(journal.entries):
+        if (
+            entry.previous_entry_sha256 != previous_entry_sha256
+            or entry.previous_credential_id != previous_id
+            or entry.credential_id == entry.previous_credential_id
+            or entry.credential_epoch != entry.previous_credential_epoch + 1
+            or entry.expires_at <= entry.not_before
+            or entry.entry_sha256
+            != _entry_digest(entry.model_dump(mode="json", by_alias=True))
+            or entry.previous_credential_epoch != previous_epoch
+        ):
+            raise _blocked("C0 credential supersession journal chain is invalid")
+        if index == 0:
+            if entry.prior_journal_sha256 is not None:
+                raise _blocked("C0 credential supersession journal first link is invalid")
+        elif previous_key_id != entry.key_id:
+            raise _blocked("C0 credential supersession journal continuity is invalid")
+        previous_id = entry.credential_id
+        previous_epoch = entry.credential_epoch
+        previous_key_id = entry.key_id
+        previous_entry_sha256 = entry.entry_sha256
 
 
 def _validate_chain(
@@ -123,32 +157,7 @@ def _validate_chain(
     ):
         raise _blocked("C0 credential supersession journal origin is invalid")
 
-    previous_id = journal.terminal_credential_id
-    previous_epoch = journal.terminal_credential_epoch
-    previous_entry_sha256 = journal.terminal_sha256
-    previous_key_id: str | None = None
-    for index, entry in enumerate(journal.entries):
-        if (
-            entry.previous_entry_sha256 != previous_entry_sha256
-            or entry.previous_credential_id != previous_id
-            or entry.credential_id == entry.previous_credential_id
-            or entry.credential_epoch != entry.previous_credential_epoch + 1
-            or entry.expires_at <= entry.not_before
-            or entry.entry_sha256
-            != _entry_digest(entry.model_dump(mode="json", by_alias=True))
-        ):
-            raise _blocked("C0 credential supersession journal chain is invalid")
-        if entry.previous_credential_epoch != previous_epoch:
-            raise _blocked("C0 credential supersession terminal credential epoch is invalid")
-        if index == 0:
-            if entry.prior_journal_sha256 is not None:
-                raise _blocked("C0 credential supersession journal first link is invalid")
-        elif previous_key_id != entry.key_id:
-            raise _blocked("C0 credential supersession journal continuity is invalid")
-        previous_id = entry.credential_id
-        previous_epoch = entry.credential_epoch
-        previous_key_id = entry.key_id
-        previous_entry_sha256 = entry.entry_sha256
+    _validate_internal_chain(journal)
 
 
 def load_supersession_journal(
@@ -173,6 +182,70 @@ def load_supersession_journal(
         harness_id=harness_id,
     )
     return journal
+
+
+def load_audited_supersession_journal(
+    raw: bytes,
+    store: _AuditStore,
+    *,
+    domain_id: str,
+    principal_id: str,
+    harness_id: str,
+) -> C0CredentialSupersessionJournal:
+    """Validate a Core-owned canonical journal against authoritative audit history."""
+
+    try:
+        journal = C0CredentialSupersessionJournal.model_validate_json(raw)
+    except PydanticValidationError as exc:
+        raise _blocked("C0 credential supersession journal is invalid") from exc
+    if (
+        journal.domain_id != domain_id
+        or journal.principal_id != principal_id
+        or journal.harness_id != harness_id
+        or canonical_supersession_journal(journal) != raw
+    ):
+        raise _blocked("C0 credential supersession journal deployment binding is invalid")
+    _validate_internal_chain(journal)
+    verify_supersession_audit(store, journal)
+    return journal
+
+
+def completed_c0_terminal_credential(
+    store: _AuditStore,
+    *,
+    domain_id: str,
+    principal_id: str,
+    harness_id: str,
+) -> tuple[str, int] | None:
+    """Resolve the exact credential proven by the latest completed C0 attempt."""
+
+    row = store.fetch_one(
+        """SELECT g.owner_harness_id,g.fresh_harness_id,
+                  g.owner_credential_epoch,g.fresh_credential_epoch
+             FROM c0_pilot_attempts a
+             JOIN c0_plan_guards g ON g.guard_id=a.guard_id
+            WHERE a.state='communication_revoked'
+              AND a.sanitized_result='COMPLETED_C0_ROUND_TRIP'
+              AND g.domain_id=? AND g.principal_id=?
+              AND (g.owner_harness_id=? OR g.fresh_harness_id=?)
+            ORDER BY a.terminal_at DESC,a.attempt_id DESC LIMIT 1""",
+        (domain_id, principal_id, harness_id, harness_id),
+    )
+    if row is None:
+        return None
+    epoch = int(
+        row["owner_credential_epoch"]
+        if row["owner_harness_id"] == harness_id
+        else row["fresh_credential_epoch"]
+    )
+    credential = store.fetch_one(
+        """SELECT credential_id FROM credentials
+            WHERE domain_id=? AND principal_id=? AND harness_id=? AND epoch=?""",
+        (domain_id, principal_id, harness_id, epoch),
+    )
+    if credential is None:
+        raise _blocked("completed C0 terminal credential is unavailable")
+    return str(credential["credential_id"]), epoch
 
 
 def verify_recovery_provenance(
@@ -290,6 +363,33 @@ def append_supersession(
         )
         if existing.terminal_credential_epoch != terminal_credential_epoch:
             raise _blocked("credential supersession terminal credential epoch changed")
+        if existing.entries[-1].request_id == request_id:
+            replay_value: dict[str, object] = {
+                "request_id": request_id,
+                "transaction_sha256": transaction_sha256,
+                "approval_receipt_id": approval_receipt_id,
+                "approval_receipt_sha256": approval_receipt_sha256,
+                "audit_record_hash": audit_record_hash,
+                "prior_journal_sha256": prior_journal_sha256,
+                "previous_credential_id": previous_credential_id,
+                "credential_id": credential_id,
+                "previous_credential_epoch": previous_credential_epoch,
+                "credential_epoch": credential_epoch,
+                "key_id": key_id,
+                "not_before": not_before,
+                "expires_at": expires_at,
+                "previous_entry_sha256": existing.entries[-1].previous_entry_sha256,
+            }
+            replay_value["entry_sha256"] = _entry_digest(replay_value)
+            try:
+                replay = C0CredentialSupersessionEntry.model_validate(replay_value)
+            except PydanticValidationError as exc:
+                raise _blocked("credential supersession replay is invalid") from exc
+            if replay != existing.entries[-1]:
+                raise _blocked("credential supersession replay conflicts with committed transition")
+            return existing
+        if any(entry.request_id == request_id for entry in existing.entries):
+            raise _blocked("credential supersession request replayed out of order")
         expected_prior = hashlib.sha256(canonical_supersession_journal(existing)).hexdigest()
         if prior_journal_sha256 != expected_prior:
             raise _blocked("credential supersession prior journal changed")

@@ -335,6 +335,21 @@ return the persisted result; expired, revoked, rotated, wrong-profile, or stale
 bindings fail closed. `agentnet credential renew` stores the request ID in one
 owner-only file before network and rotates it only after an exact response.
 
+`agentnet server-agent reauthorize-expired-credential` uses strict local
+`agentnet.managed-server-credential-reauthorization.v2` request state. The
+signed owner-approval transaction binds the exact expired credential/epoch,
+same P-256 key possession, managed config and identity digests, immutable C0
+terminal credential/digest/epoch, prior canonical supersession-journal digest,
+and a finite replacement TTL. Before PostgreSQL mutation it validates the full
+prior journal and its exact audit records. The single transaction retires the
+old row, inserts the next epoch for the unchanged key, and appends the exact
+audit record. The canonical
+`agentnet.c0-credential-supersession-journal.v1` chain then records that audit
+hash and all bound inputs. Setup and Core accept a post-C0 current credential
+only when this audited chain reaches it exactly. Exact same-request replay
+reconciles; same ID with drift, stale/missing links, skipped epochs, changed
+actor/key/files, or missing/conflicting audit rows fails closed.
+
 The signed persistent communication-scope routes are:
 
 | Route | Exact request/effect |

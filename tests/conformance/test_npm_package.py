@@ -295,6 +295,7 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         "identity-only-mode-skips-c0-phase",
         "fresh-laptop-rejects-invalid-onboarding-mode",
         "v0132-c0-responder-is-package-owned-and-isolated",
+        "post-c0-expired-credential-preserves-audited-chain",
     }
     assert all(item["prompt"] and item["expected_output"] and item["assertions"] for item in evals)
 

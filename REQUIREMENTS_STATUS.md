@@ -344,21 +344,30 @@ published and historical release evidence:
   identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
   external prerequisites. Signed clients use the platform default TLS trust
   store so the hardened services honor operator-installed private roots without
-  accepting caller-controlled CA environment overrides. Hermetic setup/recovery
-  tests report **252 passed**;
-  the focused timer and exact-upgrade lane reports **10 passed**;
-  the focused release lane reports **458 passed and 5 expected dedicated-
-  PostgreSQL skips**; and the releasable source corpus reports **2106 passed
-  and 21 expected platform/dedicated-PostgreSQL skips**. A disposable clean
-  Ubuntu 24.04 VM passed the exact packaged `0.1.45→0.1.46` upgrade, retained
-  state, private-root TLS, unit-cgroup listener ownership, and two recurring
-  renewal activations with a later finite `NEXT`. Source and two recursive
-  packed generations each report **2133 passed and 21 expected
-  platform/dedicated-PostgreSQL skips**, including the packaged v0.1.45 user
-  journey. Staging, publication, and higher-tier evidence remain pending.
-  Affected IDs are
-  `ID-009`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement or
-  must-not-ship gate is promoted.
+  accepting caller-controlled CA environment overrides.
+  The same candidate generalizes expired-credential recovery beyond the first
+  pre-C0 replacement without weakening provenance. It retains immutable C0
+  terminal evidence and a canonical hash-chained supersession journal whose
+  entries bind exact actor/key/file state, Approval receipt, transaction, and
+  PostgreSQL audit record. Recovery, setup, and Core validate the full chain
+  against current database and managed-file state. Exact replay reconciles
+  response loss; missing, stale, noncanonical, unaudited, skipped-epoch,
+  actor/key drift, and replay-conflicting state fail closed. The owner-approved
+  same-key path grants no authority and restarts no service.
+  The expanded focused release-blocker lane reports **543 passed and 5
+  expected dedicated-PostgreSQL skips**; the broad releasable-source lane
+  reports **2151 passed and 21 expected platform/dedicated-PostgreSQL skips**;
+  and the fuller local source run reports **2259 passed and 21 expected
+  skips**, with only the two deliberately non-green installed-harness pin
+  checks and the pre-assembly release-manifest binding check deselected.
+  Source and two recursive packed generations each report **2178 passed and
+  21 expected platform/dedicated-PostgreSQL skips** after candidate reassembly.
+  The earlier disposable Ubuntu timer/upgrade proof remains valid only for its
+  recorded pre-supersession source tree and was not rerun as post-C0 recovery
+  evidence. Publication and higher-tier evidence remain pending.
+  Affected IDs are `ID-006`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-004`,
+  `SEC-005`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement
+  or must-not-ship gate is promoted.
 
 
 

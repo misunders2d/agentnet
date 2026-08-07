@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, Sequence
 from urllib.parse import urlsplit
 
 if os.name == "posix":
@@ -54,6 +54,10 @@ from agentnet.approval.config import (
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
 from agentnet.identity.actors import VerifiedActor
+from agentnet.operations.c0_credential_supersession import (
+    load_audited_supersession_journal,
+    load_supersession_journal,
+)
 from agentnet.operations.config import (
     ExtensionConfig,
     ApprovalServiceClientConfig,
@@ -108,6 +112,7 @@ C0_RESPONDER_TERMINAL = C0_RESPONDER_DATA / "terminal.json"
 SERVER_AGENT_IDENTITY = CORE_DATA / "server-agent-identity.json"
 SERVER_AGENT_KEY = CORE_DATA / "guided-join.key.pem"
 CREDENTIAL_RENEW_STATE = CORE_DATA / "credential-renewal-state.json"
+CREDENTIAL_SUPERSESSION_JOURNAL = CORE_DATA / "credential-supersessions.json"
 CORE_CONFIG = CORE_DATA / "agentnet.json"
 CORE_OIDC_CONFIG = CORE_DATA / "oidc-enrollment.json"
 SCANNER_SIGNING_KEY = CORE_DATA / "scanner-signing-key.pem"
@@ -3181,6 +3186,14 @@ def _require_core_bootstrap_evidence(
         or not isinstance(audit, dict)
         or audit.get("valid") is not True
         or not isinstance(binding, dict)
+        or (
+            binding.get("ready") is True
+            and (
+                not isinstance(binding.get("credential_supersession"), dict)
+                or binding["credential_supersession"].get("status")
+                not in {"not_applicable", "verified"}
+            )
+        )
     ):
         raise ServerSetupError(
             "core_bootstrap_evidence",
@@ -3929,6 +3942,143 @@ def _run_v0145_database_operation_as(
         ) from exc
 
 
+def _postgres_supersession_audit_evidence(
+    database_url: str,
+    *,
+    journal_raw: bytes,
+    terminal_raw: bytes,
+    domain_id: str,
+    principal_id: str,
+    harness_id: str,
+) -> dict[str, Any]:
+    """Validate one canonical supersession chain through read-only PostgreSQL."""
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    connection = psycopg.connect(
+        database_url,
+        autocommit=True,
+        row_factory=dict_row,
+        connect_timeout=5,
+        application_name="agentnet:server-setup-supersession-audit",
+    )
+
+    class AuditView:
+        def fetch_all(
+            self,
+            query: str,
+            parameters: tuple[Any, ...] = (),
+        ) -> list[dict[str, object]]:
+            return [
+                dict(row)
+                for row in connection.execute(query, parameters).fetchall()
+            ]
+
+        def fetch_one(
+            self,
+            query: str,
+            parameters: tuple[Any, ...] = (),
+        ) -> dict[str, object] | None:
+            row = connection.execute(query, parameters).fetchone()
+            return None if row is None else dict(row)
+
+        def verify_audit_chain(self) -> tuple[bool, int]:
+            rows = self.fetch_all(
+                "SELECT sequence,occurred_at,record_json,previous_hash,record_hash "
+                "FROM audit_log ORDER BY sequence"
+            )
+            previous_hash = "0" * 64
+            for row in rows:
+                sequence = row["sequence"]
+                occurred_at = row["occurred_at"]
+                record_json = row["record_json"]
+                stored_previous = row["previous_hash"]
+                stored_hash = row["record_hash"]
+                if (
+                    not isinstance(sequence, int)
+                    or not isinstance(occurred_at, int)
+                    or not isinstance(record_json, str)
+                    or not isinstance(stored_previous, str)
+                    or not isinstance(stored_hash, str)
+                ):
+                    return False, 0
+                preimage = (
+                    previous_hash.encode("ascii")
+                    + b"\x00"
+                    + str(occurred_at).encode("ascii")
+                    + b"\x00"
+                    + record_json.encode("utf-8")
+                )
+                expected = hashlib.sha256(preimage).hexdigest()
+                if stored_previous != previous_hash or stored_hash != expected:
+                    return False, sequence
+                previous_hash = stored_hash
+            return True, len(rows)
+
+    try:
+        connection.execute("SET default_transaction_read_only = on")
+        journal = load_supersession_journal(
+            journal_raw,
+            terminal_raw=terminal_raw,
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id=harness_id,
+        )
+        audited = load_audited_supersession_journal(
+            journal_raw,
+            AuditView(),
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id=harness_id,
+        )
+        if audited != journal:
+            raise GateBlocked(
+                "c0_credential_supersession",
+                "audited credential supersession journal changed during validation",
+            )
+        return {
+            "ready": True,
+            "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+            "transition_count": len(journal.entries),
+            "audit_records_verified": len(journal.entries),
+            "credential_id": journal.current_credential[0],
+            "credential_epoch": journal.current_credential[1],
+        }
+    finally:
+        connection.close()
+
+
+def _run_supersession_audit_as(
+    account: pwd.struct_passwd,
+    database_url: str,
+    *,
+    journal_raw: bytes,
+    terminal_raw: bytes,
+    domain_id: str,
+    principal_id: str,
+    harness_id: str,
+) -> dict[str, Any]:
+    try:
+        return _run_postgres_probe_as(
+            account,
+            lambda: _postgres_supersession_audit_evidence(
+                database_url,
+                journal_raw=journal_raw,
+                terminal_raw=terminal_raw,
+                domain_id=domain_id,
+                principal_id=principal_id,
+                harness_id=harness_id,
+            ),
+            stage="credential_supersession_audit",
+        )
+    except ServerSetupError as exc:
+        raise ServerSetupError(
+            "c0_credential_supersession",
+            "credential supersession audit could not be proven exact",
+        ) from exc
+
+
 def _postgres_peer_gate(core_account: pwd.struct_passwd, database_url: str) -> dict[str, Any]:
     service = _run_postgres_probe_as(
         core_account,
@@ -4303,34 +4453,33 @@ def _validated_c0_terminal_marker(
     account: pwd.struct_passwd,
     *,
     config: ExtensionConfig,
-) -> dict[str, str] | None:
+    principal_id: str,
+    credential_epoch: int,
+    supersession_path: Path,
+    core_account: pwd.struct_passwd,
+    database_url: str,
+) -> tuple[dict[str, str] | None, dict[str, object]]:
     if not path.exists() and not path.is_symlink():
-        return None
+        return None, {"status": "not_applicable"}
     try:
-        value = json.loads(
-            _read_private_managed_file(
-                path,
-                account,
-                blocker="c0_responder_terminal",
-                max_bytes=4096,
-            )
+        terminal_raw = _read_private_managed_file(
+            path,
+            account,
+            blocker="c0_responder_terminal",
+            max_bytes=4096,
         )
+        value = json.loads(terminal_raw)
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ServerSetupError(
             "c0_responder_terminal",
             "C0 responder terminal marker is invalid",
         ) from exc
-    expected = {
-        "schema": "agentnet.c0-pilot-responder.terminal.v1",
-        "status": value.get("status") if isinstance(value, dict) else None,
-        "domain_id": config.domain_id,
-        "harness_id": config.enrolled_harness_id,
-        "credential_id": config.enrolled_credential_id,
-    }
     if (
         not isinstance(value, dict)
-        or set(value) != set(expected)
-        or value != expected
+        or set(value) != {"schema", "status", "domain_id", "harness_id", "credential_id"}
+        or value.get("schema") != "agentnet.c0-pilot-responder.terminal.v1"
+        or value.get("domain_id") != config.domain_id
+        or value.get("harness_id") != config.enrolled_harness_id
         or value.get("status")
         not in {"COMPLETED_C0_ROUND_TRIP", "expired", "invalidated", "failed"}
     ):
@@ -4338,7 +4487,70 @@ def _validated_c0_terminal_marker(
             "c0_responder_terminal",
             "C0 responder terminal marker conflicts with managed identity",
         )
-    return value
+    if value.get("credential_id") == config.enrolled_credential_id:
+        return value, {"status": "not_applicable"}
+    if value.get("status") != "COMPLETED_C0_ROUND_TRIP":
+        raise ServerSetupError(
+            "c0_responder_terminal",
+            "C0 responder terminal marker conflicts with managed identity",
+        )
+    try:
+        journal_raw = _read_private_managed_file(
+            supersession_path,
+            core_account,
+            blocker="c0_credential_supersession",
+            max_bytes=1_048_576,
+        )
+        journal = load_supersession_journal(
+            journal_raw,
+            terminal_raw=terminal_raw,
+            domain_id=config.domain_id,
+            principal_id=principal_id,
+            harness_id=config.enrolled_harness_id or "",
+        )
+    except (OSError, GateBlocked, ServerSetupError) as exc:
+        raise ServerSetupError(
+            "c0_credential_supersession",
+            "C0 terminal credential replacement lacks valid supersession provenance",
+        ) from exc
+    if journal.current_credential != (
+        config.enrolled_credential_id,
+        credential_epoch,
+    ):
+        raise ServerSetupError(
+            "c0_credential_supersession",
+            "C0 credential supersession journal is stale",
+        )
+    audit_evidence = _run_supersession_audit_as(
+        core_account,
+        database_url,
+        journal_raw=journal_raw,
+        terminal_raw=terminal_raw,
+        domain_id=config.domain_id,
+        principal_id=principal_id,
+        harness_id=config.enrolled_harness_id or "",
+    )
+    expected_audit_evidence = {
+        "ready": True,
+        "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+        "transition_count": len(journal.entries),
+        "audit_records_verified": len(journal.entries),
+        "credential_id": journal.current_credential[0],
+        "credential_epoch": journal.current_credential[1],
+    }
+    if audit_evidence != expected_audit_evidence:
+        raise ServerSetupError(
+            "c0_credential_supersession",
+            "credential supersession audit evidence is invalid",
+        )
+    return value, {
+        "status": "verified",
+        "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+        "transition_count": len(journal.entries),
+        "audit_records_verified": len(journal.entries),
+        "credential_id": journal.current_credential[0],
+        "credential_epoch": journal.current_credential[1],
+    }
 
 
 def _managed_config_digest(
@@ -5514,6 +5726,7 @@ def _apply_server_setup(
         c0_responder_data = layout.host(C0_RESPONDER_DATA)
         c0_responder_config_path = layout.host(C0_RESPONDER_CONFIG)
         c0_responder_terminal_path = layout.host(C0_RESPONDER_TERMINAL)
+        credential_supersession_path = layout.host(CREDENTIAL_SUPERSESSION_JOURNAL)
         core_config_path = layout.host(CORE_CONFIG)
         approval_config_path = layout.host(APPROVAL_CONFIG)
         approval_state = layout.host(APPROVAL_STATE)
@@ -6394,11 +6607,12 @@ def _apply_server_setup(
         identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
         c0_responder_required = False
         responder_payload: bytes | None = None
+        supersession_evidence: dict[str, object] = {"status": "not_applicable"}
         steps.append({"id": "core_bootstrap", "status": bootstrap_status})
         if identity_enrolled and start:
             identity_path = layout.host(SERVER_AGENT_IDENTITY)
             signing_key_path = layout.host(SERVER_AGENT_KEY)
-            _validated_managed_identity_profile(
+            identity_profile = _validated_managed_identity_profile(
                 identity_path,
                 signing_key_path,
                 core_account,
@@ -6406,10 +6620,21 @@ def _apply_server_setup(
                 request=request,
             )
             _verified["identity_enrolled"] = True
-            terminal = _validated_c0_terminal_marker(
+            identity_actor = identity_profile["actor"]
+            if not isinstance(identity_actor, dict):
+                raise ServerSetupError(
+                    "server_agent_identity",
+                    "managed server-agent identity actor is invalid",
+                )
+            terminal, supersession_evidence = _validated_c0_terminal_marker(
                 c0_responder_terminal_path,
                 c0_responder_account,
                 config=config,
+                principal_id=str(identity_actor["principal_id"]),
+                credential_epoch=int(identity_actor["credential_epoch"]),
+                supersession_path=credential_supersession_path,
+                core_account=core_account,
+                database_url=request.database_url,
             )
             if terminal is not None:
                 if c0_responder_config_path.exists() or c0_responder_config_path.is_symlink():
@@ -6669,6 +6894,7 @@ def _apply_server_setup(
                         "ready": True,
                         "required": True,
                         "credential_state": ("current", "renewal_needed"),
+                        "credential_supersession": supersession_evidence,
                     },
                     "approval_broker": {"ready": True, "required": True},
                 }

@@ -264,8 +264,8 @@ or capability and does not restart anything. These commands do not themselves
 prove HA, PITR, KMS custody, independent enrollment approval, or production
 certification.
 
-For the exact 0.1.39 pre-C0 communication-only case where the retained managed
-server credential has expired but its package-owned key remains intact, run:
+When setup reports an expired managed-server credential and its package-owned
+key remains intact, keep Core stopped and run:
 
 ```bash
 sudo -- env -u SSL_CERT_FILE -u SSL_CERT_DIR -u SSLKEYLOGFILE \
@@ -275,13 +275,18 @@ sudo -- env -u SSL_CERT_FILE -u SSL_CERT_DIR -u SSLKEYLOGFILE \
   server-agent reauthorize-expired-credential
 ```
 
-Tell the owner only to use the fixed public Approval `/approval` page. After
-WebAuthn approval, rerun the same command, then rerun the exact digest-bound
-`server-agent setup --apply --start`. This retires the old expired row and
-creates one finite next-epoch credential for the same key; it grants no
-authority and restarts nothing. It refuses A2A, relay, or retained C0-terminal
-bindings. Never delete or edit its root-only state; use
-`--replace-terminal-state` only for a broker-proven rejected or expired request.
+Tell the owner only to use fixed public Approval `/approval`. After WebAuthn
+approval, rerun the identical command, then rerun exact digest-bound
+`server-agent setup --apply --start`. The recovery proves the unchanged key,
+immutable C0 terminal, complete canonical supersession chain, every named
+PostgreSQL audit record, and current config/identity/database state before it
+retires the expired row and creates one finite next epoch. It grants no
+authority and restarts nothing. It refuses A2A, relay, missing/edited/stale
+provenance, actor/key drift, skipped epochs, conflicting replay, and
+unverifiable audit state. Never delete, edit, truncate, or reconstruct its
+root-only state, terminal, journal, config, or identity. Use
+`--replace-terminal-state` only for a broker-proven rejected or expired
+Approval request.
 
 ## Release-gated fixed C0 pilot
 

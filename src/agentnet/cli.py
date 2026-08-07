@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 try:
@@ -92,7 +93,7 @@ from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import (
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
-    ManagedServerCredentialReauthorizationRequest,
+    ManagedServerCredentialReauthorizationRequestV2,
     ManagedServerCredentialReauthorizationService,
     load_credential_binding,
     public_key_thumbprint,
@@ -105,6 +106,12 @@ from agentnet.identity.invitations import (
     InternalInvitationService,
 )
 from agentnet.identity.recovery import CredentialRecoveryRequest
+from agentnet.operations.c0_credential_supersession import (
+    append_supersession,
+    canonical_supersession_journal,
+    completed_c0_terminal_credential,
+    load_audited_supersession_journal,
+)
 from agentnet.operations.config import (
     BackupSealKeyConfig,
     BackupTrustConfig,
@@ -117,10 +124,12 @@ from agentnet.operations.config_migration import load_config_json
 from agentnet.operations.server_reset import ServerSetupResetError, reset_server_setup
 from agentnet.operations.server_setup import (
     C0_RESPONDER_TERMINAL,
+    C0_RESPONDER_USER,
     CORE_CONFIG,
     CORE_ENV,
     CORE_USER,
     SERVER_AGENT_IDENTITY,
+    CREDENTIAL_SUPERSESSION_JOURNAL,
     SERVER_AGENT_KEY,
     SETUP_ROOT,
     ServerSetupError,
@@ -1502,20 +1511,15 @@ def _managed_server_reauthorization_client(
 
 
 def _require_managed_server_reauthorization_topology(config: ExtensionConfig) -> None:
-    """Keep the corrective path inside the exact pre-C0 communication profile.
+    """Keep the corrective path inside the exact communication-only topology.
 
-    A2A/relay signing identities and a retained C0 terminal carry historical
-    credential bindings covered by separate marker semantics.  This release
-    does not silently rewrite or ignore those bindings.
+    The recovery command separately validates immutable C0 terminal provenance
+    and every post-C0 supersession before it can replace a credential.
     """
 
     if config.a2a is not None or config.relay is not None:
         raise SystemExit(
             "managed-server credential reauthorization requires the communication-only topology"
-        )
-    if os.path.lexists(C0_RESPONDER_TERMINAL):
-        raise SystemExit(
-            "managed-server credential reauthorization requires no retained C0 terminal binding"
         )
 
 
@@ -1654,9 +1658,208 @@ def _remove_private_state(path: Path) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+def _replace_managed_private_bytes(
+    path: Path,
+    *,
+    expected: bytes | None,
+    replacement: bytes,
+    uid: int,
+    gid: int,
+) -> str:
+    if os.path.lexists(path):
+        current, _ = _managed_private_file(
+            path,
+            label="managed private state",
+            expected_uid=uid,
+        )
+        if expected is None or not secrets.compare_digest(current, expected):
+            raise SystemExit("managed private state changed before replacement")
+        if secrets.compare_digest(current, replacement):
+            return "already_current"
+    elif expected is not None:
+        raise SystemExit("managed private state disappeared before replacement")
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    temporary = f".{path.name}.replace-{uuid4().hex}"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=directory,
+        )
+        remaining = memoryview(replacement)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("managed private state write made no progress")
+            remaining = remaining[written:]
+        os.fchown(descriptor, uid, gid)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        if expected is None and os.path.lexists(path):
+            raise SystemExit("managed private state appeared before replacement")
+        os.replace(temporary, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
+        return "updated"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        os.close(directory)
+
+
+def _managed_server_reauthorization_provenance(
+    *,
+    store: Any,
+    actor: VerifiedActor,
+    key: P256KeyPair,
+    core_account: Any,
+    c0_account: Any,
+    request: ManagedServerCredentialReauthorizationRequestV2 | None = None,
+) -> tuple[bytes, bytes | None, Any, tuple[str, int]]:
+    terminal_raw, terminal_metadata = _managed_private_file(
+        C0_RESPONDER_TERMINAL,
+        label="C0 responder terminal evidence",
+        expected_uid=c0_account.pw_uid,
+    )
+    if terminal_metadata.st_gid != c0_account.pw_gid:
+        raise SystemExit("C0 responder terminal evidence group custody is unsafe")
+    try:
+        terminal = json.loads(terminal_raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("C0 responder terminal evidence is invalid") from exc
+    if (
+        not isinstance(terminal, dict)
+        or set(terminal)
+        != {"schema", "status", "domain_id", "harness_id", "credential_id"}
+        or terminal.get("schema") != "agentnet.c0-pilot-responder.terminal.v1"
+        or terminal.get("status") != "COMPLETED_C0_ROUND_TRIP"
+        or terminal.get("domain_id") != actor.domain_id
+        or terminal.get("harness_id") != actor.harness_id
+    ):
+        raise SystemExit("C0 responder terminal evidence conflicts with managed identity")
+    terminal_credential = completed_c0_terminal_credential(
+        store,
+        domain_id=actor.domain_id,
+        principal_id=str(actor.principal_id),
+        harness_id=str(actor.harness_id),
+    )
+    if (
+        terminal_credential is None
+        or terminal_credential[0] != terminal.get("credential_id")
+    ):
+        raise SystemExit("C0 terminal evidence conflicts with authoritative PostgreSQL state")
+    if not os.path.lexists(CREDENTIAL_SUPERSESSION_JOURNAL):
+        if (actor.credential_id, actor.credential_epoch) != terminal_credential:
+            raise SystemExit("managed replacement credential lacks a supersession journal")
+        return terminal_raw, None, None, terminal_credential
+    journal_raw, journal_metadata = _managed_private_file(
+        CREDENTIAL_SUPERSESSION_JOURNAL,
+        label="managed credential supersession journal",
+        expected_uid=core_account.pw_uid,
+    )
+    if journal_metadata.st_gid != core_account.pw_gid:
+        raise SystemExit("managed credential supersession journal group custody is unsafe")
+    try:
+        journal = load_audited_supersession_journal(
+            journal_raw,
+            store,
+            domain_id=actor.domain_id,
+            principal_id=str(actor.principal_id),
+            harness_id=str(actor.harness_id),
+        )
+    except GateBlocked as exc:
+        raise SystemExit("managed credential supersession journal is invalid") from exc
+    if (
+        (journal.terminal_credential_id, journal.terminal_credential_epoch)
+        != terminal_credential
+        or journal.entries[-1].key_id != key.thumbprint
+    ):
+        raise SystemExit("managed credential supersession journal lineage changed")
+    actor_is_current = journal.current_credential == (
+        actor.credential_id,
+        actor.credential_epoch,
+    )
+    replay_is_current = (
+        request is not None
+        and journal.entries[-1].request_id == request.request_id
+        and journal.entries[-1].previous_credential_id
+        == request.expired_credential_id
+        and journal.entries[-1].previous_credential_epoch
+        == request.expected_credential_epoch
+    )
+    if not actor_is_current and not replay_is_current:
+        raise SystemExit("managed identity and supersession journal current credential differ")
+    return terminal_raw, journal_raw, journal, terminal_credential
+
+
+
+
+@contextmanager
+def _managed_server_reauthorization_lock():
+    """Serialize recovery with package-owned setup across the full invocation."""
+
+    lock_path = SETUP_ROOT / "setup.lock"
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_NONBLOCK
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+    except OSError as exc:
+        raise SystemExit("managed-server recovery lock custody is unsafe") from exc
+    locked = False
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != 0
+            or metadata.st_gid != 0
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise SystemExit("managed-server recovery lock custody conflicts")
+        if fcntl is None:
+            raise SystemExit("managed-server credential recovery requires POSIX file locking")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SystemExit("another AgentNet setup or recovery operation is active") from exc
+        locked = True
+        yield
+    finally:
+        if locked and fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace) -> int:
+    if os.geteuid() != 0:
+        raise SystemExit("managed-server credential reauthorization requires root")
+    with _managed_server_reauthorization_lock():
+        return _command_server_agent_reauthorize_expired_credential_locked(args)
+
+
+def _command_server_agent_reauthorize_expired_credential_locked(
+    args: argparse.Namespace,
+) -> int:
     """Rebind one expired managed-server credential after exact owner approval."""
 
     if os.geteuid() != 0:
@@ -1674,6 +1877,7 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
         import pwd as posix_pwd
 
         core_account = posix_pwd.getpwnam(CORE_USER)
+        c0_account = posix_pwd.getpwnam(C0_RESPONDER_USER)
         core_root = CORE_CONFIG.parent.lstat()
         setup_root = SETUP_ROOT.lstat()
     except (KeyError, OSError) as exc:
@@ -1781,14 +1985,45 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
             "transaction_digest",
             "request_expires_at",
         }
-        if set(pending) != expected_state_keys or pending.get("schema") != "agentnet.managed-server-credential-reauthorization-state.v1":
+        if pending.get("schema") == "agentnet.managed-server-credential-reauthorization-state.v1":
+            raise SystemExit(
+                "legacy reauthorization state lacks C0 provenance and cannot be resumed; "
+                "retain it as evidence and follow the package recovery procedure"
+            )
+        if (
+            set(pending) != expected_state_keys
+            or pending.get("schema")
+            != "agentnet.managed-server-credential-reauthorization-state.v2"
+        ):
             raise SystemExit("managed-server reauthorization state does not match the exact schema")
         if pending["config_path"] != str(config_path) or pending["identity_path"] != str(identity_path):
             raise SystemExit("managed-server reauthorization resume paths changed")
         try:
-            request = ManagedServerCredentialReauthorizationRequest.model_validate(pending["request"])
+            request = ManagedServerCredentialReauthorizationRequestV2.model_validate(
+                pending["request"]
+            )
         except Exception as exc:
             raise SystemExit("managed-server reauthorization request state is invalid") from exc
+        store = _open_server_agent_activation_store(
+            config,
+            database_url_override=database_url,
+        )
+        try:
+            (
+                c0_terminal_raw,
+                prior_supersession_journal_raw,
+                _prior_supersession_journal,
+                _terminal_credential,
+            ) = _managed_server_reauthorization_provenance(
+                store=store,
+                actor=actor,
+                key=key,
+                core_account=core_account,
+                c0_account=c0_account,
+                request=request,
+            )
+        finally:
+            store.close()
         if (
             request.domain_id != actor.domain_id
             or request.principal_id != actor.principal_id
@@ -1799,6 +2034,23 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
             or not isinstance(pending["possession_secret"], str)
             or len(pending["possession_secret"]) != 43
             or type(pending["request_expires_at"]) is not int
+            or request.c0_terminal_sha256
+            != hashlib.sha256(c0_terminal_raw).hexdigest()
+            or (
+                request.prior_supersession_journal_sha256
+                != (
+                    hashlib.sha256(prior_supersession_journal_raw).hexdigest()
+                    if prior_supersession_journal_raw is not None
+                    else None
+                )
+                and not (
+                    _prior_supersession_journal is not None
+                    and _prior_supersession_journal.entries[-1].request_id
+                    == request.request_id
+                    and _prior_supersession_journal.entries[-1].prior_journal_sha256
+                    == request.prior_supersession_journal_sha256
+                )
+            )
         ):
             raise SystemExit("managed-server reauthorization state binding changed")
     else:
@@ -1829,6 +2081,18 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
                 raise SystemExit("managed-server expired credential binding changed")
             if now < binding.expires_at:
                 raise SystemExit("managed-server credential is not expired")
+            (
+                c0_terminal_raw,
+                prior_supersession_journal_raw,
+                _prior_supersession_journal,
+                terminal_credential,
+            ) = _managed_server_reauthorization_provenance(
+                store=store,
+                actor=actor,
+                key=key,
+                core_account=core_account,
+                c0_account=c0_account,
+            )
         finally:
             store.close()
         config_sha256 = hashlib.sha256(config_raw).hexdigest()
@@ -1838,7 +2102,9 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
                 NAMESPACE_URL,
                 "agentnet:managed-server-credential-reauthorization-request:"
                 f"{actor.domain_id}:{actor.harness_id}:{actor.credential_id}:"
-                f"{actor.credential_epoch}:{binding.expires_at}:{config_sha256}:{identity_sha256}",
+                f"{actor.credential_epoch}:{binding.expires_at}:{config_sha256}:"
+                f"{identity_sha256}:{hashlib.sha256(c0_terminal_raw).hexdigest()}:"
+                f"{hashlib.sha256(prior_supersession_journal_raw).hexdigest() if prior_supersession_journal_raw is not None else '0' * 64}",
             )
         )
         values = {
@@ -1853,13 +2119,20 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
             "expected_binding_assurance": actor.binding_assurance,
             "managed_config_sha256": config_sha256,
             "managed_identity_sha256": identity_sha256,
+            "c0_terminal_credential_epoch": terminal_credential[1],
+            "c0_terminal_sha256": hashlib.sha256(c0_terminal_raw).hexdigest(),
+            "prior_supersession_journal_sha256": (
+                hashlib.sha256(prior_supersession_journal_raw).hexdigest()
+                if prior_supersession_journal_raw is not None
+                else None
+            ),
             "maximum_new_credential_ttl_seconds": ttl_seconds,
         }
-        unsigned = ManagedServerCredentialReauthorizationRequest(
+        unsigned = ManagedServerCredentialReauthorizationRequestV2(
             **values,
             old_key_possession_signature="pending",
         )
-        request = ManagedServerCredentialReauthorizationRequest(
+        request = ManagedServerCredentialReauthorizationRequestV2(
             **values,
             old_key_possession_signature=key.sign(
                 MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
@@ -1869,7 +2142,7 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
         possession_secret = secrets.token_urlsafe(32)
         request_expires_at = now + 300
         pending = {
-            "schema": "agentnet.managed-server-credential-reauthorization-state.v1",
+            "schema": "agentnet.managed-server-credential-reauthorization-state.v2",
             "config_path": str(config_path),
             "identity_path": str(identity_path),
             "request": request.model_dump(mode="json", by_alias=True),
@@ -1918,19 +2191,19 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
             replacement_values = request.model_dump(mode="python", by_alias=True)
             replacement_values["request_id"] = str(uuid4())
             replacement_values["old_key_possession_signature"] = "pending"
-            replacement_unsigned = ManagedServerCredentialReauthorizationRequest.model_validate(
+            replacement_unsigned = ManagedServerCredentialReauthorizationRequestV2.model_validate(
                 replacement_values
             )
             replacement_values["old_key_possession_signature"] = key.sign(
                 MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
                 replacement_unsigned.possession_fields(),
             )
-            request = ManagedServerCredentialReauthorizationRequest.model_validate(
+            request = ManagedServerCredentialReauthorizationRequestV2.model_validate(
                 replacement_values
             )
             possession_secret = secrets.token_urlsafe(32)
             pending = {
-                "schema": "agentnet.managed-server-credential-reauthorization-state.v1",
+                "schema": "agentnet.managed-server-credential-reauthorization-state.v2",
                 "config_path": str(config_path),
                 "identity_path": str(identity_path),
                 "request": request.model_dump(mode="json", by_alias=True),
@@ -1989,6 +2262,36 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
         database_url_override=database_url,
     )
     try:
+        (
+            c0_terminal_raw,
+            current_supersession_journal_raw,
+            current_supersession_journal,
+            _terminal_credential,
+        ) = _managed_server_reauthorization_provenance(
+            store=store,
+            actor=actor,
+            key=key,
+            core_account=core_account,
+            c0_account=c0_account,
+            request=request,
+        )
+        request_bound_journal_raw = current_supersession_journal_raw
+        if (
+            current_supersession_journal is not None
+            and current_supersession_journal.entries[-1].request_id
+            == request.request_id
+        ):
+            request_bound_journal_raw = (
+                canonical_supersession_journal(
+                    current_supersession_journal.model_copy(
+                        update={
+                            "entries": current_supersession_journal.entries[:-1]
+                        }
+                    )
+                )
+                if len(current_supersession_journal.entries) > 1
+                else None
+            )
         incidents = DomainIncidentService(store)
         outage_gate = OutageGate(
             config.policies.outage,
@@ -1999,7 +2302,49 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
             verifier,
             credential_ttl_seconds=ttl_seconds,
             outage_gate=outage_gate,
-        ).reauthorize(request=request, approval=receipt)
+        ).reauthorize(
+            request=request,
+            approval=receipt,
+            c0_terminal_raw=c0_terminal_raw,
+            c0_supersession_journal_raw=request_bound_journal_raw,
+        )
+        supersession_journal = append_supersession(
+            terminal_raw=c0_terminal_raw,
+            existing=current_supersession_journal,
+            domain_id=request.domain_id,
+            principal_id=request.principal_id,
+            terminal_credential_epoch=request.c0_terminal_credential_epoch,
+            harness_id=request.harness_id,
+            request_id=request.request_id,
+            transaction_sha256=hashlib.sha256(request.canonical_transaction).hexdigest(),
+            approval_receipt_id=str(receipt["receipt_id"]),
+            approval_receipt_sha256=hashlib.sha256(
+                canonical_json(dict(receipt))
+            ).hexdigest(),
+            audit_record_hash=result.audit_record_hash,
+            prior_journal_sha256=request.prior_supersession_journal_sha256,
+            previous_credential_id=request.expired_credential_id,
+            credential_id=result.credential_id,
+            previous_credential_epoch=request.expected_credential_epoch,
+            credential_epoch=result.credential_epoch,
+            key_id=request.expected_key_id,
+            not_before=result.not_before,
+            expires_at=result.expires_at,
+        )
+        load_audited_supersession_journal(
+            canonical_supersession_journal(supersession_journal),
+            store,
+            domain_id=request.domain_id,
+            principal_id=request.principal_id,
+            harness_id=request.harness_id,
+        )
+        journal_status = _replace_managed_private_bytes(
+            CREDENTIAL_SUPERSESSION_JOURNAL,
+            expected=current_supersession_journal_raw,
+            replacement=canonical_supersession_journal(supersession_journal),
+            uid=core_account.pw_uid,
+            gid=core_account.pw_gid,
+        )
         config_value = config.model_dump(mode="python")
         config_value["enrolled_credential_id"] = result.credential_id
         candidate = ExtensionConfig.model_validate(config_value)
@@ -2043,6 +2388,7 @@ def command_server_agent_reauthorize_expired_credential(args: argparse.Namespace
                 "idempotent_database_repeat": result.idempotent_repeat,
                 "config": config_status,
                 "identity": identity_status,
+                "credential_supersession_journal": journal_status,
                 "credential_epoch": result.credential_epoch,
                 "authority_granted": False,
                 "service_restart": "not_performed",

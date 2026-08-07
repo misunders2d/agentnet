@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import stat
 import time
 from importlib.metadata import version as package_version
 from collections.abc import Mapping
@@ -95,6 +97,10 @@ from agentnet.mailbox.service import MailboxService
 from agentnet.messaging.conversation import ConversationService
 from agentnet.messaging.events import new_event
 from agentnet.messaging.obligation import ResponseObligationService
+from agentnet.operations.c0_credential_supersession import (
+    completed_c0_terminal_credential,
+    load_audited_supersession_journal,
+)
 from agentnet.operations.config import (
     ExtensionConfig,
     OIDCTokenEndpointAuthMethod,
@@ -230,6 +236,8 @@ class CommunicationCore:
             raise GateBlocked("storage_profile", "local_conformance cannot emit a durable PostgreSQL acceptance fact")
         self.config = config
         self.store = store
+        self._verified_supersession_binding: tuple[str, int, str] | None = None
+        self._verified_supersession_evidence: dict[str, Any] | None = None
         configured_approval_verifier: IndependentApprovalVerifier | None = None
         if config.oidc_enrollment is not None:
             oidc = config.oidc_enrollment
@@ -848,6 +856,110 @@ class CommunicationCore:
 
         return self.confidentiality.require_processing(classification, capability)
 
+    @staticmethod
+    def _read_private_supersession_journal(path: Path) -> bytes:
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            raise GateBlocked(
+                "c0_credential_supersession",
+                "managed-server credential supersession journal is unavailable",
+            ) from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077
+                or metadata.st_size > 1_048_576
+            ):
+                raise GateBlocked(
+                    "c0_credential_supersession",
+                    "managed-server credential supersession journal custody is invalid",
+                )
+            raw = os.read(descriptor, 1_048_577)
+            if len(raw) != metadata.st_size:
+                raise GateBlocked(
+                    "c0_credential_supersession",
+                    "managed-server credential supersession journal changed while reading",
+                )
+            return raw
+        finally:
+            os.close(descriptor)
+
+    def _require_managed_credential_supersession(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str,
+        credential_epoch: int,
+        key_id: str,
+    ) -> dict[str, Any]:
+        current = (credential_id, credential_epoch, key_id)
+        if self._verified_supersession_binding == current:
+            if self._verified_supersession_evidence is None:
+                raise GateBlocked(
+                    "c0_credential_supersession",
+                    "managed-server supersession cache is incomplete",
+                )
+            return dict(self._verified_supersession_evidence)
+        journal_path = self.config.data_dir / "credential-supersessions.json"
+        journal_exists = os.path.lexists(journal_path)
+        terminal_credential = completed_c0_terminal_credential(
+            self.store,
+            domain_id=self.config.domain_id,
+            principal_id=principal_id,
+            harness_id=self.config.enrolled_harness_id or "",
+        )
+        if terminal_credential is None:
+            if journal_exists:
+                raise GateBlocked(
+                    "c0_credential_supersession",
+                    "managed-server credential supersession origin is unavailable",
+                )
+            evidence = {"status": "not_applicable"}
+            self._verified_supersession_binding = current
+            self._verified_supersession_evidence = evidence
+            return dict(evidence)
+        if terminal_credential == (credential_id, credential_epoch) and not journal_exists:
+            evidence = {"status": "not_applicable"}
+            self._verified_supersession_binding = current
+            self._verified_supersession_evidence = evidence
+            return dict(evidence)
+        if not journal_exists:
+            raise GateBlocked(
+                "c0_credential_supersession",
+                "managed-server replacement credential lacks supersession provenance",
+            )
+        raw = self._read_private_supersession_journal(journal_path)
+        journal = load_audited_supersession_journal(
+            raw,
+            self.store,
+            domain_id=self.config.domain_id,
+            principal_id=principal_id,
+            harness_id=self.config.enrolled_harness_id or "",
+        )
+        if (
+            (journal.terminal_credential_id, journal.terminal_credential_epoch)
+            != terminal_credential
+            or journal.current_credential != (credential_id, credential_epoch)
+            or journal.entries[-1].key_id != key_id
+        ):
+            raise GateBlocked(
+                "c0_credential_supersession",
+                "managed-server credential supersession journal is stale",
+            )
+        evidence = {
+            "status": "verified",
+            "journal_sha256": hashlib.sha256(raw).hexdigest(),
+            "transition_count": len(journal.entries),
+            "credential_id": credential_id,
+            "credential_epoch": credential_epoch,
+        }
+        self._verified_supersession_binding = current
+        self._verified_supersession_evidence = evidence
+        return dict(evidence)
+
     def _require_enrolled_server_agent_binding(self) -> None:
         """Validate deployment labels without granting caller authority.
 
@@ -875,6 +987,12 @@ class CommunicationCore:
             binding.require_active(now=int(time.time()))
         except Exception as exc:
             raise GateBlocked("server_agent_enrollment", "configured server-agent enrollment is not current") from exc
+        self._require_managed_credential_supersession(
+            principal_id=binding.principal_id,
+            credential_id=binding.credential_id,
+            credential_epoch=binding.credential_epoch,
+            key_id=binding.key_id,
+        )
         if (
             binding.domain_id != self.config.domain_id
             or binding.harness_id != harness_id
@@ -888,6 +1006,12 @@ class CommunicationCore:
         try:
             self._require_enrolled_server_agent_binding()
             binding = load_credential_binding(self.store, str(self.config.enrolled_credential_id))
+            supersession = self._require_managed_credential_supersession(
+                principal_id=binding.principal_id,
+                credential_id=binding.credential_id,
+                credential_epoch=binding.credential_epoch,
+                key_id=binding.key_id,
+            )
         except Exception as exc:
             return {
                 "ready": False,
@@ -904,6 +1028,7 @@ class CommunicationCore:
                 if remaining <= self.config.policies.identity.credential_renewal_window_seconds
                 else "current"
             ),
+            "credential_supersession": supersession,
         }
 
     def _require_server_agent_capability(self, capability: ServerAgentCapability) -> None:

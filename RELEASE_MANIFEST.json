@@ -1,135 +1,224 @@
 {
   "$schema": "https://agentnet.invalid/schemas/release-manifest-v1.json",
-  "manifest_version": "1.0",
-  "snapshot_date": "2026-08-06",
-  "release": {
-    "name": "agentnet",
-    "version": "0.1.46",
-    "profile": "credential_renewal_timer_corrective_candidate",
-    "status": "BLOCKED",
-    "production_ready": false,
-    "ship_eligible": false,
-    "reason": "All 19 must-not-ship gates remain non-PASSED; local implementation evidence is partial and required external, privileged, production-topology, or owner evidence remains absent."
-  },
   "authoritative_sources": {
     "concept": {
       "path": "docs/specification.md",
       "sha256": "1a6b90660a3bc9eb6c5e9a8ab1d004de5e89d73dfe7505f3997f90285a401b94"
     },
-    "requirements": {
-      "path": "docs/requirements.md",
-      "sha256": "bd95f53685be5a6188c8833414d3bebab07725f3dd5c0734dc2b6c8052cd27f1"
-    },
     "final_verification": {
       "path": "docs/final-verification.md",
       "sha256": "d359856efbe4e94c3b57e138b5ddb2927f233be10281538b06216af9d41fc466"
+    },
+    "requirements": {
+      "path": "docs/requirements.md",
+      "sha256": "bd95f53685be5a6188c8833414d3bebab07725f3dd5c0734dc2b6c8052cd27f1"
     }
   },
-  "runtime": {
-    "implementation": "CPython",
-    "version": "3.13.13",
-    "requires_python": ">=3.13, <3.15"
+  "component_decisions": {
+    "a2a_gateway": {
+      "boundary": "External actors never acquire corporate positive authority.",
+      "pin": "spec-1.0.1_wire-1.0_a2a-sdk-1.1.0",
+      "status": "ACCEPT_BASELINE_PRODUCTION_GATE_OPEN"
+    },
+    "a2a_internal_fabric": {
+      "boundary": "A2A is an edge protocol only.",
+      "pin": "spec-1.0.1",
+      "status": "REJECT_AS_CORE"
+    },
+    "agntcy_directory": {
+      "boundary": "The corporate PEP remains disclosure authority.",
+      "pin": null,
+      "status": "NOT_SELECTED_EXTERNAL_BAKEOFF_OPEN"
+    },
+    "agntcy_oasf": {
+      "boundary": "Imported descriptions remain tainted routing metadata.",
+      "pin": null,
+      "status": "NOT_SELECTED_EXTERNAL_BAKEOFF_OPEN"
+    },
+    "agntcy_slim": {
+      "boundary": "Transport cannot assert durable acceptance or recipient/effect facts.",
+      "pin": null,
+      "status": "NOT_SELECTED_BASELINE_COMPARATOR_ONLY"
+    },
+    "artifact_store": {
+      "boundary": "Manifests, quarantine, release, and authorization remain corporate.",
+      "pin": "rclone-1.74.4-comparator",
+      "status": "PERSISTENT_BYTE_QUOTA_FILESYSTEM_POSTGRES_MANIFEST_RESTORE_EXTERNAL"
+    },
+    "audit_witness": {
+      "boundary": "Sensitive release requires committed audit intent.",
+      "pin": null,
+      "status": "HASH_CHAIN_AND_RELEASE_INTENT_BUILT_WITNESS_EXTERNAL"
+    },
+    "canonical_schemas": {
+      "boundary": "Corporate actor, state, authority, receipt, audit, and effect semantics remain owned.",
+      "pin": "schema-catalog-v1",
+      "status": "BUILD_OWN"
+    },
+    "cedar": {
+      "boundary": "Corporate policy ownership and fail-closed PEP remain owned.",
+      "pin": null,
+      "status": "OPTIONAL_TARGET_RUNTIME_NOT_ENABLED"
+    },
+    "clean_worker_launcher": {
+      "boundary": "A separate chat is not an isolation claim.",
+      "pin": "bubblewrap-0.11.2_systemd-261-candidates",
+      "status": "DETERMINISTIC_INSTALLED_TESTED_SEMANTIC_EXTERNAL"
+    },
+    "cryptographic_primitives": {
+      "boundary": "Purpose-bound signing profiles remain corporate; no new primitives.",
+      "pin": "cryptography-49.0.0",
+      "status": "REUSE_REQUIRED_PROFILE_GATE_OPEN"
+    },
+    "file_safety": {
+      "boundary": "No scanner evidence means no release.",
+      "pin": null,
+      "status": "LOCAL_PREFILTER_QUARANTINE_ATTESTATION_SCANNER_EXTERNAL"
+    },
+    "future_hubless_custody": {
+      "boundary": "No partition shortcut weakens ordinary enrolled server-agent custody and authority boundaries.",
+      "pin": "mailbox-custodian-interface-v1",
+      "status": "ONE_HOP_PEER_RELAY_COMPOSED_DISTRIBUTED_AUTHORITY_DISABLED"
+    },
+    "human_auth_approval": {
+      "boundary": "Exact principal, purpose, transaction, receipt, audit, and independently administered deployment remain corporate; local component evidence does not prove independence.",
+      "pin": "webauthn==3.0.0",
+      "status": "OIDC_WEBAUTHN_COMPONENT_BUILT_EXTERNAL_OWNER_BLOCKED"
+    },
+    "matrix_components": {
+      "boundary": "Corporate room ownership and governance remain canonical.",
+      "pin": null,
+      "status": "REJECT_AS_AUTHORITY_COMPONENT"
+    },
+    "mcp_local_binding": {
+      "boundary": "Caller identity is server-derived; MCP is not the corporate network.",
+      "pin": "spec-2025-11-25_mcp-1.28.1",
+      "status": "PARENT_BOUND_MCP_AND_PI_CAPABILITY_COMPOSED_INTEROP_EXTERNAL"
+    },
+    "mls": {
+      "boundary": "No custom MLS or implicit key-holder visibility.",
+      "pin": null,
+      "status": "C3_DISABLED_EXTERNAL_MLS_OWNER_BLOCKED"
+    },
+    "postgresql": {
+      "boundary": "Only proven commits may assert durable state.",
+      "pin": "psycopg-binary-3.3.4_postgresql-18.4-local-gate",
+      "status": "MULTI_HOST_PRIMARY_RECONNECT_FENCED_LOCAL_HA_EXTERNAL"
+    },
+    "spiffe_spire": {
+      "boundary": "Workload identity cannot impersonate a human.",
+      "pin": null,
+      "status": "REGISTERED_WORKLOAD_BOUNDARY_BUILT_EXTERNAL_SPIFFE_OPEN"
+    },
+    "supervisor_harness_lifecycle": {
+      "boundary": "Exact human plus harness binding and foreground isolation remain owned.",
+      "pin": "agentnet-0.1.39",
+      "status": "BUILD_OWN_INTEGRATION"
+    },
+    "temporal_style_workflow": {
+      "boundary": "Workflow success cannot fabricate external effects.",
+      "pin": null,
+      "status": "EXPLICIT_EFFECT_LIFECYCLE_COMPOSED"
+    }
   },
   "dependency_lock": {
-    "path": "uv.lock",
-    "sha256": "84d5e1d251fffe796f83b41a6e115e7ec52228a2eb27fd42177e604f577e5a93",
-    "format_version": 1,
-    "revision": 3,
-    "pyproject": {
-      "path": "pyproject.toml",
-      "sha256": "35d2aec99d7123711160830ad38f8a4a9b210e11ccfaff239d9c18908b16a876"
-    },
     "direct_dependencies": {
       "build": {
-        "hatchling": {
-          "version": "1.28.0",
-          "extras": [],
-          "marker": null
-        },
         "editables": {
-          "version": "0.5",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "0.5"
+        },
+        "hatchling": {
+          "extras": [],
+          "marker": null,
+          "version": "1.28.0"
         }
       },
       "runtime": {
         "a2a-sdk": {
-          "version": "1.1.0",
           "extras": [
             "http-server"
           ],
-          "marker": null
+          "marker": null,
+          "version": "1.1.0"
         },
         "cryptography": {
-          "version": "49.0.0",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "49.0.0"
         },
         "jsonschema": {
-          "version": "4.26.0",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "4.26.0"
         },
         "mcp": {
-          "version": "1.28.1",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "1.28.1"
         },
         "psutil": {
-          "version": "7.2.2",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "7.2.2"
         },
         "psycopg": {
-          "version": "3.3.4",
           "extras": [
             "binary"
           ],
-          "marker": null
+          "marker": null,
+          "version": "3.3.4"
         },
         "pydantic": {
-          "version": "2.13.4",
           "extras": [],
-          "marker": null
-        },
-        "segno": {
-          "version": "1.6.6",
-          "extras": [],
-          "marker": null
-        },
-        "starlette": {
-          "version": "1.3.1",
-          "extras": [],
-          "marker": null
-        },
-        "uvicorn": {
-          "version": "0.51.0",
-          "extras": [],
-          "marker": null
-        },
-        "webauthn": {
-          "version": "3.0.0",
-          "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "2.13.4"
         },
         "pywin32": {
-          "version": "312",
           "extras": [],
-          "marker": "sys_platform == 'win32'"
+          "marker": "sys_platform == 'win32'",
+          "version": "312"
+        },
+        "segno": {
+          "extras": [],
+          "marker": null,
+          "version": "1.6.6"
+        },
+        "starlette": {
+          "extras": [],
+          "marker": null,
+          "version": "1.3.1"
+        },
+        "uvicorn": {
+          "extras": [],
+          "marker": null,
+          "version": "0.51.0"
+        },
+        "webauthn": {
+          "extras": [],
+          "marker": null,
+          "version": "3.0.0"
         }
       },
       "test": {
         "hypothesis": {
-          "version": "6.156.6",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "6.156.6"
         },
         "pytest": {
-          "version": "9.1.1",
           "extras": [],
-          "marker": null
+          "marker": null,
+          "version": "9.1.1"
         }
       }
+    },
+    "format_version": 1,
+    "path": "uv.lock",
+    "pyproject": {
+      "path": "pyproject.toml",
+      "sha256": "35d2aec99d7123711160830ad38f8a4a9b210e11ccfaff239d9c18908b16a876"
     },
     "resolution": {
       "a2a-sdk": "1.1.0",
@@ -194,16 +283,266 @@
       "urllib3": "2.7.0",
       "uvicorn": "0.51.0",
       "webauthn": "3.0.0"
+    },
+    "revision": 3,
+    "sha256": "84d5e1d251fffe796f83b41a6e115e7ec52228a2eb27fd42177e604f577e5a93"
+  },
+  "external_release_evidence": {
+    "installer_lifecycle": {
+      "gate": "G15",
+      "passed": false,
+      "status": "EXTERNAL_REQUIRED"
+    },
+    "provenance": {
+      "gate": "G15",
+      "passed": false,
+      "status": "EXTERNAL_REQUIRED"
+    },
+    "sbom": {
+      "gate": "G15",
+      "passed": false,
+      "status": "EXTERNAL_REQUIRED"
+    },
+    "signature": {
+      "gate": "G15",
+      "passed": false,
+      "status": "EXTERNAL_REQUIRED"
     }
+  },
+  "manifest_version": "1.0",
+  "must_not_ship_gates": {
+    "G01": {
+      "external_evidence": "MISSING",
+      "name": "Foreground isolation",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G02": {
+      "external_evidence": "MISSING",
+      "name": "Worker recovery",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G03": {
+      "external_evidence": "MISSING",
+      "name": "Harness isolation/model egress",
+      "required_tiers": [
+        "H",
+        "P",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G04": {
+      "external_evidence": "REVIEWED_PARTIAL",
+      "name": "Native A2A",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "FAILED"
+    },
+    "G05": {
+      "external_evidence": "MISSING",
+      "name": "MCP/local API",
+      "required_tiers": [
+        "H",
+        "L",
+        "P",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G06": {
+      "external_evidence": "MISSING",
+      "name": "Identity/enrollment",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G07": {
+      "external_evidence": "MISSING",
+      "name": "Local IPC/signing oracle",
+      "required_tiers": [
+        "H",
+        "P",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G08": {
+      "external_evidence": "MISSING",
+      "name": "Authorization/intent",
+      "required_tiers": [
+        "H",
+        "L",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G09": {
+      "external_evidence": "MISSING",
+      "name": "Durability",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G10": {
+      "external_evidence": "MISSING",
+      "name": "Delivery/effects/expiry",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "PARTIAL"
+    },
+    "G11": {
+      "external_evidence": "MISSING",
+      "name": "Revocation",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G12": {
+      "external_evidence": "MISSING",
+      "name": "Room authority",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G13": {
+      "external_evidence": "MISSING",
+      "name": "Files/audit",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G14": {
+      "external_evidence": "MISSING",
+      "name": "Signed-peer abuse/intent",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G15": {
+      "external_evidence": "MISSING",
+      "name": "Supply chain",
+      "required_tiers": [
+        "H",
+        "P",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G16": {
+      "external_evidence": "MISSING",
+      "name": "Operations/failure/adoption",
+      "required_tiers": [
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G17": {
+      "external_evidence": "MISSING",
+      "name": "Owner policy",
+      "required_tiers": [
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    },
+    "G18": {
+      "external_evidence": "MISSING",
+      "name": "Discovery/version/config",
+      "required_tiers": [
+        "H",
+        "L",
+        "E"
+      ],
+      "status": "BLOCKED_EXTERNAL"
+    },
+    "G19": {
+      "external_evidence": "MISSING",
+      "name": "Freshness/crypto/audit roots",
+      "required_tiers": [
+        "H",
+        "L",
+        "E",
+        "O"
+      ],
+      "status": "BLOCKED_OWNER"
+    }
+  },
+  "protocols": {
+    "a2a": {
+      "bindings": [
+        "HTTP+JSON",
+        "JSONRPC"
+      ],
+      "sdk_name": "a2a-sdk",
+      "sdk_version": "1.1.0",
+      "spec_release": "1.0.1",
+      "wire_version": "1.0"
+    },
+    "mcp": {
+      "role": "optional_local_binding_only",
+      "sdk_name": "mcp",
+      "sdk_version": "1.28.1",
+      "spec_version": "2025-11-25"
+    }
+  },
+  "release": {
+    "name": "agentnet",
+    "production_ready": false,
+    "profile": "credential_renewal_timer_corrective_candidate",
+    "reason": "All 19 must-not-ship gates remain non-PASSED; local implementation evidence is partial and required external, privileged, production-topology, or owner evidence remains absent.",
+    "ship_eligible": false,
+    "status": "BLOCKED",
+    "version": "0.1.46"
   },
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "73565039fc3fa51ace573635c0d3cf052d8ebc5b16e8606a25bfbdce96b80af0"
+      "sha256": "91f3b70c13baaf0b5690be811f6c94edf0b90e22e059be3f282a47d32f758799"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "ba1568cf83c402978b509942c309272f81f4d07ec1568f736d8cd1f9a6a8ec5f"
+      "sha256": "8fd0bddb6f5742bdd01e2cfad2132c74c425f194c8726ac73843d0f517f19ae1"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -223,7 +562,7 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "f6721442644b4d71d847012d34089bf2f37218f47a4a6db1b1516ccb894a7398"
+      "sha256": "63472714a608840389f3945d99cf034aad22dc949fc8a90235c756a9b2214763"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
@@ -263,488 +602,149 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "cf71a0ff516fee73eb4f947a22da759c49188a6f0dc41089f3a504561dcd636e"
+      "sha256": "df7ca6e3aad7ec3a3c71e7913cbc4d09a83af42095270d04a4af8f5f54c7b177"
     }
   },
   "release_source_tree": {
-    "path": "src",
     "algorithm": "sha256(path NUL bytes NUL)",
-    "sha256": "b48753c38105d51e042ddea03840d81c4a1a21fea2fc82cbc712d70a20c99d14"
+    "path": "src",
+    "sha256": "773f994f5a0f9261cbc719da1c6adfc89b0daf83c98df629063f7b5e2acae055"
   },
-  "protocols": {
-    "a2a": {
-      "spec_release": "1.0.1",
-      "wire_version": "1.0",
-      "sdk_name": "a2a-sdk",
-      "sdk_version": "1.1.0",
-      "bindings": [
-        "HTTP+JSON",
-        "JSONRPC"
-      ]
-    },
-    "mcp": {
-      "spec_version": "2025-11-25",
-      "sdk_name": "mcp",
-      "sdk_version": "1.28.1",
-      "role": "optional_local_binding_only"
-    }
+  "runtime": {
+    "implementation": "CPython",
+    "requires_python": ">=3.13, <3.15",
+    "version": "3.13.13"
   },
   "schema_catalog": {
-    "version": "1.0",
     "generator": "scripts/export_schemas.py",
     "schemas": {
       "actor": {
-        "path": "schemas/v1/actor.json",
         "$id": "https://agentnet.invalid/schemas/v1/actor.json",
+        "path": "schemas/v1/actor.json",
         "sha256": "88f69c93f49ef23016c5a6200ab7935188f536cfbd0577abc26387924e7660c0"
       },
       "artifact-manifest": {
-        "path": "schemas/v1/artifact-manifest.json",
         "$id": "https://agentnet.invalid/schemas/v1/artifact-manifest.json",
+        "path": "schemas/v1/artifact-manifest.json",
         "sha256": "425b9ffd781aa5dc93da4634ab1b53cd4198bcaa527cfdd5b6874604f3fc2d0b"
       },
       "audit-intent": {
-        "path": "schemas/v1/audit-intent.json",
         "$id": "https://agentnet.invalid/schemas/v1/audit-intent.json",
+        "path": "schemas/v1/audit-intent.json",
         "sha256": "4bbc0fc0356d07cf37772d277e4a1d0f6cfc235fe35ccbef50d45ddeb5c70232"
       },
       "enrollment-transaction": {
-        "path": "schemas/v1/enrollment-transaction.json",
         "$id": "https://agentnet.invalid/schemas/v1/enrollment-transaction.json",
+        "path": "schemas/v1/enrollment-transaction.json",
         "sha256": "0c0a3cf5782b2a6248fb0b55db0f91b717506b3fb389fd8aaedcd4b9cfbdddaa"
       },
       "event": {
-        "path": "schemas/v1/event.json",
         "$id": "https://agentnet.invalid/schemas/v1/event.json",
+        "path": "schemas/v1/event.json",
         "sha256": "97e98d8f8ec0efdb07ba040989b9d38f27fca25aead97d403b5c4b965df69adb"
       },
       "federation-invitation": {
-        "path": "schemas/v1/federation-invitation.json",
         "$id": "https://agentnet.invalid/schemas/v1/federation-invitation.json",
+        "path": "schemas/v1/federation-invitation.json",
         "sha256": "28824856533340c49866dda831fd4465c7115f8665dcae21aa84524fadeaa9f8"
       },
       "identity": {
-        "path": "schemas/v1/identity.json",
         "$id": "https://agentnet.invalid/schemas/v1/identity.json",
+        "path": "schemas/v1/identity.json",
         "sha256": "1d35bfc082e379df29d900dcc867cda914d3aeeb13bedb303ee964455663a317"
       },
       "independent-approval-receipt": {
-        "path": "schemas/v1/independent-approval-receipt.json",
         "$id": "https://agentnet.invalid/schemas/v1/independent-approval-receipt.json",
+        "path": "schemas/v1/independent-approval-receipt.json",
         "sha256": "0031076ce642f25942539ac5d3159155afac965c20ae3d94dd9af811363d3648"
       },
       "internal-invitation-acceptance": {
-        "path": "schemas/v1/internal-invitation-acceptance.json",
         "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-acceptance.json",
+        "path": "schemas/v1/internal-invitation-acceptance.json",
         "sha256": "cd598888e8c72734aead3b9b77f6bfb4e0638776147e383783b674e8980a916c"
       },
       "internal-invitation-record": {
-        "path": "schemas/v1/internal-invitation-record.json",
         "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-record.json",
+        "path": "schemas/v1/internal-invitation-record.json",
         "sha256": "0ffa16ad6bd4c9ee9b556c04bfe7a97db3695ccbd0e67a899512aad2e3b11849"
       },
       "internal-invitation-request": {
-        "path": "schemas/v1/internal-invitation-request.json",
         "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-request.json",
+        "path": "schemas/v1/internal-invitation-request.json",
         "sha256": "2b28222f11e4a2b8019f2fb6bc18cb595ce481e2d54f711fc2921aef12b63899"
       },
       "internal-invitation-transaction": {
-        "path": "schemas/v1/internal-invitation-transaction.json",
         "$id": "https://agentnet.invalid/schemas/v1/internal-invitation-transaction.json",
+        "path": "schemas/v1/internal-invitation-transaction.json",
         "sha256": "35c51dd0045954c37e8bde6f59b1fc0563025eaf388f39067e439f00f12d8fc7"
       },
       "presence": {
-        "path": "schemas/v1/presence.json",
         "$id": "https://agentnet.invalid/schemas/v1/presence.json",
+        "path": "schemas/v1/presence.json",
         "sha256": "6b19a5d5c0f74e5d9cb2336b20dcdab790a25321e2e20bfbeb4ab302839cf1c5"
       },
       "protocol-error": {
-        "path": "schemas/v1/protocol-error.json",
         "$id": "https://agentnet.invalid/schemas/v1/protocol-error.json",
+        "path": "schemas/v1/protocol-error.json",
         "sha256": "d7830dc9e90872d20fafc109b575261c2cd97cbce2700d9150edd8f794b03b21"
       },
       "provenance-reference": {
-        "path": "schemas/v1/provenance-reference.json",
         "$id": "https://agentnet.invalid/schemas/v1/provenance-reference.json",
+        "path": "schemas/v1/provenance-reference.json",
         "sha256": "18a052c3635e8c04783bad66cec1cd0932c786fe00bdd404f2c33b09a40ad82a"
       },
       "receipt": {
-        "path": "schemas/v1/receipt.json",
         "$id": "https://agentnet.invalid/schemas/v1/receipt.json",
+        "path": "schemas/v1/receipt.json",
         "sha256": "11f21ebdb2d846a0f5795bcb57705d7170c3e8947fde5ba38b8df6074ebb39c9"
       },
+      "relationship": {
+        "$id": "https://agentnet.invalid/schemas/v1/relationship.json",
+        "path": "schemas/v1/relationship.json",
+        "sha256": "86b536881373bd6f4e507ad8983573953a1238e92f57fe321eafb88af21ef013"
+      },
       "relationship-consent-transaction": {
-        "path": "schemas/v1/relationship-consent-transaction.json",
         "$id": "https://agentnet.invalid/schemas/v1/relationship-consent-transaction.json",
+        "path": "schemas/v1/relationship-consent-transaction.json",
         "sha256": "96ef4cd4198df69aaf54610a1084fb3dc9d6320f4489da875bf0dc3c47477ce3"
       },
       "relationship-policy-exception": {
-        "path": "schemas/v1/relationship-policy-exception.json",
         "$id": "https://agentnet.invalid/schemas/v1/relationship-policy-exception.json",
+        "path": "schemas/v1/relationship-policy-exception.json",
         "sha256": "22d19d9f7f0e714a0de914e0090d5a5474ecd63c6239212268ab6e73470a8d20"
       },
-      "relationship": {
-        "path": "schemas/v1/relationship.json",
-        "$id": "https://agentnet.invalid/schemas/v1/relationship.json",
-        "sha256": "86b536881373bd6f4e507ad8983573953a1238e92f57fe321eafb88af21ef013"
-      },
       "revocation": {
-        "path": "schemas/v1/revocation.json",
         "$id": "https://agentnet.invalid/schemas/v1/revocation.json",
+        "path": "schemas/v1/revocation.json",
         "sha256": "0ef0be7d658008ee159d5e1b82f524f5f73d48f09153330888514b9381645903"
       },
       "room": {
-        "path": "schemas/v1/room.json",
         "$id": "https://agentnet.invalid/schemas/v1/room.json",
+        "path": "schemas/v1/room.json",
         "sha256": "4c974837c2e355297dfa1012709b7d5dfa5c32f26f8fd99dd88f6d54ab39be52"
       },
       "task-conflict-adjudication": {
-        "path": "schemas/v1/task-conflict-adjudication.json",
         "$id": "https://agentnet.invalid/schemas/v1/task-conflict-adjudication.json",
+        "path": "schemas/v1/task-conflict-adjudication.json",
         "sha256": "fb25bd652867057f901b843d0821f08768f30b16b8e5cb26afef37469729a242"
       },
       "task-conflict-outcome": {
-        "path": "schemas/v1/task-conflict-outcome.json",
         "$id": "https://agentnet.invalid/schemas/v1/task-conflict-outcome.json",
+        "path": "schemas/v1/task-conflict-outcome.json",
         "sha256": "b3777bec880c580f5922addc5159f8fcdaad22610a0cc0079a2ee1cf2891b0d1"
       },
       "task-execution-intent": {
-        "path": "schemas/v1/task-execution-intent.json",
         "$id": "https://agentnet.invalid/schemas/v1/task-execution-intent.json",
+        "path": "schemas/v1/task-execution-intent.json",
         "sha256": "38daca5b00e2e24d086bee72c090b4f1868c32cbb850cd02420728a383720262"
       },
       "task-grant": {
-        "path": "schemas/v1/task-grant.json",
         "$id": "https://agentnet.invalid/schemas/v1/task-grant.json",
+        "path": "schemas/v1/task-grant.json",
         "sha256": "5b51a9f0ad10541b91f7abc764270e2af2d591624b51586f9615259fcaecd57c"
       }
-    }
+    },
+    "version": "1.0"
   },
-  "component_decisions": {
-    "canonical_schemas": {
-      "status": "BUILD_OWN",
-      "pin": "schema-catalog-v1",
-      "boundary": "Corporate actor, state, authority, receipt, audit, and effect semantics remain owned."
-    },
-    "supervisor_harness_lifecycle": {
-      "status": "BUILD_OWN_INTEGRATION",
-      "pin": "agentnet-0.1.39",
-      "boundary": "Exact human plus harness binding and foreground isolation remain owned."
-    },
-    "a2a_gateway": {
-      "status": "ACCEPT_BASELINE_PRODUCTION_GATE_OPEN",
-      "pin": "spec-1.0.1_wire-1.0_a2a-sdk-1.1.0",
-      "boundary": "External actors never acquire corporate positive authority."
-    },
-    "a2a_internal_fabric": {
-      "status": "REJECT_AS_CORE",
-      "pin": "spec-1.0.1",
-      "boundary": "A2A is an edge protocol only."
-    },
-    "agntcy_oasf": {
-      "status": "NOT_SELECTED_EXTERNAL_BAKEOFF_OPEN",
-      "pin": null,
-      "boundary": "Imported descriptions remain tainted routing metadata."
-    },
-    "agntcy_directory": {
-      "status": "NOT_SELECTED_EXTERNAL_BAKEOFF_OPEN",
-      "pin": null,
-      "boundary": "The corporate PEP remains disclosure authority."
-    },
-    "agntcy_slim": {
-      "status": "NOT_SELECTED_BASELINE_COMPARATOR_ONLY",
-      "pin": null,
-      "boundary": "Transport cannot assert durable acceptance or recipient/effect facts."
-    },
-    "matrix_components": {
-      "status": "REJECT_AS_AUTHORITY_COMPONENT",
-      "pin": null,
-      "boundary": "Corporate room ownership and governance remain canonical."
-    },
-    "mls": {
-      "status": "C3_DISABLED_EXTERNAL_MLS_OWNER_BLOCKED",
-      "pin": null,
-      "boundary": "No custom MLS or implicit key-holder visibility."
-    },
-    "spiffe_spire": {
-      "status": "REGISTERED_WORKLOAD_BOUNDARY_BUILT_EXTERNAL_SPIFFE_OPEN",
-      "pin": null,
-      "boundary": "Workload identity cannot impersonate a human."
-    },
-    "human_auth_approval": {
-      "status": "OIDC_WEBAUTHN_COMPONENT_BUILT_EXTERNAL_OWNER_BLOCKED",
-      "pin": "webauthn==3.0.0",
-      "boundary": "Exact principal, purpose, transaction, receipt, audit, and independently administered deployment remain corporate; local component evidence does not prove independence."
-    },
-    "cedar": {
-      "status": "OPTIONAL_TARGET_RUNTIME_NOT_ENABLED",
-      "pin": null,
-      "boundary": "Corporate policy ownership and fail-closed PEP remain owned."
-    },
-    "postgresql": {
-      "status": "MULTI_HOST_PRIMARY_RECONNECT_FENCED_LOCAL_HA_EXTERNAL",
-      "pin": "psycopg-binary-3.3.4_postgresql-18.4-local-gate",
-      "boundary": "Only proven commits may assert durable state."
-    },
-    "artifact_store": {
-      "status": "PERSISTENT_BYTE_QUOTA_FILESYSTEM_POSTGRES_MANIFEST_RESTORE_EXTERNAL",
-      "pin": "rclone-1.74.4-comparator",
-      "boundary": "Manifests, quarantine, release, and authorization remain corporate."
-    },
-    "file_safety": {
-      "status": "LOCAL_PREFILTER_QUARANTINE_ATTESTATION_SCANNER_EXTERNAL",
-      "pin": null,
-      "boundary": "No scanner evidence means no release."
-    },
-    "mcp_local_binding": {
-      "status": "PARENT_BOUND_MCP_AND_PI_CAPABILITY_COMPOSED_INTEROP_EXTERNAL",
-      "pin": "spec-2025-11-25_mcp-1.28.1",
-      "boundary": "Caller identity is server-derived; MCP is not the corporate network."
-    },
-    "clean_worker_launcher": {
-      "status": "DETERMINISTIC_INSTALLED_TESTED_SEMANTIC_EXTERNAL",
-      "pin": "bubblewrap-0.11.2_systemd-261-candidates",
-      "boundary": "A separate chat is not an isolation claim."
-    },
-    "cryptographic_primitives": {
-      "status": "REUSE_REQUIRED_PROFILE_GATE_OPEN",
-      "pin": "cryptography-49.0.0",
-      "boundary": "Purpose-bound signing profiles remain corporate; no new primitives."
-    },
-    "temporal_style_workflow": {
-      "status": "EXPLICIT_EFFECT_LIFECYCLE_COMPOSED",
-      "pin": null,
-      "boundary": "Workflow success cannot fabricate external effects."
-    },
-    "audit_witness": {
-      "status": "HASH_CHAIN_AND_RELEASE_INTENT_BUILT_WITNESS_EXTERNAL",
-      "pin": null,
-      "boundary": "Sensitive release requires committed audit intent."
-    },
-    "future_hubless_custody": {
-      "status": "ONE_HOP_PEER_RELAY_COMPOSED_DISTRIBUTED_AUTHORITY_DISABLED",
-      "pin": "mailbox-custodian-interface-v1",
-      "boundary": "No partition shortcut weakens ordinary enrolled server-agent custody and authority boundaries."
-    }
-  },
-  "must_not_ship_gates": {
-    "G01": {
-      "name": "Foreground isolation",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G02": {
-      "name": "Worker recovery",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G03": {
-      "name": "Harness isolation/model egress",
-      "required_tiers": [
-        "H",
-        "P",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G04": {
-      "name": "Native A2A",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "FAILED",
-      "external_evidence": "REVIEWED_PARTIAL"
-    },
-    "G05": {
-      "name": "MCP/local API",
-      "required_tiers": [
-        "H",
-        "L",
-        "P",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G06": {
-      "name": "Identity/enrollment",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G07": {
-      "name": "Local IPC/signing oracle",
-      "required_tiers": [
-        "H",
-        "P",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G08": {
-      "name": "Authorization/intent",
-      "required_tiers": [
-        "H",
-        "L",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G09": {
-      "name": "Durability",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G10": {
-      "name": "Delivery/effects/expiry",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "PARTIAL",
-      "external_evidence": "MISSING"
-    },
-    "G11": {
-      "name": "Revocation",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G12": {
-      "name": "Room authority",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G13": {
-      "name": "Files/audit",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G14": {
-      "name": "Signed-peer abuse/intent",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G15": {
-      "name": "Supply chain",
-      "required_tiers": [
-        "H",
-        "P",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G16": {
-      "name": "Operations/failure/adoption",
-      "required_tiers": [
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G17": {
-      "name": "Owner policy",
-      "required_tiers": [
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    },
-    "G18": {
-      "name": "Discovery/version/config",
-      "required_tiers": [
-        "H",
-        "L",
-        "E"
-      ],
-      "status": "BLOCKED_EXTERNAL",
-      "external_evidence": "MISSING"
-    },
-    "G19": {
-      "name": "Freshness/crypto/audit roots",
-      "required_tiers": [
-        "H",
-        "L",
-        "E",
-        "O"
-      ],
-      "status": "BLOCKED_OWNER",
-      "external_evidence": "MISSING"
-    }
-  },
-  "external_release_evidence": {
-    "sbom": {
-      "status": "EXTERNAL_REQUIRED",
-      "passed": false,
-      "gate": "G15"
-    },
-    "provenance": {
-      "status": "EXTERNAL_REQUIRED",
-      "passed": false,
-      "gate": "G15"
-    },
-    "signature": {
-      "status": "EXTERNAL_REQUIRED",
-      "passed": false,
-      "gate": "G15"
-    },
-    "installer_lifecycle": {
-      "status": "EXTERNAL_REQUIRED",
-      "passed": false,
-      "gate": "G15"
-    }
-  }
+  "snapshot_date": "2026-08-06"
 }

@@ -253,7 +253,27 @@ Setup never automates owner OIDC or WebAuthn. Human work is browser-only. Never 
 
 Remote activation fails closed with `remote_activation_unavailable` when zero, multiple, expired, rejected, locally initiated, or conflicted transactions exist. Recovery is server-manager-only. For pending nonterminal state, rerun the exact `join guided --browser remote` command and have owner retry only fixed `/activate`; never send private URL/state. If Core reports that exact continuation `expired` or `failed`, rerun the exact command with `--replace-terminal-state`. That flag refuses absent, completed, malformed, argument-drifted, or nonterminal state, reuses the same candidate key, and starts a fresh OIDC transaction; never delete or edit guided state manually. The 60-poll anti-abuse budget applies only before OIDC callback; callback/Approval polling is bounded by the fresh challenge expiry. Failed PKCE, candidate possession failure, missing WebAuthn UV, broker denial, and response-loss conflicts never activate identity.
 
-If a preserved managed-server credential is already expired before the first C0 exchange, 0.1.39 does not reset or replace its identity. After the corrective setup has made Approval reachable, the server manager runs the exact package launcher with `server-agent reauthorize-expired-credential`. Defaults are the package-owned Core config, identity, key, and root-only state paths. The command accepts only the pre-C0 communication-only topology, proves fresh possession of the same managed key, and asks the owner only to open the fixed public Approval `/approval` page and approve with WebAuthn UV. Rerunning the exact command consumes the signed receipt, atomically retires the old expired row without extending it, creates one finite next-epoch credential, and CAS-updates the service-owned config/identity without restart or authority grant. Then rerun the exact digest-bound setup `--apply --start`. Never delete the state file; use `--replace-terminal-state` only after the command proves the prior Approval request rejected or expired. A2A, relay, or retained C0-terminal state requires separate recovery and is refused.
+If a preserved managed-server credential expires, never reset, relabel, or
+manually replace its identity. Keep Core stopped and run the exact package
+launcher with `server-agent reauthorize-expired-credential`. Defaults are the
+package-owned Core config, identity, key, canonical supersession journal, and
+root-only request-state paths. The command accepts only the communication-only
+topology, proves fresh possession of the unchanged managed key, and asks the
+owner only to open fixed public Approval `/approval` and approve with WebAuthn
+UV. Rerun the identical command after approval. Before first C0, immutable
+terminal evidence anchors the replacement; after C0, the complete canonical
+hash-chained journal and every named PostgreSQL audit record must prove all
+prior replacements. The command atomically retires the old row, creates one
+finite next epoch, and crash-safely CAS-updates config, identity, and journal.
+A2A or relay capability state requires separate recovery and is refused;
+retained C0-terminal state alone is accepted only through the audited post-C0
+supersession chain.
+It grants no authority and restarts nothing. Exact retries reconcile response
+loss. Missing, stale, edited, noncanonical, unaudited, actor/key-drifted, or
+replay-conflicting provenance fails closed. Never edit or reconstruct those
+files; use `--replace-terminal-state` only after the broker proves that the
+pending Approval request itself rejected or expired. Rerun exact digest-bound
+setup apply/start only after reauthorization completes.
 
 Final setup must report `operational`, `identity_enrolled=true`, exact public Core readiness with `credential_state=current|renewal_needed` and broker readiness, and `authority_granted=false`. Enrollment remains identity-only. The package-owned responder waits before plan creation, replies exactly once when `waiting_owner`, remains active through `waiting_fresh`, and durably records an owner-only terminal marker before removing its config for `COMPLETED_C0_ROUND_TRIP|expired|invalidated|failed`. If cleanup loses its response, same-digest setup validates terminal binding and private custody, removes only the stale responder config, and never resurrects it. The managed hourly timer renews only the exact current always-on credential during its six-hour window; it cannot revive expiry or follow rotation.
 

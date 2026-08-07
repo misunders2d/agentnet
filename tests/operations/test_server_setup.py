@@ -895,6 +895,161 @@ def test_private_managed_file_custody_rejects_mode_and_symlink(tmp_path: Path) -
         setup._require_private_file(linked, account, blocker="test_custody")
 
 
+def test_terminal_replacement_requires_and_reports_exact_supersession_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+    from agentnet.operations.c0_credential_supersession import (
+        append_supersession,
+        canonical_supersession_journal,
+    )
+
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    terminal = {
+        "schema": "agentnet.c0-pilot-responder.terminal.v1",
+        "status": "COMPLETED_C0_ROUND_TRIP",
+        "domain_id": "corp.example",
+        "harness_id": "server-harness",
+        "credential_id": "credential-1",
+    }
+    terminal_path = _private_json(tmp_path / "terminal.json", terminal)
+    terminal_raw = terminal_path.read_bytes()
+    journal = append_supersession(
+        terminal_raw=terminal_raw,
+        existing=None,
+        domain_id="corp.example",
+        principal_id="owner-principal",
+        terminal_credential_epoch=1,
+        harness_id="server-harness",
+        request_id="00000000-0000-4000-8000-000000000001",
+        transaction_sha256="a" * 64,
+        approval_receipt_id="receipt-1",
+        approval_receipt_sha256="b" * 64,
+        audit_record_hash="c" * 64,
+        prior_journal_sha256=None,
+        previous_credential_id="credential-1",
+        credential_id="credential-2",
+        previous_credential_epoch=1,
+        credential_epoch=2,
+        key_id="key-thumbprint-1",
+        not_before=100,
+        expires_at=200,
+    )
+    journal_raw = canonical_supersession_journal(journal)
+    journal_path = tmp_path / "credential-supersessions.json"
+    journal_path.write_bytes(journal_raw)
+    journal_path.chmod(0o600)
+    config = SimpleNamespace(
+        domain_id="corp.example",
+        enrolled_harness_id="server-harness",
+        enrolled_credential_id="credential-2",
+    )
+    audit_calls: list[dict[str, object]] = []
+
+    def verify_audit(
+        _account: object,
+        database_url: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        audit_calls.append({"database_url": database_url, **kwargs})
+        return {
+            "ready": True,
+            "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+            "transition_count": 1,
+            "audit_records_verified": 1,
+            "credential_id": "credential-2",
+            "credential_epoch": 2,
+        }
+
+    monkeypatch.setattr(setup, "_run_supersession_audit_as", verify_audit)
+
+    marker, evidence = setup._validated_c0_terminal_marker(
+        terminal_path,
+        account,
+        config=config,
+        principal_id="owner-principal",
+        credential_epoch=2,
+        supersession_path=journal_path,
+        core_account=account,
+        database_url="postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
+    )
+
+    assert marker == terminal
+    assert evidence == {
+        "status": "verified",
+        "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+        "transition_count": 1,
+        "audit_records_verified": 1,
+        "credential_id": "credential-2",
+        "credential_epoch": 2,
+    }
+    assert audit_calls == [
+        {
+            "database_url": "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
+            "journal_raw": journal_raw,
+            "terminal_raw": terminal_raw,
+            "domain_id": "corp.example",
+            "principal_id": "owner-principal",
+            "harness_id": "server-harness",
+        }
+    ]
+
+    def reject_audit(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ServerSetupError(
+            "c0_credential_supersession",
+            "credential supersession audit could not be proven exact",
+        )
+
+    monkeypatch.setattr(setup, "_run_supersession_audit_as", reject_audit)
+    with pytest.raises(ServerSetupError, match="audit could not be proven exact"):
+        setup._validated_c0_terminal_marker(
+            terminal_path,
+            account,
+            config=config,
+            principal_id="owner-principal",
+            credential_epoch=2,
+            supersession_path=journal_path,
+            core_account=account,
+            database_url="postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
+        )
+
+
+def test_terminal_replacement_without_supersession_journal_fails_closed(
+    tmp_path: Path,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+    terminal_path = _private_json(
+        tmp_path / "terminal.json",
+        {
+            "schema": "agentnet.c0-pilot-responder.terminal.v1",
+            "status": "COMPLETED_C0_ROUND_TRIP",
+            "domain_id": "corp.example",
+            "harness_id": "server-harness",
+            "credential_id": "credential-1",
+        },
+    )
+    config = SimpleNamespace(
+        domain_id="corp.example",
+        enrolled_harness_id="server-harness",
+        enrolled_credential_id="credential-2",
+    )
+
+    with pytest.raises(ServerSetupError, match="lacks valid supersession provenance"):
+        setup._validated_c0_terminal_marker(
+            terminal_path,
+            account,
+            config=config,
+            principal_id="owner-principal",
+            credential_epoch=2,
+            supersession_path=tmp_path / "missing.json",
+            core_account=account,
+            database_url="postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet",
+        )
+
+
 def test_private_tree_custody_rejects_symlinks_and_nonregular_entries(tmp_path: Path) -> None:
     import agentnet.operations.server_setup as setup
 
@@ -3591,7 +3746,16 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 4
 
     enrolled = True
-    monkeypatch.setattr(setup, "_validated_managed_identity_profile", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {
+            "actor": {
+                "principal_id": "owner-principal",
+                "credential_epoch": 1,
+            }
+        },
+    )
 
     class ReadyBrokerClient:
         def __init__(self, *_args, **_kwargs):

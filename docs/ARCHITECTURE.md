@@ -100,17 +100,21 @@ expired/revoked/rotated binding cannot renew or satisfy readiness. These labels
 and server capability limits can only narrow process eligibility; protected
 operations still derive and authorize their exact caller independently.
 
-Published 0.1.35 adds one narrower recovery for the released Hub condition: an
-expired, still-possessed managed-server key in the pre-C0 communication-only
-topology. The root-only command freezes the exact expired binding and managed
-config/identity digests, proves possession with that same key, and requires a
-fresh owner WebAuthn-UV Approval receipt before one PostgreSQL transaction
-retires the expired row unchanged and creates a finite next-epoch credential.
-It grants no authority and performs no service restart. Service-owned config
-and identity files are then updated by inode-checked, mode/owner-preserving CAS;
-an interrupted update is idempotently reconciled before setup is rerun. A2A,
-relay, or retained C0-terminal bindings are refused rather than silently
-rewritten or excluded from marker evidence.
+The current candidate narrows recovery for an expired, still-possessed
+managed-server key in the communication-only topology. Before first C0,
+immutable terminal C0 evidence is the provenance root. After C0, every
+credential replacement requires the complete canonical supersession journal:
+each entry binds the previous/new credentials and epochs, unchanged key,
+managed config/identity digests, Approval receipt, transaction, and exact
+PostgreSQL audit record. Startup and setup independently verify the journal,
+terminal evidence, current database row, and enrolled files; missing, stale,
+noncanonical, replay-conflicting, or unaudited state fails closed. The root-only
+recovery command freezes this provenance, proves possession of the same key,
+and requires fresh owner WebAuthn UV before one PostgreSQL transaction retires
+the expired row and creates a finite next-epoch credential. It grants no
+authority and restarts no service. Inode-checked owner/mode-preserving CAS
+updates config, identity, and journal, and exact retry reconciles crashes or
+response loss without creating another credential.
 
 ## Canonical state and evidence
 

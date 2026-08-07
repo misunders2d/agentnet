@@ -662,6 +662,26 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
+If setup reports that the retained managed-server credential expired, keep
+Core stopped and run the root-only exact-package command:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> \
+  server-agent reauthorize-expired-credential
+```
+
+The first call creates one exact owner Approval request and reports
+`waiting_owner_approval`; the owner uses only the fixed public Approval page.
+After WebAuthn UV, rerun the identical command. It validates the immutable C0
+terminal plus every audited post-C0 supersession, proves possession of the
+unchanged key, retires the expired row, creates one finite next epoch, and
+crash-safely updates the managed config, identity, and canonical supersession
+journal. It grants no authority and restarts nothing. Then rerun the exact
+digest-bound setup apply/start command. Never delete, edit, truncate, or
+reconstruct the request state, terminal, journal, config, or identity to force
+recovery; absent or conflicting provenance requires a separate owner-approved
+recovery path.
+
 Guided command defaults to local system browser without printing authorization
 URL. Explicit server-only `--browser remote` stores authorization URL encrypted
 inside Core continuation custody, opens/discloses nothing, and waits. Owner opens

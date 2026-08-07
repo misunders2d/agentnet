@@ -2458,7 +2458,12 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
         monkeypatch.setattr(
             setup,
             "_validated_managed_identity_profile",
-            lambda *_args, **_kwargs: None,
+            lambda *_args, **_kwargs: {
+                "actor": {
+                    "principal_id": "owner-principal",
+                    "credential_epoch": 1,
+                }
+            },
         )
     if checkpoint == "after_units":
         original_write_unit = setup._write_managed_unit

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import stat
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from agentnet.operations.config import (
     OIDCEnrollmentConfig,
     RuntimeProfile,
 )
+from agentnet.operations.c0_credential_supersession import load_supersession_journal
 from agentnet.security.signatures import P256KeyPair
 
 
@@ -415,11 +417,8 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert defaults.config == str(cli.CORE_CONFIG)
     assert defaults.identity == str(cli.SERVER_AGENT_IDENTITY)
     assert defaults.state == str(cli.SETUP_ROOT / "credential-reauthorization.json")
-    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", tmp_path / "absent-terminal.json")
-    cli._require_managed_server_reauthorization_topology(state.config)
     monkeypatch.setattr(cli.os.path, "lexists", lambda _path: True)
-    with pytest.raises(SystemExit, match="no retained C0 terminal"):
-        cli._require_managed_server_reauthorization_topology(state.config)
+    cli._require_managed_server_reauthorization_topology(state.config)
 
     managed = tmp_path / "managed.json"
     managed.write_text('{"old":true}\n', encoding="utf-8")
@@ -481,16 +480,30 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
         "actor": actor.model_dump(mode="json"),
         "private_key_path": str(key_path),
     }
+    terminal_path = tmp_path / "c0-terminal.json"
+    journal_path = managed_root / "credential-supersessions.json"
     files: dict[Path, bytes] = {
         config_path: json.dumps(managed_config.redacted_export(), indent=2, sort_keys=True).encode() + b"\n",
         identity_path: json.dumps(managed_identity, indent=2, sort_keys=True).encode() + b"\n",
         key_path: state.key.private_pem,
+        terminal_path: json.dumps(
+            {
+                "schema": "agentnet.c0-pilot-responder.terminal.v1",
+                "status": "COMPLETED_C0_ROUND_TRIP",
+                "domain_id": actor.domain_id,
+                "harness_id": actor.harness_id,
+                "credential_id": actor.credential_id,
+            },
+            sort_keys=True,
+        ).encode(),
     }
     monkeypatch.setattr(cli, "CORE_CONFIG", config_path)
     monkeypatch.setattr(cli, "SERVER_AGENT_IDENTITY", identity_path)
     monkeypatch.setattr(cli, "SERVER_AGENT_KEY", key_path)
     monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
-    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", tmp_path / "no-c0-terminal.json")
+    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", terminal_path)
+    monkeypatch.setattr(cli, "CREDENTIAL_SUPERSESSION_JOURNAL", journal_path)
+    monkeypatch.setattr(cli, "_managed_server_reauthorization_lock", nullcontext)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
     import pwd
 
@@ -565,6 +578,22 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
 
     monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_reauthorization_store)
     monkeypatch.setattr(cli, "load_credential_binding", lambda _store, _credential_id: expired_binding)
+    monkeypatch.setattr(
+        cli,
+        "completed_c0_terminal_credential",
+        lambda *_args, **_kwargs: (actor.credential_id, actor.credential_epoch),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_audited_supersession_journal",
+        lambda raw, *_args, **kwargs: load_supersession_journal(
+            raw,
+            terminal_raw=files[terminal_path],
+            domain_id=kwargs["domain_id"],
+            principal_id=kwargs["principal_id"],
+            harness_id=kwargs["harness_id"],
+        ),
+    )
     monkeypatch.setattr(cli.time, "time", lambda: 1_000)
 
     class Broker:
@@ -581,7 +610,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
 
         def retrieve_receipt(self, **_kwargs):
             self.retrieves += 1
-            return {"signed": "receipt"}
+            return {"receipt_id": "receipt-1", "signed": "receipt"}
 
         def close(self):
             return None
@@ -594,17 +623,30 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def reauthorize(self, *, request, approval):
-            assert approval == {"signed": "receipt"}
+        def reauthorize(
+            self,
+            *,
+            request,
+            approval,
+            c0_terminal_raw,
+            c0_supersession_journal_raw,
+        ):
+            assert approval == {"receipt_id": "receipt-1", "signed": "receipt"}
+            assert c0_terminal_raw == files[terminal_path]
+            assert c0_supersession_journal_raw is None
             service_calls.append(request.request_id)
             return SimpleNamespace(
                 credential_id="credential-2",
                 credential_epoch=2,
+                not_before=1_000,
+                expires_at=87_400,
+                audit_record_hash="a" * 64,
                 idempotent_repeat=len(service_calls) > 1,
             )
 
     monkeypatch.setattr(cli, "ManagedServerCredentialReauthorizationService", Recovery)
     fail_after_config = {"armed": True}
+    fail_after_journal = {"armed": True}
 
     def crashable_cas(path: Path, *, expected_sha256: str, replacement, label: str, expected_uid: int):
         current = files[path]
@@ -618,6 +660,22 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
         return "updated"
 
     monkeypatch.setattr(cli, "_cas_managed_private_json", crashable_cas)
+
+    def replace_journal(path: Path, *, expected, replacement, uid, gid):
+        assert path == journal_path
+        if path in files:
+            assert files[path] == expected
+            if files[path] == replacement:
+                return "already_current"
+        else:
+            assert expected is None
+        files[path] = replacement
+        if fail_after_journal["armed"]:
+            fail_after_journal["armed"] = False
+            raise RuntimeError("injected crash after supersession journal")
+        return "updated"
+
+    monkeypatch.setattr(cli, "_replace_managed_private_bytes", replace_journal)
     args = argparse.Namespace(
         config=str(config_path),
         identity=str(identity_path),
@@ -627,18 +685,59 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert cli.command_server_agent_reauthorize_expired_credential(args) == 2
     assert broker.creates == 1
     broker.issued = True
-    with pytest.raises(RuntimeError, match="injected crash"):
+    pending_v2 = json.loads(files[state_path])
+    assert pending_v2["schema"] == "agentnet.managed-server-credential-reauthorization-state.v2"
+    assert pending_v2["request"]["c0_terminal_sha256"] == hashlib.sha256(
+        files[terminal_path]
+    ).hexdigest()
+    broker.issued = True
+    with pytest.raises(RuntimeError, match="injected crash after supersession journal"):
+        cli.command_server_agent_reauthorize_expired_credential(args)
+    assert journal_path in files
+    assert json.loads(files[config_path])["enrolled_credential_id"] == actor.credential_id
+    assert json.loads(files[identity_path])["actor"]["credential_id"] == actor.credential_id
+    with pytest.raises(RuntimeError, match="injected crash after config CAS"):
         cli.command_server_agent_reauthorize_expired_credential(args)
     assert state_path in files
     assert json.loads(files[config_path])["enrolled_credential_id"] == "credential-2"
-    assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-1"
+    assert json.loads(files[identity_path])["actor"]["credential_id"] == actor.credential_id
     assert cli.command_server_agent_reauthorize_expired_credential(args) == 0
     assert broker.creates == 1
-    assert broker.retrieves == 2
-    assert len(service_calls) == 2 and len(set(service_calls)) == 1
-    assert state_path not in files
+    assert broker.retrieves == 3
+    assert len(service_calls) == 3 and len(set(service_calls)) == 1
     assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-2"
     assert all(opened_store.closed for opened_store in stores)
+
+
+def test_managed_server_reauthorization_lock_rejects_concurrent_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_root = tmp_path / "setup"
+    setup_root.mkdir(mode=0o700)
+    lock_path = setup_root / "setup.lock"
+    lock_path.write_bytes(b"")
+    lock_path.chmod(0o600)
+    monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
+    real_fstat = os.fstat
+
+    def root_owned_fstat(descriptor: int):
+        metadata = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=metadata.st_mode,
+            st_nlink=metadata.st_nlink,
+            st_uid=0,
+            st_gid=0,
+        )
+
+    monkeypatch.setattr(cli.os, "fstat", root_owned_fstat)
+    with cli._managed_server_reauthorization_lock():
+        with pytest.raises(
+            SystemExit,
+            match="another AgentNet setup or recovery operation is active",
+        ):
+            with cli._managed_server_reauthorization_lock():
+                raise AssertionError("concurrent setup lock unexpectedly acquired")
 
 
 def test_server_agent_activate_store_unavailable_leaves_config_unchanged(

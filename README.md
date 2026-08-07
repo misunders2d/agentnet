@@ -279,6 +279,14 @@ and separate
 Request-v2 binds approval digest v3 and marker v3; old approval/marker evidence
 cannot authorize it.
 
+An expired managed-server credential is recovered in place only through
+`server-agent reauthorize-expired-credential`: exact same-key possession,
+fresh owner WebAuthn UV, immutable C0 provenance, the complete audited
+credential-supersession chain, and current managed-file/database state must all
+agree. The command performs no authority grant or restart. Exact retry
+reconciles interruption; missing, stale, edited, or unaudited provenance fails
+closed. After completion, rerun the same digest-bound setup apply/start.
+
 Plan and apply bind exact Node/uv/launcher/`systemctl`/`useradd` paths and
 content hashes plus the canonical full AgentNet package-tree content hash to
 the request-versioned approval digest. Apply

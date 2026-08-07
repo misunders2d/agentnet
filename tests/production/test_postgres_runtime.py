@@ -2001,8 +2001,17 @@ def test_server_agent_probe_status_does_not_enumerate_enrollment_identifiers(
     core.config = config
     core.store = object()
     monkeypatch.setattr(core, "_require_enrolled_server_agent_binding", lambda: None)
+    monkeypatch.setattr(
+        core,
+        "_require_managed_credential_supersession",
+        lambda **_kwargs: {"status": "not_applicable"},
+    )
 
     class CurrentBinding:
+        principal_id = "owner-principal"
+        credential_id = "credential-1"
+        credential_epoch = 1
+        key_id = "key-1"
         expires_at = 4_102_444_800
 
     monkeypatch.setattr(
@@ -2012,7 +2021,12 @@ def test_server_agent_probe_status_does_not_enumerate_enrollment_identifiers(
 
     status = core.server_agent_binding_status()
 
-    assert status == {"ready": True, "required": True, "credential_state": "current"}
+    assert status == {
+        "ready": True,
+        "required": True,
+        "credential_state": "current",
+        "credential_supersession": {"status": "not_applicable"},
+    }
     assert "harness_id" not in status
     assert "credential_id" not in status
 
@@ -2025,9 +2039,18 @@ def test_server_agent_probe_reports_renewal_window_without_identifiers(
     core.config = config
     core.store = object()
     monkeypatch.setattr(core, "_require_enrolled_server_agent_binding", lambda: None)
+    monkeypatch.setattr(
+        core,
+        "_require_managed_credential_supersession",
+        lambda **_kwargs: {"status": "not_applicable"},
+    )
     now = 1_800_000_000
 
     class CurrentBinding:
+        principal_id = "owner-principal"
+        credential_id = "credential-1"
+        credential_epoch = 1
+        key_id = "key-1"
         expires_at = now + config.policies.identity.credential_renewal_window_seconds
 
     monkeypatch.setattr("agentnet.core.app.time.time", lambda: now)
@@ -2040,6 +2063,7 @@ def test_server_agent_probe_reports_renewal_window_without_identifiers(
         "ready": True,
         "required": True,
         "credential_state": "renewal_needed",
+        "credential_supersession": {"status": "not_applicable"},
     }
 
 
