@@ -492,22 +492,21 @@ Activation still requires the user's explicit harness restart. It remains a
 fresh-install-only release because its `0.1.44→0.1.45` packaged upgrade lane
 did not pass.
 
-Candidate `0.1.46` corrects the ordinary-server credential-renewal timer and
-adds one exact in-place `0.1.45→0.1.46` path. The new owner-approved package
-digest preserves the enrolled server identity and credential, PostgreSQL,
-endpoint lifecycle, and external prerequisites. Upgrade setup first quiesces
-the managed services, then materializes the exact target package in a
-generation-specific runtime owned by each service account before validation or
-restart; the released runtime remains available for bounded pre-commit
-rollback. The timer checks first five minutes after timer activation and then
-one hour after each completed renewal attempt; setup rejects an elapsed timer
-without a finite next activation. A disposable clean Ubuntu 24.04 VM proved
-the exact packaged `0.1.45→0.1.46` upgrade, operator-installed private TLS
-trust, exact unit-cgroup listener ownership, and two successful recurring
-renewals with a later finite `NEXT`. Source and two recursive packed
-generations each passed `2133` tests with `21` expected
-platform/dedicated-PostgreSQL skips. Publication remains pending. No
-requirement, production claim, or must-not-ship gate is promoted.
+Candidate `0.1.47` supersedes the unpublished `0.1.46` candidate and adds only
+the exact forward-only `0.1.46→0.1.47` five-unit marker path. A server had
+already committed an unpublished `0.1.46` setup marker before different
+corrected bytes were installed under the same version; AgentNet correctly
+rejected that same-version request-digest drift. `0.1.47` gives the corrected
+bytes a distinct package identity and fresh owner-approved plan digest without
+weakening provenance validation. The transition preserves the enrolled server
+identity and credential, schema-v7 PostgreSQL, endpoint and communication
+state, and external prerequisites, and uses the existing journaled
+package-runtime replacement without database migration. The focused lane
+passes `544` tests with `5` expected dedicated-PostgreSQL skips, and the broad
+releasable-source lane passes `2152` tests with `21` expected
+platform/dedicated-PostgreSQL skips. Recursive packed-package verification and
+publication remain pending. No requirement, production claim, or must-not-ship
+gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a

@@ -1,0 +1,55 @@
+{
+  "run_id": "2026-08-07-v0.1.47",
+  "evaluated_at": "2026-08-07T16:28:46Z",
+  "scope": "v0_1_47_exact_stranded_marker_correction_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "verification_scope": "PASS applies only to the selected local source, package, and archive commands recorded below; it is not release certification and does not include the separately non-green installed-harness pin gate, the historical disposable-host timer result, or any owner/privileged/external must-not-ship gate",
+  "source_revision_kind": "release_source_tree_sha256",
+  "release_source_tree_sha256": "b250bb9e789799fa64b3f1a484d4b619cdc20c50a24dc65cbcd2fb801d37f0ae",
+  "supersedes_package_evidence": "evidence/local/2026-08-06-v0.1.46/manifest.json",
+  "change_boundary": "Candidate 0.1.47 adds only the exact forward-only 0.1.46 to 0.1.47 five-unit marker transition required after an unpublished 0.1.46 marker was committed before different corrected bytes were installed under the same version. Same-version request-digest drift remains rejected. The new owner-approved package and plan digest preserve schema-v7 PostgreSQL, enrolled identity and credential, endpoint, communication, and external-prerequisite state without database migration.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/approval/test_transaction_summary.py tests/cli/test_server_agent_activation.py tests/core/test_synthetic_lane.py",
+      "result": "PASS: 544 passed, 5 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2152 passed and 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 972abc09cb49d6bb911b2e3921a91a738b0376272b4d4d5754fda18f4706ac5c; wheel sha256 d2ccc0436f2a70091e266270234b2ea3ded01e07b8c1c0fb24a9a3193e28fa5d"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "Disposable clean Ubuntu 24.04 VM: CI=true GITHUB_ACTIONS=true RUNNER_TEMP=/tmp/runner UV_PYTHON_INSTALL_DIR=/tmp/uv-python-dir scripts/ci/ordinary-server-upgrade-e2e.sh",
+      "result": "NOT RERUN: exact installed 0.1.46 to 0.1.47 live-server upgrade remains pending"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each reported 2179 passed and 21 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+    }
+  ],
+  "execution_context": {
+    "source": "AgentNet v0.1.47 exact stranded-marker correction candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "callback_incident": "No external workflow result is included in this local candidate evidence",
+    "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
+    "root_installed_external_host": "Not yet rerun for the exact installed 0.1.46 to 0.1.47 transition"
+  },
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-07-v0.1.47/artifacts/agentnet-0.1.47.tar.gz",
+      "sha256": "972abc09cb49d6bb911b2e3921a91a738b0376272b4d4d5754fda18f4706ac5c"
+    },
+    {
+      "path": "evidence/local/2026-08-07-v0.1.47/artifacts/agentnet-0.1.47-py3-none-any.whl",
+      "sha256": "d2ccc0436f2a70091e266270234b2ea3ded01e07b8c1c0fb24a9a3193e28fa5d"
+    }
+  ],
+  "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
+}

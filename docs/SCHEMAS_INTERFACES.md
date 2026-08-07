@@ -762,6 +762,12 @@ timer uses `OnActiveSec=5min` and `OnUnitInactiveSec=1h`, forbids `OnBootSec`,
 `OnUnitActiveSec`, and `Persistent`, and must expose a finite future activation
 when setup reports operational.
 
+For `0.1.46→0.1.47`, setup accepts only the exact five-unit `0.1.46`
+marker and uses the same forward-only journal without database or endpoint
+migration. The new package version and owner-approved request digest distinguish
+the corrected bytes; an altered request under the same package version remains
+a provenance conflict.
+
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,
 HA/restore, production durability, and every other production/high-tier gate

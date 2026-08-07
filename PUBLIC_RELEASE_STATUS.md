@@ -1,6 +1,6 @@
 # Public Package Status
 
-Snapshot: 2026-08-06
+Snapshot: 2026-08-07
 
 This additive status note reconciles public package availability with AgentNet's
 published `0.1.45` communication and collaboration release. It does not replace
@@ -27,24 +27,20 @@ clean-install lane, which is the exact path operators follow.
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
-## Corrective `0.1.46` candidate
+## Corrective `0.1.47` candidate
 
-Candidate `0.1.46` repairs the released ordinary-server renewal schedule and
-adds one exact `0.1.45→0.1.46` in-place transition. It requires a fresh owner
-approval for the changed package and plan digest, preserves the enrolled server
-identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle, and
-external prerequisites, and replaces only the package/config/unit provenance
-needed by the corrected runtime. Upgrade setup quiesces managed services before
-executing candidate package code, prepares an exact generation-specific
-runtime as each service account, and restarts only after runtime validation;
-the released runtime remains intact for bounded pre-commit rollback.
-The timer's first run is five minutes from timer activation, not host boot, and
-later runs are one hour after the renewal service becomes inactive.
-The real packaged Ubuntu upgrade lane passed on a disposable clean Ubuntu
-24.04 VM, and source plus two recursive packed generations each passed
-`2133` tests with `21` expected platform/dedicated-PostgreSQL skips.
-Publication remains pending; this note does not promote any requirement or
-gate.
+Candidate `0.1.47` supersedes the unpublished `0.1.46` candidate and adds only
+the exact `0.1.46→0.1.47` five-unit marker transition. One server had already
+committed an unpublished `0.1.46` marker before different corrected bytes were
+installed under the same version. AgentNet correctly rejected the changed
+request digest as same-version provenance drift. The new package version
+requires a fresh owner-approved plan digest and preserves the enrolled server
+identity/credential, schema-v7 PostgreSQL state, endpoint lifecycle,
+communication state, and external prerequisites without database migration.
+The focused lane passed `544` tests with `5` expected dedicated-PostgreSQL
+skips; the broad releasable-source lane passed `2152` tests with `21` expected
+platform/dedicated-PostgreSQL skips. Recursive packed-package verification and
+publication remain pending; this note does not promote any requirement or gate.
 
 ## Frozen release-input clarification
 

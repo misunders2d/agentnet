@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-06. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-07. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -330,8 +330,8 @@ published and historical release evidence:
   `SEC-003`, `SEC-004`, `SEC-005`, `SEC-006`, `OPS-002`, `OPS-003`,
   `OPS-004`, `OPS-005`, and `OPS-006`.
 
-- Candidate `0.1.46` repairs the ordinary-server credential-renewal timer and
-  adds one exact `0.1.45→0.1.46` in-place transition. The replacement schedule
+- Superseded candidate `0.1.46` repaired the ordinary-server credential-renewal timer and
+  added one exact `0.1.45→0.1.46` in-place transition. The replacement schedule
   uses timer-activation-relative first activation and service-inactive-relative
   recurrence, avoiding an immediate trigger when setup runs after five minutes
   of host uptime; setup refuses operational status unless systemd exposes a
@@ -367,6 +367,20 @@ published and historical release evidence:
   evidence. Publication and higher-tier evidence remain pending.
   Affected IDs are `ID-006`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-004`,
   `SEC-005`, `SEC-006`, `OPS-003`, `OPS-004`, and `OPS-006`. No requirement
+  or must-not-ship gate is promoted.
+
+- Candidate `0.1.47` adds only the exact forward-only
+  `0.1.46→0.1.47` five-unit marker transition after an unpublished `0.1.46`
+  marker was committed before different corrected bytes were installed under
+  the same package version. Same-version request-digest drift remains rejected.
+  The new version and owner-approved plan digest preserve schema-v7 PostgreSQL,
+  enrolled identity/credential, endpoint, communication, and external-
+  prerequisite state without database migration. The focused lane reports
+  **544 passed and 5 expected dedicated-PostgreSQL skips**; the broad
+  releasable-source lane reports **2152 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**. Recursive packed-package verification,
+  installed-host upgrade evidence, publication, and higher-tier evidence remain
+  pending. Affected IDs are `ID-009`, `SEC-007`, and `OPS-003`. No requirement
   or must-not-ship gate is promoted.
 
 

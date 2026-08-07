@@ -338,6 +338,13 @@ Signed AgentNet clients build verification from the platform default trust
 store, so operator-installed private roots used by the self-hosted HTTPS
 topology are honored without allowing service-environment CA overrides.
 
+If an unpublished `0.1.46` marker is already present, do not install different
+bytes as `0.1.46` and do not edit the marker. Install `0.1.47`, create one fresh
+no-write plan, obtain approval for that exact digest, and apply it. The sole
+`0.1.46→0.1.47` edge preserves schema-v7 and enrolled server state while
+changing package/config/unit provenance through the existing journaled
+transition. Same-version request-digest drift remains a terminal conflict.
+
 ### Communication-only request-v2
 
 Use
