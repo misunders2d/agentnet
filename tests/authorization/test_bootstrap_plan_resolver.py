@@ -486,6 +486,30 @@ def test_communication_resolver_ignores_stale_sibling_enrollment(
     assert resolved["harnesses"]["fresh"]["harness_id"] == fresh.harness_id
 
 
+def test_communication_resolver_ignores_recent_revoked_sibling_enrollment(
+    resolver_stack,
+) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    revoked = seed(name="Revoked laptop", consumed_at=NOW - 120, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE credentials SET status='revoked' WHERE credential_id=?",
+            (revoked.credential_id,),
+        )
+
+    resolved = _resolve_communication(
+        store,
+        verifier,
+        owner=owner,
+        actor=owner,
+    )
+
+    assert resolved["harnesses"]["owner"]["harness_id"] == owner.harness_id
+    assert resolved["harnesses"]["fresh"]["harness_id"] == fresh.harness_id
+
+
 def test_communication_resolver_rejects_non_owner_caller(resolver_stack) -> None:
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)

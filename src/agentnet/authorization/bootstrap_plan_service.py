@@ -159,13 +159,35 @@ class ExactBootstrapHarnessResolver:
                 )
                 == actor.harness_id
             ]
-            fresh_rows = [
-                row
-                for row in rows
-                if row not in owner_rows
-                and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
-                and 0 <= now - int(row["enrollment_consumed_at"]) <= self.fresh_max_age_seconds
-            ]
+            eligible_enrollments = {
+                (str(current["harness_id"]), str(current["credential_id"]))
+                for current in connection.execute(
+                    """SELECT h.harness_id,c.credential_id
+                    FROM harnesses h
+                    JOIN credentials c ON c.harness_id=h.harness_id
+                    WHERE h.domain_id=? AND h.principal_id=?
+                      AND h.status='active' AND c.status='active'
+                      AND c.epoch=h.credential_epoch
+                      AND c.not_before<=? AND c.expires_at>?""",
+                    (actor.domain_id, actor.principal_id, now, now),
+                ).fetchall()
+            }
+            fresh_rows = []
+            for row in rows:
+                challenge_id = str(row["enrollment_challenge_id"])
+                enrollment_ids = (
+                    str(uuid5(NAMESPACE_URL, f"agentnet:harness:{challenge_id}")),
+                    str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}")),
+                )
+                if (
+                    row not in owner_rows
+                    and enrollment_ids in eligible_enrollments
+                    and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
+                    and 0
+                    <= now - int(row["enrollment_consumed_at"])
+                    <= self.fresh_max_age_seconds
+                ):
+                    fresh_rows.append(row)
             if len(owner_rows) != 1 or len(fresh_rows) != 1:
                 raise ConflictError(
                     "communication scope requires one configured server and one fresh guided harness"
