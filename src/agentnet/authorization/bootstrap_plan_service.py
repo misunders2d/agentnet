@@ -8,7 +8,7 @@ import json
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from agentnet.approval.service import IndependentApprovalVerifier, consume_independent_approval
@@ -87,12 +87,16 @@ class ExactBootstrapHarnessResolver:
         approval_verifier: IndependentApprovalVerifier,
         *,
         fresh_max_age_seconds: int = 900,
+        authenticated_role: Literal["fresh", "enrolled_server"] = "fresh",
     ) -> None:
         if fresh_max_age_seconds < 300 or fresh_max_age_seconds > 3_600:
             raise ValueError("fresh enrollment age must be between five minutes and one hour")
+        if authenticated_role not in {"fresh", "enrolled_server"}:
+            raise ValueError("authenticated harness role is invalid")
         self.store = store
         self.approval_verifier = approval_verifier
         self.fresh_max_age_seconds = fresh_max_age_seconds
+        self.authenticated_role = authenticated_role
 
     @staticmethod
     def _denied(message: str = "guided enrollment proof is invalid") -> AuthorizationError:
@@ -300,7 +304,7 @@ class ExactBootstrapHarnessResolver:
                 }
             )
 
-        fresh = [
+        authenticated = [
             item
             for item in candidates
             if item["harness"]["harness_id"] == actor.harness_id
@@ -308,9 +312,16 @@ class ExactBootstrapHarnessResolver:
             and item["harness"]["credential_epoch"] == actor.credential_epoch
             and item["harness"]["binding_assurance"] == actor.binding_assurance
         ]
-        if len(fresh) != 1:
-            raise self._denied("authenticated actor is not the unique fresh harness")
-        fresh_item = fresh[0]
+        if len(authenticated) != 1:
+            raise self._denied("authenticated actor does not match the required harness")
+        authenticated_item = authenticated[0]
+        peer_item = next(item for item in candidates if item is not authenticated_item)
+        if self.authenticated_role == "fresh":
+            fresh_item = authenticated_item
+            owner_item = peer_item
+        else:
+            owner_item = authenticated_item
+            fresh_item = peer_item
         if (
             now - int(fresh_item["evidence"]["oidc_consumed_at"])
             > self.fresh_max_age_seconds
@@ -319,8 +330,7 @@ class ExactBootstrapHarnessResolver:
             or int(fresh_item["evidence"]["oidc_consumed_at"]) > now
             or int(fresh_item["evidence"]["enrollment_consumed_at"]) > now
         ):
-            raise self._denied("authenticated fresh enrollment is stale")
-        owner_item = next(item for item in candidates if item is not fresh_item)
+            raise self._denied("resolved fresh enrollment is stale")
         fresh_item["evidence"]["role"] = "fresh"
         owner_item["evidence"]["role"] = "owner"
         return {

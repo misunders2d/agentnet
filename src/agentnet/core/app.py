@@ -545,23 +545,15 @@ class CommunicationCore:
                 exact_communication_resolver = ExactCommunicationHarnessResolver(
                     store,
                     self.approval_verifier,
+                    owner_harness_id=config.enrolled_harness_id,
                     fresh_max_age_seconds=3_600,
                 )
-
-                def resolve_current_server_harness(
-                    connection: Any,
-                    actor: VerifiedActor,
-                    now: int,
-                ) -> dict[str, Any]:
-                    if actor.harness_id != config.enrolled_harness_id:
-                        raise AuthorizationError("communication scope denied")
-                    return exact_communication_resolver(connection, actor, now)
 
                 self.communication_scope_service = CommunicationScopeService(
                     store,
                     self.approval_service_client,
                     self.approval_verifier,
-                    resolver=resolve_current_server_harness,
+                    resolver=exact_communication_resolver,
                     public_approval_url=(
                         oidc.approval_service.public_origin.rstrip("/") + "/approval"
                     ),

@@ -52,7 +52,33 @@ class _FinalCommitExpired(Exception):
 
 
 class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
-    """Reuse the exact current guided same-principal two-harness resolver."""
+    """Resolve a fresh peer for the exact authenticated owner server harness."""
+
+    def __init__(
+        self,
+        store: StoreBackend,
+        approval_verifier: IndependentApprovalVerifier,
+        *,
+        owner_harness_id: str | None,
+        fresh_max_age_seconds: int = 900,
+    ) -> None:
+        super().__init__(
+            store,
+            approval_verifier,
+            fresh_max_age_seconds=fresh_max_age_seconds,
+            authenticated_role="enrolled_server",
+        )
+        self.owner_harness_id = owner_harness_id
+
+    def __call__(
+        self,
+        connection: Any,
+        actor: VerifiedActor,
+        now: int,
+    ) -> dict[str, Any]:
+        if actor.harness_id != self.owner_harness_id:
+            raise AuthorizationError("communication scope denied")
+        return super().__call__(connection, actor, now)
 
 
 def _hash_text(value: str) -> str:

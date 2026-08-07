@@ -13,6 +13,7 @@ from agentnet.approval import (
     create_independent_approval_receipt,
 )
 from agentnet.authorization.bootstrap_plan_service import ExactBootstrapHarnessResolver
+from agentnet.authorization.communication_scope_service import ExactCommunicationHarnessResolver
 from agentnet.errors import AuthorizationError, ConflictError
 from agentnet.identity.domains import DomainRegistry
 from agentnet.identity.enrollment import (
@@ -378,3 +379,48 @@ def test_resolver_rejects_tampered_guided_challenge_ciphertext(resolver_stack) -
 
     with pytest.raises(AuthorizationError, match="guided enrollment proof"):
         _resolve(store, verifier, fresh)
+
+
+def _resolve_communication(store, verifier, *, owner, actor):
+    resolver = ExactCommunicationHarnessResolver(
+        store,
+        verifier,
+        owner_harness_id=owner.harness_id,
+        fresh_max_age_seconds=3_600,
+    )
+    with store.transaction() as connection:
+        return resolver(connection, actor, NOW)
+
+
+def test_communication_resolver_authenticates_configured_owner_server(
+    resolver_stack,
+) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+
+    resolved = _resolve_communication(
+        store,
+        verifier,
+        owner=owner,
+        actor=owner,
+    )
+
+    assert resolved["harnesses"]["owner"]["harness_id"] == owner.harness_id
+    assert resolved["harnesses"]["fresh"]["harness_id"] == fresh.harness_id
+    assert resolved["enrollment_evidence"]["owner"]["role"] == "owner"
+    assert resolved["enrollment_evidence"]["fresh"]["role"] == "fresh"
+
+
+def test_communication_resolver_rejects_non_owner_caller(resolver_stack) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+
+    with pytest.raises(AuthorizationError, match="communication scope denied"):
+        _resolve_communication(
+            store,
+            verifier,
+            owner=owner,
+            actor=fresh,
+        )
