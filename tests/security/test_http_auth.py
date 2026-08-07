@@ -10,8 +10,8 @@ from starlette.responses import Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+import agentnet.http_auth as http_auth
 from agentnet.errors import AuthenticationError
-from agentnet.http_auth import authenticate_proof_request
 
 
 PROOF_HEADERS = {
@@ -32,7 +32,12 @@ PROOF_HEADERS = {
 }
 
 
-def test_http_auth_logs_fixed_reason_without_identity_or_body(caplog: pytest.LogCaptureFixture) -> None:
+def test_http_auth_logs_fixed_reason_without_identity_or_body(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(http_auth, "_LOGGED_AUTH_FAILURE_REASONS", set())
+
     class RejectingCore:
         config = SimpleNamespace(max_request_bytes=1024)
 
@@ -43,7 +48,7 @@ def test_http_auth_logs_fixed_reason_without_identity_or_body(caplog: pytest.Log
     core = RejectingCore()
 
     async def protected(request: Request) -> Response:
-        await authenticate_proof_request(request, core)  # type: ignore[arg-type]
+        await http_auth.authenticate_proof_request(request, core)  # type: ignore[arg-type]
         return Response(status_code=204)
 
     client = TestClient(Starlette(routes=[Route("/protected", protected, methods=["POST"])]))
