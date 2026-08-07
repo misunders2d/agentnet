@@ -385,6 +385,25 @@ published and historical release evidence:
   `ID-006`, `ID-009`, `SEC-007`, and `OPS-003`. No requirement or
   must-not-ship gate is promoted.
 
+- Candidate `0.1.49` removes the fresh-enrollment timing dependency from
+  permanent communication activation by resolving the exact completed C0 pair.
+  Only the authenticated ordinary server harness's current active credential
+  may advance that same harness lineage; stale, revoked, ambiguous,
+  cross-harness, and incomplete identity state remains fail-closed. Terminal
+  pre-commit scope retries converge without replacing active authority. Remote
+  message send, inbox, and acknowledgement operations now require and sign the
+  exact collaboration scope. The candidate adds only the exact forward-only
+  `0.1.48→0.1.49` five-unit marker transition and no database migration.
+  The focused lane reports **645 passed and 5 expected dedicated-PostgreSQL
+  skips**; the broad releasable-source lane reports **2166 passed and 21
+  expected platform/dedicated-PostgreSQL skips**. Recursive packed-package
+  verification and installed-host upgrade evidence remain pending.
+  Publication and higher-tier evidence remain pending. Affected IDs are
+  `ID-001`, `ID-002`, `ID-004`, `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
+  `AUTH-004`, `AUTH-007`, `AUTH-009`, `COM-001`, `COM-002`, `COM-003`,
+  `COM-006`, `COM-009`, `COM-011`, `AVL-003`, `AVL-005`, `AVL-006`, `SEC-003`,
+  and `SEC-005`. No requirement or must-not-ship gate is promoted.
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,

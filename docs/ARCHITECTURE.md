@@ -858,4 +858,17 @@ unpublished `0.1.47` marker. It preserves schema v7 and all identity,
 credential, endpoint, communication, and external-prerequisite state, and uses
 the existing journaled package-runtime transition without database migration.
 
+Corrective `0.1.49` removes the fresh-enrollment timing dependency from
+permanent communication activation. Core selects the exact completed C0 harness
+pair, then permits only the authenticated ordinary server harness's current
+active credential on that same lineage; stale, revoked, ambiguous,
+cross-harness, and incomplete state fail closed. Terminal pre-commit scope rows
+converge without replacing active or committed authority. Remote message send,
+inbox, and acknowledgement calls now require and sign the exact collaboration
+scope, preventing a valid credential from replaying a mailbox operation outside
+its committed scope. The candidate adds only the forward-only
+`0.1.48→0.1.49` five-unit marker edge; schema v7 and enrolled identity,
+credential, endpoint, communication, and external-prerequisite state remain
+unchanged.
+
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

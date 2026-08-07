@@ -381,6 +381,126 @@ def test_resolver_rejects_tampered_guided_challenge_ciphertext(resolver_stack) -
         _resolve(store, verifier, fresh)
 
 
+def _record_completed_c0_pair(store, *, owner, fresh, terminal_at: int = NOW - 30) -> None:
+    plan_id = f"completed-c0-plan-{fresh.harness_id}"
+    guard_id = f"completed-c0-guard-{fresh.harness_id}"
+    attempt_id = f"completed-c0-attempt-{fresh.harness_id}"
+    digest = hashlib.sha256(plan_id.encode()).hexdigest()
+    with store.transaction() as connection:
+        connection.execute(
+            """INSERT INTO bootstrap_grant_plans(
+                plan_id,profile,profile_version,domain_id,principal_id,
+                owner_harness_id,fresh_harness_id,owner_credential_id,fresh_credential_id,
+                owner_credential_epoch,fresh_credential_epoch,domain_revocation_epoch,
+                policy_revision,actor_binding_json,canonical_plan_preimage_json,
+                final_approval_transaction_json,plan_digest,transaction_digest,
+                begin_idempotency_key_sha256,begin_response_encrypted,state,created_at,
+                approval_expires_at,authority_expires_at,approval_create_idempotency_key,
+                approval_create_request_digest,approval_request_id,approval_issued_at,
+                completion_reserved_at,completion_idempotency_key_sha256,
+                completion_request_digest,approval_receipt_id,approval_receipt_digest,
+                committed_at,committed_result_encrypted,committed_result_digest,
+                audit_record_hash
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                plan_id,
+                "ordinary-two-harness-c0:v1",
+                1,
+                owner.domain_id,
+                owner.principal_id,
+                owner.harness_id,
+                fresh.harness_id,
+                owner.credential_id,
+                fresh.credential_id,
+                owner.credential_epoch,
+                fresh.credential_epoch,
+                1,
+                1,
+                "{}",
+                "{}",
+                "{}",
+                digest,
+                hashlib.sha256(f"{digest}:transaction".encode()).hexdigest(),
+                hashlib.sha256(f"{digest}:begin".encode()).hexdigest(),
+                "encrypted",
+                "committed",
+                terminal_at - 100,
+                terminal_at - 50,
+                terminal_at + 3_600,
+                f"approval-create-{fresh.harness_id}",
+                hashlib.sha256(f"{digest}:create".encode()).hexdigest(),
+                f"approval-request-{fresh.harness_id}",
+                terminal_at - 40,
+                terminal_at - 30,
+                hashlib.sha256(f"{digest}:complete-key".encode()).hexdigest(),
+                hashlib.sha256(f"{digest}:complete-request".encode()).hexdigest(),
+                f"approval-receipt-{fresh.harness_id}",
+                hashlib.sha256(f"{digest}:receipt".encode()).hexdigest(),
+                terminal_at - 20,
+                "encrypted-result",
+                hashlib.sha256(f"{digest}:result".encode()).hexdigest(),
+                hashlib.sha256(f"{digest}:audit".encode()).hexdigest(),
+            ),
+        )
+        connection.execute(
+            """INSERT INTO c0_plan_guards(
+                guard_id,plan_id,domain_id,principal_id,owner_harness_id,fresh_harness_id,
+                owner_credential_epoch,fresh_credential_epoch,domain_revocation_epoch,
+                policy_revision,classification,request_payload_schema,
+                request_payload_schema_digest,request_payload_json,request_payload_digest,
+                reply_payload_schema,reply_payload_schema_digest,reply_payload_json,
+                reply_payload_digest,request_remaining_uses,reply_remaining_uses,state,
+                created_at,expires_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                guard_id,
+                plan_id,
+                owner.domain_id,
+                owner.principal_id,
+                owner.harness_id,
+                fresh.harness_id,
+                owner.credential_epoch,
+                fresh.credential_epoch,
+                1,
+                1,
+                "C0",
+                "request.schema.v1",
+                hashlib.sha256(b"request-schema").hexdigest(),
+                "{}",
+                hashlib.sha256(b"request").hexdigest(),
+                "reply.schema.v1",
+                hashlib.sha256(b"reply-schema").hexdigest(),
+                "{}",
+                hashlib.sha256(b"reply").hexdigest(),
+                0,
+                0,
+                "revoked",
+                terminal_at - 19,
+                terminal_at + 300,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO c0_pilot_attempts(
+                attempt_id,plan_id,guard_id,request_idempotency_digest,
+                reply_idempotency_digest,state,created_at,expires_at,
+                evidence_completed_at,communication_revoked_at,terminal_at,sanitized_result
+            ) VALUES(?,?,?,?,?,'communication_revoked',?,?,?,?,?,?)""",
+            (
+                attempt_id,
+                plan_id,
+                guard_id,
+                hashlib.sha256(f"{digest}:request-idempotency".encode()).hexdigest(),
+                hashlib.sha256(f"{digest}:reply-idempotency".encode()).hexdigest(),
+                terminal_at - 18,
+                terminal_at + 300,
+                terminal_at - 2,
+                terminal_at,
+                terminal_at,
+                "COMPLETED_C0_ROUND_TRIP",
+            ),
+        )
+
+
 def _resolve_communication(store, verifier, *, owner, actor):
     resolver = ExactCommunicationHarnessResolver(
         store,
@@ -398,6 +518,7 @@ def test_communication_resolver_authenticates_configured_owner_server(
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
     fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    _record_completed_c0_pair(store, owner=owner, fresh=fresh)
 
     resolved = _resolve_communication(
         store,
@@ -418,15 +539,12 @@ def test_communication_resolver_accepts_reauthorized_owner_credential(
 ) -> None:
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
-    seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    _record_completed_c0_pair(store, owner=owner, fresh=fresh)
     replacement_credential_id = str(uuid4())
     replacement_epoch = int(owner.credential_epoch or 0) + 1
     with store.transaction() as connection:
-        current = connection.execute(
-            """SELECT key_id,public_key_pem FROM credentials
-                WHERE credential_id=?""",
-            (owner.credential_id,),
-        ).fetchone()
+        replacement_key = P256KeyPair.generate()
         connection.execute(
             "UPDATE credentials SET status='retired' WHERE credential_id=?",
             (owner.credential_id,),
@@ -442,8 +560,8 @@ def test_communication_resolver_accepts_reauthorized_owner_credential(
             (
                 replacement_credential_id,
                 owner.harness_id,
-                current["key_id"],
-                current["public_key_pem"],
+                replacement_key.thumbprint,
+                replacement_key.public_pem,
                 replacement_epoch,
                 NOW - 10,
                 NOW + 20_000,
@@ -467,13 +585,56 @@ def test_communication_resolver_accepts_reauthorized_owner_credential(
     assert resolved["harnesses"]["owner"]["credential_epoch"] == replacement_epoch
 
 
-def test_communication_resolver_ignores_stale_sibling_enrollment(
+def test_communication_resolver_rejects_rotated_peer_without_succession_proof(
     resolver_stack,
 ) -> None:
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
-    seed(name="Old laptop", consumed_at=NOW - 4_000, remote_activation=True)
-    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    peer = seed(name="C0 laptop", consumed_at=NOW - 4_000, remote_activation=True)
+    _record_completed_c0_pair(store, owner=owner, fresh=peer)
+    replacement_key = P256KeyPair.generate()
+    replacement_epoch = int(peer.credential_epoch or 0) + 1
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE credentials SET status='retired' WHERE credential_id=?",
+            (peer.credential_id,),
+        )
+        connection.execute(
+            "UPDATE harnesses SET credential_epoch=? WHERE harness_id=?",
+            (replacement_epoch, peer.harness_id),
+        )
+        connection.execute(
+            """INSERT INTO credentials(
+                credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at
+            ) VALUES(?,?,?,?, 'active',?,?,?)""",
+            (
+                str(uuid4()),
+                peer.harness_id,
+                replacement_key.thumbprint,
+                replacement_key.public_pem,
+                replacement_epoch,
+                NOW - 10,
+                NOW + 20_000,
+            ),
+        )
+
+    with pytest.raises(AuthorizationError, match="guided enrollment proof is invalid"):
+        _resolve_communication(
+            store,
+            verifier,
+            owner=owner,
+            actor=owner,
+        )
+
+
+def test_communication_resolver_uses_completed_c0_peer_despite_newer_enrollment(
+    resolver_stack,
+) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    c0_peer = seed(name="C0 laptop", consumed_at=NOW - 4_000, remote_activation=True)
+    seed(name="Newer laptop", consumed_at=NOW - 60, remote_activation=True)
+    _record_completed_c0_pair(store, owner=owner, fresh=c0_peer)
 
     resolved = _resolve_communication(
         store,
@@ -483,7 +644,7 @@ def test_communication_resolver_ignores_stale_sibling_enrollment(
     )
 
     assert resolved["harnesses"]["owner"]["harness_id"] == owner.harness_id
-    assert resolved["harnesses"]["fresh"]["harness_id"] == fresh.harness_id
+    assert resolved["harnesses"]["fresh"]["harness_id"] == c0_peer.harness_id
 
 
 def test_communication_resolver_ignores_recent_revoked_sibling_enrollment(
@@ -498,6 +659,7 @@ def test_communication_resolver_ignores_recent_revoked_sibling_enrollment(
             "UPDATE credentials SET status='revoked' WHERE credential_id=?",
             (revoked.credential_id,),
         )
+    _record_completed_c0_pair(store, owner=owner, fresh=fresh)
 
     resolved = _resolve_communication(
         store,
@@ -514,6 +676,7 @@ def test_communication_resolver_rejects_non_owner_caller(resolver_stack) -> None
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
     fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    _record_completed_c0_pair(store, owner=owner, fresh=fresh)
 
     with pytest.raises(AuthorizationError, match="communication scope denied"):
         _resolve_communication(
@@ -521,4 +684,18 @@ def test_communication_resolver_rejects_non_owner_caller(resolver_stack) -> None
             verifier,
             owner=owner,
             actor=fresh,
+        )
+
+
+def test_communication_resolver_requires_completed_c0_pair(resolver_stack) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+
+    with pytest.raises(ConflictError, match="completed C0"):
+        _resolve_communication(
+            store,
+            verifier,
+            owner=owner,
+            actor=owner,
         )

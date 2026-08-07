@@ -1,0 +1,60 @@
+{
+  "run_id": "2026-08-07-v0.1.49",
+  "evaluated_at": "2026-08-07T20:37:42Z",
+  "scope": "v0_1_49_completed_c0_communication_recovery_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "verification_scope": "PASS applies only to the selected local source, package, archive, recursive packed-package, and installed-byte communication commands recorded below; it is not release certification and does not include the separately non-green installed-harness pin gate, the historical disposable-host timer result, or any owner/privileged/external must-not-ship gate",
+  "source_revision_kind": "release-source-tree-sha256",
+  "release_source_tree_sha256": "35765305e4c5873aee8c535e601d65658b970f1a1a63fd9a727eaa03f3047bb2",
+  "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.48/manifest.json",
+  "change_boundary": "Candidate 0.1.49 removes the fresh-enrollment timing dependency from permanent communication activation by resolving the exact completed C0 pair through current canonical identity rows, while preserving exact domain/principal/harness/epoch checks and fail-closed mismatch behavior. It adds only the exact forward-only 0.1.48 to 0.1.49 five-unit marker transition and no database migration.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/approval/test_transaction_summary.py tests/cli/test_server_agent_activation.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py",
+      "result": "PASS: 645 passed, 5 expected dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2166 passed and 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 af8f6ee7b3e114045635003f06731f4d49505e65b2a49fa9e3b63f6b644cc435; wheel sha256 09f60fd3f1423829c287e8342eda14da02abe8c176b82fa1c5f138eeb21a8131"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "Two isolated Ubuntu 24.04 KVM guests with separate PostgreSQL/Core/identity state: clean-enroll C0 pair; activate permanent communication scope; send client-to-server; server inbox; server acknowledge exact event and envelope digest; send server-to-client; client inbox; client acknowledge exact event and envelope digest",
+      "result": "PASS: C0 completed on both guests; permanent scope became communication_active; each direction produced one authenticated non-duplicate message bound to the exact recipient harness; each recipient committed one exact receipt; no cross-harness or caller-supplied identity substitution was accepted"
+    },
+    {
+      "command": "Disposable clean Ubuntu 24.04 VM: install published 0.1.48, then CI=true GITHUB_ACTIONS=true RUNNER_TEMP=/tmp/runner UV_PYTHON_INSTALL_DIR=/tmp/uv-python-dir scripts/ci/ordinary-server-upgrade-e2e.sh",
+      "result": "NOT RUN: exact installed-host 0.1.48 to 0.1.49 upgrade evidence remains pending; no prior result inherited or waived"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each reported 2193 passed and 21 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+    }
+  ],
+  "execution_context": {
+    "source": "AgentNet v0.1.49 completed-C0 communication recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "callback_incident": "No external workflow result is included in this local candidate evidence",
+    "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
+    "two_vm_source_proof": "Two run-unique Ubuntu 24.04 KVM guests used synthetic vm-communication.example identities, separate PostgreSQL/Core state, local TLS, and source-tree v0.1.49 candidate bytes; both guests and run-unique keys/state were destroyed after result collection",
+    "root_installed_external_host": "Not rerun for the exact installed 0.1.48 to 0.1.49 transition"
+  },
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-07-v0.1.49/artifacts/agentnet-0.1.49.tar.gz",
+      "sha256": "af8f6ee7b3e114045635003f06731f4d49505e65b2a49fa9e3b63f6b644cc435"
+    },
+    {
+      "path": "evidence/local/2026-08-07-v0.1.49/artifacts/agentnet-0.1.49-py3-none-any.whl",
+      "sha256": "09f60fd3f1423829c287e8342eda14da02abe8c176b82fa1c5f138eeb21a8131"
+    }
+  ],
+  "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
+}

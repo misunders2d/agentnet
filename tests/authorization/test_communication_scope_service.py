@@ -285,6 +285,30 @@ def test_begin_and_complete_are_idempotent(communication_stack) -> None:
     assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 38
 
 
+def test_committed_begin_replay_remains_bound_to_original_harness(
+    communication_stack,
+) -> None:
+    _commit(communication_stack)
+    peer = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id=communication_stack.actor.domain_id,
+        principal_id=communication_stack.actor.principal_id,
+        harness_id="owner-harness",
+        credential_id="owner-credential",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+
+    with pytest.raises(ConflictError, match="idempotency conflict"):
+        communication_stack.service.begin(
+            actor=peer,
+            request=CommunicationScopeBeginRequest(
+                schema="agentnet.communication-scope.begin.v1",
+                begin_idempotency_key=BEGIN_KEY,
+            ),
+        )
+
+
 def test_new_begin_expires_due_orphaned_reservation(communication_stack) -> None:
     communication_stack.client.fail_create = True
     with pytest.raises(RuntimeError, match="approval unavailable"):
@@ -439,6 +463,70 @@ def test_committed_scope_survives_issuance_credential_renewal(communication_stac
         binding_assurance=communication_stack.actor.binding_assurance,
     )
     assert _status(communication_stack, actor=rotated_actor) == expected
+
+
+@pytest.mark.parametrize("approval_issued", [False, True])
+def test_rotated_current_credential_terminalizes_precommit_scope(
+    communication_stack, approval_issued: bool
+) -> None:
+    _begin(communication_stack)
+    if approval_issued:
+        communication_stack.client.state = "issued"
+        assert _status(communication_stack)["status"] == "approval_ready"
+    rotated_key = P256KeyPair.generate()
+    with communication_stack.store.transaction() as connection:
+        connection.execute(
+            "UPDATE credentials SET status='retired' WHERE credential_id=?",
+            (communication_stack.actor.credential_id,),
+        )
+        connection.execute(
+            "UPDATE harnesses SET credential_epoch=2 WHERE harness_id=?",
+            (communication_stack.actor.harness_id,),
+        )
+        connection.execute(
+            """INSERT INTO credentials(
+                credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at
+            ) VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                "credential-rotated-precommit",
+                communication_stack.actor.harness_id,
+                rotated_key.thumbprint,
+                rotated_key.public_pem,
+                "active",
+                2,
+                NOW - 1,
+                NOW + 86_400,
+            ),
+        )
+    rotated_actor = communication_stack.actor.model_copy(
+        update={
+            "credential_id": "credential-rotated-precommit",
+            "credential_epoch": 2,
+        }
+    )
+    communication_stack.resolver.actor = rotated_actor
+    communication_stack.resolver.fresh_credential_epoch = 2
+
+    with pytest.raises(CommunicationScopeTerminalError, match="terminal"):
+        communication_stack.service.begin(
+            actor=rotated_actor,
+            request=CommunicationScopeBeginRequest(
+                schema="agentnet.communication-scope.begin.v1",
+                begin_idempotency_key=BEGIN_KEY,
+            ),
+        )
+    with pytest.raises(CommunicationScopeTerminalError, match="terminal"):
+        communication_stack.service.begin(
+            actor=rotated_actor,
+            request=CommunicationScopeBeginRequest(
+                schema="agentnet.communication-scope.begin.v1",
+                begin_idempotency_key=BEGIN_KEY,
+            ),
+        )
+
+    assert communication_stack.store.fetch_one(
+        "SELECT state FROM communication_scopes"
+    )["state"] == "invalidated"
 
 
 @pytest.mark.parametrize(

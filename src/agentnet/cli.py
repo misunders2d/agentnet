@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -4004,7 +4004,7 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                 "/v1/communication-scope/begin",
                 json_body=body,
             )
-            if replace_terminal_state:
+            if replace_terminal_state and response.status_code != 201:
                 try:
                     terminal_proof = response.json()
                 except (ValueError, json.JSONDecodeError):
@@ -4444,6 +4444,7 @@ def command_message_send(args: argparse.Namespace) -> int:
             "POST",
             "/v1/messages",
             json_body={
+                "collaboration_scope_id": args.collaboration_scope_id,
                 "recipients": list(args.recipient),
                 "payload": payload,
                 "idempotency_key": idempotency_key,
@@ -4540,10 +4541,14 @@ def command_message_inbox(args: argparse.Namespace) -> int:
         raise SystemExit("mailbox cursor or limit is outside the supported range")
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
-        response = client.request(
-            "GET",
-            f"/v1/mailbox?after={args.after}&limit={args.limit}",
+        query = urlencode(
+            {
+                "collaboration_scope_id": args.collaboration_scope_id,
+                "after": args.after,
+                "limit": args.limit,
+            }
         )
+        response = client.request("GET", f"/v1/mailbox?{query}")
     finally:
         client.close()
     if response.status_code != 200:
@@ -4556,6 +4561,7 @@ def command_message_acknowledge(args: argparse.Namespace) -> int:
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.acknowledge_mailbox(
+            collaboration_scope_id=args.collaboration_scope_id,
             event_id=args.event_id,
             envelope_digest=args.envelope_digest,
         )
@@ -6267,6 +6273,7 @@ def build_parser() -> argparse.ArgumentParser:
     message_commands = message.add_subparsers(dest="message_command", required=True)
     message_send = message_commands.add_parser("send")
     message_send.add_argument("--identity", default=".agentnet/identity.json")
+    message_send.add_argument("--collaboration-scope-id", required=True)
     message_send.add_argument("--recipient", action="append", required=True)
     message_send.add_argument("--payload", required=True)
     message_send.add_argument("--idempotency-key")
@@ -6278,6 +6285,7 @@ def build_parser() -> argparse.ArgumentParser:
     message_send.set_defaults(func=command_message_send)
     message_inbox = message_commands.add_parser("inbox")
     message_inbox.add_argument("--identity", default=".agentnet/identity.json")
+    message_inbox.add_argument("--collaboration-scope-id", required=True)
     message_inbox.add_argument("--after", type=int, default=0)
     message_inbox.add_argument("--limit", type=int, default=100)
     message_inbox.set_defaults(func=command_message_inbox)
@@ -6288,6 +6296,7 @@ def build_parser() -> argparse.ArgumentParser:
     message_acknowledge.add_argument("event_id")
     message_acknowledge.add_argument("--envelope-digest", required=True)
     message_acknowledge.add_argument("--identity", default=".agentnet/identity.json")
+    message_acknowledge.add_argument("--collaboration-scope-id", required=True)
     message_acknowledge.set_defaults(func=command_message_acknowledge)
 
     obligation = commands.add_parser(

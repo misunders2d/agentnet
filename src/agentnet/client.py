@@ -398,9 +398,17 @@ class AgentNetClient:
     def acknowledge_mailbox(
         self,
         *,
+        collaboration_scope_id: str,
         event_id: str,
         envelope_digest: str,
     ) -> httpx.Response:
+        if (
+            not 1 <= len(collaboration_scope_id) <= 256
+            or collaboration_scope_id != collaboration_scope_id.strip()
+        ):
+            raise ValidationError(
+                "mailbox acknowledgement collaboration scope is invalid"
+            )
         if (
             not 1 <= len(event_id) <= 256
             or event_id != event_id.strip()
@@ -418,7 +426,10 @@ class AgentNetClient:
         return self.request(
             "POST",
             f"/v1/mailbox/{encoded_event_id}/acknowledge",
-            json_body={"envelope_digest": envelope_digest},
+            json_body={
+                "collaboration_scope_id": collaboration_scope_id,
+                "envelope_digest": envelope_digest,
+            },
         )
 
     def close(self) -> None:

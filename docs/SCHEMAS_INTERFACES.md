@@ -354,7 +354,7 @@ The signed persistent communication-scope routes are:
 
 | Route | Exact request/effect |
 |---|---|
-| `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact current same-principal harness pair and creates the one-hour Approval request |
+| `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact completed same-principal C0 harness pair, requires the authenticated ordinary server harness, accepts only its current active credential on the same harness lineage, and creates the one-hour Approval request |
 | `POST /v1/communication-scope/status` | `agentnet.communication-scope.status.v1`; returns only caller-bound pending/ready/terminal state, approval URL/expiry when applicable, and `complete_automatically` only after issuance |
 | `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 38-item commit; exact retry returns the encrypted committed result |
 Before `begin` resolves an active-scope conflict, Core atomically expires every
@@ -541,10 +541,12 @@ rewriting or downgrading state. Wrong recipient/digest, stale or revoked actor,
 late expiry, and illegal predecessor state fail closed.
 
 The operator CLI exposes this as `agentnet message acknowledge EVENT_ID
---envelope-digest DIGEST`. Credential-free local bindings expose the same
-operation as `agentnet.inbox.acknowledge`; MCP and Pi render it as
-`agentnet_inbox_acknowledge`. All argument schemas omit identity and recipient
-fields.
+--collaboration-scope-id SCOPE_ID --envelope-digest DIGEST`; `message send`,
+`message inbox`, and `message acknowledge` all require the exact collaboration
+scope and bind it into the signed request. Credential-free local bindings expose
+the same operation as `agentnet.inbox.acknowledge`; MCP and Pi render it as
+`agentnet_inbox_acknowledge`. All local-binding argument schemas omit identity
+and recipient fields.
 
 ## Binary artifact client and operator contract
 
@@ -769,6 +771,14 @@ foreign-key path `credentials.harness_id → harnesses.harness_id`; domain and
 principal constraints apply to the joined harness while epoch remains on the
 credential. Any missing or mismatched binding returns no credential and blocks
 Core readiness.
+
+For `0.1.48→0.1.49`, setup accepts only the exact five-unit `0.1.48`
+marker and uses the same forward-only journal without database or endpoint
+migration. Permanent communication scope resolution selects the exact completed
+C0 pair, then may substitute only the authenticated ordinary server harness's
+current active credential on the same harness lineage. Remote message, inbox,
+and acknowledgement requests carry `collaboration_scope_id` inside the signed
+request target or body.
 
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,

@@ -348,6 +348,13 @@ domain/principal-bound harness and credential epoch. Any mismatch remains a
 terminal readiness blocker; same-version request-digest drift remains a
 terminal setup conflict.
 
+For `0.1.48→0.1.49`, use the same no-write-plan and exact-digest approval
+process. The transition changes only package/config/unit provenance and
+preserves schema-v7 plus enrolled identity, credential, endpoint,
+communication, and external-prerequisite state. After restart, permanent
+communication activation resolves the exact completed C0 pair and accepts only
+the ordinary server harness's current active credential on that lineage.
+
 ### Communication-only request-v2
 
 Use
@@ -771,8 +778,11 @@ through possession-bound signed broker; owner moves no code, receipt, URL, or
 secret. Enrollment itself grants none of these entitlements.
 
 After the C0 result is `COMPLETED_C0_ROUND_TRIP`, the ordinary server harness
-requests the separate permanent same-principal communication transaction:
-
+requests the separate permanent same-principal communication transaction. Core
+selects the exact completed C0 pair rather than a fresh-enrollment time window.
+If the same ordinary server harness rotated its credential after C0, Core accepts
+only that harness's current active credential; a stale, revoked, cross-harness,
+ambiguous, or incomplete lineage fails closed:
 ```bash
 # Ordinary server: creates/reuses one exact one-hour Approval request.
 agentnet communication-scope begin \
@@ -802,9 +812,9 @@ agentnet communication-scope begin \
   --replace-terminal-state
 ```
 
-The server resolves the only eligible second harness; the human supplies no
-harness, action, entitlement, credential, or TTL selector. Completion grants
-each of the two exact harnesses all 19 canonical message, mailbox, conversation,
+The server resolves the exact completed C0 peer; the human supplies no harness,
+action, entitlement, credential, or TTL selector. Completion grants each of the
+two exact harnesses all 19 canonical message, mailbox, conversation,
 response-obligation, and room actions—38 exact entitlements total—permanently
 (`expires_at=NULL`) in one transaction.
 Those exact callers may communicate only with the other active enrolled harness
@@ -889,8 +899,11 @@ After an enrolled recipient has durably persisted the exact inbox bytes and
 dedup state, it can record the protocol's baseline delivery acknowledgement:
 
 ```bash
-agentnet message inbox --identity .agentnet/recipient-identity.json
+agentnet message inbox \
+  --collaboration-scope-id SCOPE_ID \
+  --identity .agentnet/recipient-identity.json
 agentnet message acknowledge EVENT_ID \
+  --collaboration-scope-id SCOPE_ID \
   --envelope-digest ENVELOPE_DIGEST \
   --identity .agentnet/recipient-identity.json
 ```

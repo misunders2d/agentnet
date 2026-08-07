@@ -53,6 +53,9 @@ class _FinalCommitExpired(Exception):
 
 class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
     """Resolve a fresh peer for the exact authenticated owner server harness."""
+    allow_current_credential_rotation = True
+    require_fresh_enrollment = False
+
 
     def __init__(
         self,
@@ -69,6 +72,72 @@ class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
             authenticated_role="enrolled_server",
         )
         self.owner_harness_id = owner_harness_id
+
+    def _select_authenticated_rows(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        now: int,
+        rows: list[Any],
+    ) -> list[Any]:
+        pairs = connection.execute(
+            """SELECT DISTINCT p.owner_harness_id,p.fresh_harness_id
+            FROM c0_pilot_attempts a
+            JOIN bootstrap_grant_plans p ON p.plan_id=a.plan_id
+            JOIN c0_plan_guards g ON g.guard_id=a.guard_id AND g.plan_id=p.plan_id
+            JOIN harnesses owner ON owner.harness_id=p.owner_harness_id
+            JOIN credentials owner_credential
+              ON owner_credential.harness_id=owner.harness_id
+             AND owner_credential.epoch=owner.credential_epoch
+            JOIN harnesses fresh ON fresh.harness_id=p.fresh_harness_id
+            JOIN credentials fresh_credential
+              ON fresh_credential.harness_id=fresh.harness_id
+             AND fresh_credential.epoch=fresh.credential_epoch
+            WHERE p.domain_id=? AND p.principal_id=? AND p.owner_harness_id=?
+              AND p.state='committed'
+              AND a.state='communication_revoked'
+              AND a.sanitized_result='COMPLETED_C0_ROUND_TRIP'
+              AND a.evidence_completed_at IS NOT NULL
+              AND a.communication_revoked_at IS NOT NULL
+              AND a.terminal_at IS NOT NULL
+              AND g.state='revoked'
+              AND g.request_remaining_uses=0 AND g.reply_remaining_uses=0
+              AND owner.status='active' AND fresh.status='active'
+              AND owner.domain_id=p.domain_id AND fresh.domain_id=p.domain_id
+              AND owner.principal_id=p.principal_id AND fresh.principal_id=p.principal_id
+              AND owner_credential.status='active'
+              AND fresh_credential.status='active'
+              AND owner_credential.not_before<=? AND owner_credential.expires_at>?
+              AND fresh_credential.not_before<=? AND fresh_credential.expires_at>?
+            ORDER BY p.owner_harness_id,p.fresh_harness_id""",
+            (
+                actor.domain_id,
+                actor.principal_id,
+                actor.harness_id,
+                now,
+                now,
+                now,
+                now,
+            ),
+        ).fetchall()
+        if len(pairs) != 1:
+            raise ConflictError(
+                "communication scope requires exactly one completed C0 harness pair"
+            )
+        enrollment_by_harness = {
+            self._enrollment_harness_id(row): row
+            for row in rows
+        }
+        pair = pairs[0]
+        try:
+            owner_row = enrollment_by_harness[str(pair["owner_harness_id"])]
+            fresh_row = enrollment_by_harness[str(pair["fresh_harness_id"])]
+        except KeyError as exc:
+            raise ConflictError(
+                "completed C0 harness pair lacks guided enrollment evidence"
+            ) from exc
+        return [owner_row, fresh_row]
 
     def __call__(
         self,
@@ -156,6 +225,38 @@ class CommunicationScopeService:
     def _require_row_actor(row: Any, actor: VerifiedActor) -> None:
         if row is None or not secrets.compare_digest(str(row["actor_binding_json"]), _actor_binding(actor)):
             raise ConflictError("communication scope idempotency conflict")
+
+    @staticmethod
+    def _same_harness_binding(row: Any, actor: VerifiedActor) -> bool:
+        try:
+            bound = VerifiedActor.model_validate_json(str(row["actor_binding_json"]))
+        except Exception:
+            return False
+        return (
+            bound.kind is actor.kind
+            and bound.domain_id == actor.domain_id
+            and bound.principal_id == actor.principal_id
+            and bound.harness_id == actor.harness_id
+        )
+
+    @staticmethod
+    def _require_current_actor_state(
+        connection: Any, *, actor: VerifiedActor, now: int
+    ) -> None:
+        domain = connection.execute(
+            "SELECT status,policy_revision FROM domains WHERE domain_id=?",
+            (actor.domain_id,),
+        ).fetchone()
+        if domain is None or domain["status"] != "active":
+            raise AuthorizationError("communication scope denied")
+        denial, _revision = validate_actor_state(
+            connection,
+            actor=actor,
+            expected_policy_revision=int(domain["policy_revision"]),
+            when=datetime.fromtimestamp(now, UTC),
+        )
+        if denial is not None:
+            raise AuthorizationError("communication scope denied")
 
     def _begin_storage(self, row: Any) -> tuple[str | None, dict[str, Any] | None]:
         encrypted = row["begin_response_encrypted"]
@@ -447,26 +548,64 @@ class CommunicationScopeService:
         with self.store.transaction() as connection:
             existing = self._row_for_begin(connection, key_hash)
             if existing is not None:
-                self._require_row_actor(existing, actor)
-                if self._expire_if_due(connection, row=existing, now=now):
-                    expired_existing = True
-                elif existing["state"] in {
-                    "rejected",
-                    "canceled",
-                    "expired",
-                    "invalidated",
-                }:
-                    raise CommunicationScopeTerminalError(
-                        "communication scope is terminal"
+                if existing["state"] == "committed":
+                    try:
+                        self._require_row_actor(existing, actor)
+                    except ConflictError:
+                        if not self._same_harness_binding(existing, actor):
+                            raise
+                    self._require_committed_current(
+                        connection, row=existing, actor=actor, now=now
                     )
-                elif existing["state"] != "reserved":
                     return self._stored_begin(existing)
-                else:
-                    row = existing
-                    self._require_current_resolution(
-                        connection, row=row, actor=actor, now=now
+                try:
+                    self._require_row_actor(existing, actor)
+                except ConflictError:
+                    if not self._same_harness_binding(existing, actor):
+                        raise
+                    self._require_current_actor_state(
+                        connection, actor=actor, now=now
                     )
-            else:
+                    if existing["state"] in {
+                        "rejected",
+                        "canceled",
+                        "expired",
+                        "invalidated",
+                    }:
+                        expired_existing = True
+                    else:
+                        changed = connection.execute(
+                            """UPDATE communication_scopes
+                               SET state='invalidated',terminal_at=?
+                               WHERE scope_id=? AND state IN (
+                                   'reserved','pending_approval','approval_issued',
+                                   'completion_reserved'
+                               )""",
+                            (now, existing["scope_id"]),
+                        )
+                        if changed.rowcount != 1:
+                            raise ConflictError("communication scope state conflict")
+                        expired_existing = True
+                if not expired_existing:
+                    if self._expire_if_due(connection, row=existing, now=now):
+                        expired_existing = True
+                    elif existing["state"] in {
+                        "rejected",
+                        "canceled",
+                        "expired",
+                        "invalidated",
+                    }:
+                        raise CommunicationScopeTerminalError(
+                            "communication scope is terminal"
+                        )
+                    elif existing["state"] != "reserved":
+                        return self._stored_begin(existing)
+                    else:
+                        row = existing
+                        self._require_current_resolution(
+                            connection, row=row, actor=actor, now=now
+                        )
+            if existing is None:
                 resolved = self.resolver(connection, actor, now)
                 if (
                     resolved.get("domain", {}).get("domain_id") != actor.domain_id

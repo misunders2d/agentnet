@@ -333,6 +333,8 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
         [
             "message",
             "send",
+            "--collaboration-scope-id",
+            "collaboration-scope-1",
             "--recipient",
             "peer-harness",
             "--payload",
@@ -343,6 +345,8 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
         [
             "message",
             "acknowledge",
+            "--collaboration-scope-id",
+            "collaboration-scope-1",
             "event-1",
             "--envelope-digest",
             "a" * 64,

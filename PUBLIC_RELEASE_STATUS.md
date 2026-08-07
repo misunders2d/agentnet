@@ -27,6 +27,18 @@ clean-install lane, which is the exact path operators follow.
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
+## Corrective `0.1.49` candidate
+
+Candidate `0.1.49` corrects permanent communication activation and remote
+mailbox operations after the exact C0 round trip. Core selects the completed C0
+pair without a fresh-enrollment timing window, permits only the ordinary server
+harness's current active credential on that lineage, and keeps stale, revoked,
+ambiguous, and cross-harness state fail-closed. Remote message send, inbox, and
+acknowledgement calls require and sign the exact collaboration scope. It adds
+only the exact `0.1.48→0.1.49` five-unit marker transition and no database
+migration. Release packaging and publication remain pending; this note does not
+promote any requirement or gate.
+
 ## Corrective `0.1.48` candidate
 
 Candidate `0.1.48` supersedes unpublished `0.1.47`. It corrects post-C0

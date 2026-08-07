@@ -81,6 +81,9 @@ def _strict_canonical_object(raw: bytes) -> dict[str, Any]:
 class ExactBootstrapHarnessResolver:
     """Resolve exactly two current guided OIDC harnesses for one principal."""
 
+    allow_current_credential_rotation = False
+    require_fresh_enrollment = True
+
     def __init__(
         self,
         store: StoreBackend,
@@ -101,6 +104,62 @@ class ExactBootstrapHarnessResolver:
     @staticmethod
     def _denied(message: str = "guided enrollment proof is invalid") -> AuthorizationError:
         return AuthorizationError(message)
+
+    @staticmethod
+    def _enrollment_harness_id(row: Any) -> str:
+        return str(
+            uuid5(
+                NAMESPACE_URL,
+                f"agentnet:harness:{row['enrollment_challenge_id']}",
+            )
+        )
+
+    def _select_authenticated_rows(
+        self,
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        now: int,
+        rows: list[Any],
+    ) -> list[Any]:
+        owner_rows = [
+            row for row in rows if self._enrollment_harness_id(row) == actor.harness_id
+        ]
+        eligible_enrollments = {
+            (str(current["harness_id"]), str(current["credential_id"]))
+            for current in connection.execute(
+                """SELECT h.harness_id,c.credential_id
+                FROM harnesses h
+                JOIN credentials c ON c.harness_id=h.harness_id
+                WHERE h.domain_id=? AND h.principal_id=?
+                  AND h.status='active' AND c.status='active'
+                  AND c.epoch=h.credential_epoch
+                  AND c.not_before<=? AND c.expires_at>?""",
+                (actor.domain_id, actor.principal_id, now, now),
+            ).fetchall()
+        }
+        fresh_rows = []
+        for row in rows:
+            challenge_id = str(row["enrollment_challenge_id"])
+            enrollment_ids = (
+                self._enrollment_harness_id(row),
+                str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}")),
+            )
+            if (
+                row not in owner_rows
+                and enrollment_ids in eligible_enrollments
+                and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
+                and 0
+                <= now - int(row["enrollment_consumed_at"])
+                <= self.fresh_max_age_seconds
+            ):
+                fresh_rows.append(row)
+        if len(owner_rows) != 1 or len(fresh_rows) != 1:
+            raise ConflictError(
+                "communication scope requires one configured server and one fresh guided harness"
+            )
+        return [owner_rows[0], fresh_rows[0]]
+
 
     def __call__(self, connection: Any, actor: VerifiedActor, now: int) -> ResolvedHarnesses:
         if (
@@ -148,58 +207,19 @@ class ExactBootstrapHarnessResolver:
             (actor.domain_id, actor.principal_id),
         ).fetchall()
         if self.authenticated_role == "enrolled_server":
-            owner_rows = [
-                row
-                for row in rows
-                if str(
-                    uuid5(
-                        NAMESPACE_URL,
-                        f"agentnet:harness:{row['enrollment_challenge_id']}",
-                    )
-                )
-                == actor.harness_id
-            ]
-            eligible_enrollments = {
-                (str(current["harness_id"]), str(current["credential_id"]))
-                for current in connection.execute(
-                    """SELECT h.harness_id,c.credential_id
-                    FROM harnesses h
-                    JOIN credentials c ON c.harness_id=h.harness_id
-                    WHERE h.domain_id=? AND h.principal_id=?
-                      AND h.status='active' AND c.status='active'
-                      AND c.epoch=h.credential_epoch
-                      AND c.not_before<=? AND c.expires_at>?""",
-                    (actor.domain_id, actor.principal_id, now, now),
-                ).fetchall()
-            }
-            fresh_rows = []
-            for row in rows:
-                challenge_id = str(row["enrollment_challenge_id"])
-                enrollment_ids = (
-                    str(uuid5(NAMESPACE_URL, f"agentnet:harness:{challenge_id}")),
-                    str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}")),
-                )
-                if (
-                    row not in owner_rows
-                    and enrollment_ids in eligible_enrollments
-                    and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
-                    and 0
-                    <= now - int(row["enrollment_consumed_at"])
-                    <= self.fresh_max_age_seconds
-                ):
-                    fresh_rows.append(row)
-            if len(owner_rows) != 1 or len(fresh_rows) != 1:
-                raise ConflictError(
-                    "communication scope requires one configured server and one fresh guided harness"
-                )
-            rows = [owner_rows[0], fresh_rows[0]]
+            rows = self._select_authenticated_rows(
+                connection,
+                actor=actor,
+                now=now,
+                rows=list(rows),
+            )
         elif len(rows) != 2:
             raise ConflictError("bootstrap plan requires exactly two guided harnesses")
 
         candidates: list[dict[str, Any]] = []
         for row in rows:
             challenge_id = str(row["enrollment_challenge_id"])
-            expected_harness_id = str(uuid5(NAMESPACE_URL, f"agentnet:harness:{challenge_id}"))
+            expected_harness_id = self._enrollment_harness_id(row)
             expected_credential_id = str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}"))
             current_credential_id = (
                 actor.credential_id
@@ -231,6 +251,12 @@ class ExactBootstrapHarnessResolver:
                     "bootstrap plan harness must have one active current-epoch credential"
                 )
             credential = current[0]
+            credential_rotation_allowed = (
+                self.allow_current_credential_rotation
+                and expected_harness_id == actor.harness_id
+            )
+            if credential_rotation_allowed:
+                current_credential_id = str(credential["credential_id"])
             try:
                 if (
                     credential["harness_id"] != expected_harness_id
@@ -250,9 +276,15 @@ class ExactBootstrapHarnessResolver:
                     or int(credential["credential_not_before"]) > now
                     or now >= int(credential["credential_expires_at"])
                     or row["transaction_public_key_pem"] != row["challenge_public_key_pem"]
-                    or row["transaction_public_key_pem"] != credential["credential_public_key_pem"]
                     or row["transaction_key_id"] != row["challenge_key_id"]
-                    or row["transaction_key_id"] != credential["credential_key_id"]
+                    or (
+                        not credential_rotation_allowed
+                        and (
+                            row["transaction_public_key_pem"]
+                            != credential["credential_public_key_pem"]
+                            or row["transaction_key_id"] != credential["credential_key_id"]
+                        )
+                    )
                     or public_key_thumbprint(str(credential["credential_public_key_pem"]))
                     != credential["credential_key_id"]
                 ):
@@ -376,7 +408,7 @@ class ExactBootstrapHarnessResolver:
         else:
             owner_item = authenticated_item
             fresh_item = peer_item
-        if (
+        if self.require_fresh_enrollment and (
             now - int(fresh_item["evidence"]["oidc_consumed_at"])
             > self.fresh_max_age_seconds
             or now - int(fresh_item["evidence"]["enrollment_consumed_at"])

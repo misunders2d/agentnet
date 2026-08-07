@@ -96,6 +96,7 @@ def test_client_signs_exact_mailbox_acknowledgement_path_and_body() -> None:
     )
     try:
         response = client.acknowledge_mailbox(
+            collaboration_scope_id="collaboration-scope-1",
             event_id="event-1",
             envelope_digest="a" * 64,
         )
@@ -106,7 +107,10 @@ def test_client_signs_exact_mailbox_acknowledgement_path_and_body() -> None:
     assert captured["url"] == (
         "https://api.corp.example/v1/mailbox/event-1/acknowledge"
     )
-    assert json.loads(captured["body"]) == {"envelope_digest": "a" * 64}
+    assert json.loads(captured["body"]) == {
+        "collaboration_scope_id": "collaboration-scope-1",
+        "envelope_digest": "a" * 64,
+    }
     proof = captured["proof"]
     assert (proof.method, proof.path, proof.query) == (
         "POST",
@@ -116,17 +120,20 @@ def test_client_signs_exact_mailbox_acknowledgement_path_and_body() -> None:
 
 
 @pytest.mark.parametrize(
-    "event_id,envelope_digest",
+    "collaboration_scope_id,event_id,envelope_digest",
     [
-        ("", "a" * 64),
-        ("prefix/suffix", "a" * 64),
-        ("prefix%2Fsuffix", "a" * 64),
-        ("event+1", "a" * 64),
-        ("event-1", "A" * 64),
-        ("event-1", "short"),
+        ("", "event-1", "a" * 64),
+        (" collaboration-scope-1", "event-1", "a" * 64),
+        ("collaboration-scope-1", "", "a" * 64),
+        ("collaboration-scope-1", "prefix/suffix", "a" * 64),
+        ("collaboration-scope-1", "prefix%2Fsuffix", "a" * 64),
+        ("collaboration-scope-1", "event+1", "a" * 64),
+        ("collaboration-scope-1", "event-1", "A" * 64),
+        ("collaboration-scope-1", "event-1", "short"),
     ],
 )
 def test_client_rejects_invalid_mailbox_acknowledgement_binding(
+    collaboration_scope_id: str,
     event_id: str,
     envelope_digest: str,
 ) -> None:
@@ -142,6 +149,7 @@ def test_client_rejects_invalid_mailbox_acknowledgement_binding(
     try:
         with pytest.raises(ValidationError):
             client.acknowledge_mailbox(
+                collaboration_scope_id=collaboration_scope_id,
                 event_id=event_id,
                 envelope_digest=envelope_digest,
             )

@@ -206,7 +206,7 @@ def test_begin_replaces_state_only_after_core_proves_terminal(
     ]
 
 
-def test_begin_refuses_to_replace_nonterminal_state(
+def test_begin_reuses_nonterminal_state_instead_of_replacing_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -221,20 +221,26 @@ def test_begin_refuses_to_replace_nonterminal_state(
     client = _Client([_Response(201, _BEGIN_RESULT)])
     monkeypatch.setattr(cli, "_load_identity_client", _load(client))
 
-    with pytest.raises(
-        SystemExit,
-        match="terminal replacement requires exact Core terminal proof",
-    ):
-        cli.command_communication_scope_begin(
-            argparse.Namespace(
-                identity="identity.json",
-                state=str(state_path),
-                replace_terminal_state=True,
-            )
+    assert cli.command_communication_scope_begin(
+        argparse.Namespace(
+            identity="identity.json",
+            state=str(state_path),
+            replace_terminal_state=True,
         )
+    ) == 0
 
     assert json.loads(state_path.read_text(encoding="utf-8")) == original
-    assert capsys.readouterr().out == ""
+    assert json.loads(capsys.readouterr().out) == _BEGIN_RESULT
+    assert client.requests == [
+        (
+            "POST",
+            "/v1/communication-scope/begin",
+            {
+                "schema": "agentnet.communication-scope.begin.v1",
+                "begin_idempotency_key": original["begin_idempotency_key"],
+            },
+        )
+    ]
 
 
 def test_begin_refuses_non_core_terminal_response(

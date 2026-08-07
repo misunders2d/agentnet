@@ -373,15 +373,18 @@ identity-only completion, local save status,
 and the bounded-authority next step.
 
 After the exact C0 round trip completes, the server harness can run
-`agentnet communication-scope begin|status|complete`. One WebAuthn-UV approval
-then atomically gives the existing laptop harness and ordinary server harness
-the fixed permanent canonical message, mailbox, conversation, response-
-obligation, and room actions. The human selects no IDs or permissions. Every
-operation still revalidates the current exact caller harness, credential, human,
-domain-revocation epoch, and policy revision. Each exact caller may communicate
-only with the other active enrolled harness named by the scope in the same trust
-domain; an unknown, inactive, revoked, additional, or cross-domain target fails
-closed. Caller or target revocation denies immediately.
+`agentnet communication-scope begin|status|complete`. Core resolves the exact
+completed C0 pair rather than a fresh-enrollment timing window and accepts only
+the ordinary server harness's current active credential on that same harness
+lineage. One WebAuthn-UV approval then atomically gives the existing laptop
+harness and ordinary server harness the fixed permanent canonical message,
+mailbox, conversation, response-obligation, and room actions. The human selects
+no IDs or permissions. Every operation still revalidates the current exact
+caller harness, credential, human, domain-revocation epoch, and policy revision.
+Each exact caller may communicate only with the other active enrolled harness
+named by the scope in the same trust domain; an unknown, inactive, revoked,
+additional, ambiguous, or cross-domain target fails closed.
+Caller or target revocation denies immediately.
 Artifacts, effects, federation, public A2A, administration, data, tools,
 and secrets remain excluded.
 
@@ -507,6 +510,17 @@ and the broad releasable-source lane passes `2155` tests with `21` expected
 platform/dedicated-PostgreSQL skips. Recursive packed-package verification and
 publication remain pending. No requirement, production claim, or must-not-ship
 gate is promoted.
+
+Candidate `0.1.49` corrects the first permanent communication activation and
+remote mailbox path exercised after the exact C0 round trip. Core selects the
+completed C0 pair without a fresh-enrollment timing window, permits only the
+ordinary server harness's current active credential on that same lineage, and
+keeps ambiguity, revocation, stale epochs, and cross-harness substitution
+fail-closed. Terminal scope retries converge without replacing active authority.
+Remote message send, inbox, and acknowledgement operations require and sign the
+exact collaboration scope. The candidate adds only the exact forward-only
+`0.1.48→0.1.49` five-unit marker edge and no database migration. No requirement,
+production claim, or must-not-ship gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
