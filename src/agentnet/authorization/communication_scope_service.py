@@ -442,23 +442,30 @@ class CommunicationScopeService:
         self._require_actor(actor)
         now = int(self.clock())
         key_hash = _hash_text(request.begin_idempotency_key)
+        expired_existing = False
+        row: Any | None = None
         with self.store.transaction() as connection:
             existing = self._row_for_begin(connection, key_hash)
             if existing is not None:
                 self._require_row_actor(existing, actor)
-                if existing["state"] in {
+                if self._expire_if_due(connection, row=existing, now=now):
+                    expired_existing = True
+                elif existing["state"] in {
                     "rejected",
                     "canceled",
                     "expired",
                     "invalidated",
                 }:
-                    raise CommunicationScopeTerminalError("communication scope is terminal")
-                if existing["state"] != "reserved":
+                    raise CommunicationScopeTerminalError(
+                        "communication scope is terminal"
+                    )
+                elif existing["state"] != "reserved":
                     return self._stored_begin(existing)
-                row = existing
-                self._require_current_resolution(
-                    connection, row=row, actor=actor, now=now
-                )
+                else:
+                    row = existing
+                    self._require_current_resolution(
+                        connection, row=row, actor=actor, now=now
+                    )
             else:
                 resolved = self.resolver(connection, actor, now)
                 if (
@@ -467,6 +474,23 @@ class CommunicationScopeService:
                     != actor.principal_id
                 ):
                     raise AuthorizationError("communication scope denied")
+                connection.execute(
+                    """UPDATE communication_scopes
+                       SET state='expired',terminal_at=?
+                       WHERE domain_id=? AND principal_id=? AND profile=?
+                         AND state IN (
+                             'reserved','pending_approval','approval_issued',
+                             'completion_reserved'
+                         )
+                         AND approval_expires_at<=?""",
+                    (
+                        now,
+                        actor.domain_id,
+                        actor.principal_id,
+                        COMMUNICATION_SCOPE_PROFILE,
+                        now,
+                    ),
+                )
                 if self._active_scope_conflict(
                     connection,
                     domain_id=actor.domain_id,
@@ -541,20 +565,33 @@ class CommunicationScopeService:
                     ),
                 )
                 row = self._row_for_begin(connection, key_hash)
-            possession_secret, _result = self._begin_storage(row)
-            if possession_secret is None:
-                possession_secret = secrets.token_urlsafe(32)
-                connection.execute(
-                    """UPDATE communication_scopes SET begin_response_encrypted=?
-                       WHERE scope_id=? AND state='reserved'""",
-                    (
-                        self._encrypt_begin_storage(
-                            row, possession_secret=possession_secret, result=None
+            if not expired_existing:
+                if row is None:
+                    raise GateBlocked(
+                        "communication_scope",
+                        "communication scope reservation is unavailable",
+                    )
+                possession_secret, _result = self._begin_storage(row)
+                if possession_secret is None:
+                    possession_secret = secrets.token_urlsafe(32)
+                    connection.execute(
+                        """UPDATE communication_scopes SET begin_response_encrypted=?
+                           WHERE scope_id=? AND state='reserved'""",
+                        (
+                            self._encrypt_begin_storage(
+                                row, possession_secret=possession_secret, result=None
+                            ),
+                            row["scope_id"],
                         ),
-                        row["scope_id"],
-                    ),
-                )
-                row = self._row_for_begin(connection, key_hash)
+                    )
+                    row = self._row_for_begin(connection, key_hash)
+        if expired_existing:
+            raise CommunicationScopeTerminalError("communication scope is terminal")
+        if row is None:
+            raise GateBlocked(
+                "communication_scope",
+                "communication scope reservation is unavailable",
+            )
 
         possession_secret, _result = self._begin_storage(row)
         if possession_secret is None:

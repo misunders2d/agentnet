@@ -757,6 +757,20 @@ agentnet communication-scope complete \
   --identity /var/lib/agentnet/server-agent-identity.json \
   --state /var/lib/agentnet/communication-scope-state.json
 ```
+If a crash leaves an incomplete pre-commit reservation, Core keeps it exclusive
+until the displayed one-hour deadline. The next `begin` atomically expires it
+before conflict evaluation. Same-key retry then reports terminal state without
+reissuing the expired Approval request. Recover the owner-only state and start
+one replacement request only after that exact Core `410` error-envelope proof.
+The CLI serializes concurrent local recovery processes from initial state read
+through the replacement begin:
+
+```bash
+agentnet communication-scope begin \
+  --identity /var/lib/agentnet/server-agent-identity.json \
+  --state /var/lib/agentnet/communication-scope-state.json \
+  --replace-terminal-state
+```
 
 The server resolves the only eligible second harness; the human supplies no
 harness, action, entitlement, credential, or TTL selector. Completion grants

@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import stat
+import subprocess
+import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -68,6 +71,12 @@ _COMPLETE_RESULT = {
     "federation_enabled": False,
     "public_a2a_enabled": False,
 }
+_TERMINAL_ERROR = {
+    "schema": "agentnet.communication-scope.error.v1",
+    "code": "communication_scope_terminal",
+    "message": "request denied",
+    "retryable": False,
+}
 
 
 def test_parser_exposes_exact_communication_scope_commands() -> None:
@@ -81,6 +90,11 @@ def test_parser_exposes_exact_communication_scope_commands() -> None:
         assert args.func is function
         assert args.identity == ".agentnet/identity.json"
         assert args.state == ".agentnet/communication-scope-state.json"
+    begin = parser.parse_args(["communication-scope", "begin"])
+    assert begin.replace_terminal_state is False
+    assert parser.parse_args(
+        ["communication-scope", "begin", "--replace-terminal-state"]
+    ).replace_terminal_state is True
 
 
 def test_communication_scope_requests_use_stable_owner_only_retry_keys(
@@ -147,6 +161,211 @@ def test_communication_scope_requests_use_stable_owner_only_retry_keys(
         ("POST", "/v1/communication-scope/complete", complete_body),
     ]
     assert client.closed is True
+
+
+def test_begin_replaces_state_only_after_core_proves_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_path = tmp_path / "communication-scope.json"
+    original: dict[str, object] = {
+        "schema": "agentnet.communication-scope-cli-state.v1",
+        "begin_idempotency_key": "communication-begin-key-0001",
+        "completion_idempotency_key": "communication-complete-key-0001",
+    }
+    cli._write_owner_json(state_path, original)
+    client = _Client(
+        [
+            _Response(410, _TERMINAL_ERROR),
+            _Response(201, _BEGIN_RESULT),
+        ]
+    )
+    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+
+    assert cli.command_communication_scope_begin(
+        argparse.Namespace(
+            identity="identity.json",
+            state=str(state_path),
+            replace_terminal_state=True,
+        )
+    ) == 0
+    assert json.loads(capsys.readouterr().out) == _BEGIN_RESULT
+
+    replaced = json.loads(state_path.read_text(encoding="utf-8"))
+    assert replaced["schema"] == original["schema"]
+    assert replaced["begin_idempotency_key"] != original["begin_idempotency_key"]
+    assert (
+        replaced["completion_idempotency_key"]
+        != original["completion_idempotency_key"]
+    )
+    assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+    assert [request[2]["begin_idempotency_key"] for request in client.requests] == [
+        original["begin_idempotency_key"],
+        replaced["begin_idempotency_key"],
+    ]
+
+
+def test_begin_refuses_to_replace_nonterminal_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_path = tmp_path / "communication-scope.json"
+    original: dict[str, object] = {
+        "schema": "agentnet.communication-scope-cli-state.v1",
+        "begin_idempotency_key": "communication-begin-key-0001",
+        "completion_idempotency_key": "communication-complete-key-0001",
+    }
+    cli._write_owner_json(state_path, original)
+    client = _Client([_Response(201, _BEGIN_RESULT)])
+    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+
+    with pytest.raises(
+        SystemExit,
+        match="terminal replacement requires exact Core terminal proof",
+    ):
+        cli.command_communication_scope_begin(
+            argparse.Namespace(
+                identity="identity.json",
+                state=str(state_path),
+                replace_terminal_state=True,
+            )
+        )
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+    assert capsys.readouterr().out == ""
+
+
+def test_begin_refuses_non_core_terminal_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_path = tmp_path / "communication-scope.json"
+    original: dict[str, object] = {
+        "schema": "agentnet.communication-scope-cli-state.v1",
+        "begin_idempotency_key": "communication-begin-key-0001",
+        "completion_idempotency_key": "communication-complete-key-0001",
+    }
+    cli._write_owner_json(state_path, original)
+    client = _Client(
+        [
+            _Response(
+                410,
+                {**_TERMINAL_ERROR, "proxy_detail": "not Core proof"},
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+
+    with pytest.raises(
+        SystemExit,
+        match="terminal replacement requires exact Core terminal proof",
+    ):
+        cli.command_communication_scope_begin(
+            argparse.Namespace(
+                identity="identity.json",
+                state=str(state_path),
+                replace_terminal_state=True,
+            )
+        )
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+    assert capsys.readouterr().out == ""
+
+
+def test_private_state_lock_serializes_two_processes(tmp_path: Path) -> None:
+    state_path = tmp_path / "communication-scope.json"
+    first_acquired = tmp_path / "first-acquired"
+    first_release = tmp_path / "first-release"
+    second_attempted = tmp_path / "second-attempted"
+    second_acquired = tmp_path / "second-acquired"
+    second_release = tmp_path / "second-release"
+    second_release.write_text("release", encoding="utf-8")
+    child = """
+import sys
+import time
+from pathlib import Path
+from agentnet.cli import _private_state_lock
+
+state, attempted, acquired, release = map(Path, sys.argv[1:])
+attempted.write_text("attempted", encoding="utf-8")
+with _private_state_lock(state):
+    acquired.write_text("acquired", encoding="utf-8")
+    while not release.exists():
+        time.sleep(0.01)
+"""
+
+    def launch(attempted: Path, acquired: Path, release: Path) -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                child,
+                str(state_path),
+                str(attempted),
+                str(acquired),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def wait_for(path: Path, process: subprocess.Popen[str]) -> None:
+        deadline = time.monotonic() + 5
+        while not path.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                pytest.fail(
+                    f"lock child exited before {path.name}: {stdout=} {stderr=}"
+                )
+            if time.monotonic() >= deadline:
+                pytest.fail(f"lock child did not create {path.name}")
+            time.sleep(0.01)
+
+    first_attempted = tmp_path / "first-attempted"
+    first = launch(first_attempted, first_acquired, first_release)
+    second: subprocess.Popen[str] | None = None
+    try:
+        wait_for(first_acquired, first)
+        second = launch(second_attempted, second_acquired, second_release)
+        wait_for(second_attempted, second)
+        time.sleep(0.2)
+        assert not second_acquired.exists()
+
+        first_release.write_text("release", encoding="utf-8")
+        assert first.wait(timeout=5) == 0
+        assert second.wait(timeout=5) == 0
+        assert second_acquired.read_text(encoding="utf-8") == "acquired"
+    finally:
+        first_release.write_text("release", encoding="utf-8")
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    cli.host_platform() == "windows",
+    reason="POSIX peer-unlink boundary",
+)
+def test_private_state_lock_rejects_peer_writable_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "peer-writable"
+    parent.mkdir()
+    parent.chmod(0o777)
+    state_path = parent / "communication-scope.json"
+    try:
+        with pytest.raises(
+            SystemExit,
+            match="state lock directory is unsafe",
+        ):
+            with cli._private_state_lock(state_path):
+                pytest.fail("peer-writable parent must not admit a lock")
+        assert not (parent / ".communication-scope.json.lock").exists()
+    finally:
+        parent.chmod(0o700)
 
 
 def test_status_accepts_exact_committed_result(

@@ -21,10 +21,16 @@ import tempfile
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - exercised on Windows CI
+    fcntl = None  # type: ignore[assignment]
 
 import uvicorn
 import httpx
@@ -467,6 +473,115 @@ def _owner_only_file(path: Path, *, label: str) -> bytes:
         return bytes(content)
     finally:
         os.close(descriptor)
+
+
+@contextmanager
+def _private_state_lock(path: Path):
+    """Serialize one private state lifecycle across local processes."""
+
+    path = path.absolute()
+    lock_path = path.with_name(f".{path.name}.lock")
+    if host_platform() == "windows":
+        from agentnet.windows_security import (
+            require_private_path,
+            write_private_file,
+        )
+
+        try:
+            write_private_file(lock_path, b"\0")
+        except FileExistsError:
+            pass
+        try:
+            before = require_private_path(lock_path, directory=False)
+            descriptor = os.open(
+                lock_path,
+                os.O_RDWR | getattr(os, "O_BINARY", 0),
+            )
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                os.close(descriptor)
+                raise SystemExit(
+                    f"communication scope state lock raced during open: {lock_path}"
+                )
+        except Exception as exc:
+            raise SystemExit(
+                f"communication scope state lock is unsafe: {lock_path}"
+            ) from exc
+    else:
+        parent = path.parent
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        before_parent = os.stat(parent, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(before_parent.st_mode)
+            or before_parent.st_uid != os.geteuid()
+            or before_parent.st_mode & 0o022
+        ):
+            raise SystemExit(f"communication scope state lock directory is unsafe: {parent}")
+        directory = os.open(
+            parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened_parent = os.fstat(directory)
+        if (
+            (opened_parent.st_dev, opened_parent.st_ino)
+            != (before_parent.st_dev, before_parent.st_ino)
+            or not stat.S_ISDIR(opened_parent.st_mode)
+            or opened_parent.st_uid != os.geteuid()
+            or opened_parent.st_mode & 0o022
+        ):
+            os.close(directory)
+            raise SystemExit(f"communication scope state lock directory raced: {parent}")
+        try:
+            descriptor = os.open(
+                lock_path.name,
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory,
+            )
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                os.close(descriptor)
+                raise SystemExit(
+                    f"communication scope state lock is unsafe: {lock_path}"
+                )
+        finally:
+            os.close(directory)
+    locked = False
+    try:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        else:  # Windows byte-range lock; the verified file is process-private.
+            import msvcrt
+
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            getattr(msvcrt, "locking")(descriptor, getattr(msvcrt, "LK_LOCK"), 1)
+        locked = True
+        yield
+    finally:
+        try:
+            if locked:
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                else:
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    getattr(msvcrt, "locking")(
+                        descriptor,
+                        getattr(msvcrt, "LK_UNLCK"),
+                        1,
+                    )
+        finally:
+            os.close(descriptor)
 
 
 def _required_artifact_open_flags(*names: str) -> int:
@@ -2958,12 +3073,13 @@ def command_invitation_join_sponsored(args: argparse.Namespace) -> int:
         }
         _write_owner_json(invitation_path, invitation_output)
         _owner_only_directory(state_path.parent)
-        _write_private_config(
-            state_path,
-            candidate_state,
-            force=True,
-            expected_content=state_bytes,
-        )
+        with _private_state_lock(state_path):
+            _write_private_config(
+                state_path,
+                candidate_state,
+                force=True,
+                expected_content=state_bytes,
+            )
         return command_invitation_oidc_begin(
             argparse.Namespace(state=str(state_path), invitation=str(invitation_path))
         )
@@ -3512,27 +3628,80 @@ def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
 
 
 def command_communication_scope_begin(args: argparse.Namespace) -> int:
-    state = _load_or_create_communication_scope_cli_state(Path(args.state))
-    body = CommunicationScopeBeginRequest.model_validate(
-        {
-            "schema": "agentnet.communication-scope.begin.v1",
-            "begin_idempotency_key": state["begin_idempotency_key"],
-        }
-    ).model_dump(mode="json", by_alias=True)
-    client, _actor, _key = _load_identity_client(Path(args.identity))
-    try:
-        response = client.request(
-            "POST",
-            "/v1/communication-scope/begin",
-            json_body=body,
+    state_path = Path(args.state).absolute()
+    replace_terminal_state = bool(getattr(args, "replace_terminal_state", False))
+    with _private_state_lock(state_path):
+        expected_state_content: bytes | None = None
+        if replace_terminal_state:
+            if not os.path.lexists(state_path):
+                raise SystemExit(
+                    "terminal replacement requires existing communication scope state"
+                )
+            expected_state_content = _owner_only_file(
+                state_path,
+                label="communication scope state",
+            )
+            state = _load_communication_scope_cli_state(state_path)
+        else:
+            state = _load_or_create_communication_scope_cli_state(state_path)
+
+        body = CommunicationScopeBeginRequest.model_validate(
+            {
+                "schema": "agentnet.communication-scope.begin.v1",
+                "begin_idempotency_key": state["begin_idempotency_key"],
+            }
+        ).model_dump(mode="json", by_alias=True)
+        client, _actor, _key = _load_identity_client(Path(args.identity))
+        try:
+            response = client.request(
+                "POST",
+                "/v1/communication-scope/begin",
+                json_body=body,
+            )
+            if replace_terminal_state:
+                try:
+                    terminal_proof = response.json()
+                except (ValueError, json.JSONDecodeError):
+                    terminal_proof = None
+                if response.status_code != 410 or terminal_proof != {
+                    "schema": "agentnet.communication-scope.error.v1",
+                    "code": "communication_scope_terminal",
+                    "message": "request denied",
+                    "retryable": False,
+                }:
+                    raise SystemExit(
+                        "terminal replacement requires exact Core terminal proof"
+                    )
+                replacement: dict[str, object] = {
+                    "schema": _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+                    "begin_idempotency_key": secrets.token_urlsafe(32),
+                    "completion_idempotency_key": secrets.token_urlsafe(32),
+                }
+                _write_private_config(
+                    state_path,
+                    replacement,
+                    force=True,
+                    expected_content=expected_state_content,
+                )
+                state = _validate_communication_scope_cli_state(replacement)
+                body = CommunicationScopeBeginRequest.model_validate(
+                    {
+                        "schema": "agentnet.communication-scope.begin.v1",
+                        "begin_idempotency_key": state["begin_idempotency_key"],
+                    }
+                ).model_dump(mode="json", by_alias=True)
+                response = client.request(
+                    "POST",
+                    "/v1/communication-scope/begin",
+                    json_body=body,
+                )
+        finally:
+            client.close()
+        result = _communication_scope_result(
+            response,
+            expected_status=201,
+            model=CommunicationScopeBeginResult,
         )
-    finally:
-        client.close()
-    result = _communication_scope_result(
-        response,
-        expected_status=201,
-        model=CommunicationScopeBeginResult,
-    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -5625,6 +5794,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--state",
             default=".agentnet/communication-scope-state.json",
         )
+        if name == "begin":
+            operation.add_argument(
+                "--replace-terminal-state",
+                action="store_true",
+                help="replace retry keys only after Core proves the old scope terminal",
+            )
         operation.set_defaults(func=function)
 
     credential = commands.add_parser(

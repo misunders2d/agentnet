@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,10 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeCompleteRequest,
     CommunicationScopeStatusRequest,
 )
-from agentnet.authorization.communication_scope_service import CommunicationScopeService
+from agentnet.authorization.communication_scope_service import (
+    CommunicationScopeService,
+    CommunicationScopeTerminalError,
+)
 from agentnet.errors import AuthenticationError, ConflictError
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
@@ -101,10 +105,13 @@ class FakeApprovalClient:
         self.wrong_status_digest = False
         self.wrong_receipt_transaction = False
         self.create_calls = 0
+        self.fail_create = False
         self.retrieve_calls = 0
 
     def create_request(self, **kwargs):
         self.create_calls += 1
+        if self.fail_create:
+            raise RuntimeError("approval unavailable")
         self.canonical = kwargs["canonical_transaction"]
         self.possession_hash = kwargs["possession_hash"]
         return {
@@ -276,6 +283,99 @@ def test_begin_and_complete_are_idempotent(communication_stack) -> None:
     assert _complete(communication_stack) == _complete(communication_stack)
     assert communication_stack.client.retrieve_calls == 1
     assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 38
+
+
+def test_new_begin_expires_due_orphaned_reservation(communication_stack) -> None:
+    communication_stack.client.fail_create = True
+    with pytest.raises(RuntimeError, match="approval unavailable"):
+        _begin(communication_stack)
+
+    communication_stack.client.fail_create = False
+    replacement = CommunicationScopeBeginRequest(
+        schema="agentnet.communication-scope.begin.v1",
+        begin_idempotency_key="communication-scope-replacement-key-0001",
+    )
+    with pytest.raises(ConflictError, match="active communication scope"):
+        communication_stack.service.begin(
+            actor=communication_stack.actor,
+            request=replacement,
+        )
+
+    communication_stack.service.clock = lambda: NOW + 3_600
+    result = communication_stack.service.begin(
+        actor=communication_stack.actor,
+        request=replacement,
+    )
+
+    assert result["status"] == "approval_pending"
+    assert [
+        row["state"]
+        for row in communication_stack.store.fetch_all(
+            "SELECT state FROM communication_scopes ORDER BY created_at,scope_id"
+        )
+    ] == ["expired", "pending_approval"]
+
+
+def test_concurrent_replacements_after_due_orphan_have_one_winner(
+    communication_stack,
+) -> None:
+    communication_stack.client.fail_create = True
+    with pytest.raises(RuntimeError, match="approval unavailable"):
+        _begin(communication_stack)
+
+    communication_stack.client.fail_create = False
+    communication_stack.service.clock = lambda: NOW + 3_600
+
+    def begin(key: str) -> str:
+        try:
+            result = communication_stack.service.begin(
+                actor=communication_stack.actor,
+                request=CommunicationScopeBeginRequest(
+                    schema="agentnet.communication-scope.begin.v1",
+                    begin_idempotency_key=key,
+                ),
+            )
+        except ConflictError:
+            return "conflict"
+        return str(result["status"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(
+            executor.map(
+                begin,
+                (
+                    "communication-scope-racing-key-0001",
+                    "communication-scope-racing-key-0002",
+                ),
+            )
+        )
+
+    assert sorted(outcomes) == ["approval_pending", "conflict"]
+    assert sorted(
+        row["state"]
+        for row in communication_stack.store.fetch_all(
+            "SELECT state FROM communication_scopes"
+        )
+    ) == ["expired", "pending_approval"]
+
+
+def test_same_key_retry_expires_due_orphan_without_recalling_approval(
+    communication_stack,
+) -> None:
+    communication_stack.client.fail_create = True
+    with pytest.raises(RuntimeError, match="approval unavailable"):
+        _begin(communication_stack)
+    assert communication_stack.client.create_calls == 1
+
+    communication_stack.client.fail_create = False
+    communication_stack.service.clock = lambda: NOW + 3_600
+    with pytest.raises(CommunicationScopeTerminalError, match="terminal"):
+        _begin(communication_stack)
+
+    assert communication_stack.client.create_calls == 1
+    assert communication_stack.store.fetch_one(
+        "SELECT state FROM communication_scopes"
+    )["state"] == "expired"
 
 
 @pytest.mark.parametrize("stale", ["credential", "policy"])

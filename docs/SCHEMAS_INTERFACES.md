@@ -342,6 +342,13 @@ The signed persistent communication-scope routes are:
 | `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact current same-principal harness pair and creates the one-hour Approval request |
 | `POST /v1/communication-scope/status` | `agentnet.communication-scope.status.v1`; returns only caller-bound pending/ready/terminal state, approval URL/expiry when applicable, and `complete_automatically` only after issuance |
 | `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 38-item commit; exact retry returns the encrypted committed result |
+Before `begin` resolves an active-scope conflict, Core atomically expires every
+due pre-commit reservation for that principal and profile. A not-yet-due
+reservation remains exclusive. Same-key retry of a newly expired reservation
+returns terminal state without calling Approval again. CLI
+`begin --replace-terminal-state` holds an owner-only cross-process state lock
+from initial read through replacement begin and rotates both retry keys only
+after exact Core `410` error-envelope proof with no extra fields.
 
 The only success body is
 `agentnet.communication-scope.complete-result.v1` with
