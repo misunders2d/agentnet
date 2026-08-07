@@ -412,6 +412,80 @@ def test_communication_resolver_authenticates_configured_owner_server(
     assert resolved["enrollment_evidence"]["fresh"]["role"] == "fresh"
 
 
+
+def test_communication_resolver_accepts_reauthorized_owner_credential(
+    resolver_stack,
+) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+    replacement_credential_id = str(uuid4())
+    replacement_epoch = int(owner.credential_epoch or 0) + 1
+    with store.transaction() as connection:
+        current = connection.execute(
+            """SELECT key_id,public_key_pem FROM credentials
+                WHERE credential_id=?""",
+            (owner.credential_id,),
+        ).fetchone()
+        connection.execute(
+            "UPDATE credentials SET status='retired' WHERE credential_id=?",
+            (owner.credential_id,),
+        )
+        connection.execute(
+            "UPDATE harnesses SET credential_epoch=? WHERE harness_id=?",
+            (replacement_epoch, owner.harness_id),
+        )
+        connection.execute(
+            """INSERT INTO credentials(
+                credential_id,harness_id,key_id,public_key_pem,status,epoch,not_before,expires_at
+            ) VALUES(?,?,?,?, 'active',?,?,?)""",
+            (
+                replacement_credential_id,
+                owner.harness_id,
+                current["key_id"],
+                current["public_key_pem"],
+                replacement_epoch,
+                NOW - 10,
+                NOW + 20_000,
+            ),
+        )
+    reauthorized_owner = owner.model_copy(
+        update={
+            "credential_id": replacement_credential_id,
+            "credential_epoch": replacement_epoch,
+        }
+    )
+
+    resolved = _resolve_communication(
+        store,
+        verifier,
+        owner=reauthorized_owner,
+        actor=reauthorized_owner,
+    )
+
+    assert resolved["harnesses"]["owner"]["credential_id"] == replacement_credential_id
+    assert resolved["harnesses"]["owner"]["credential_epoch"] == replacement_epoch
+
+
+def test_communication_resolver_ignores_stale_sibling_enrollment(
+    resolver_stack,
+) -> None:
+    store, verifier, seed = resolver_stack
+    owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)
+    seed(name="Old laptop", consumed_at=NOW - 4_000, remote_activation=True)
+    fresh = seed(name="Fresh laptop", consumed_at=NOW - 60, remote_activation=True)
+
+    resolved = _resolve_communication(
+        store,
+        verifier,
+        owner=owner,
+        actor=owner,
+    )
+
+    assert resolved["harnesses"]["owner"]["harness_id"] == owner.harness_id
+    assert resolved["harnesses"]["fresh"]["harness_id"] == fresh.harness_id
+
+
 def test_communication_resolver_rejects_non_owner_caller(resolver_stack) -> None:
     store, verifier, seed = resolver_stack
     owner = seed(name="Owner server", consumed_at=NOW - 5_000, remote_activation=True)

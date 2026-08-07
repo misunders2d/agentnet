@@ -147,7 +147,31 @@ class ExactBootstrapHarnessResolver:
             ORDER BY t.transaction_id""",
             (actor.domain_id, actor.principal_id),
         ).fetchall()
-        if len(rows) != 2:
+        if self.authenticated_role == "enrolled_server":
+            owner_rows = [
+                row
+                for row in rows
+                if str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"agentnet:harness:{row['enrollment_challenge_id']}",
+                    )
+                )
+                == actor.harness_id
+            ]
+            fresh_rows = [
+                row
+                for row in rows
+                if row not in owner_rows
+                and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
+                and 0 <= now - int(row["enrollment_consumed_at"]) <= self.fresh_max_age_seconds
+            ]
+            if len(owner_rows) != 1 or len(fresh_rows) != 1:
+                raise ConflictError(
+                    "communication scope requires one configured server and one fresh guided harness"
+                )
+            rows = [owner_rows[0], fresh_rows[0]]
+        elif len(rows) != 2:
             raise ConflictError("bootstrap plan requires exactly two guided harnesses")
 
         candidates: list[dict[str, Any]] = []
@@ -155,6 +179,14 @@ class ExactBootstrapHarnessResolver:
             challenge_id = str(row["enrollment_challenge_id"])
             expected_harness_id = str(uuid5(NAMESPACE_URL, f"agentnet:harness:{challenge_id}"))
             expected_credential_id = str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}"))
+            current_credential_id = (
+                actor.credential_id
+                if (
+                    self.authenticated_role == "enrolled_server"
+                    and expected_harness_id == actor.harness_id
+                )
+                else expected_credential_id
+            )
             current = connection.execute(
                 """SELECT
                     h.harness_id,h.domain_id,h.principal_id,h.kind AS stored_harness_kind,
@@ -180,7 +212,7 @@ class ExactBootstrapHarnessResolver:
             try:
                 if (
                     credential["harness_id"] != expected_harness_id
-                    or credential["credential_id"] != expected_credential_id
+                    or credential["credential_id"] != current_credential_id
                     or credential["domain_id"] != actor.domain_id
                     or credential["principal_id"] != actor.principal_id
                     or credential["stored_harness_kind"] != row["harness_kind"]
@@ -275,7 +307,7 @@ class ExactBootstrapHarnessResolver:
                 {
                     "harness": {
                         "harness_id": expected_harness_id,
-                        "credential_id": expected_credential_id,
+                        "credential_id": current_credential_id,
                         "credential_epoch": int(credential["credential_epoch"]),
                         "binding_assurance": credential["stored_binding_assurance"],
                         "display_name": credential["display_name"],
