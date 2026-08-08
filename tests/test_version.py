@@ -8,10 +8,10 @@ from agentnet import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.1.49"
+EXPECTED_VERSION = "0.1.50"
 
 
-def test_release_versions_are_exactly_v0149() -> None:
+def test_release_versions_are_exactly_v0150() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     lock_path = ROOT / "package-lock.json"

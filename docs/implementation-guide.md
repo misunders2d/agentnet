@@ -199,17 +199,35 @@ endpoint is substituted.
 
 ## Product-owned ordinary Linux server setup
 
-The default host path is one fixed wrapper, not a general deployment framework. The target agent first resolves system-wide root-owned AgentNet, Node.js, and `uv` executables accessible to the locked service identities:
+The default v0.1.50 host path is one fixed wrapper, not a general deployment
+framework. Provision the strict owner-only prerequisite bundle under
+`/var/lib/agentnet-setup/`, including `server-setup.json`, then run:
 
 ```bash
-# no privileged or managed-host writes; npm may materialize caller-owned runtime
-<resolved-root-owned-agentnet-path> server-agent setup --request /home/operator/.config/agentnet-setup/server-setup.json
+sudo -- agentnet server-agent setup --apply --start
+```
 
-# one frozen approved scope
-sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
-  --request /home/operator/.config/agentnet-setup/server-setup.json \
-  --expected-request-digest <approved-request-digest> \
-  --apply --start
+The command discovers the standard bundle, validates a no-write plan, displays
+the exact digest and scope, asks once for `yes`, applies, starts, and verifies.
+If an external prerequisite, owner ceremony, or deadline blocks it, fix only
+the named blocker and rerun the identical command; retained state is
+revalidated and resumed. The successful plan/result includes the exact
+package-pinned laptop command:
+
+```bash
+agentnet join guided --server https://agents.corp.example
+```
+
+That laptop command derives domain and default harness from authenticated
+discovery. Explicit `--domain`, `--harness`, and `--name` remain optional
+overrides and must match discovery and retained state.
+
+Automation may continue to use the strict request/plan/apply interface:
+
+```bash
+agentnet server-agent setup --request /secure/server-setup.json
+sudo -- agentnet server-agent setup --request /secure/server-setup.json \
+  --expected-request-digest <approved-request-digest> --apply --start
 ```
 
 The strict request contains public metadata and absolute references only. Secret
@@ -354,6 +372,15 @@ preserves schema-v7 plus enrolled identity, credential, endpoint,
 communication, and external-prerequisite state. After restart, permanent
 communication activation resolves the exact completed C0 pair and accepts only
 the ordinary server harness's current active credential on that lineage.
+
+
+For v0.1.50, install the target package once and run the guided server command.
+Exact v0.1.45–v0.1.49 schema-v7 five-unit markers are allowlisted direct
+sources; no intermediate npm install is required. The forward-only journal
+revalidates source marker, units, schema, request/input provenance, and target
+runtime before commit. Unsupported, ambiguous, or downgraded markers fail
+closed. This is package/config/unit provenance replacement, not a database
+migration or rollback promise.
 
 ### Communication-only request-v2
 

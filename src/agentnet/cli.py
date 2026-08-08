@@ -13,6 +13,7 @@ import json
 import socket
 import os
 import secrets
+import signal
 import shutil
 import stat
 import subprocess
@@ -868,6 +869,112 @@ def _public_json_request(
         raise SystemExit("AgentNet server returned a non-object response")
     return value
 
+def _detect_guided_harness() -> str:
+    supported = {"omp", "pi", "claude", "codex", "antigravity"}
+    configured = os.environ.get("AGENTNET_HARNESS_KIND")
+    if configured is not None:
+        if configured not in supported:
+            raise SystemExit("AGENTNET_HARNESS_KIND is not a supported laptop harness")
+        return configured
+
+    executable_kinds = {
+        "omp": "omp",
+        "pi": "pi",
+        "claude": "claude",
+        "codex": "codex",
+        "agy": "antigravity",
+        "antigravity": "antigravity",
+    }
+    try:
+        import psutil
+
+        process = psutil.Process(os.getppid())
+        for _ in range(12):
+            name = process.name().casefold()
+            if name.endswith(".exe"):
+                name = name[:-4]
+            detected = executable_kinds.get(name)
+            if detected is not None:
+                return detected
+            parent = process.parent()
+            if parent is None:
+                break
+            process = parent
+    except (OSError, ValueError, psutil.Error):
+        pass
+
+    environment_kinds = {
+        kind
+        for variable, kind in (
+            ("OMPCODE", "omp"),
+            ("CLAUDECODE", "claude"),
+            ("CODEX_HOME", "codex"),
+            ("ANTIGRAVITY_HOME", "antigravity"),
+        )
+        if os.environ.get(variable)
+    }
+    if len(environment_kinds) == 1:
+        return environment_kinds.pop()
+    raise SystemExit(
+        "current AI harness could not be identified unambiguously; use --harness"
+    )
+
+
+def _guided_join_inputs(
+    args: argparse.Namespace,
+    *,
+    server: str,
+    retained_state: dict[str, object] | None,
+) -> tuple[str, str, str]:
+    retained_domain = retained_state.get("domain_id") if retained_state else None
+    retained_harness = retained_state.get("harness_kind") if retained_state else None
+    retained_name = retained_state.get("harness_name") if retained_state else None
+
+    domain = args.domain if args.domain is not None else retained_domain
+    if domain is None:
+        discovery = _public_json_request(
+            server=server,
+            method="GET",
+            path="/v1/enrollment/discovery",
+            body={},
+        )
+        if (
+            set(discovery) != {"schema", "domain_id", "profile"}
+            or discovery.get("schema") != "agentnet.enrollment.discovery.v1"
+            or discovery.get("profile") != "guided_oidc_passkey"
+        ):
+            raise SystemExit("AgentNet enrollment discovery response is invalid")
+        domain = discovery.get("domain_id")
+    if (
+        not isinstance(domain, str)
+        or not 3 <= len(domain) <= 128
+        or domain[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for character in domain)
+    ):
+        raise SystemExit("AgentNet enrollment discovery domain is invalid")
+
+    harness = args.harness if args.harness is not None else retained_harness
+    if harness is None:
+        harness = _detect_guided_harness()
+    if (
+        not isinstance(harness, str)
+        or not 1 <= len(harness) <= 64
+        or any(not (character.isascii() and (character.isalnum() or character in "._-")) for character in harness)
+    ):
+        raise SystemExit("guided join harness is invalid")
+
+    name = args.name if args.name is not None else retained_name
+    if name is None:
+        name = socket.gethostname()
+    if (
+        not isinstance(name, str)
+        or not 1 <= len(name) <= 128
+        or name != name.strip()
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in name)
+    ):
+        raise SystemExit("guided join display name is invalid; use --name")
+    return domain, harness, name
+
 
 def _load_identity_profile(path: Path) -> tuple[dict[str, object], VerifiedActor, P256KeyPair]:
     value = _read_json_object(path, label="AgentNet identity profile")
@@ -1371,29 +1478,148 @@ def command_network_create(args: argparse.Namespace) -> int:
     return 0 if bool(local_readiness.get("ready")) else 1
 
 
+@contextmanager
+def _server_setup_deadline(seconds: int = 600):
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def exceeded(_signum, _frame) -> None:
+        raise ServerSetupError(
+            "setup_deadline_exceeded",
+            f"guided server setup exceeded its {seconds}-second deadline; rerun resumes exact state",
+        )
+
+    started = time.monotonic()
+    prior_handler = signal.getsignal(signal.SIGALRM)
+    prior_timer = signal.setitimer(signal.ITIMER_REAL, 0.0)
+    signal.signal(signal.SIGALRM, exceeded)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, prior_handler)
+        prior_delay, prior_interval = prior_timer
+        if prior_delay > 0.0 or prior_interval > 0.0:
+            elapsed = time.monotonic() - started
+            signal.setitimer(
+                signal.ITIMER_REAL,
+                max(0.000001, prior_delay - elapsed),
+                prior_interval,
+            )
+
+
+def _setup_progress(phase: str, started: float, action: str) -> None:
+    elapsed = max(0.0, time.monotonic() - started)
+    print(
+        f"phase={phase} elapsed={elapsed:.1f}s action={action}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def command_server_agent_setup(args: argparse.Namespace) -> int:
     """Plan or apply the fixed product-owned ordinary Linux server profile."""
 
+    started = time.monotonic()
+    phase = "discover"
     try:
-        if args.start and not args.apply:
-            raise ServerSetupError("invalid_action", "--start requires --apply")
-        if args.apply and not args.expected_request_digest:
-            raise ServerSetupError(
-                "approval_digest_required",
-                "--apply requires --expected-request-digest from the frozen no-managed-host-write plan",
+        with _server_setup_deadline():
+            guided = args.request is None
+            if args.start and not args.apply:
+                raise ServerSetupError("invalid_action", "--start requires --apply")
+            if not guided and args.apply and not args.expected_request_digest:
+                raise ServerSetupError(
+                    "approval_digest_required",
+                    "--apply requires --expected-request-digest from the frozen no-managed-host-write plan",
+                )
+            if not args.apply and args.expected_request_digest:
+                raise ServerSetupError(
+                    "invalid_action",
+                    "--expected-request-digest requires --apply",
+                )
+            if guided and args.expected_request_digest:
+                raise ServerSetupError(
+                    "invalid_action",
+                    "guided setup derives the approved request digest itself",
+                )
+            request_path = (
+                SETUP_ROOT / "server-setup.json"
+                if guided
+                else Path(str(args.request))
             )
-        if not args.apply and args.expected_request_digest:
-            raise ServerSetupError("invalid_action", "--expected-request-digest requires --apply")
-        request = load_server_setup_request(Path(args.request))
-        result = (
-            apply_server_setup(
-                request,
-                start=bool(args.start),
-                expected_request_digest=str(args.expected_request_digest),
-            )
-            if args.apply
-            else plan_server_setup(request)
-        )
+            if guided:
+                _setup_progress("discover", started, "load standard owner-only prerequisites")
+            try:
+                request = load_server_setup_request(request_path)
+            except ServerSetupError as exc:
+                if guided and exc.blocker == "missing_input":
+                    raise ServerSetupError(
+                        "missing_external_prerequisite",
+                        "create the owner-only standard prerequisite file at "
+                        f"{request_path}",
+                    ) from exc
+                raise
+
+            phase = "plan"
+            if guided:
+                _setup_progress("plan", started, "validate and freeze exact setup plan")
+            plan = plan_server_setup(request)
+            if guided and args.apply:
+                phase = "approve"
+                _setup_progress("approve", started, "await one exact terminal approval")
+                if not sys.stdin.isatty():
+                    raise ServerSetupError(
+                        "plan_approval_required",
+                        "guided server setup requires one interactive terminal approval",
+                    )
+                summary = {
+                    key: plan[key]
+                    for key in (
+                        "schema",
+                        "status",
+                        "package_version",
+                        "profile",
+                        "request_digest",
+                        "managed_units",
+                        "public_core_origin",
+                    )
+                    if key in plan
+                }
+                print(json.dumps(summary, indent=2, sort_keys=True), file=sys.stderr)
+                print(
+                    "Apply this exact AgentNet server setup plan? [yes/no]",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if sys.stdin.readline().strip().lower() != "yes":
+                    raise ServerSetupError(
+                        "approval_declined",
+                        "guided server setup plan was not approved",
+                    )
+                phase = "apply"
+                _setup_progress("apply", started, "apply exact plan and managed services")
+                result = apply_server_setup(
+                    request,
+                    start=bool(args.start),
+                    expected_request_digest=str(plan["request_digest"]),
+                )
+                phase = "verify"
+                _setup_progress("verify", started, "confirm exact setup result")
+            elif guided:
+                result = plan
+            else:
+                phase = "apply" if args.apply else "plan"
+                result = (
+                    apply_server_setup(
+                        request,
+                        start=bool(args.start),
+                        expected_request_digest=str(args.expected_request_digest),
+                    )
+                    if args.apply
+                    else plan
+                )
     except ServerSetupError as exc:
         blocker = exc.blocker
         message = str(exc)
@@ -1403,6 +1629,11 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
         message = "server setup failed before producing verified evidence"
         identity_enrolled = False
     else:
+        result = {
+            "phase": phase,
+            **result,
+            "setup_elapsed_seconds": round(time.monotonic() - started, 3),
+        }
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     print(
@@ -1410,11 +1641,19 @@ def command_server_agent_setup(args: argparse.Namespace) -> int:
             {
                 "schema": "agentnet.server-setup.evidence.v1",
                 "status": "blocked",
+                "phase": phase,
                 "blocker": blocker,
                 "message": message,
+                "responsible_component": "agentnet-server-setup",
+                "safe_action": "retained exact resumable setup state",
+                "rerun_resumes": True,
+                "human_action": (
+                    "supply the named prerequisite or approval, then rerun the same command"
+                ),
                 "authority_granted": False,
                 "identity_enrolled": identity_enrolled,
                 "production_durability_proven": False,
+                "setup_elapsed_seconds": round(time.monotonic() - started, 3),
             },
             indent=2,
             sort_keys=True,
@@ -2612,13 +2851,13 @@ def _guided_success_output(
 ) -> dict[str, object]:
     _ = identity_path, actor
     return {
-        "status": "enrolled_identity_only",
+        "status": "communication_ready",
         "idempotent_repeat": idempotent_repeat,
         "identity_saved_locally": True,
         "approval_delivery": "automatic_possession_bound_signed_broker",
-        "authority_granted": False,
-        "first_message_status": "first_message_blocked_explicit_authority_required",
-        "next": "continue only with an explicitly approved bounded authority plan",
+        "authority_granted": True,
+        "first_message_status": "COMPLETED_C0_ROUND_TRIP",
+        "next": None,
     }
 
 
@@ -2675,9 +2914,169 @@ def _poll_guided_authorization(
         raise SystemExit("guided enrollment poll response is invalid")
     return polled, status, interval
 
+def _guided_signed_result(
+    *,
+    identity_path: Path,
+    method: str,
+    path: str,
+    body: dict[str, object] | None,
+    expected_status: int,
+    models: object,
+) -> object:
+    client, _actor, _key = _load_identity_client(identity_path)
+    try:
+        response = client.request(method, path, json_body=body)
+    finally:
+        client.close()
+    if response.status_code != expected_status:
+        raise SystemExit(
+            f"guided communication activation was rejected with HTTP {response.status_code}"
+        )
+    try:
+        raw = response.json()
+    except Exception as exc:
+        raise SystemExit("guided communication activation response is invalid") from exc
+    candidates = models if isinstance(models, tuple) else (models,)
+    for model in candidates:
+        try:
+            return model.model_validate(raw)
+        except Exception:
+            continue
+    raise SystemExit("guided communication activation response is invalid")
+
+
+def _complete_guided_activation(
+    *,
+    identity_path: Path,
+    state_path: Path,
+    browser: str,
+    deadline: float,
+    started: float | None = None,
+) -> str:
+    if started is not None:
+        _setup_progress("activate", started, "establish exact bounded communication authority")
+    activation_path = state_path.with_name(f"{state_path.name}.activation")
+    activation_exists = os.path.lexists(activation_path)
+    activation = (
+        _load_bootstrap_plan_cli_state(activation_path)
+        if activation_exists
+        else _load_or_create_bootstrap_plan_cli_state(activation_path)
+    )
+    begin_body = {
+        "schema": "agentnet.bootstrap-plan.begin.v1",
+        "begin_idempotency_key": activation["begin_idempotency_key"],
+    }
+    status_body = {
+        "schema": "agentnet.bootstrap-plan.status.v1",
+        "begin_idempotency_key": activation["begin_idempotency_key"],
+    }
+    bootstrap = _guided_signed_result(
+        identity_path=identity_path,
+        method="POST",
+        path="/v1/bootstrap-plan/status" if activation_exists else "/v1/bootstrap-plan/begin",
+        body=status_body if activation_exists else begin_body,
+        expected_status=200 if activation_exists else 201,
+        models=(
+            BootstrapPlanBeginResult,
+            BootstrapPlanStatusResult,
+            BootstrapPlanCompleteResult,
+        ),
+    )
+    approval_disclosed = False
+    while not isinstance(bootstrap, BootstrapPlanCompleteResult):
+        if time.monotonic() >= deadline:
+            raise SystemExit(
+                "guided activation timed out; enrollment and activation state are retained"
+            )
+        if isinstance(bootstrap, BootstrapPlanBeginResult):
+            approval_url = _validate_stable_approval_url(bootstrap.approval_url)
+            _handoff_guided_authorization(
+                approval_url,
+                browser=browser,
+                purpose="bounded communication activation",
+            )
+            approval_disclosed = True
+        elif bootstrap.status == "approval_ready":
+            bootstrap = _guided_signed_result(
+                identity_path=identity_path,
+                method="POST",
+                path="/v1/bootstrap-plan/complete",
+                body={
+                    "schema": "agentnet.bootstrap-plan.complete.v2",
+                    "begin_idempotency_key": activation["begin_idempotency_key"],
+                    "completion_idempotency_key": activation[
+                        "completion_idempotency_key"
+                    ],
+                },
+                expected_status=201,
+                models=BootstrapPlanCompleteResult,
+            )
+            continue
+        elif bootstrap.status != "approval_pending":
+            raise SystemExit(
+                f"guided communication activation stopped in terminal state: {bootstrap.status}"
+            )
+        elif not approval_disclosed and bootstrap.approval_url is not None:
+            _handoff_guided_authorization(
+                _validate_stable_approval_url(bootstrap.approval_url),
+                browser=browser,
+                purpose="bounded communication activation",
+            )
+            approval_disclosed = True
+        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+        bootstrap = _guided_signed_result(
+            identity_path=identity_path,
+            method="POST",
+            path="/v1/bootstrap-plan/status",
+            body=status_body,
+            expected_status=200,
+            models=(BootstrapPlanStatusResult, BootstrapPlanCompleteResult),
+        )
+
+    if started is not None:
+        _setup_progress("roundtrip", started, "complete exact C0 request and acknowledgement")
+    pilot = _guided_signed_result(
+        identity_path=identity_path,
+        method="POST",
+        path="/v1/c0-pilot/start",
+        body={"schema": "agentnet.c0-pilot.start.v1"},
+        expected_status=201,
+        models=C0PilotResult,
+    )
+    while pilot.status != "COMPLETED_C0_ROUND_TRIP":
+        if time.monotonic() >= deadline:
+            raise SystemExit(
+                "guided roundtrip timed out; enrollment and activation state are retained"
+            )
+        if pilot.status == "waiting_fresh":
+            pilot = _guided_signed_result(
+                identity_path=identity_path,
+                method="POST",
+                path="/v1/c0-pilot/complete",
+                body={"schema": "agentnet.c0-pilot.complete.v1"},
+                expected_status=200,
+                models=C0PilotResult,
+            )
+            continue
+        if pilot.status not in {"prepared_unusable", "waiting_owner"}:
+            raise SystemExit(f"guided roundtrip stopped in terminal state: {pilot.status}")
+        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+        pilot = _guided_signed_result(
+            identity_path=identity_path,
+            method="POST",
+            path="/v1/c0-pilot/status",
+            body={"schema": "agentnet.c0-pilot.status.v1"},
+            expected_status=200,
+            models=C0PilotResult,
+        )
+    return pilot.status
+
 
 def command_join_guided(args: argparse.Namespace) -> int:
     """Run resumable browser OIDC and Core-brokered independent approval."""
+    started = time.monotonic()
+    deadline = started + float(args.timeout)
+    _setup_progress("discover", started, "fetch strict server enrollment metadata")
 
     state_path = Path(os.path.abspath(args.state))
     identity_path = Path(os.path.abspath(args.identity))
@@ -2685,9 +3084,16 @@ def command_join_guided(args: argparse.Namespace) -> int:
     authorization_url_disclosed = False
     approval_url_disclosed = False
     state_exists = os.path.lexists(state_path)
+    pending = _guided_join_state(state_path) if state_exists else None
+    args.domain, args.harness, args.name = _guided_join_inputs(
+        args,
+        server=server,
+        retained_state=pending,
+    )
+    _setup_progress("prepare", started, "validate resumable owner-only identity state")
     replace_terminal_state = False
     if state_exists:
-        pending = _guided_join_state(state_path)
+        assert pending is not None
         if pending.get("schema") == "agentnet.guided-join-complete.v1":
             if args.replace_terminal_state:
                 raise SystemExit("completed guided join state cannot be replaced")
@@ -2731,6 +3137,15 @@ def command_join_guided(args: argparse.Namespace) -> int:
             }
             if _guided_join_state(identity_path) != expected_identity:
                 raise SystemExit("completed guided join identity file does not match state")
+            _setup_progress("enroll", started, "validate retained exact identity binding")
+            _complete_guided_activation(
+                identity_path=identity_path,
+                state_path=state_path,
+                browser=args.browser,
+                deadline=deadline,
+                started=started,
+            )
+            _setup_progress("verify", started, "confirm communication-ready terminal state")
             print(
                 json.dumps(
                     _guided_success_output(
@@ -2875,6 +3290,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             else:
                 _write_owner_json(state_path, pending)
             state_exists = True
+        _setup_progress("authenticate", started, "start exact owner OIDC authorization")
         authorization = _validate_guided_authorization(
             _public_json_request(
                 server=server,
@@ -2899,6 +3315,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             "replaced_authorization": None,
         }
         _write_private_config(state_path, pending, force=True)
+        _setup_progress("approve", started, "request independent owner passkey approval")
         _handoff_guided_authorization(
             str(authorization["authorization_url"]),
             browser=args.browser,
@@ -2906,7 +3323,6 @@ def command_join_guided(args: argparse.Namespace) -> int:
         authorization_url_disclosed = True
 
     challenge_value = pending.get("challenge")
-    deadline = time.monotonic() + float(args.timeout)
     while True:
         if time.monotonic() >= deadline:
             raise SystemExit("guided enrollment timed out; pending state is retained")
@@ -2947,6 +3363,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             authorization_url_disclosed = True
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
+    _setup_progress("enroll", started, "complete exact human and harness binding")
     _challenge, decoded = _validate_guided_challenge(challenge_value)
     result = _public_json_request(
         server=server,
@@ -2978,6 +3395,14 @@ def command_join_guided(args: argparse.Namespace) -> int:
         identity_repeat = True
     else:
         _write_owner_json(identity_path, identity)
+    _complete_guided_activation(
+        identity_path=identity_path,
+        state_path=state_path,
+        browser=args.browser,
+        deadline=deadline,
+        started=started,
+    )
+    _setup_progress("verify", started, "confirm communication-ready terminal state")
     completed_state = {
         "schema": "agentnet.guided-join-complete.v1",
         "server_base_url": server,
@@ -5933,7 +6358,7 @@ def build_parser() -> argparse.ArgumentParser:
         "setup",
         help="plan or apply the fixed product-owned ordinary Linux server profile",
     )
-    server_agent_setup.add_argument("--request", required=True)
+    server_agent_setup.add_argument("--request")
     server_agent_setup.add_argument(
         "--apply",
         action="store_true",
@@ -5999,9 +6424,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="run resumable browser OIDC and Core-brokered independent approval",
     )
     join_guided.add_argument("--server", required=True)
-    join_guided.add_argument("--domain", required=True)
-    join_guided.add_argument("--harness", required=True)
-    join_guided.add_argument("--name", required=True)
+    join_guided.add_argument("--domain")
+    join_guided.add_argument("--harness")
+    join_guided.add_argument("--name")
     join_guided.add_argument("--state", default=".agentnet/guided-join.json")
     join_guided.add_argument("--private-key")
     join_guided.add_argument("--identity", default=".agentnet/identity.json")

@@ -196,6 +196,70 @@ const expectedV0145Journey = {
   residual_processes: 0,
 };
 
+const expectedPackagedLocalCommunication = {
+  accepted_fact: "accepted_local",
+  approved_revocation_proven: false,
+  bounded_c0_pilot_proven: false,
+  core_process_starts: 4,
+  core_restarts: 3,
+  credential_refusal_fixture: true,
+  exact_attribution: true,
+  idempotency: true,
+  non_production: true,
+  obligation_state: "completed",
+  production_durability_proven: false,
+  recipient_fact: "recipient_committed",
+  release_certified: false,
+  separate_process_loopback: true,
+};
+
+const requirePackagedLocalCommunication = (packageRoot, launcher, environment) => {
+  const runtime = path.join(temporary, "local-communication-runtime");
+  const workspace = path.join(temporary, "local-communication-workspace");
+  mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  const lifecycleEnvironment = {
+    ...environment,
+    AGENTNET_NPM_RUNTIME_DIR: runtime,
+    PYTHONPYCACHEPREFIX: path.join(runtime, "pycache"),
+    UV_PROJECT_ENVIRONMENT: runtime,
+  };
+  for (const name of [
+    "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "PYTHONHOME", "PYTHONPATH",
+    "VIRTUAL_ENV", "all_proxy", "http_proxy", "https_proxy",
+  ]) {
+    delete lifecycleEnvironment[name];
+  }
+  lifecycleEnvironment.NO_PROXY = "127.0.0.1,localhost";
+  lifecycleEnvironment.no_proxy = "127.0.0.1,localhost";
+  const completed = run(
+    resolveCommand("uv", lifecycleEnvironment.PATH ?? "") ?? "uv",
+    [
+      "run", "--project", packageRoot, "--frozen", "--no-default-groups",
+      "--python", "3.13.13", "python", "-B", "-I",
+      path.join(packageRoot, "scripts", "ci", "packaged_local_communication_e2e.py"),
+      "run", "--package-root", packageRoot, "--launcher", launcher,
+      "--workspace", workspace,
+    ],
+    { cwd: unrelated, env: lifecycleEnvironment, capture: true },
+  );
+  let report;
+  try {
+    report = JSON.parse(completed.stdout);
+  } catch {
+    process.stderr.write(completed.stdout ?? "");
+    process.stderr.write(completed.stderr ?? "");
+    throw new Error("packaged local communication gate did not return JSON");
+  }
+  if (JSON.stringify(report) !== JSON.stringify(expectedPackagedLocalCommunication)) {
+    throw new Error("packaged local communication gate returned an invalid report");
+  }
+  if (readdirSync(workspace).length !== 0) {
+    throw new Error("packaged local communication gate left workspace residue");
+  }
+  process.stdout.write(completed.stdout);
+};
+
 const requirePackagedV0145UserJourney = (packageRoot, launcher, environment) => {
   const runtime = path.join(temporary, "v0145-user-journey-runtime");
   const workspace = path.join(temporary, "v0145-user-journey-workspace");
@@ -392,6 +456,16 @@ try {
       }
     }
 
+    if (generation === 2) {
+      const packageTreeBeforeCommunication = stablePackageTreeSha256(packageRoot);
+      requirePackagedLocalCommunication(packageRoot, launcher, environment);
+      requireNoVerificationResidue(packageRoot);
+      const packageTreeAfterCommunication = stablePackageTreeSha256(packageRoot);
+      if (packageTreeAfterCommunication !== packageTreeBeforeCommunication) {
+        throw new Error("packaged local communication gate mutated package tree contents");
+      }
+    }
+
     if (initName === "systemd") {
       const inputs = path.join(temporary, `server-setup-inputs-${generation}`);
       mkdirSync(inputs, { mode: 0o700 });
@@ -421,22 +495,24 @@ try {
         allowed_endpoint_origins: ["https://accounts.example"],
         allowed_signing_algorithms: ["RS256"],
       });
-      writePrivate(approvers, { approvers: [{
-        principal_id: "packed-owner",
-        authority_kind: "human",
-        domain_id: "corp.example",
-        allowed_purposes: [
-          "authorization.bootstrap_plan.approve",
-          "authorization.communication_scope.approve",
-          "authorization.elevation.approve",
-          "identity.credential.recover.approve",
-          "identity.enrollment.approve",
-          "identity.harness.revoke.approve",
-          "organization.relationship.accept",
-        ],
-        oidc_issuer: "https://accounts.example",
-        oidc_subject: "packed-owner-subject",
-      }] });
+      writePrivate(approvers, {
+        approvers: [{
+          principal_id: "packed-owner",
+          authority_kind: "human",
+          domain_id: "corp.example",
+          allowed_purposes: [
+            "authorization.bootstrap_plan.approve",
+            "authorization.communication_scope.approve",
+            "authorization.elevation.approve",
+            "identity.credential.recover.approve",
+            "identity.enrollment.approve",
+            "identity.harness.revoke.approve",
+            "organization.relationship.accept",
+          ],
+          oidc_issuer: "https://accounts.example",
+          oidc_subject: "packed-owner-subject",
+        }]
+      });
       writePrivate(scannerTrust, {
         trusted_public_keys: { "packed-scanner-key": scannerPublicKey },
         required_engine: "packed-check-scanner",

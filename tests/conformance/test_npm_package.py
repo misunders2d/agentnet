@@ -115,6 +115,13 @@ def test_npm_package_is_scoped_discoverable_and_version_aligned() -> None:
     }
 
 
+def test_packaged_v0145_journey_accepts_current_candidate() -> None:
+    from agentnet import __version__
+    from scripts.ci.packaged_v0145_user_journey import _installed_candidate_version
+
+    assert _installed_candidate_version(ROOT) == __version__
+
+
 def test_npm_package_contains_one_runtime_and_all_harness_adapters() -> None:
     required = (
         "LICENSE",

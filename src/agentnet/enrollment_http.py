@@ -105,6 +105,17 @@ def create_enrollment_routes(
     if coordinator.store is not core.store:
         raise ValueError("enrollment HTTP coordinator must share the core store")
 
+
+    async def discovery(request: Request) -> Response:
+        _rate_limit(core, request, metric="enrollment_discovery", limit=120)
+        return JSONResponse(
+            {
+                "schema": "agentnet.enrollment.discovery.v1",
+                "domain_id": core.config.domain_id,
+                "profile": "guided_oidc_passkey",
+            },
+            headers=_public_headers(),
+        )
     async def begin(request: Request) -> Response:
         _rate_limit(core, request)
         parsed = OIDCBeginBody.model_validate_json(await _bounded_body(request, core))
@@ -260,6 +271,7 @@ def create_enrollment_routes(
         return JSONResponse(value, status_code=201, headers=_public_headers())
 
     return [
+        Route("/v1/enrollment/discovery", discovery, methods=["GET"]),
         Route("/activate", activation_page, methods=["GET"]),
         Route("/v1/enrollment/oidc/activate", activate, methods=["GET"]),
         Route("/v1/enrollment/oidc/begin", begin, methods=["POST"]),

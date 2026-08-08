@@ -42,11 +42,20 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Check out source
+      - name: Check out current test harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: 9620e24c74e3720ad90790da037b013dd26bfbab # frozen v0.1.46 evidence source
+
+      - name: Retain current upgrade harness
+        shell: bash
+        run: install -m 0755 scripts/ci/ordinary-server-upgrade-e2e.sh "$RUNNER_TEMP/ordinary-server-upgrade-e2e.sh"
+
+      - name: Check out frozen v0.1.46 evidence source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: 9620e24c74e3720ad90790da037b013dd26bfbab
 
       - name: Configure Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -84,7 +93,7 @@ jobs:
 
       - name: Prove exact released-to-corrected timer upgrade
         shell: bash
-        run: scripts/ci/ordinary-server-upgrade-e2e.sh
+        run: "$RUNNER_TEMP/ordinary-server-upgrade-e2e.sh"
 
       - name: Verify E2E cleanup
         if: ${{ always() }}

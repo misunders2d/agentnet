@@ -27,6 +27,17 @@ clean-install lane, which is the exact path operators follow.
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
+## Setup-usability `0.1.50` candidate
+
+Candidate `0.1.50` wraps the existing strict server and laptop protocols in
+one resumable command per machine. It adds authenticated discovery defaults,
+content-free named phases, bounded deadlines, exact blocker/recovery output,
+and direct allowlisted upgrades from exact v0.1.45–v0.1.49 schema-v7 five-unit
+markers. Packed-package verification requires an installed separate-process
+message/obligation roundtrip. Release artifacts, complete validation, fresh CI,
+and publication remain pending. This local implementation does not promote a
+requirement, production claim, or must-not-ship gate.
+
 ## Corrective `0.1.49` candidate
 
 Candidate `0.1.49` corrects permanent communication activation and remote

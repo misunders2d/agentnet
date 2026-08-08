@@ -157,6 +157,15 @@ async def test_public_oidc_enrollment_routes_compose_exact_ceremony_without_clai
         transport=httpx.ASGITransport(app=create_app(core), raise_app_exceptions=False),
         base_url="http://127.0.0.1",
     ) as client:
+        discovery = await client.get("/v1/enrollment/discovery")
+        assert discovery.status_code == 200
+        assert discovery.headers["cache-control"] == "no-store"
+        assert discovery.json() == {
+            "schema": "agentnet.enrollment.discovery.v1",
+            "domain_id": actor.domain_id,
+            "profile": "guided_oidc_passkey",
+        }
+
         activation_page = await client.get("/activate")
         assert activation_page.status_code == 200
         assert "Activate AgentNet server" in activation_page.text

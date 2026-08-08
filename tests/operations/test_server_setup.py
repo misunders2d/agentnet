@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import signal
 import threading
 import stat
 import subprocess
@@ -28,7 +29,11 @@ from agentnet.approval.config import (
     ApprovalServiceConfig,
 )
 from agentnet.operations.config import IndependentApproverConfig, ScannerTrustConfig
-from agentnet.cli import build_parser, command_server_agent_setup
+from agentnet.cli import (
+    _server_setup_deadline,
+    build_parser,
+    command_server_agent_setup,
+)
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
@@ -539,6 +544,140 @@ def test_server_setup_is_one_fixed_public_cli_surface(tmp_path: Path) -> None:
     assert applied.func is command_server_agent_setup
     assert applied.apply is True and applied.start is True
     assert applied.expected_request_digest == "a" * 64
+
+
+def test_server_setup_guided_mode_needs_no_request_or_digest_arguments() -> None:
+    parsed = build_parser().parse_args(["server-agent", "setup"])
+
+    assert parsed.request is None
+    assert parsed.apply is False
+    assert parsed.start is False
+    assert parsed.expected_request_digest is None
+
+
+def test_guided_server_setup_refuses_noninteractive_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import agentnet.cli as cli
+
+    request = object()
+    monkeypatch.setattr(cli, "load_server_setup_request", lambda _path: request)
+    monkeypatch.setattr(
+        cli,
+        "plan_server_setup",
+        lambda candidate: {
+            "schema": "agentnet.server-setup.evidence.v1",
+            "status": "planned",
+            "request_digest": "a" * 64,
+            "package_version": "0.1.50",
+            "profile": "always_on_server_agent",
+        }
+        if candidate is request
+        else pytest.fail("guided setup changed the loaded request"),
+    )
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+    rc = command_server_agent_setup(
+        build_parser().parse_args(["server-agent", "setup", "--apply", "--start"])
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert output["blocker"] == "plan_approval_required"
+    assert output["authority_granted"] is False
+    assert output["phase"] == "approve"
+    assert output["rerun_resumes"] is True
+    assert output["responsible_component"] == "agentnet-server-setup"
+
+
+def test_guided_server_setup_approves_and_applies_exact_planned_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import agentnet.cli as cli
+
+    request = object()
+    applied: list[tuple[object, bool, str]] = []
+
+    class ApprovingTerminal:
+        def isatty(self) -> bool:
+            return True
+
+        def readline(self) -> str:
+            return "yes\n"
+
+    monkeypatch.setattr(cli, "load_server_setup_request", lambda _path: request)
+    monkeypatch.setattr(
+        cli,
+        "plan_server_setup",
+        lambda candidate: {
+            "schema": "agentnet.server-setup.evidence.v1",
+            "status": "planned",
+            "request_digest": "b" * 64,
+            "package_version": "0.1.50",
+            "profile": "always_on_server_agent",
+            "managed_units": ["agentnet-core.service"],
+        }
+        if candidate is request
+        else pytest.fail("guided setup changed the loaded request"),
+    )
+
+    def apply(candidate: object, *, start: bool, expected_request_digest: str) -> dict[str, object]:
+        applied.append((candidate, start, expected_request_digest))
+        return {
+            "schema": "agentnet.server-setup.evidence.v1",
+            "status": "applied",
+            "request_digest": expected_request_digest,
+        }
+
+    monkeypatch.setattr(cli, "apply_server_setup", apply)
+    monkeypatch.setattr(cli.sys, "stdin", ApprovingTerminal())
+
+    rc = command_server_agent_setup(
+        build_parser().parse_args(["server-agent", "setup", "--apply", "--start"])
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert rc == 0
+    assert output["status"] == "applied"
+    assert output["request_digest"] == "b" * 64
+    assert applied == [(request, True, "b" * 64)]
+    assert "Apply this exact AgentNet server setup plan? [yes/no]" in captured.err
+    for phase in ("discover", "plan", "approve", "apply", "verify"):
+        assert f"phase={phase}" in captured.err
+
+
+def test_guided_server_setup_reports_missing_standard_prerequisite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import agentnet.cli as cli
+
+    monkeypatch.setattr(cli, "SETUP_ROOT", tmp_path / "missing")
+
+    rc = command_server_agent_setup(
+        build_parser().parse_args(["server-agent", "setup"])
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert output["phase"] == "discover"
+    assert output["blocker"] == "missing_external_prerequisite"
+    assert output["rerun_resumes"] is True
+
+
+@pytest.mark.skipif(not hasattr(signal, "setitimer"), reason="POSIX timers unavailable")
+def test_guided_server_setup_deadline_is_typed_and_bounded() -> None:
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        with _server_setup_deadline(0.01):
+            time.sleep(0.1)
+
+    assert exc_info.value.blocker == "setup_deadline_exceeded"
+    assert "rerun resumes exact state" in str(exc_info.value)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -1538,6 +1677,13 @@ def test_plan_is_read_only_and_emits_redacted_fixed_steps(
     assert report["managed_units"] == sorted(MANAGED_UNITS)
     assert report["https_topology"] == "external_self_hosted_reverse_proxy_to_loopback"
     assert report["package_version"]
+    assert report["public_core_origin"] == "https://core.corp.example"
+    assert report["laptop_join_command"] == (
+        "npm install --global @misunders2d/agentnet@"
+        + report["package_version"]
+        + " --ignore-scripts --no-audit --no-fund && "
+        "agentnet join guided --server https://core.corp.example"
+    )
     assert report["prerequisites"]["database_reference"] == (
         "validated_fixed_local_peer_contract_service_canary_pending_apply"
     )
@@ -4209,6 +4355,8 @@ def test_plan_cli_returns_structured_tls_environment_blocker(
 
     output = json.loads(capsys.readouterr().out)
     assert rc == 1
+    elapsed = output.pop("setup_elapsed_seconds")
+    assert isinstance(elapsed, float)
     assert output == {
         "schema": "agentnet.server-setup.evidence.v1",
         "status": "blocked",
@@ -4217,6 +4365,11 @@ def test_plan_cli_returns_structured_tls_environment_blocker(
         "authority_granted": False,
         "identity_enrolled": False,
         "production_durability_proven": False,
+        "phase": "plan",
+        "responsible_component": "agentnet-server-setup",
+        "safe_action": "retained exact resumable setup state",
+        "rerun_resumes": True,
+        "human_action": "supply the named prerequisite or approval, then rerun the same command",
     }
     assert private_value not in json.dumps(output)
 

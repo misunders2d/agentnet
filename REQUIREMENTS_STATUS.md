@@ -404,6 +404,25 @@ published and historical release evidence:
   `COM-006`, `COM-009`, `COM-011`, `AVL-003`, `AVL-005`, `AVL-006`, `SEC-003`,
   and `SEC-005`. No requirement or must-not-ship gate is promoted.
 
+- Candidate `0.1.50` makes the existing setup protocol resumable through one
+  guided server command and one server-origin-only laptop command. It derives
+  laptop identity defaults from authenticated discovery, emits content-free
+  named phases, enforces ten-minute server and five-minute laptop deadlines,
+  and returns exact blocker/recovery metadata without changing authority.
+  Exact v0.1.45–v0.1.49 schema-v7 five-unit markers are allowlisted direct
+  sources to v0.1.50 under the existing forward-only journal; unsupported and
+  ambiguous state remains fail-closed. Packed-package verification now invokes
+  the separate-process local message/obligation roundtrip. The focused lane
+  reports **296 passed**; the broad releasable-source lane reports **2179
+  passed and 21 expected platform/dedicated-PostgreSQL skips**; and source plus
+  two recursive packed generations each report **2206 passed and 21 expected
+  skips**. Two independent release builds are byte-identical, the release
+  manifest verifier passes, and the installed tarball journey passes from an
+  unrelated prefix. Installed-host, fresh-machine, and same-commit CI evidence
+  remains pending. Affected IDs are `ID-006`, `COM-001`, `COM-002`, `COM-009`,
+  `AVL-003`, `AVL-005`, `AVL-006`, `UX-001`, `UX-002`, `SEC-003`, `SEC-005`,
+  `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is promoted.
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,

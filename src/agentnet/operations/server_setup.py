@@ -188,6 +188,11 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.46", "0.1.47"): MANAGED_UNITS,
     ("0.1.47", "0.1.48"): MANAGED_UNITS,
     ("0.1.48", "0.1.49"): MANAGED_UNITS,
+    ("0.1.45", "0.1.50"): MANAGED_UNITS,
+    ("0.1.46", "0.1.50"): MANAGED_UNITS,
+    ("0.1.47", "0.1.50"): MANAGED_UNITS,
+    ("0.1.48", "0.1.50"): MANAGED_UNITS,
+    ("0.1.49", "0.1.50"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -205,6 +210,11 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.46", "0.1.47"),
         ("0.1.47", "0.1.48"),
         ("0.1.48", "0.1.49"),
+        ("0.1.45", "0.1.50"),
+        ("0.1.46", "0.1.50"),
+        ("0.1.47", "0.1.50"),
+        ("0.1.48", "0.1.50"),
+        ("0.1.49", "0.1.50"),
     }
 )
 # The lifecycle release is the sole rollback-capable database upgrade.  Older
@@ -1900,6 +1910,13 @@ def _planned_setup_evidence(
         "managed_units": sorted(units),
         "loopback_ports": {"core": CORE_PORT, "approval": APPROVAL_PORT},
         "https_topology": "external_self_hosted_reverse_proxy_to_loopback",
+        "public_core_origin": request.core_public_origin,
+        "laptop_join_command": (
+            "npm install --global @misunders2d/agentnet@"
+            + __version__
+            + " --ignore-scripts --no-audit --no-fund && agentnet join guided --server "
+            + request.core_public_origin
+        ),
         "prerequisites": {
             "host": "validated_linux_systemd",
             "runtime": "validated_service_visible_and_digest_bound",

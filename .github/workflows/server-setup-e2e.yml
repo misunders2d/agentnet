@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/server-setup-e2e.yml"
       - "scripts/ci/ordinary-server-setup-e2e.sh"
+      - "scripts/ci/packaged_local_communication_e2e.py"
       - "npm/**"
       - "src/agentnet/approval/cli_commands.py"
       - "src/agentnet/cli.py"
@@ -22,6 +23,7 @@ on:
       - "scripts/ci/ordinary-server-setup-e2e.sh"
       - "npm/**"
       - "src/agentnet/approval/cli_commands.py"
+      - "scripts/ci/packaged_local_communication_e2e.py"
       - "src/agentnet/cli.py"
       - "src/agentnet/core/app.py"
       - "src/agentnet/operations/server_setup.py"
@@ -146,3 +148,51 @@ jobs:
           ! sudo grep -Fq '# agentnet-e2e' "$HBA_FILE"
           [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_roles WHERE rolname='agentnet'")" == "0" ]]
           [[ "$(sudo -u postgres psql -Atq --dbname=postgres -c "SELECT count(*) FROM pg_database WHERE datname='agentnet'")" == "0" ]]
+
+  ubuntu-24-installed-roundtrip:
+    name: Ubuntu 24.04 / installed package communication roundtrip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
+      - name: Install pinned npm CLI
+        shell: bash
+        run: |
+          npm install --global npm@12.0.1 --ignore-scripts --no-audit --no-fund
+          test "$(node --version)" = "v24.18.0"
+          test "$(npm --version)" = "12.0.1"
+
+      - name: Configure uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          python-version: "3.13.13"
+          enable-cache: false
+
+      - name: Install Linux process sandbox
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-profiles apparmor-utils bubblewrap
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          bwrap --unshare-user --die-with-parent --ro-bind / / /usr/bin/true
+
+      - name: Install locked package tooling
+        run: npm ci --ignore-scripts
+
+      - name: Run installed package communication and obligation roundtrip
+        run: npm run check:packed

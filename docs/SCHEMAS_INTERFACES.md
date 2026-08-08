@@ -780,6 +780,20 @@ current active credential on the same harness lineage. Remote message, inbox,
 and acknowledgement requests carry `collaboration_scope_id` inside the signed
 request target or body.
 
+For v0.1.50, setup evidence adds `public_core_origin` and the exact
+package-pinned `laptop_join_command` to a successful plan. The CLI adds
+`phase` and `setup_elapsed_seconds` to terminal JSON. A blocked server command
+also returns `responsible_component`, `safe_action`, `rerun_resumes`, and
+`human_action`; these fields describe recovery only and never grant authority.
+Content-free phase/action/elapsed progress is written to stderr.
+
+The no-argument guided server surface reads the same strict request schema from
+`/var/lib/agentnet-setup/server-setup.json`; the `--request` plus
+`--expected-request-digest` interface remains the automation contract. Exact
+five-unit schema-v7 markers from v0.1.45 through v0.1.49 are distinct
+allowlisted forward-only sources to v0.1.50. They use journal v4 and do not
+imply an intermediate package install or database migration.
+
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,
 HA/restore, production durability, and every other production/high-tier gate

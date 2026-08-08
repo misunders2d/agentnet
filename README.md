@@ -522,6 +522,27 @@ exact collaboration scope. The candidate adds only the exact forward-only
 `0.1.48→0.1.49` five-unit marker edge and no database migration. No requirement,
 production claim, or must-not-ship gate is promoted.
 
+Candidate `0.1.50` makes the existing secure setup path operable without
+weakening its approval or fail-closed boundaries. A standard server host runs
+`agentnet server-agent setup --apply --start`, reviews one exact plan, and
+reruns the same command to resume retained state. Its successful plan returns
+the exact package-pinned laptop command:
+`agentnet join guided --server <Core-origin>`. Guided laptop setup derives the
+domain and default harness from authenticated discovery, emits content-free
+named progress phases, completes the exact enrollment, communication
+activation, and C0 acknowledgement lifecycle, and returns
+`communication_ready`.
+
+The server command has a ten-minute process deadline; laptop guided join keeps
+its five-minute default deadline. Timeout and named blockers preserve resumable
+state. One v0.1.50 package may directly upgrade exact five-unit schema-v7 setup
+markers from v0.1.45 through v0.1.49 using an allowlisted journaled transition;
+unsupported or ambiguous markers fail closed. Packed-package verification now
+requires the separate-process local communication and obligation roundtrip in
+addition to the existing installed journey. These are local and CI evidence,
+not production certification, and no requirement or must-not-ship gate is
+promoted.
+
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
 runner where that path did not exist. No `0.1.23` package was staged or

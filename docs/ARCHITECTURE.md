@@ -871,4 +871,22 @@ its committed scope. The candidate adds only the forward-only
 credential, endpoint, communication, and external-prerequisite state remain
 unchanged.
 
+Usability candidate `0.1.50` adds a guided orchestration surface around the
+existing strict server and laptop protocols; it does not create a second
+authority or deployment implementation. The server command discovers the
+standard owner-only prerequisite bundle, plans, obtains one exact terminal
+approval, applies, and verifies under a ten-minute process deadline. Guided
+laptop join derives public identity inputs from authenticated discovery and
+reports discover, prepare, authenticate, approve, enroll, activate, roundtrip,
+and verify progress without protected content.
+
+Canonical resume state remains the existing guided enrollment files, setup
+marker, forward-only upgrade journal, exact managed configuration, and
+PostgreSQL state. Since v0.1.45–v0.1.49 all use schema v7 and the same five-unit
+profile, v0.1.50 accepts each as an explicit direct source rather than
+fabricating intermediate migrations. Every source marker and target runtime is
+revalidated before commit. Packed-package verification additionally executes
+the separate-process local message/obligation roundtrip; it remains H/L local
+evidence and does not prove production durability.
+
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

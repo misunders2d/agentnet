@@ -26,6 +26,15 @@ from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION
 
+@pytest.fixture(autouse=True)
+def _complete_guided_activation_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "agentnet.cli._complete_guided_activation",
+        lambda **_kwargs: "COMPLETED_C0_ROUND_TRIP",
+    )
+
 
 def _free_loopback_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -185,6 +194,18 @@ def test_zero_state_and_signed_admin_commands_are_exposed_by_one_cli() -> None:
             "terminal",
         ]
     ).func.__name__ == "command_join_guided"
+    guided = parser.parse_args(
+        [
+            "join",
+            "guided",
+            "--server",
+            "https://agents.example",
+        ]
+    )
+    assert guided.func.__name__ == "command_join_guided"
+    assert guided.domain is None
+    assert guided.harness is None
+    assert guided.name is None
     assert parser.parse_args(
         [
             "join",
@@ -421,6 +442,14 @@ def test_guided_join_is_resumable_private_and_identity_only(
     def fake_request(*, server, method, path, body, timeout=10.0):
         nonlocal key_id
         assert server == "https://agents.example"
+        if path == "/v1/enrollment/discovery":
+            assert method == "GET"
+            assert body == {}
+            return {
+                "schema": "agentnet.enrollment.discovery.v1",
+                "domain_id": "corp.example",
+                "profile": "guided_oidc_passkey",
+            }
         assert method == "POST"
         calls.append((path, body))
         if path.endswith("/begin"):
@@ -457,6 +486,8 @@ def test_guided_join_is_resumable_private_and_identity_only(
         }
 
     monkeypatch.setattr("agentnet.cli._public_json_request", fake_request)
+    monkeypatch.setattr("agentnet.cli._detect_guided_harness", lambda: "codex")
+    monkeypatch.setattr("agentnet.cli.socket.gethostname", lambda: "fresh-laptop")
     opened: list[str] = []
     monkeypatch.setattr(
         "agentnet.cli.webbrowser.open",
@@ -476,12 +507,6 @@ def test_guided_join_is_resumable_private_and_identity_only(
             "guided",
             "--server",
             "https://agents.example",
-            "--domain",
-            "corp.example",
-            "--harness",
-            "codex",
-            "--name",
-            "Fresh laptop",
             "--state",
             str(state),
             "--identity",
@@ -491,16 +516,14 @@ def test_guided_join_is_resumable_private_and_identity_only(
     assert args.func(args) == 0
     output = capsys.readouterr()
     result = json.loads(output.out)
-    assert result["status"] == "enrolled_identity_only"
-    assert result["authority_granted"] is False
-    assert result["first_message_status"] == (
-        "first_message_blocked_explicit_authority_required"
-    )
-    assert result["next"] == (
-        "continue only with an explicitly approved bounded authority plan"
-    )
+    assert result["status"] == "communication_ready"
+    assert result["authority_granted"] is True
+    assert result["first_message_status"] == "COMPLETED_C0_ROUND_TRIP"
+    assert result["next"] is None
     assert result["identity_saved_locally"] is True
     assert result["approval_delivery"] == "automatic_possession_bound_signed_broker"
+    for phase in ("discover", "prepare", "authenticate", "approve", "enroll", "verify"):
+        assert f"phase={phase}" in output.err
     for forbidden in (
         actor.domain_id,
         actor.principal_id,
@@ -531,6 +554,8 @@ def test_guided_join_is_resumable_private_and_identity_only(
         "/v1/enrollment/oidc/poll",
         "/v1/enrollment/oidc/complete",
     ]
+    assert calls[0][1]["harness_kind"] == "codex"
+    assert calls[0][1]["harness_name"] == "fresh-laptop"
 
     monkeypatch.setattr(
         "agentnet.cli._public_json_request",
@@ -687,7 +712,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
     assert args.func(args) == 0
     resumed_output = capsys.readouterr()
     result = json.loads(resumed_output.out)
-    assert result["status"] == "enrolled_identity_only"
+    assert result["status"] == "communication_ready"
     assert authorization_url not in resumed_output.out + resumed_output.err
     assert resume_paths == [
         "/v1/enrollment/oidc/poll",
@@ -791,7 +816,7 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
             "--domain",
             "corp.example",
             "--harness",
-            "native",
+            "codex",
             "--name",
             "Headless server",
             "--state",
@@ -806,7 +831,7 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
     assert args.func(args) == 0
     output = capsys.readouterr()
     result = json.loads(output.out)
-    assert result["status"] == "enrolled_identity_only"
+    assert result["status"] == "communication_ready"
     assert paths == [
         "/v1/enrollment/oidc/begin",
         "/v1/enrollment/oidc/poll",
@@ -1111,7 +1136,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
     monkeypatch.setattr("agentnet.cli._public_json_request", replacement_request)
     assert replacement_args.func(replacement_args) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "enrolled_identity_only"
+    assert result["status"] == "communication_ready"
     assert calls == [
         "/v1/enrollment/oidc/poll",
         "/v1/enrollment/oidc/begin",

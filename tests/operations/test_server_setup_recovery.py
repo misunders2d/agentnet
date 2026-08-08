@@ -791,6 +791,51 @@ def test_marker_accepts_only_released_package_caused_digest_drift(
     assert marker["package_version"] == source
 
 
+
+@pytest.mark.parametrize("source", ["0.1.45", "0.1.46", "0.1.47", "0.1.48", "0.1.49"])
+def test_0150_accepts_direct_upgrade_from_every_supported_setup_release(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version=source,
+        artifact_mode="disabled",
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode="disabled",
+    )
+
+    assert marker is not None
+    assert marker["package_version"] == source
+    assert setup._forward_only_setup_upgrade(source, "0.1.50") is True
+
+
+def test_0150_rejects_direct_upgrade_from_pre_lifecycle_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version="0.1.44",
+        artifact_mode="disabled",
+    )
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._validated_setup_marker(
+            payload,
+            request_digest="9" * 64,
+            legacy_request_digest="1" * 64,
+            artifact_mode="disabled",
+        )
+
+    assert exc_info.value.blocker == "setup_marker_conflict"
+
 @pytest.mark.parametrize(
     ("package_version", "current_version"),
     [
