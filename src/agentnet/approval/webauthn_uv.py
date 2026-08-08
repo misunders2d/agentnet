@@ -29,6 +29,7 @@ from agentnet.approval.config import ApprovalServiceConfig, require_owner_only_f
 from agentnet.approval.service import TrustedApprover, create_independent_approval_receipt
 from agentnet.approval.store import ApprovalStore
 from agentnet.approval.transaction_summary import validate_and_summarize_approval_transaction
+from agentnet.authorization.communication_scope import COMMUNICATION_SCOPE_APPROVAL_PURPOSE
 from agentnet.errors import AuthenticationError, ConflictError, GateBlocked, ValidationError
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import (
@@ -464,9 +465,14 @@ class WebAuthnApprovalService:
             raise ValidationError("approval possession binding is invalid")
         if not canonical_transaction or len(canonical_transaction) > self.config.max_transaction_bytes:
             raise ValidationError("approval transaction size is invalid")
+        request_ttl_seconds = (
+            self.config.communication_scope_request_ttl_seconds
+            if approval_purpose == COMMUNICATION_SCOPE_APPROVAL_PURPOSE
+            else self.config.request_ttl_seconds
+        )
         if request_expires_at is not None and (
             type(request_expires_at) is not int
-            or not at < request_expires_at <= at + self.config.request_ttl_seconds
+            or not at < request_expires_at <= at + request_ttl_seconds
         ):
             raise ValidationError("approval request expiry is invalid")
         transaction_digest = hashlib.sha256(canonical_transaction).hexdigest()

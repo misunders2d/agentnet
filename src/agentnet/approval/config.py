@@ -171,6 +171,7 @@ class ApprovalServiceConfig(BaseModel):
     database_path: Path
     record_key_path: Path
     request_ttl_seconds: int = Field(default=300, ge=30, le=600)
+    communication_scope_request_ttl_seconds: Literal[3_600] = 3_600
     challenge_ttl_seconds: int = Field(default=180, ge=30, le=600)
     receipt_ttl_seconds: int = Field(default=300, ge=30, le=600)
     registration_ttl_seconds: int = Field(default=600, ge=60, le=900)

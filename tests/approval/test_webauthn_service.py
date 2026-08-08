@@ -17,6 +17,7 @@ from agentnet.approval.config import (
 from agentnet.approval.service import IndependentApprovalVerifier, TrustedApprover
 from agentnet.approval.store import ApprovalStore
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
+from agentnet.authorization.communication_scope import COMMUNICATION_SCOPE_APPROVAL_PURPOSE
 from agentnet.errors import AuthenticationError, ConflictError, GateBlocked, ValidationError
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair, b64url_encode, canonical_json
@@ -181,7 +182,10 @@ def test_config_requires_exact_https_rp_and_mandatory_purpose_coverage(tmp_path:
         record_key_path=(data / "secrets" / "records.key").absolute(),
         approvers=(approver,),
     )
-    assert ApprovalServiceConfig(**base).rp_id == "approval.corp.example"
+    config = ApprovalServiceConfig(**base)
+    assert config.rp_id == "approval.corp.example"
+    assert config.request_ttl_seconds == 300
+    assert config.communication_scope_request_ttl_seconds == 3_600
     assert ApprovalServiceConfig(
         **base,
         internal_core_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
@@ -197,6 +201,11 @@ def test_config_requires_exact_https_rp_and_mandatory_purpose_coverage(tmp_path:
     )
     with pytest.raises(ValueError, match="mandatory ceremony"):
         ApprovalServiceConfig(**{**base, "approvers": (missing,)})
+    with pytest.raises(ValueError):
+        ApprovalServiceConfig(
+            **base,
+            communication_scope_request_ttl_seconds=3_599,
+        )
 
 
 def test_store_rejects_schema_metadata_tamper_on_reopen(tmp_path: Path) -> None:
@@ -515,6 +524,61 @@ def test_core_request_capability_stays_encrypted_and_opens_only_on_approval_host
     finally:
         stack.store.close()
 
+
+
+def test_only_communication_scope_request_may_outlive_five_minute_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _stack(tmp_path)
+    try:
+        _register(stack, monkeypatch)
+        default_request = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=PURPOSE,
+            canonical_transaction=_approval_transaction("Default approval window"),
+        )
+        assert default_request.expires_at == NOW + 300
+
+        one_hour_request = stack.service.create_request(
+            principal_id="security-owner",
+            domain_id="corp.example",
+            approval_purpose=COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+            canonical_transaction=_approval_transaction("Communication scope approval window"),
+            delivery_mode="core_claim_code",
+            idempotency_key="core:communication-scope:one-hour",
+            possession_hash="a" * 64,
+            request_expires_at=NOW + 3_600,
+        )
+        assert one_hour_request.expires_at == NOW + 3_600
+        assert stack.config.communication_scope_request_ttl_seconds == 3_600
+
+        with pytest.raises(ValidationError, match="expiry is invalid"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=PURPOSE,
+                canonical_transaction=_approval_transaction("Excessive enrollment window"),
+                delivery_mode="core_claim_code",
+                idempotency_key="core:enrollment:too-long-for-purpose",
+                possession_hash="b" * 64,
+                request_expires_at=NOW + 301,
+            )
+
+        with pytest.raises(ValidationError, match="expiry is invalid"):
+            stack.service.create_request(
+                principal_id="security-owner",
+                domain_id="corp.example",
+                approval_purpose=COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+                canonical_transaction=_approval_transaction("Excessive approval window"),
+                delivery_mode="core_claim_code",
+                idempotency_key="core:communication-scope:too-long",
+                possession_hash="b" * 64,
+                request_expires_at=NOW + 3_601,
+            )
+    finally:
+        stack.store.close()
 
 def test_core_claim_code_retrieves_same_receipt_only_for_exact_retry(
     tmp_path: Path,

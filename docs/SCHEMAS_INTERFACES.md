@@ -145,9 +145,12 @@ for its original exact harness.
 `ApprovalServiceConfig` is strict (`extra="forbid"`, schema `1.0`) and binds
 one canonical HTTPS `public_origin`, an exactly matching `rp_id`, `verifier_id`,
 bounded TTL/body sizes, absolute owner-only storage/key paths, and one or more
-unique approvers. Configured purposes must collectively cover all six mandatory
-approval consumers, and every approver must cover enrollment. Signer private
-keys remain file references; load verifies each key's configured thumbprint.
+unique approvers. Ordinary requests retain the five-minute default and ceiling;
+only `authorization.communication_scope.approve` has the fixed one-hour
+request ceiling required by the persistent communication transaction. Configured
+purposes must collectively cover all six mandatory approval consumers, and
+every approver must cover enrollment. Signer private keys remain file
+references; load verifies each key's configured thumbprint.
 
 The approval SQLite catalog is version 4 and is checked on every open against
 both exact `sqlite_master` objects, stored catalog SHA-256, and immutable
