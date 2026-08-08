@@ -164,6 +164,7 @@ cleanup() {
     /etc/systemd/system/agentnet-credential-renew.service \
     /etc/systemd/system/agentnet-credential-renew.timer
   sudo rm -f /run/systemd/system/agentnet-credential-renew-e2e.timer
+  sudo rm -f /var/lib/systemd/timers/stamp-agentnet-credential-renew.timer
   sudo systemctl daemon-reload >/dev/null 2>&1
   sudo rm -rf /var/lib/agentnet /var/lib/agentnet-approval /var/lib/agentnet-c0 /var/lib/agentnet-setup /etc/agentnet-secrets
   sudo userdel agentnet-c0 >/dev/null 2>&1
@@ -614,26 +615,12 @@ run_as_core_service "$AGENTNET_0144" server-agent activate \
 jq -e --arg harness "$HARNESS_ID" --arg credential "$CREDENTIAL_ID" \
   '.activated == true and .harness_id == $harness and .credential_id == $credential and .authority_granted == false' \
   "$WORK/activate-0.1.45.json" >/dev/null
-# Give the released OnUnitActiveSec timer an exact inactive baseline before
-# enabling it. On current systemd, a never-run oneshot activates immediately
-# and races setup's postcondition check. Public 0.1.45 may fail this first run
-# only through its retained platform-root defect; v0.1.46 must later repair it.
-if sudo systemctl start agentnet-credential-renew.service; then
-  [[ "$(sudo systemctl show agentnet-credential-renew.service \
-    --property=Result --value)" == "success" ]]
-else
-  [[ "$(sudo systemctl show agentnet-credential-renew.service \
-    --property=Result --value)" == "exit-code" ]]
-  [[ "$(sudo systemctl show agentnet-credential-renew.service \
-    --property=ExecMainStatus --value)" == "1" ]]
-  RENEWAL_FAILURE_JOURNAL="$(
-    sudo journalctl -u agentnet-credential-renew.service --no-pager -n 80
-  )"
-  [[ "$RENEWAL_FAILURE_JOURNAL" == *CERTIFICATE_VERIFY_FAILED* ]]
-fi
-sudo systemctl reset-failed agentnet-credential-renew.service
-[[ "$(sudo systemctl show agentnet-credential-renew.service \
-  --property=ActiveState --value)" == "inactive" ]]
+# Public 0.1.45 uses Persistent=true. Seed the fresh runner's standard systemd
+# timer stamp so enabling the historical timer does not fabricate a missed
+# activation from before this disposable host existed and race setup's exact
+# postcondition check.
+sudo install -d -o root -g root -m 0755 /var/lib/systemd/timers
+sudo touch /var/lib/systemd/timers/stamp-agentnet-credential-renew.timer
 apply_setup "$PREFIX_0144" "$DIGEST_0144" "$APPLY_BOUND_0144"
 jq -e '.status == "operational" and .identity_enrolled == true and .authority_granted == false' "$APPLY_BOUND_0144" >/dev/null
 sudo grep -Fxq 'OnUnitActiveSec=1h' /etc/systemd/system/agentnet-credential-renew.timer

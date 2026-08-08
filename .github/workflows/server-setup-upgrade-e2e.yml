@@ -119,6 +119,7 @@ jobs:
             /etc/systemd/system/agentnet-c0-responder.service \
             /etc/systemd/system/agentnet-credential-renew.service \
             /etc/systemd/system/agentnet-credential-renew.timer \
+            /var/lib/systemd/timers/stamp-agentnet-credential-renew.timer \
             /etc/nginx/sites-enabled/agentnet-upgrade-e2e \
             /etc/nginx/sites-available/agentnet-upgrade-e2e \
             /usr/local/share/ca-certificates/agentnet-upgrade-e2e-root.crt \
