@@ -551,6 +551,12 @@ to the exact active session plus configured RP ID, origin, and verifier ID. The
 preauth cookie is Secure, HttpOnly, `__Host-`, and `SameSite=Lax` so the browser
 can return from a cross-site IdP; authenticated session and CSRF cookies remain
 `SameSite=Strict`.
+
+Ordinary approval requests retain the five-minute default and ceiling. The
+fixed persistent communication transaction is the sole exception: its signed
+`authorization.communication_scope.approve` purpose may request up to the
+configured one-hour `communication_scope_request_ttl_seconds` limit. WebAuthn
+challenges remain short-lived, and an expired request fails closed.
 Concurrent tabs retain independent OIDC state; a replacement session receives a
 fresh challenge and the old session fails closed.
 

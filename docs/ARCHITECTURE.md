@@ -567,6 +567,12 @@ an independently administered TLS proxy exposes the exact configured HTTPS
 origin. Running it beside an agent under the same readable/control boundary is
 local mechanism testing only and cannot satisfy independence.
 
+Approval request lifetime is purpose-gated. Ordinary requests retain the
+five-minute default and ceiling; only
+`authorization.communication_scope.approve` may use the separately configured
+one-hour maximum. The WebAuthn challenge remains short-lived, and request
+expiry still terminally denies approval without granting authority.
+
 Ordinary self-hosted onboarding uses one stable `/approval` origin. The owner
 starts OIDC Authorization Code + PKCE from that page, returns through one
 preauth cookie that is Secure, HttpOnly, `__Host-`, and `SameSite=Lax`, and

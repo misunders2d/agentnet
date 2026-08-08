@@ -1,18 +1,18 @@
 {
   "run_id": "2026-08-07-v0.1.50",
-  "evaluated_at": "2026-08-08T00:35:45Z",
+  "evaluated_at": "2026-08-08T13:06:52Z",
   "scope": "v0_1_50_setup_usability_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "verification_scope": "PASS applies only to the selected local source, focused setup/communication tests, reproducible package, and installed-byte communication commands recorded below; it is not release certification and does not include fresh installed-host setup/upgrade, the exact v0.1.50 two-machine flow, the separately non-green installed-harness pin gate, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "release-source-tree-sha256",
-  "release_source_tree_sha256": "b895aef7863d162f202979e23d0fa096b651b1a3501a37598b3cb9e33bfad214",
+  "release_source_tree_sha256": "740adfb28e27641c3ec0bab470036c4690fde2c70a53ab0568fde644aecddb7e",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.49/manifest.json",
-  "change_boundary": "Candidate 0.1.50 wraps the existing strict ordinary-server and guided-laptop protocols in one-command surfaces with authenticated discovery, phase progress, typed blockers, bounded deadlines, exact-state resume, and direct allowlisted 0.1.45 through 0.1.49 package/config/unit transitions to 0.1.50. It does not add authority, weaken approval, infer identity from CLI input, migrate the database, or promote a release gate.",
+  "change_boundary": "Candidate 0.1.50 wraps the existing strict ordinary-server and guided-laptop protocols in one-command surfaces with authenticated discovery, phase progress, typed blockers, bounded deadlines, exact-state resume, and direct allowlisted 0.1.45 through 0.1.49 package/config/unit transitions to 0.1.50. The Approval service now admits an explicit request lifetime up to one hour only for authorization.communication_scope.approve; every other approval retains the five-minute ceiling and WebAuthn challenges remain short-lived. It does not add authority, weaken approval, infer identity from CLI input, migrate the database, or promote a release gate.",
   "commands": [
     {
-      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/approval/test_transaction_summary.py tests/cli/test_server_agent_activation.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py",
-      "result": "PASS: 666 passed, 5 expected dedicated-PostgreSQL skips"
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/approval/test_transaction_summary.py tests/approval/test_webauthn_service.py tests/cli/test_server_agent_activation.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py",
+      "result": "PASS: 681 passed, 5 expected dedicated-PostgreSQL skips"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/integration/test_cli_product_journey.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py tests/test_version.py",
@@ -20,11 +20,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2179 passed and 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+      "result": "PASS: 2180 passed and 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 9dd1b107741c0a0eb52aefb5c715396c0c3506762e634bd6c97582734b862919; wheel sha256 8a9135779ae2576e8b5b52fdf072a80343733577984cc3abd8da4e1ddbb072d8"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 59fbb68b6ef0bc13984a51078f0f4f775ff2b083cf017488717e7e1bac1c4b13; wheel sha256 a494818ebab9ae9d76361e58d0a7ec33ac5ebc6feb5993e000ecdb3872d5ed78"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -48,7 +48,7 @@
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2206 passed and 21 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2207 passed and 21 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
   "execution_context": {
@@ -61,11 +61,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-07-v0.1.50/artifacts/agentnet-0.1.50.tar.gz",
-      "sha256": "9dd1b107741c0a0eb52aefb5c715396c0c3506762e634bd6c97582734b862919"
+      "sha256": "59fbb68b6ef0bc13984a51078f0f4f775ff2b083cf017488717e7e1bac1c4b13"
     },
     {
       "path": "evidence/local/2026-08-07-v0.1.50/artifacts/agentnet-0.1.50-py3-none-any.whl",
-      "sha256": "8a9135779ae2576e8b5b52fdf072a80343733577984cc3abd8da4e1ddbb072d8"
+      "sha256": "a494818ebab9ae9d76361e58d0a7ec33ac5ebc6feb5993e000ecdb3872d5ed78"
     }
   ],
   "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
