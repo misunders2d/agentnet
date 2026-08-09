@@ -23,6 +23,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -51,12 +52,17 @@ from agentnet.approval.config import (
     ApprovalServiceConfig,
     MANDATORY_APPROVAL_PURPOSES,
 )
+from agentnet.approval.store import ApprovalStore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import GateBlocked
 from agentnet.identity.actors import VerifiedActor
 from agentnet.operations.c0_credential_supersession import (
     load_audited_supersession_journal,
     load_supersession_journal,
+)
+from agentnet.operations.canonical_owner_recovery import (
+    CanonicalOwnerAdoptionRequest,
+    converge_canonical_approval_owner,
 )
 from agentnet.operations.config import (
     ExtensionConfig,
@@ -68,6 +74,7 @@ from agentnet.operations.config import (
     ScannerTrustConfig,
 )
 from agentnet.operations.config_migration import load_config_json
+from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.security.signatures import P256KeyPair, canonical_digest, verify_signature
 from agentnet.storage.migrations import MIGRATIONS
 from agentnet.storage.postgres import (
@@ -4714,7 +4721,8 @@ def _require_exact_approval_policy(
     owner_oidc: ApprovalOwnerOIDCConfig,
     approvers: tuple[SetupApprover, ...],
     approval_state: Path,
-) -> None:
+    allow_canonical_owner_adoption: bool = False,
+) -> str | None:
     actual_approvers = tuple(
         SetupApprover(
             principal_id=item.principal_id,
@@ -4728,19 +4736,77 @@ def _require_exact_approval_policy(
         for item in config.approvers
     )
     approval_host = urlsplit(request.approval_public_origin).hostname
-    if (
-        approval_host is None
-        or config.public_origin != request.approval_public_origin
-        or config.rp_id != approval_host
-        or config.verifier_id != request.approval_verifier_id
-        or config.data_dir != approval_state
-        or config.database_path != approval_state / "approval.sqlite3"
-        or config.record_key_path != approval_state / "secrets" / "records.key"
-        or config.internal_core_credential_env != "AGENTNET_APPROVAL_CORE_TOKEN"
-        or config.owner_oidc != owner_oidc
-        or actual_approvers != approvers
-    ):
+    fixed_profile_matches = (
+        approval_host is not None
+        and config.public_origin == request.approval_public_origin
+        and config.rp_id == approval_host
+        and config.verifier_id == request.approval_verifier_id
+        and config.data_dir == approval_state
+        and config.database_path == approval_state / "approval.sqlite3"
+        and config.record_key_path == approval_state / "secrets" / "records.key"
+        and config.internal_core_credential_env == "AGENTNET_APPROVAL_CORE_TOKEN"
+        and config.owner_oidc == owner_oidc
+    )
+    if not fixed_profile_matches:
         raise ServerSetupError("approval_conflict", "existing Approval state conflicts with fixed request")
+    if actual_approvers == approvers:
+        return None
+    if allow_canonical_owner_adoption and len(actual_approvers) == len(approvers) == 1:
+        source = actual_approvers[0]
+        target = approvers[0]
+        source_principal = source.principal_id
+        if (
+            source.model_copy(update={"principal_id": target.principal_id}) == target
+            and source_principal != target.principal_id
+            and source.oidc_issuer is not None
+            and target.oidc_issuer is not None
+        ):
+            return source_principal
+    raise ServerSetupError("approval_conflict", "existing Approval state conflicts with fixed request")
+
+
+def _completed_canonical_owner_source(
+    approval_state: Path,
+    approval_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+) -> dict[str, str] | None:
+    journal_path = approval_state / "canonical-owner-recovery.json"
+    if not (journal_path.exists() or journal_path.is_symlink()):
+        return None
+    try:
+        value = _strict_json_bytes(
+            _read_private_managed_file(
+                journal_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=262_144,
+            ),
+            label="canonical owner recovery journal",
+        )
+    except Exception as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner recovery journal is invalid",
+        ) from exc
+    required = (
+        "source_principal_id",
+        "source_signer_key_id",
+        "source_signer_public_key_pem",
+    )
+    if (
+        value.get("schema") != "agentnet.canonical-owner-recovery-journal.v1"
+        or value.get("phase") != "complete"
+        or value.get("domain_id") != request.domain_id
+        or value.get("target_principal_id") != request.approval_approver_principal_id
+        or any(not isinstance(value.get(key), str) or not value.get(key) for key in required)
+        or value.get("source_principal_id") == request.approval_approver_principal_id
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner recovery journal conflicts with setup request",
+        )
+    return {key: str(value[key]) for key in required}
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -5111,6 +5177,79 @@ def _migrate_legacy_remote_activation_policy(
         "core_oidc_config": oidc_payload,
     }
     pending["replacement_configs"] = replacements
+    core_status = _write_journaled_core_config(
+        core_config_path,
+        core_payload,
+        account=core_account,
+        previous=previous["core_config"],
+    )
+    oidc_status = _write_journaled_core_config(
+        core_oidc_path,
+        oidc_payload,
+        account=core_account,
+        previous=previous["core_oidc_config"],
+    )
+    return (
+        "updated_package_upgrade"
+        if "updated_package_upgrade" in {core_status, oidc_status}
+        else "already_satisfied"
+    )
+
+
+def _migrate_canonical_owner_core_policy(
+    *,
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    source_oidc: OIDCEnrollmentConfig,
+    target_oidc: OIDCEnrollmentConfig,
+    pending: dict[str, Any],
+) -> str:
+    """Replace only the proof-bound Approval owner and signer in Core."""
+
+    journal = pending.get("journal")
+    if not isinstance(journal, Mapping):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical Core policy cutover requires an active upgrade journal",
+        )
+    previous = _journaled_config_payloads(journal)
+    source_document = source_oidc.model_dump(mode="json")
+    target_document = target_oidc.model_dump(mode="json")
+    previous_oidc_document = _strict_json_bytes(
+        previous["core_oidc_config"],
+        label="journaled Core OIDC config",
+    )
+    if previous_oidc_document not in (source_document, target_document):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "journaled Core OIDC policy is not the exact canonical-owner source",
+        )
+    previous_core_document = _strict_json_bytes(
+        previous["core_config"],
+        label="journaled Core config",
+    )
+    if previous_core_document.get("oidc_enrollment") not in (
+        source_document,
+        target_document,
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "journaled Core config is not the exact canonical-owner source",
+        )
+    oidc_payload = (
+        json.dumps(target_document, indent=2, sort_keys=True).encode() + b"\n"
+    )
+    replacement_core_document = dict(previous_core_document)
+    replacement_core_document["oidc_enrollment"] = target_document
+    core_payload = (
+        json.dumps(replacement_core_document, indent=2, sort_keys=True).encode()
+        + b"\n"
+    )
+    pending["replacement_configs"] = {
+        "core_config": core_payload,
+        "core_oidc_config": oidc_payload,
+    }
     core_status = _write_journaled_core_config(
         core_config_path,
         core_payload,
@@ -6011,36 +6150,108 @@ def _apply_server_setup(
         if core_runtime_preexisting:
             _require_private_tree(core_runtime, core_account, blocker="core_custody")
         prevalidated_oidc: OIDCEnrollmentConfig | None = None
+        prevalidated_source_oidc: OIDCEnrollmentConfig | None = None
         prevalidated_config: Any | None = None
         legacy_owner_policy = False
+        canonical_owner_source: str | None = None
         if approval_preexisting and core_preexisting:
             approval_config_before, trusted_before = _approval_trust(
                 approval_config_path,
                 approval_account,
                 approval_state,
             )
-            _require_exact_approval_policy(
+            canonical_owner_source = _require_exact_approval_policy(
                 approval_config_before,
                 request=request,
                 owner_oidc=owner_oidc,
                 approvers=approvers,
                 approval_state=approval_state,
+                allow_canonical_owner_adoption=True,
             )
-            prevalidated_oidc = _build_core_oidc_config(
-                request,
-                oidc_provider,
-                trusted=trusted_before,
-                approvers=approvers,
-            )
-            prevalidated_config, legacy_owner_policy = _load_upgrade_compatible_core_config(
-                core_config_path,
-                core_oidc_path,
-                core_account,
-                request=request,
-                core_data=core_data,
-                oidc=prevalidated_oidc,
-                scanner_trust=scanner_trust,
-            )
+            if canonical_owner_source is None:
+                prevalidated_oidc = _build_core_oidc_config(
+                    request,
+                    oidc_provider,
+                    trusted=trusted_before,
+                    approvers=approvers,
+                )
+                try:
+                    prevalidated_config, legacy_owner_policy = (
+                        _load_upgrade_compatible_core_config(
+                            core_config_path,
+                            core_oidc_path,
+                            core_account,
+                            request=request,
+                            core_data=core_data,
+                            oidc=prevalidated_oidc,
+                            scanner_trust=scanner_trust,
+                        )
+                    )
+                except ServerSetupError as exc:
+                    completed = _completed_canonical_owner_source(
+                        approval_state,
+                        approval_account,
+                        request=request,
+                    )
+                    if exc.blocker != "setup_upgrade_conflict" or completed is None:
+                        raise
+                    canonical_owner_source = completed["source_principal_id"]
+                    selected = approvers[0].model_copy(
+                        update={"principal_id": canonical_owner_source}
+                    )
+                    source_request = request.model_copy(
+                        update={"approval_approver_principal_id": canonical_owner_source}
+                    )
+                    source_trust = [
+                        IndependentApproverConfig(
+                            principal_id=canonical_owner_source,
+                            authority_kind=selected.authority_kind,
+                            signer_key_id=completed["source_signer_key_id"],
+                            public_key_pem=completed["source_signer_public_key_pem"],
+                            allowed_purposes=selected.allowed_purposes,
+                        )
+                    ]
+                    prevalidated_source_oidc = _build_core_oidc_config(
+                        source_request,
+                        oidc_provider,
+                        trusted=source_trust,
+                        approvers=(selected,),
+                    )
+                    prevalidated_config, legacy_owner_policy = (
+                        _load_upgrade_compatible_core_config(
+                            core_config_path,
+                            core_oidc_path,
+                            core_account,
+                            request=source_request,
+                            core_data=core_data,
+                            oidc=prevalidated_source_oidc,
+                            scanner_trust=scanner_trust,
+                        )
+                    )
+            else:
+                selected = approvers[0].model_copy(
+                    update={"principal_id": canonical_owner_source}
+                )
+                source_request = request.model_copy(
+                    update={"approval_approver_principal_id": canonical_owner_source}
+                )
+                prevalidated_source_oidc = _build_core_oidc_config(
+                    source_request,
+                    oidc_provider,
+                    trusted=trusted_before,
+                    approvers=(selected,),
+                )
+                prevalidated_config, legacy_owner_policy = (
+                    _load_upgrade_compatible_core_config(
+                        core_config_path,
+                        core_oidc_path,
+                        core_account,
+                        request=source_request,
+                        core_data=core_data,
+                        oidc=prevalidated_source_oidc,
+                        scanner_trust=scanner_trust,
+                    )
+                )
         upgrade_status = _prepare_supported_upgrade(
             existing_marker=existing_marker,
             existing_marker_payload=existing_marker_payload,
@@ -6264,6 +6475,119 @@ def _apply_server_setup(
                 _clear_upgrade_journal(setup_attempt)
             return unit_payloads
 
+        if canonical_owner_source is not None:
+            approval_config_active, _ = _approval_trust(
+                approval_config_path,
+                approval_account,
+                approval_state,
+            )
+            recovery_store = ApprovalStore(
+                approval_state / "approval.sqlite3",
+                LocalEnvelopeCipher(
+                    _read_private_managed_file(
+                        approval_config_active.record_key_path,
+                        approval_account,
+                        blocker="canonical_owner_recovery",
+                        max_bytes=65_536,
+                    )
+                ),
+                initialize=False,
+            )
+            try:
+                target_binding = recovery_store.fetch_one(
+                    """
+                    SELECT oidc_issuer, oidc_subject, verified_email, pinned_at
+                    FROM approval_owner_bindings
+                    WHERE domain_id=? AND approver_principal_id=? AND status='active'
+                    """,
+                    (request.domain_id, request.approval_approver_principal_id),
+                )
+                if target_binding is None:
+                    raise ServerSetupError(
+                        "canonical_owner_recovery",
+                        "canonical target owner binding is unavailable",
+                    )
+                if any(
+                    not isinstance(target_binding[key], str) or not target_binding[key]
+                    for key in ("oidc_issuer", "oidc_subject", "verified_email")
+                ):
+                    raise ServerSetupError(
+                        "canonical_owner_recovery",
+                        "canonical target owner binding is incomplete",
+                    )
+                recovery = converge_canonical_approval_owner(
+                    recovery_store,
+                    config_path=approval_config_path,
+                    journal_path=approval_state / "canonical-owner-recovery.json",
+                    request=CanonicalOwnerAdoptionRequest(
+                        schema="agentnet.canonical-owner-adoption.v1",
+                        recovery_id=str(
+                            uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                f"agentnet:{request.domain_id}:{canonical_owner_source}:"
+                                f"{request.approval_approver_principal_id}",
+                            )
+                        ),
+                        domain_id=request.domain_id,
+                        source_principal_id=canonical_owner_source,
+                        target_principal_id=request.approval_approver_principal_id,
+                        oidc_issuer=str(target_binding["oidc_issuer"]),
+                        oidc_subject=str(target_binding["oidc_subject"]),
+                        verified_email=str(target_binding["verified_email"]),
+                        verifier_id=request.approval_verifier_id,
+                        approved_at=int(target_binding["pinned_at"]),
+                    ),
+                    now=int(time.time()),
+                )
+            finally:
+                recovery_store.close()
+            recovery_pending = dict(_pending_upgrade)
+            _pending_upgrade.clear()
+            if recovery["status"] not in {"recovered", "already_exact"}:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical owner recovery returned an invalid status",
+                )
+            if prevalidated_source_oidc is None:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical source Core policy was not prevalidated",
+                )
+            approval_config_after, trusted_after = _approval_trust(
+                approval_config_path,
+                approval_account,
+                approval_state,
+            )
+            _require_exact_approval_policy(
+                approval_config_after,
+                request=request,
+                owner_oidc=owner_oidc,
+                approvers=approvers,
+                approval_state=approval_state,
+            )
+            prevalidated_oidc = _build_core_oidc_config(
+                request,
+                oidc_provider,
+                trusted=trusted_after,
+                approvers=approvers,
+            )
+            core_policy_status = _migrate_canonical_owner_core_policy(
+                core_config_path=core_config_path,
+                core_oidc_path=core_oidc_path,
+                core_account=core_account,
+                source_oidc=prevalidated_source_oidc,
+                target_oidc=prevalidated_oidc,
+                pending=recovery_pending,
+            )
+            steps.append(
+                {
+                    "id": "canonical_owner_recovery",
+                    "status": recovery["status"],
+                    "source_principal_id": canonical_owner_source,
+                    "target_principal_id": request.approval_approver_principal_id,
+                    "core_policy_status": core_policy_status,
+                }
+            )
         if legacy_owner_policy:
             if prevalidated_oidc is None:  # pragma: no cover - guarded above
                 raise ServerSetupError(

@@ -1226,6 +1226,168 @@ def test_0149_upgrade_accepts_exact_0148_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+def test_0150_upgrade_converges_placeholder_approval_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+
+    source_principal = "setup-placeholder-owner"
+    setup_request_path = tmp_path / "setup.json"
+    approvers_path = tmp_path / "approvers.json"
+    target_request_document = json.loads(setup_request_path.read_text(encoding="utf-8"))
+    target_approvers_document = json.loads(approvers_path.read_text(encoding="utf-8"))
+    source_request_document = copy.deepcopy(target_request_document)
+    source_approvers_document = copy.deepcopy(target_approvers_document)
+    source_request_document["approval_approver_principal_id"] = source_principal
+    source_approvers_document["approvers"][0]["principal_id"] = source_principal
+    _private_json(setup_request_path, source_request_document)
+    _private_json(approvers_path, source_approvers_document)
+    harness.request = load_server_setup_request(setup_request_path)
+    source_signer = P256KeyPair.generate()
+    target_signer = P256KeyPair.generate()
+    recovered = {"value": False}
+    store_closed = {"value": False}
+    record_key_path = harness.layout.host(setup.APPROVAL_STATE) / "secrets" / "records.key"
+    approval_config = SimpleNamespace(
+        record_key_path=record_key_path,
+        model_dump=lambda **_kwargs: {"policy": "fixed"},
+    )
+
+    def approval_trust(*_args: object, **_kwargs: object) -> tuple[object, list[IndependentApproverConfig]]:
+        signer = target_signer if recovered["value"] else source_signer
+        principal = (
+            harness.request.approval_approver_principal_id
+            if recovered["value"]
+            else source_principal
+        )
+        return approval_config, [
+            IndependentApproverConfig(
+                principal_id=principal,
+                authority_kind="human",
+                signer_key_id=signer.thumbprint,
+                public_key_pem=signer.public_pem,
+                allowed_purposes=MANDATORY_APPROVAL_PURPOSES,
+            )
+        ]
+    monkeypatch.setattr(setup, "_approval_trust", approval_trust)
+    monkeypatch.setattr(setup, "__version__", "0.1.49")
+    harness.apply(harness.plan_digest())
+    _private_json(setup_request_path, target_request_document)
+    _private_json(approvers_path, target_approvers_document)
+    harness.request = load_server_setup_request(setup_request_path)
+
+    def require_policy(
+        *_args: object,
+        allow_canonical_owner_adoption: bool = False,
+        **_kwargs: object,
+    ) -> str | None:
+        if recovered["value"]:
+            return None
+        if allow_canonical_owner_adoption:
+            return source_principal
+        raise ServerSetupError("approval_conflict", "placeholder owner remains active")
+
+    class RecoveryStore:
+        def fetch_one(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            return {
+                "oidc_issuer": "https://accounts.example",
+                "oidc_subject": "owner-subject",
+                "verified_email": "owner@corp.example",
+                "pinned_at": 1_800_000_000,
+            }
+
+        def close(self) -> None:
+            store_closed["value"] = True
+
+    seen: dict[str, object] = {}
+
+    def converge(
+        store: object,
+        *,
+        config_path: Path,
+        journal_path: Path,
+        request: object,
+        now: int,
+    ) -> dict[str, object]:
+        seen.update(
+            {
+                "store": store,
+                "config_path": config_path,
+                "journal_path": journal_path,
+                "request": request,
+                "now": now,
+            }
+        )
+        recovered["value"] = True
+        return {"status": "recovered"}
+
+    monkeypatch.setattr(setup, "_approval_trust", approval_trust)
+    monkeypatch.setattr(setup, "_require_exact_approval_policy", require_policy)
+    private_read = setup._read_private_managed_file
+    monkeypatch.setattr(
+        setup,
+        "_read_private_managed_file",
+        lambda path, *args, **kwargs: (
+            b"k" * 32
+            if path == record_key_path
+            else private_read(path, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(setup, "LocalEnvelopeCipher", lambda _key: object())
+    monkeypatch.setattr(setup, "ApprovalStore", lambda *_a, **_k: RecoveryStore())
+    monkeypatch.setattr(setup, "converge_canonical_approval_owner", converge)
+    def migrate_core_policy(
+        *,
+        core_config_path: Path,
+        core_oidc_path: Path,
+        core_account: object,
+        source_oidc: object,
+        target_oidc: object,
+        pending: dict[str, object],
+    ) -> str:
+        del core_config_path, core_account, source_oidc, pending
+        target_payload = (
+            json.dumps(target_oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode()
+            + b"\n"
+        )
+        setup._write_journaled_core_config(
+            core_oidc_path,
+            target_payload,
+            account=SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()),
+            previous=core_oidc_path.read_bytes(),
+        )
+        return "updated_package_upgrade"
+
+    monkeypatch.setattr(
+        setup,
+        "_migrate_canonical_owner_core_policy",
+        migrate_core_policy,
+    )
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    result = harness.apply(harness.plan_digest())
+
+    request = seen["request"]
+    assert request.source_principal_id == source_principal
+    assert request.target_principal_id == harness.request.approval_approver_principal_id
+    assert request.approved_at == 1_800_000_000
+    assert seen["config_path"] == harness.layout.host(setup.APPROVAL_CONFIG)
+    assert seen["journal_path"] == (
+        record_key_path.parent.parent / "canonical-owner-recovery.json"
+    )
+    assert store_closed["value"] is True
+    assert {
+        "id": "canonical_owner_recovery",
+        "status": "recovered",
+        "source_principal_id": source_principal,
+        "target_principal_id": harness.request.approval_approver_principal_id,
+        "core_policy_status": "updated_package_upgrade",
+    } in result["steps"]
+    assert harness.marker()["package_version"] == "0.1.50"
+
+
 def test_0146_replaces_released_timer_without_resetting_server_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
