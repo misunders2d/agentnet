@@ -174,6 +174,94 @@ def test_provision_wires_reference_only_owner_oidc_and_open_service(
         store.close()
 
 
+def test_recover_canonical_owner_uses_store_bound_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.json"
+    config = SimpleNamespace(
+        verifier_id="approval.corp.example",
+        data_dir=tmp_path,
+    )
+    closed = {"value": False}
+
+    class Store:
+        def fetch_one(
+            self,
+            _sql: str,
+            params: tuple[object, ...],
+        ) -> dict[str, object] | None:
+            if params[1] != "placeholder-owner":
+                return None
+            return {
+                "oidc_issuer": "https://idp.example",
+                "oidc_subject": "owner-subject",
+                "verified_email": "sergey@corp.example",
+                "pinned_at": 1_800_000_000,
+            }
+
+        def close(self) -> None:
+            closed["value"] = True
+
+    seen: dict[str, object] = {}
+
+    def converge(
+        store: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        seen.update({"store": store, **kwargs})
+        return {
+            "schema": "agentnet.canonical-owner-recovery-result.v1",
+            "status": "recovered",
+        }
+
+    store = Store()
+    monkeypatch.setattr(
+        approval_cli,
+        "_open_service",
+        lambda _path: (config, store, object()),
+    )
+    monkeypatch.setattr(
+        approval_cli,
+        "converge_canonical_approval_owner",
+        converge,
+    )
+    monkeypatch.setattr(approval_cli.time, "time", lambda: 1_800_000_100)
+
+    assert (
+        cli.main(
+            [
+                "approval",
+                "recover-canonical-owner",
+                "--config",
+                str(config_path),
+                "--recovery-id",
+                "93756ff6-6337-4ed1-9697-250b63fb68a2",
+                "--domain",
+                "corp.example",
+                "--source-principal",
+                "placeholder-owner",
+                "--target-principal",
+                "canonical-owner",
+                "--oidc-issuer",
+                "https://idp.example",
+            ]
+        )
+        == 0
+    )
+    request = seen["request"]
+    assert getattr(request, "source_principal_id") == "placeholder-owner"
+    assert getattr(request, "target_principal_id") == "canonical-owner"
+    assert getattr(request, "oidc_subject") == "owner-subject"
+    assert getattr(request, "verified_email") == "sergey@corp.example"
+    assert seen["now"] == 1_800_000_100
+    assert closed["value"] is True
+    assert json.loads(capsys.readouterr().out)["status"] == "recovered"
+
+
+
+
 def test_pending_open_and_watch_keep_approval_capability_local(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

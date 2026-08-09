@@ -895,4 +895,24 @@ revalidated before commit. Packed-package verification additionally executes
 the separate-process local message/obligation roundtrip; it remains H/L local
 evidence and does not prove production durability.
 
+The corrective v0.1.51 recovery remains inside this composition root. After an
+exact supported upgrade has established the enrolled Core identity, setup may
+classify only the known placeholder-owner, partial-repair, live-repair, or
+already-converged Approval shapes. A service-private command adopts the
+canonical owner and replacement P-256 receipt signer under Approval's OS
+identity. Setup then replaces the corresponding Core OIDC and approver policy
+through the existing root-owned upgrade journal. Exact journal phases make an
+interruption resumable; mismatched identity, OIDC subject, domain, signer,
+configuration, database shape, revision, or digest blocks startup.
+
+Communication-scope completion and legacy-scope repair share one schema-v7
+single-scope materializer. Completion invokes it inside the transaction that
+commits the scope, entitlements, revoke powers, members, audit record, and
+idempotent result. Repair derives the same projection only from committed
+server-held scope rows. Existing exact rows are a no-op; partial, extra, or
+conflicting rows roll back. Thus no success can expose a terminal active scope
+without its canonical collaboration authority, and recovery never replaces
+the active scope or grants generic access.
+
+
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

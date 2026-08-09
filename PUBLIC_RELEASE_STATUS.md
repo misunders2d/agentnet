@@ -11,32 +11,37 @@ requirements, gate ledgers, or accountable-owner evidence.
 Reads of the public npm registry and immutable Git tag returned:
 
 - package: `@misunders2d/agentnet`
-- latest published version: `0.1.45`
-- published source commit: `e8a49671481767078551f677599f51af051c3d5a`
-- immutable tag: `v0.1.45`
-- registry shasum: `06f4775ecf63097068e1f3583fe84a2c66c64096`
+- latest published version: `0.1.50`
+- published source commit: `c7c5659055884b3a6fa4ad05f1e43b7e7e844436`
+- immutable tag: `v0.1.50`
+- registry shasum: `4875fd0e37b8a12689a6a50772b89e118931e7d7`
 - provenance: SLSA statement signed by the trusted GitHub Actions publisher and
   approved by the accountable npm owner
 
-`0.1.45` is a **fresh-install-only** release. In-place upgrade from `0.1.44` is
-not a supported path: the packaged upgrade and rollback lane is preserved as
-non-green, so operators must install `0.1.45` on a clean host and re-enroll the
-server and each harness. Publication is gated on the ordinary-server
-clean-install lane, which is the exact path operators follow.
+`0.1.50` is the published setup-usability release. It supports the exact
+allowlisted schema-v7 five-unit upgrade paths documented by that immutable
+package. Publication does not prove installed-host convergence, production
+durability, or any must-not-ship gate.
 
 Package availability does not authorize deployment and does not establish
 production readiness. No must-not-ship gate is promoted by publication.
 
-## Setup-usability `0.1.50` candidate
+## Corrective `0.1.51` candidate
 
-Candidate `0.1.50` wraps the existing strict server and laptop protocols in
-one resumable command per machine. It adds authenticated discovery defaults,
-content-free named phases, bounded deadlines, exact blocker/recovery output,
-and direct allowlisted upgrades from exact v0.1.45–v0.1.49 schema-v7 five-unit
-markers. Packed-package verification requires an installed separate-process
-message/obligation roundtrip. Release artifacts, complete validation, fresh CI,
-and publication remain pending. This local implementation does not promote a
-requirement, production claim, or must-not-ship gate.
+Candidate `0.1.51` retains the published `0.1.50` setup and laptop protocols
+and adds package-owned convergence for the exact ordinary-onboarding
+placeholder Approval owner and for a committed communication scope missing
+its schema-v7 collaboration projection. The target owner is derived from
+enrolled Core identity plus Approval's pinned OIDC binding; signer and Core
+policy cutover is journaled and resumable. New scope activation writes its
+projection atomically, and legacy repair derives it from the existing
+committed scope without replacing authority.
+
+The candidate accepts only exact five-unit schema-v7 markers from v0.1.45
+through v0.1.50. Ambiguous, drifted, incomplete, or unsupported state fails
+closed. Package, installed-host, dedicated-PostgreSQL, and live two-machine
+validation remain pending; no production or gate claim is made.
+
 
 ## Corrective `0.1.49` candidate
 

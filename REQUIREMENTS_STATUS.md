@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-07. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-09. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -427,6 +427,31 @@ published and historical release evidence:
   `COM-002`, `COM-003`, `COM-006`, `COM-009`, `AVL-003`, `AVL-005`, `AVL-006`,
   `UX-001`, `UX-002`, `SEC-003`, `SEC-005`, `OPS-003`, and `OPS-006`. No
   requirement or must-not-ship gate is promoted.
+
+- Corrective v0.1.51 work replaces the manually demonstrated live recovery
+  with a package-owned, bounded path for the exact ordinary-onboarding
+  placeholder-owner state. Approval owner/passkey custody and current signer
+  authority converge to the enrolled Core principal only when exact domain,
+  OIDC, credential, row-shape, configuration, and journal evidence agrees.
+  Setup journals the corresponding Core policy cutover and resumes exact
+  partial writes; unsupported or ambiguous state fails closed. Communication
+  activation now materializes the complete schema-v7 collaboration projection
+  atomically with scope commitment, while a committed legacy scope is repaired
+  idempotently from its server-held source rows without replacement or generic
+  entitlement minting. The focused recovery lane reports **347 passed**; the
+  broad releasable-source lane reports **2204 passed and 22 expected
+  platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
+  generations each report **2231 passed and 22 expected skips**. Two independent
+  builds are byte-identical, packaged local message/obligation processing
+  reaches `recipient_committed`, and a fresh installed npm package passes exact
+  endpoint routing with zero sibling reactions or residue. Dedicated
+  PostgreSQL, installed-host setup/upgrade, same-commit CI, and live two-machine
+  evidence remain pending. Affected IDs are `ID-001`, `ID-002`, `ID-005`,
+  `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-005`,
+  `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `AVL-005`, `SEC-003`, `SEC-005`,
+  `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is
+  promoted.
+
 
 
 

@@ -441,7 +441,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.45`. Its publication does not promote any requirement or gate.
+`0.1.50`. Its publication does not promote any requirement or gate.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -542,6 +542,20 @@ requires the separate-process local communication and obligation roundtrip in
 addition to the existing installed journey. These are local and CI evidence,
 not production certification, and no requirement or must-not-ship gate is
 promoted.
+
+Candidate `0.1.51` adds the package-owned corrective recovery path for the
+exact ordinary-onboarding state where Approval still names the setup
+placeholder owner after Core enrolled the canonical human. Managed setup
+derives the target only from the enrolled Core identity and Approval's pinned
+OIDC binding, rotates current Approval signing authority to that principal,
+and journals resumable Core policy replacement. It rejects identity, domain,
+OIDC, signer, database, configuration, or journal ambiguity. New communication
+activation writes its complete schema-v7 collaboration projection in the same
+transaction; an already committed scope missing that projection is repaired
+from its immutable scope rows without replacing the scope or minting broader
+authority. Exact five-unit schema-v7 markers from v0.1.45 through published
+v0.1.50 may upgrade directly to v0.1.51.
+
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a

@@ -8,15 +8,25 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import httpx
+import agentnet.authorization.communication_scope_service as communication_scope_module
 import psycopg
 
+from agentnet.approval.service import (
+    IndependentApprovalVerifier,
+    TrustedApprover,
+)
+from agentnet.authorization.communication_scope import (
+    COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+)
 from agentnet.authorization.communication_scope_service import (
     COLLABORATION_SCOPE_ISSUE_ACTION,
     CollaborationScopeProposal,
+    CommunicationScopeService,
     CollaborationScopeService,
 )
 from agentnet.authorization.evidence import IssuanceAuthority
@@ -80,6 +90,14 @@ from agentnet.storage.postgres_catalog import (
 )
 from agentnet.storage.recovery import probe_filesystem_artifact_recovery
 from agentnet.storage.sqlite import SQLiteStore
+from tests.authorization.test_communication_scope_service import (
+    FakeApprovalClient,
+    MutableResolver,
+    NOW as COMMUNICATION_NOW,
+    _begin as begin_communication_scope,
+    _complete as complete_communication_scope,
+    _status as communication_scope_status,
+)
 
 
 def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> ExtensionConfig:
@@ -2206,6 +2224,230 @@ def test_real_postgres_fresh_schema_installs_current_migration_catalog() -> None
             store.close()
         if reopened is not None:
             reopened.close()
+        administrator.execute(
+            psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(
+                psycopg.sql.Identifier(schema)
+            )
+        )
+        administrator.close()
+
+
+@pytest.mark.skipif(
+    not (
+        os.environ.get("AGENTNET_TEST_POSTGRES_URL")
+        and os.environ.get("AGENTNET_TEST_POSTGRES_ALLOW_MUTATION") == "1"
+    ),
+    reason="requires an explicitly mutation-authorized dedicated PostgreSQL test database",
+)
+def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = os.environ["AGENTNET_TEST_POSTGRES_URL"]
+    schema = f"agentnet_scope_recovery_{uuid4().hex}"
+    administrator = psycopg.connect(database_url, autocommit=True)
+    administrator.execute(
+        psycopg.sql.SQL("CREATE SCHEMA {}").format(psycopg.sql.Identifier(schema))
+    )
+    separator = "&" if "?" in database_url else "?"
+    isolated_url = (
+        f"{database_url}{separator}options="
+        f"-csearch_path%3D{schema}%20-cclient_encoding%3DUTF8"
+    )
+    store = None
+    try:
+        store = PostgreSQLStore(
+            isolated_url,
+            LocalEnvelopeCipher(b"c" * 32),
+            instance_id=f"scope-recovery-{uuid4().hex}",
+            start_lease_keeper=False,
+        )
+        domain_id = "scope-recovery.example"
+        principal_id = "scope-recovery-owner"
+        actor = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id="scope-recovery-fresh",
+            credential_id="scope-recovery-fresh-credential",
+            credential_epoch=1,
+            binding_assurance="os_bound",
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO domains(domain_id,status,created_at) VALUES(?,?,?)",
+                (domain_id, "active", COMMUNICATION_NOW - 200),
+            )
+            connection.execute(
+                """INSERT INTO principals(
+                    principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,
+                    status,created_at
+                ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    principal_id,
+                    domain_id,
+                    "https://idp.example",
+                    "subject",
+                    "owner@example.test",
+                    "active",
+                    COMMUNICATION_NOW - 200,
+                ),
+            )
+            for harness_id, kind, display_name in (
+                ("owner-harness", "pi", "Owner laptop"),
+                (actor.harness_id, "codex", "Fresh laptop"),
+            ):
+                connection.execute(
+                    """INSERT INTO harnesses(
+                        harness_id,domain_id,principal_id,guest_id,kind,display_name,
+                        status,binding_assurance,capabilities_json,credential_epoch,
+                        created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        harness_id,
+                        domain_id,
+                        principal_id,
+                        None,
+                        kind,
+                        display_name,
+                        "active",
+                        "os_bound",
+                        "[]",
+                        1,
+                        COMMUNICATION_NOW - 200,
+                    ),
+                )
+            for credential_id, harness_id, key_id in (
+                ("owner-credential", "owner-harness", "owner-key"),
+                (actor.credential_id, actor.harness_id, "fresh-key"),
+            ):
+                connection.execute(
+                    """INSERT INTO credentials(
+                        credential_id,harness_id,key_id,public_key_pem,status,epoch,
+                        not_before,expires_at
+                    ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        credential_id,
+                        harness_id,
+                        key_id,
+                        "synthetic-public-key",
+                        "active",
+                        1,
+                        COMMUNICATION_NOW - 100,
+                        COMMUNICATION_NOW + 86_400,
+                    ),
+                )
+
+        resolver = MutableResolver(actor)
+        signer = P256KeyPair.generate()
+        approver = TrustedApprover(
+            principal_id=principal_id,
+            domain_id=domain_id,
+            signer_key_id=signer.thumbprint,
+            public_key_pem=signer.public_pem,
+            allowed_purposes=frozenset({COMMUNICATION_SCOPE_APPROVAL_PURPOSE}),
+        )
+        verifier = IndependentApprovalVerifier(
+            {signer.thumbprint: approver},
+            verifier_id="approval.corp.example",
+        )
+        client = FakeApprovalClient(signer, approver, verifier)
+        service = CommunicationScopeService(
+            store,
+            client,
+            verifier,
+            resolver=resolver,
+            public_approval_url="https://approval.corp.example/approval",
+            clock=lambda: COMMUNICATION_NOW,
+        )
+        stack = SimpleNamespace(
+            service=service,
+            client=client,
+            resolver=resolver,
+            store=store,
+            actor=actor,
+        )
+        begin_communication_scope(stack)
+        client.state = "issued"
+        assert communication_scope_status(stack)["status"] == "approval_ready"
+        original_materializer = communication_scope_module.materialize_v6_communication_scope
+
+        def fail_projection(*_args, **_kwargs):
+            raise GateBlocked(
+                "schema_v7_scope_projection",
+                "injected PostgreSQL projection failure",
+            )
+
+        monkeypatch.setattr(
+            communication_scope_module,
+            "materialize_v6_communication_scope",
+            fail_projection,
+        )
+        with pytest.raises(
+            GateBlocked,
+            match="injected PostgreSQL projection failure",
+        ):
+            complete_communication_scope(stack)
+        assert store.fetch_one(
+            "SELECT state FROM communication_scopes"
+        )["state"] == "completion_reserved"
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM entitlements"
+        )["n"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes"
+        )["n"] == 0
+
+        monkeypatch.setattr(
+            communication_scope_module,
+            "materialize_v6_communication_scope",
+            original_materializer,
+        )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        scope_id = str(
+            store.fetch_one("SELECT scope_id FROM communication_scopes")["scope_id"]
+        )
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 1
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 2
+
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM collaboration_scope_members WHERE scope_id=?",
+                (scope_id,),
+            )
+            connection.execute(
+                "DELETE FROM collaboration_scopes WHERE scope_id=?",
+                (scope_id,),
+            )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 2
+
+        with store.transaction() as connection:
+            connection.execute(
+                """DELETE FROM collaboration_scope_members
+                   WHERE scope_id=? AND role='member'""",
+                (scope_id,),
+            )
+        with pytest.raises(
+            GateBlocked,
+            match="existing collaboration scope projection mismatches",
+        ):
+            complete_communication_scope(stack)
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 1
+    finally:
+        if store is not None:
+            store.close()
         administrator.execute(
             psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(
                 psycopg.sql.Identifier(schema)

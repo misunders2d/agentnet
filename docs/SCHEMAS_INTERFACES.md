@@ -797,6 +797,27 @@ five-unit schema-v7 markers from v0.1.45 through v0.1.49 are distinct
 allowlisted forward-only sources to v0.1.50. They use journal v4 and do not
 imply an intermediate package install or database migration.
 
+Corrective v0.1.51 setup recognizes only the bounded canonical-owner recovery
+states. Its internal Approval subprocess receives the expected source and
+target principal, exact OIDC issuer/subject, verified alias, recovery ID, and
+approved timestamp; Approval verifies those values against its active
+store-bound owner record before mutation. The strict recovery result and
+root-owned journal are schema-v1 objects. Current Approval configuration,
+passkey ownership, and receipt signing move to the canonical principal while
+terminal historical evidence remains immutable. Core OIDC and approver policy
+files are replaced through journaled compare-and-swap writes. These interfaces
+are setup-owned recovery mechanics, not generic principal migration APIs.
+
+The schema-v7 communication projection has one canonical single-scope mapping.
+Both normal activation and repair write the exact collaboration scope, two
+active member rows, five entitlements, and five revoke powers from server-held
+communication-scope rows. Normal activation does so in the same transaction as
+terminal scope commitment and its idempotent result. Exact existing rows are
+accepted; missing rows are inserted only by repair; partial, extra, or
+conflicting rows fail closed. Neither interface accepts caller-supplied member
+identity or authority fields.
+
+
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,
 HA/restore, production durability, and every other production/high-tier gate

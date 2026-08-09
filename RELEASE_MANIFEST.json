@@ -218,7 +218,7 @@
     "path": "uv.lock",
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "95c9effe37951f5ab012aa00743ecc52b44ca0ac0b62ab08eddafa3ab7559e7a"
+      "sha256": "6aebcdea17d2715c3136c2b6b3179a424a3eed990f54d65a4cccbf67c715c5da"
     },
     "resolution": {
       "a2a-sdk": "1.1.0",
@@ -285,7 +285,7 @@
       "webauthn": "3.0.0"
     },
     "revision": 3,
-    "sha256": "afffa3558290939ca4f3efae1b04559db3299084f4a62c0d93ccdd4ab66e69c8"
+    "sha256": "c971fdea8d3782a9d7349b5723f4e036740d314f19f7c3553dc6ba1780c9f84d"
   },
   "external_release_evidence": {
     "installer_lifecycle": {
@@ -529,20 +529,20 @@
   "release": {
     "name": "agentnet",
     "production_ready": false,
-    "profile": "setup_usability_candidate",
+    "profile": "canonical_owner_recovery_candidate",
     "reason": "All 19 must-not-ship gates remain non-PASSED; local implementation evidence is partial and required external, privileged, production-topology, or owner evidence remains absent.",
     "ship_eligible": false,
     "status": "BLOCKED",
-    "version": "0.1.50"
+    "version": "0.1.51"
   },
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "f6839282457daeeb8cad2b76621b384725cb6caac15e92ad3e09f72633fcbbe3"
+      "sha256": "f594836e220538cac9c41da74a7a02dcaaebc05534a2fa0bae1302b19ee21a26"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "59491a96c8697c41c47d29756144768f5b62da0df04c3d75c9579dc762dae0d8"
+      "sha256": "18c34a4e0224e68ccc68e71a970b398fc1e1bc1547c4ce4b00a43554b6887340"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -562,11 +562,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "1d690b65756169e1954c1a37c0436bc3dc053e903e61dd4a647a0a0f786be6e2"
+      "sha256": "83e5178c205b2808f9155ff245469a6234abf616cefac36f604badabbaa4419f"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "99fb7ad44dfb05766c59ac69c1decb1df9e951984c7196acb53c37179d2d99ad"
+      "sha256": "5953a7a3d47c10f145243ba82db76457f09fb7326f1d4373175a29087e776cd5"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -602,13 +602,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "b559a98eb5050f54a9d4d222ef83e2b6bda16af5c79860699d0eace2c1661d00"
+      "sha256": "612baa0e73b836f7411cc8f76f5698d750bfd5a77cbad8f94c70d6ac9f59bb01"
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "740adfb28e27641c3ec0bab470036c4690fde2c70a53ab0568fde644aecddb7e"
+    "sha256": "0906475b88bb57673fa2ab4ea793803d9931fad36e97a00519d52f7bb39685ea"
   },
   "runtime": {
     "implementation": "CPython",
@@ -746,5 +746,5 @@
     },
     "version": "1.0"
   },
-  "snapshot_date": "2026-08-07"
+  "snapshot_date": "2026-08-09"
 }

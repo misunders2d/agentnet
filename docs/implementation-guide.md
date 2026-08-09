@@ -382,6 +382,24 @@ runtime before commit. Unsupported, ambiguous, or downgraded markers fail
 closed. This is package/config/unit provenance replacement, not a database
 migration or rollback promise.
 
+If v0.1.51 setup reports `canonical_owner_recovery`, do not edit Approval or
+Core databases, identity files, approver files, or scopes manually. Keep the
+managed recovery journal and rerun the same approved
+`agentnet server-agent setup --apply --start` request. The package derives the
+canonical owner from the enrolled Core identity, verifies Approval's pinned
+OIDC owner binding, performs the service-private owner/signer adoption, resumes
+the journaled Core policy cutover, and verifies both services before reporting
+success. Unsupported identity, OIDC, signer, row-shape, revision, or file drift
+requires operator investigation; email equality alone is never recovery
+authority.
+
+The same setup pass repairs an already committed communication scope that lacks
+its schema-v7 collaboration projection. It materializes only the exact
+committed scope and member authority from server-held rows. It does not replace
+the scope, re-enroll either endpoint, or mint a generic entitlement. Repeating
+the recovery is a verified no-op.
+
+
 ### Communication-only request-v2
 
 Use

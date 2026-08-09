@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import os
+import pwd
 import shutil
 import stat
 import subprocess
@@ -149,6 +150,34 @@ def _bootstrap_evidence(domain_id: str) -> dict[str, object]:
         "deployment_binding": {"ready": False, "required": True},
         "warning": "software-key/single-PostgreSQL bootstrap; no HA, mTLS, KMS, or restore claim",
     }
+
+
+def test_canonical_owner_source_reports_incomplete_recovery_phase(tmp_path: Path) -> None:
+    request = load_server_setup_request(_communication_only_request(tmp_path))
+    approval_state = tmp_path / "approval-state"
+    approval_state.mkdir(mode=0o700)
+    _private_json(
+        approval_state / "canonical-owner-recovery.json",
+        {
+            "schema": "agentnet.canonical-owner-recovery-journal.v1",
+            "phase": "authority_adopted",
+            "domain_id": request.domain_id,
+            "source_principal_id": "setup-placeholder-owner",
+            "source_signer_key_id": "source-signer-key-id",
+            "source_signer_public_key_pem": "synthetic-public-key",
+            "target_principal_id": request.approval_approver_principal_id,
+        },
+    )
+
+    with pytest.raises(
+        ServerSetupError,
+        match="canonical owner recovery is incomplete",
+    ):
+        getattr(setup, "_canonical_owner_recovery_source")(
+            approval_state,
+            pwd.getpwuid(os.geteuid()),
+            request=request,
+        )
 
 
 @dataclass
@@ -792,12 +821,15 @@ def test_marker_accepts_only_released_package_caused_digest_drift(
 
 
 
-@pytest.mark.parametrize("source", ["0.1.45", "0.1.46", "0.1.47", "0.1.48", "0.1.49"])
-def test_0150_accepts_direct_upgrade_from_every_supported_setup_release(
+@pytest.mark.parametrize(
+    "source",
+    ["0.1.45", "0.1.46", "0.1.47", "0.1.48", "0.1.49", "0.1.50"],
+)
+def test_0151_accepts_direct_upgrade_from_every_supported_setup_release(
     monkeypatch: pytest.MonkeyPatch,
     source: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=source,
@@ -813,13 +845,13 @@ def test_0150_accepts_direct_upgrade_from_every_supported_setup_release(
 
     assert marker is not None
     assert marker["package_version"] == source
-    assert setup._forward_only_setup_upgrade(source, "0.1.50") is True
+    assert setup._forward_only_setup_upgrade(source, "0.1.51") is True
 
 
-def test_0150_rejects_direct_upgrade_from_pre_lifecycle_release(
+def test_0151_rejects_direct_upgrade_from_pre_lifecycle_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.44",
@@ -1226,7 +1258,7 @@ def test_0149_upgrade_accepts_exact_0148_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
-def test_0150_upgrade_converges_placeholder_approval_owner(
+def test_0151_upgrade_converges_placeholder_approval_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1247,12 +1279,7 @@ def test_0150_upgrade_converges_placeholder_approval_owner(
     source_signer = P256KeyPair.generate()
     target_signer = P256KeyPair.generate()
     recovered = {"value": False}
-    store_closed = {"value": False}
-    record_key_path = harness.layout.host(setup.APPROVAL_STATE) / "secrets" / "records.key"
-    approval_config = SimpleNamespace(
-        record_key_path=record_key_path,
-        model_dump=lambda **_kwargs: {"policy": "fixed"},
-    )
+    approval_config = SimpleNamespace()
 
     def approval_trust(*_args: object, **_kwargs: object) -> tuple[object, list[IndependentApproverConfig]]:
         signer = target_signer if recovered["value"] else source_signer
@@ -1288,55 +1315,40 @@ def test_0150_upgrade_converges_placeholder_approval_owner(
             return source_principal
         raise ServerSetupError("approval_conflict", "placeholder owner remains active")
 
-    class RecoveryStore:
-        def fetch_one(self, *_args: object, **_kwargs: object) -> dict[str, object]:
-            return {
-                "oidc_issuer": "https://accounts.example",
-                "oidc_subject": "owner-subject",
-                "verified_email": "owner@corp.example",
-                "pinned_at": 1_800_000_000,
-            }
-
-        def close(self) -> None:
-            store_closed["value"] = True
-
     seen: dict[str, object] = {}
+    original_run_as = setup._run_as
 
-    def converge(
-        store: object,
+    def run_as(
+        account: pwd.struct_passwd,
+        argv: list[str],
         *,
-        config_path: Path,
-        journal_path: Path,
-        request: object,
-        now: int,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
     ) -> dict[str, object]:
-        seen.update(
-            {
-                "store": store,
-                "config_path": config_path,
-                "journal_path": journal_path,
-                "request": request,
-                "now": now,
-            }
+        if argv[2:4] == ["approval", "recover-canonical-owner"]:
+            seen.update(
+                {
+                    "account": account,
+                    "argv": argv,
+                    "environment": environment,
+                    "stage": stage,
+                }
+            )
+            harness.operation_events.append(("product", stage))
+            recovered["value"] = True
+            return {"status": "recovered"}
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
         )
-        recovered["value"] = True
-        return {"status": "recovered"}
 
     monkeypatch.setattr(setup, "_approval_trust", approval_trust)
     monkeypatch.setattr(setup, "_require_exact_approval_policy", require_policy)
-    private_read = setup._read_private_managed_file
-    monkeypatch.setattr(
-        setup,
-        "_read_private_managed_file",
-        lambda path, *args, **kwargs: (
-            b"k" * 32
-            if path == record_key_path
-            else private_read(path, *args, **kwargs)
-        ),
-    )
-    monkeypatch.setattr(setup, "LocalEnvelopeCipher", lambda _key: object())
-    monkeypatch.setattr(setup, "ApprovalStore", lambda *_a, **_k: RecoveryStore())
-    monkeypatch.setattr(setup, "converge_canonical_approval_owner", converge)
+    monkeypatch.setattr(setup, "_run_as", run_as)
     def migrate_core_policy(
         *,
         core_config_path: Path,
@@ -1365,19 +1377,22 @@ def test_0150_upgrade_converges_placeholder_approval_owner(
         migrate_core_policy,
     )
 
+    upgrade_event_offset = len(harness.operation_events)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
     result = harness.apply(harness.plan_digest())
 
-    request = seen["request"]
-    assert request.source_principal_id == source_principal
-    assert request.target_principal_id == harness.request.approval_approver_principal_id
-    assert request.approved_at == 1_800_000_000
-    assert seen["config_path"] == harness.layout.host(setup.APPROVAL_CONFIG)
-    assert seen["journal_path"] == (
-        record_key_path.parent.parent / "canonical-owner-recovery.json"
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[argv.index("--source-principal") + 1] == source_principal
+    assert (
+        argv[argv.index("--target-principal") + 1]
+        == harness.request.approval_approver_principal_id
     )
-    assert store_closed["value"] is True
+    assert argv[argv.index("--config") + 1] == str(
+        harness.layout.host(setup.APPROVAL_CONFIG)
+    )
+    assert seen["stage"] == "canonical_owner_recovery"
     assert {
         "id": "canonical_owner_recovery",
         "status": "recovered",
@@ -1385,7 +1400,104 @@ def test_0150_upgrade_converges_placeholder_approval_owner(
         "target_principal_id": harness.request.approval_approver_principal_id,
         "core_policy_status": "updated_package_upgrade",
     } in result["steps"]
-    assert harness.marker()["package_version"] == "0.1.50"
+    upgrade_events = harness.operation_events[upgrade_event_offset:]
+    quiesced = upgrade_events.index(
+        ("systemctl", ("disable", "--now", setup.APPROVAL_UNIT))
+    )
+    recovered_event = upgrade_events.index(("product", "canonical_owner_recovery"))
+    assert quiesced < recovered_event
+    assert harness.marker()["package_version"] == "0.1.51"
+
+
+def test_canonical_owner_core_policy_cutover_resumes_partial_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    harness.apply(harness.plan_digest())
+    core_config_path = harness.layout.host(setup.CORE_CONFIG)
+    core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
+    target_oidc = OIDCEnrollmentConfig.model_validate_json(
+        core_oidc_path.read_text(encoding="utf-8")
+    )
+    target_approver = target_oidc.trusted_approvers[0]
+    source_signer = P256KeyPair.generate()
+    source_principal = "setup-placeholder-owner"
+    source_approver = target_approver.model_copy(
+        update={
+            "principal_id": source_principal,
+            "signer_key_id": source_signer.thumbprint,
+            "public_key_pem": source_signer.public_pem,
+        }
+    )
+    assert target_oidc.approval_service is not None
+    source_oidc = target_oidc.model_copy(
+        update={
+            "trusted_approvers": (source_approver,),
+            "approval_service": target_oidc.approval_service.model_copy(
+                update={"approver_principal_id": source_principal}
+            ),
+        }
+    )
+    source_oidc_payload = (
+        json.dumps(source_oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode()
+        + b"\n"
+    )
+    source_core = json.loads(core_config_path.read_text(encoding="utf-8"))
+    source_core["oidc_enrollment"] = source_oidc.model_dump(mode="json")
+    source_core_payload = (
+        json.dumps(source_core, indent=2, sort_keys=True).encode() + b"\n"
+    )
+    core_config_path.write_bytes(source_core_payload)
+    core_oidc_path.write_bytes(source_oidc_payload)
+    pending: dict[str, object] = {
+        "journal": {
+            "previous_configs": {
+                "core_config": base64.b64encode(source_core_payload).decode("ascii"),
+                "core_oidc_config": base64.b64encode(source_oidc_payload).decode("ascii"),
+            }
+        }
+    }
+    original_write = setup._write_journaled_core_config
+    writes = {"count": 0}
+
+    def interrupt_second_write(*args: object, **kwargs: object) -> str:
+        writes["count"] += 1
+        if writes["count"] == 2:
+            raise RuntimeError("injected Core config interruption")
+        return original_write(*args, **kwargs)
+
+    migrate_core_policy = getattr(setup, "_migrate_canonical_owner_core_policy")
+    monkeypatch.setattr(setup, "_write_journaled_core_config", interrupt_second_write)
+    with pytest.raises(RuntimeError, match="injected Core config interruption"):
+        migrate_core_policy(
+            core_config_path=core_config_path,
+            core_oidc_path=core_oidc_path,
+            core_account=pwd.getpwuid(os.geteuid()),
+            source_oidc=source_oidc,
+            target_oidc=target_oidc,
+            pending=pending,
+        )
+    assert json.loads(core_config_path.read_text(encoding="utf-8"))[
+        "oidc_enrollment"
+    ] == target_oidc.model_dump(mode="json")
+    assert OIDCEnrollmentConfig.model_validate_json(
+        core_oidc_path.read_text(encoding="utf-8")
+    ) == source_oidc
+
+    monkeypatch.setattr(setup, "_write_journaled_core_config", original_write)
+    status = migrate_core_policy(
+        core_config_path=core_config_path,
+        core_oidc_path=core_oidc_path,
+        core_account=pwd.getpwuid(os.geteuid()),
+        source_oidc=source_oidc,
+        target_oidc=target_oidc,
+        pending=pending,
+    )
+    assert status == "updated_package_upgrade"
+    assert OIDCEnrollmentConfig.model_validate_json(
+        core_oidc_path.read_text(encoding="utf-8")
+    ) == target_oidc
 
 
 def test_0146_replaces_released_timer_without_resetting_server_state(

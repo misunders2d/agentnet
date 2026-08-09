@@ -1,0 +1,72 @@
+{
+  "run_id": "2026-08-09-v0.1.51-local-package-candidate",
+  "evaluated_at": "2026-08-09T10:47:31Z",
+  "scope": "v0_1_51_canonical_owner_recovery_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "verification_scope": "PASS applies only to the selected local source, focused recovery/communication tests, broad hermetic suite, reproducible package, and installed-byte commands recorded below; it is not release certification and does not include the exact v0.1.51 two-machine flow, fresh installed-host upgrade, dedicated PostgreSQL recovery, installed-harness pin gates, or any owner/privileged/external must-not-ship gate",
+  "source_revision_kind": "working_tree_candidate",
+  "release_source_tree_sha256": "0906475b88bb57673fa2ab4ea793803d9931fad36e97a00519d52f7bb39685ea",
+  "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
+  "change_boundary": "Candidate 0.1.51 adds one bounded, fail-closed recovery path for the exact ordinary-onboarding placeholder-owner state: it atomically adopts the enrolled canonical owner, rotates the current signer, updates Core OIDC authority, and materializes or repairs the single schema-v7 communication projection without broadening authority. It accepts only exact allowlisted 0.1.45 through published 0.1.50 schema-v7 markers and rejects ambiguous, drifted, tampered, partial, unsupported, or conflicting state.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py",
+      "result": "PASS: 347 passed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2204 passed and 22 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 f3ebfa58c5daf263ebf99abe83a9065e928ce2e209aedff58a5492673e881820; wheel sha256 8030d8cbd62ef05f6b3134994ccbd884f343356d16203d02484bbefde59af10e"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
+      "result": "PASS: accepted_fact=accepted_local; approved_revocation_proven=false; bounded_c0_pilot_proven=false; core_process_starts=4; core_restarts=3; credential_refusal_fixture=true; exact_attribution=true; idempotency=true; non_production=true; obligation_state=completed; production_durability_proven=false; recipient_fact=recipient_committed; release_certified=false; separate_process_loopback=true"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "Fresh GitHub ubuntu-24.04 installed-package lane: npm pack, install into unrelated prefix, run scripts/ci/packaged_local_communication_e2e.py from installed bytes",
+      "result": "NOT RUN: exact same-commit GitHub workflow result awaits commit and push; no source-local result is substituted"
+    },
+    {
+      "command": "Two isolated Ubuntu 24.04 machines: one-command server setup; server-origin guided laptop join; complete browser OIDC and independent approval; send authenticated messages bidirectionally; prove offline reconnect, duplicate safety, and recipient acknowledgement",
+      "result": "NOT RUN: exact v0.1.51 cross-machine reliability proof awaits two isolated hosts; no historical run is inherited"
+    },
+    {
+      "command": "Fresh Ubuntu 24.04 installed-host matrix: clean v0.1.51 setup and direct installed v0.1.45/v0.1.46/v0.1.47/v0.1.48/v0.1.49/v0.1.50 to v0.1.51 upgrades",
+      "result": "NOT RUN: exact same-commit GitHub setup and upgrade workflow results await commit and push; no historical run is inherited or waived"
+    },
+    {
+      "command": "Dedicated mutation-authorized PostgreSQL recovery and schema-v7 projection suite",
+      "result": "NOT RUN: no local PostgreSQL binaries, container runtime, or dedicated mutation-authorized test database are available"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each reported 2231 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+    }
+  ],
+  "execution_context": {
+    "source": "AgentNet v0.1.51 canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "callback_incident": "No external workflow result is included in this local candidate evidence",
+    "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
+    "two_vm_source_proof": "Not rerun for exact v0.1.51; cross-machine reliability trials await isolated hosts",
+    "root_installed_external_host": "Not rerun for exact v0.1.51; fresh installed-host setup and direct upgrade evidence await GitHub CI"
+  },
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
+      "sha256": "f3ebfa58c5daf263ebf99abe83a9065e928ce2e209aedff58a5492673e881820"
+    },
+    {
+      "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
+      "sha256": "8030d8cbd62ef05f6b3134994ccbd884f343356d16203d02484bbefde59af10e"
+    }
+  ],
+  "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
+}

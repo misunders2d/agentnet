@@ -200,6 +200,12 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.47", "0.1.50"): MANAGED_UNITS,
     ("0.1.48", "0.1.50"): MANAGED_UNITS,
     ("0.1.49", "0.1.50"): MANAGED_UNITS,
+    ("0.1.45", "0.1.51"): MANAGED_UNITS,
+    ("0.1.46", "0.1.51"): MANAGED_UNITS,
+    ("0.1.47", "0.1.51"): MANAGED_UNITS,
+    ("0.1.48", "0.1.51"): MANAGED_UNITS,
+    ("0.1.49", "0.1.51"): MANAGED_UNITS,
+    ("0.1.50", "0.1.51"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -222,6 +228,12 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.47", "0.1.50"),
         ("0.1.48", "0.1.50"),
         ("0.1.49", "0.1.50"),
+        ("0.1.45", "0.1.51"),
+        ("0.1.46", "0.1.51"),
+        ("0.1.47", "0.1.51"),
+        ("0.1.48", "0.1.51"),
+        ("0.1.49", "0.1.51"),
+        ("0.1.50", "0.1.51"),
     }
 )
 # The lifecycle release is the sole rollback-capable database upgrade.  Older
@@ -4765,7 +4777,7 @@ def _require_exact_approval_policy(
     raise ServerSetupError("approval_conflict", "existing Approval state conflicts with fixed request")
 
 
-def _completed_canonical_owner_source(
+def _canonical_owner_recovery_source(
     approval_state: Path,
     approval_account: pwd.struct_passwd,
     *,
@@ -4795,8 +4807,18 @@ def _completed_canonical_owner_source(
         "source_signer_public_key_pem",
     )
     if (
+        value.get("schema") == "agentnet.canonical-owner-recovery-journal.v1"
+        and value.get("phase")
+        in {"prepared", "authority_adopted", "signer_replaced"}
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner recovery is incomplete",
+        )
+    if (
         value.get("schema") != "agentnet.canonical-owner-recovery-journal.v1"
-        or value.get("phase") != "complete"
+        or value.get("phase")
+        not in {"config_replacing", "config_replaced", "complete"}
         or value.get("domain_id") != request.domain_id
         or value.get("target_principal_id") != request.approval_approver_principal_id
         or any(not isinstance(value.get(key), str) or not value.get(key) for key in required)
@@ -6188,7 +6210,7 @@ def _apply_server_setup(
                         )
                     )
                 except ServerSetupError as exc:
-                    completed = _completed_canonical_owner_source(
+                    completed = _canonical_owner_recovery_source(
                         approval_state,
                         approval_account,
                         request=request,
@@ -6475,119 +6497,6 @@ def _apply_server_setup(
                 _clear_upgrade_journal(setup_attempt)
             return unit_payloads
 
-        if canonical_owner_source is not None:
-            approval_config_active, _ = _approval_trust(
-                approval_config_path,
-                approval_account,
-                approval_state,
-            )
-            recovery_store = ApprovalStore(
-                approval_state / "approval.sqlite3",
-                LocalEnvelopeCipher(
-                    _read_private_managed_file(
-                        approval_config_active.record_key_path,
-                        approval_account,
-                        blocker="canonical_owner_recovery",
-                        max_bytes=65_536,
-                    )
-                ),
-                initialize=False,
-            )
-            try:
-                target_binding = recovery_store.fetch_one(
-                    """
-                    SELECT oidc_issuer, oidc_subject, verified_email, pinned_at
-                    FROM approval_owner_bindings
-                    WHERE domain_id=? AND approver_principal_id=? AND status='active'
-                    """,
-                    (request.domain_id, request.approval_approver_principal_id),
-                )
-                if target_binding is None:
-                    raise ServerSetupError(
-                        "canonical_owner_recovery",
-                        "canonical target owner binding is unavailable",
-                    )
-                if any(
-                    not isinstance(target_binding[key], str) or not target_binding[key]
-                    for key in ("oidc_issuer", "oidc_subject", "verified_email")
-                ):
-                    raise ServerSetupError(
-                        "canonical_owner_recovery",
-                        "canonical target owner binding is incomplete",
-                    )
-                recovery = converge_canonical_approval_owner(
-                    recovery_store,
-                    config_path=approval_config_path,
-                    journal_path=approval_state / "canonical-owner-recovery.json",
-                    request=CanonicalOwnerAdoptionRequest(
-                        schema="agentnet.canonical-owner-adoption.v1",
-                        recovery_id=str(
-                            uuid.uuid5(
-                                uuid.NAMESPACE_URL,
-                                f"agentnet:{request.domain_id}:{canonical_owner_source}:"
-                                f"{request.approval_approver_principal_id}",
-                            )
-                        ),
-                        domain_id=request.domain_id,
-                        source_principal_id=canonical_owner_source,
-                        target_principal_id=request.approval_approver_principal_id,
-                        oidc_issuer=str(target_binding["oidc_issuer"]),
-                        oidc_subject=str(target_binding["oidc_subject"]),
-                        verified_email=str(target_binding["verified_email"]),
-                        verifier_id=request.approval_verifier_id,
-                        approved_at=int(target_binding["pinned_at"]),
-                    ),
-                    now=int(time.time()),
-                )
-            finally:
-                recovery_store.close()
-            recovery_pending = dict(_pending_upgrade)
-            _pending_upgrade.clear()
-            if recovery["status"] not in {"recovered", "already_exact"}:
-                raise ServerSetupError(
-                    "canonical_owner_recovery",
-                    "canonical owner recovery returned an invalid status",
-                )
-            if prevalidated_source_oidc is None:
-                raise ServerSetupError(
-                    "canonical_owner_recovery",
-                    "canonical source Core policy was not prevalidated",
-                )
-            approval_config_after, trusted_after = _approval_trust(
-                approval_config_path,
-                approval_account,
-                approval_state,
-            )
-            _require_exact_approval_policy(
-                approval_config_after,
-                request=request,
-                owner_oidc=owner_oidc,
-                approvers=approvers,
-                approval_state=approval_state,
-            )
-            prevalidated_oidc = _build_core_oidc_config(
-                request,
-                oidc_provider,
-                trusted=trusted_after,
-                approvers=approvers,
-            )
-            core_policy_status = _migrate_canonical_owner_core_policy(
-                core_config_path=core_config_path,
-                core_oidc_path=core_oidc_path,
-                core_account=core_account,
-                source_oidc=prevalidated_source_oidc,
-                target_oidc=prevalidated_oidc,
-                pending=recovery_pending,
-            )
-            steps.append(
-                {
-                    "id": "canonical_owner_recovery",
-                    "status": recovery["status"],
-                    "source_principal_id": canonical_owner_source,
-                    "target_principal_id": request.approval_approver_principal_id,
-                    "core_policy_status": core_policy_status,
-                }
-            )
         if legacy_owner_policy:
             if prevalidated_oidc is None:  # pragma: no cover - guarded above
                 raise ServerSetupError(
@@ -6675,13 +6584,19 @@ def _apply_server_setup(
             approval_account,
             approval_state,
         )
-        _require_exact_approval_policy(
+        observed_owner_source = _require_exact_approval_policy(
             approval_config,
             request=request,
             owner_oidc=owner_oidc,
             approvers=approvers,
             approval_state=approval_state,
+            allow_canonical_owner_adoption=canonical_owner_source is not None,
         )
+        if observed_owner_source != canonical_owner_source:
+            raise ServerSetupError(
+                "canonical_owner_recovery",
+                "Approval owner state changed after preflight",
+            )
         deferred_approval_status = approval_preexisting and forward_only_transition
         if approval_preexisting:
             if not deferred_approval_status:
@@ -6692,17 +6607,25 @@ def _apply_server_setup(
                     stage="approval_status",
                 )
             steps.append({"id": "approval_provision", "status": "already_satisfied"})
-        oidc = _build_core_oidc_config(
-            request,
-            oidc_provider,
-            trusted=trusted,
-            approvers=approvers,
-        )
-        if prevalidated_oidc is not None and oidc != prevalidated_oidc:
-            raise ServerSetupError(
-                "approval_conflict",
-                "Approval trust changed during setup",
+        if canonical_owner_source is not None:
+            if prevalidated_source_oidc is None:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical source Core policy was not prevalidated",
+                )
+            oidc = prevalidated_source_oidc
+        else:
+            oidc = _build_core_oidc_config(
+                request,
+                oidc_provider,
+                trusted=trusted,
+                approvers=approvers,
             )
+            if prevalidated_oidc is not None and oidc != prevalidated_oidc:
+                raise ServerSetupError(
+                    "approval_conflict",
+                    "Approval trust changed during setup",
+                )
         oidc_path = core_oidc_path
         oidc_payload = json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
         steps.append({"id": "core_oidc_config", "status": _atomic_write(oidc_path, oidc_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
@@ -6858,6 +6781,90 @@ def _apply_server_setup(
                     environment=approval_environment,
                     stage="approval_status",
                 )
+        if canonical_owner_source is not None:
+            recovery_oidc_issuer = approvers[0].oidc_issuer
+            if recovery_oidc_issuer is None:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical owner recovery requires exact OIDC issuer binding",
+                )
+            recovery_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"agentnet:{request.domain_id}:{canonical_owner_source}:"
+                    f"{request.approval_approver_principal_id}",
+                )
+            )
+            recovery = _run_as(
+                approval_account,
+                [
+                    str(node_executable),
+                    str(executable),
+                    "approval",
+                    "recover-canonical-owner",
+                    "--config",
+                    str(approval_config_path),
+                    "--recovery-id",
+                    recovery_id,
+                    "--domain",
+                    request.domain_id,
+                    "--source-principal",
+                    canonical_owner_source,
+                    "--target-principal",
+                    request.approval_approver_principal_id,
+                    "--oidc-issuer",
+                    recovery_oidc_issuer,
+                ],
+                environment=approval_environment,
+                stage="canonical_owner_recovery",
+            )
+            recovery_pending = _pending_upgrade
+            if recovery["status"] not in {"recovered", "already_exact"}:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical owner recovery returned an invalid status",
+                )
+            if prevalidated_source_oidc is None:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "canonical source Core policy was not prevalidated",
+                )
+            approval_config_after, trusted_after = _approval_trust(
+                approval_config_path,
+                approval_account,
+                approval_state,
+            )
+            _require_exact_approval_policy(
+                approval_config_after,
+                request=request,
+                owner_oidc=owner_oidc,
+                approvers=approvers,
+                approval_state=approval_state,
+            )
+            prevalidated_oidc = _build_core_oidc_config(
+                request,
+                oidc_provider,
+                trusted=trusted_after,
+                approvers=approvers,
+            )
+            core_policy_status = _migrate_canonical_owner_core_policy(
+                core_config_path=core_config_path,
+                core_oidc_path=core_oidc_path,
+                core_account=core_account,
+                source_oidc=prevalidated_source_oidc,
+                target_oidc=prevalidated_oidc,
+                pending=recovery_pending,
+            )
+            oidc = prevalidated_oidc
+            steps.append(
+                {
+                    "id": "canonical_owner_recovery",
+                    "status": recovery["status"],
+                    "source_principal_id": canonical_owner_source,
+                    "target_principal_id": request.approval_approver_principal_id,
+                    "core_policy_status": core_policy_status,
+                }
+            )
         if rollback_capable_upgrade:
             journal = _pending_upgrade.get("journal")
             if not isinstance(journal, Mapping):
@@ -7046,7 +7053,7 @@ def _apply_server_setup(
             approvers=approvers,
             approval_state=approval_state,
         )
-        if trusted_after != trusted:
+        if canonical_owner_source is None and trusted_after != trusted:
             raise ServerSetupError("approval_conflict", "Approval trust changed during setup")
 
         if unit_payloads is None:

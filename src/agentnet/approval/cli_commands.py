@@ -35,6 +35,10 @@ from agentnet.approval.http import create_approval_app
 from agentnet.approval.owner_session import OwnerSessionService
 from agentnet.approval.store import ApprovalStore
 from agentnet.approval.webauthn_uv import WebAuthnApprovalService
+from agentnet.operations.canonical_owner_recovery import (
+    CanonicalOwnerAdoptionRequest,
+    converge_canonical_approval_owner,
+)
 from agentnet.errors import GateBlocked, ValidationError
 from agentnet.identity.oidc import OIDCProvider, OIDCProviderConfig
 from agentnet.operations.config import OIDCTokenEndpointAuthMethod
@@ -560,6 +564,57 @@ def command_approval_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_approval_recover_canonical_owner(args: argparse.Namespace) -> int:
+    config, store, _service = _open_service(Path(args.config))
+    try:
+        binding = store.fetch_one(
+            """SELECT oidc_issuer,oidc_subject,verified_email,pinned_at
+                 FROM approval_owner_bindings
+                WHERE domain_id=? AND approver_principal_id=? AND status='active'""",
+            (args.domain, args.source_principal),
+        )
+        if binding is None:
+            binding = store.fetch_one(
+                """SELECT oidc_issuer,oidc_subject,verified_email,pinned_at
+                     FROM approval_owner_bindings
+                    WHERE domain_id=? AND approver_principal_id=? AND status='active'""",
+                (args.domain, args.target_principal),
+            )
+        if binding is None:
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "exact Approval owner binding is unavailable",
+            )
+        if binding["oidc_issuer"] != args.oidc_issuer:
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "exact Approval owner OIDC issuer does not match recovery request",
+            )
+        request = CanonicalOwnerAdoptionRequest(
+            schema="agentnet.canonical-owner-adoption.v1",
+            recovery_id=args.recovery_id,
+            domain_id=args.domain,
+            source_principal_id=args.source_principal,
+            target_principal_id=args.target_principal,
+            oidc_issuer=str(binding["oidc_issuer"]),
+            oidc_subject=str(binding["oidc_subject"]),
+            verified_email=str(binding["verified_email"]),
+            verifier_id=config.verifier_id,
+            approved_at=int(binding["pinned_at"]),
+        )
+        result = converge_canonical_approval_owner(
+            store,
+            config_path=Path(args.config),
+            journal_path=config.data_dir / "canonical-owner-recovery.json",
+            request=request,
+            now=int(time.time()),
+        )
+    finally:
+        store.close()
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def configure_approval_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     approval = commands.add_parser(
         "approval",
@@ -645,6 +700,18 @@ def configure_approval_parser(commands: argparse._SubParsersAction[argparse.Argu
     status = sub.add_parser("status", help="show content-free approval-service readiness")
     status.add_argument("--config", default=".agentnet-approval/config.json")
     status.set_defaults(func=command_approval_status)
+
+    recover = sub.add_parser(
+        "recover-canonical-owner",
+        help=argparse.SUPPRESS,
+    )
+    recover.add_argument("--config", required=True)
+    recover.add_argument("--recovery-id", required=True)
+    recover.add_argument("--domain", required=True)
+    recover.add_argument("--source-principal", required=True)
+    recover.add_argument("--target-principal", required=True)
+    recover.add_argument("--oidc-issuer", required=True)
+    recover.set_defaults(func=command_approval_recover_canonical_owner)
 
 
 __all__ = ["configure_approval_parser"]
