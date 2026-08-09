@@ -40,6 +40,7 @@ from agentnet.protocol.models import Classification
 from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 from agentnet.storage.communication_scope_schema import COMMUNICATION_SCOPE_TABLE_DDL
+from agentnet.storage.release_v7_schema import materialize_v6_communication_scope
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -937,6 +938,10 @@ class CommunicationScopeService:
                 self._require_committed_current(
                     connection, row=row, actor=actor, now=now
                 )
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id=str(row["scope_id"]),
+                )
                 return self._stored_complete(row, reservation_digest)
             self._require_row_actor(row, actor)
             if row["state"] in {
@@ -1018,6 +1023,10 @@ class CommunicationScopeService:
                 if row["state"] == "committed":
                     self._require_committed_current(
                         connection, row=row, actor=actor, now=int(self.clock())
+                    )
+                    materialize_v6_communication_scope(
+                        connection,
+                        scope_id=str(row["scope_id"]),
                     )
                     return self._stored_complete(row, reservation_digest)
                 if (
@@ -1158,6 +1167,10 @@ class CommunicationScopeService:
                         audit_hash,
                         scope_id,
                     ),
+                )
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id=scope_id,
                 )
                 return self._stored_complete(
                     self._row_for_begin(connection, begin_hash),

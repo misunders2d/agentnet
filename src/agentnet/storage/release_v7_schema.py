@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import json
-from typing import Any
+from typing import Any, Literal
 
 from agentnet.errors import GateBlocked
 from agentnet.security.signatures import canonical_digest
@@ -146,6 +146,319 @@ def _scope_digest(
     )
 
 
+def _execute(
+    connection: Any,
+    query: str,
+    parameters: tuple[object, ...] = (),
+    *,
+    postgres: bool,
+) -> Any:
+    if postgres:
+        query = query.replace("?", "%s")
+    return connection.execute(query, parameters)
+
+
+def _scope_projection(
+    connection: Any,
+    *,
+    row: Any,
+    postgres: bool,
+) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
+    scope_id = str(row["scope_id"])
+    domain_id = str(row["domain_id"])
+    principal_id = str(row["principal_id"])
+    owner_harness_id = str(row["owner_harness_id"])
+    fresh_harness_id = str(row["fresh_harness_id"])
+    harness_rows = _execute(
+        connection,
+        "SELECT harness_id,domain_id,principal_id FROM harnesses "
+        "WHERE harness_id IN (?,?) ORDER BY harness_id",
+        (owner_harness_id, fresh_harness_id),
+        postgres=postgres,
+    ).fetchall()
+    if (
+        len(harness_rows) != 2
+        or owner_harness_id == fresh_harness_id
+        or any(
+            str(harness["domain_id"]) != domain_id
+            or str(harness["principal_id"]) != principal_id
+            for harness in harness_rows
+        )
+    ):
+        raise GateBlocked(
+            "schema_v7_scope_migration",
+            "v6 communication scope exact harness ownership is ambiguous",
+        )
+    item_rows = _execute(
+        connection,
+        """SELECT i.harness_id,i.action,i.resource_pattern,i.expires_at,
+                  e.action AS entitlement_action,
+                  e.resource_pattern AS entitlement_resource_pattern,
+                  e.expires_at AS entitlement_expires_at,e.revoked_at,
+                  e.revision AS entitlement_revision
+             FROM communication_scope_items AS i
+             JOIN entitlements AS e ON e.entitlement_id=i.entitlement_id
+            WHERE i.scope_id=? ORDER BY i.harness_id,i.action""",
+        (scope_id,),
+        postgres=postgres,
+    ).fetchall()
+    expected_pairs = {
+        (harness_id, action)
+        for harness_id in (owner_harness_id, fresh_harness_id)
+        for action in _LEGACY_COMMUNICATION_ACTIONS
+    }
+    actual_pairs = {
+        (str(item["harness_id"]), str(item["action"])) for item in item_rows
+    }
+    if (
+        len(item_rows) != len(expected_pairs)
+        or actual_pairs != expected_pairs
+        or any(
+            item["resource_pattern"] != "*"
+            or item["entitlement_resource_pattern"] != "*"
+            or item["action"] != item["entitlement_action"]
+            or item["expires_at"] is not None
+            or item["entitlement_expires_at"] is not None
+            or item["revoked_at"] is not None
+            or int(item["entitlement_revision"]) != int(row["policy_revision"])
+            for item in item_rows
+        )
+    ):
+        raise GateBlocked(
+            "schema_v7_scope_migration",
+            "v6 communication scope authority items are incomplete or not current",
+        )
+    committed_at = int(row["committed_at"])
+    audit_record_hash = str(row["audit_record_hash"])
+    if len(audit_record_hash) != 64:
+        raise GateBlocked(
+            "schema_v7_scope_migration",
+            "v6 communication scope audit lineage is unavailable",
+        )
+    proposal_digest = canonical_digest(
+        {
+            "migration": "v6-communication-scope-to-v7-collaboration-scope",
+            "source_communication_scope_id": scope_id,
+            "source_scope_digest": str(row["scope_digest"]),
+            "source_transaction_digest": str(row["transaction_digest"]),
+        }
+    )
+    member_values = tuple(
+        sorted(
+            (
+                {
+                    "scope_id": scope_id,
+                    "authority_kind": "principal",
+                    "authority_id": principal_id,
+                    "harness_id": owner_harness_id,
+                    "role": "owner",
+                    "state": "active",
+                    "joined_sequence": 1,
+                    "removed_sequence": None,
+                    "joined_at": committed_at,
+                    "removed_at": None,
+                },
+                {
+                    "scope_id": scope_id,
+                    "authority_kind": "principal",
+                    "authority_id": principal_id,
+                    "harness_id": fresh_harness_id,
+                    "role": "member",
+                    "state": "active",
+                    "joined_sequence": 1,
+                    "removed_sequence": None,
+                    "joined_at": committed_at,
+                    "removed_at": None,
+                },
+            ),
+            key=lambda value: str(value["harness_id"]),
+        )
+    )
+    members_for_digest = [
+        {
+            "authority_kind": member["authority_kind"],
+            "authority_id": member["authority_id"],
+            "harness_id": member["harness_id"],
+            "role": member["role"],
+            "state": member["state"],
+            "joined_sequence": member["joined_sequence"],
+            "joined_at": member["joined_at"],
+        }
+        for member in member_values
+    ]
+    scope_digest = _scope_digest(
+        scope_id=scope_id,
+        domain_id=domain_id,
+        principal_id=principal_id,
+        owner_harness_id=owner_harness_id,
+        members=members_for_digest,
+        policy_revision=int(row["policy_revision"]),
+        domain_revocation_epoch=int(row["domain_revocation_epoch"]),
+        proposal_digest=proposal_digest,
+        created_at=committed_at,
+    )
+    scope = {
+        "scope_id": scope_id,
+        "schema_version": 1,
+        "domain_id": domain_id,
+        "scope_kind": "direct",
+        "owner_principal_id": principal_id,
+        "owner_harness_id": owner_harness_id,
+        "source_communication_scope_id": scope_id,
+        "state": "active",
+        "state_reason": "migrated_v6_communication_scope",
+        "allowed_actions_json": _canonical_text(list(_MIGRATED_COLLABORATION_ACTIONS)),
+        "allowed_resource_prefixes_json": _canonical_text(
+            list(_MIGRATED_RESOURCE_PREFIXES)
+        ),
+        "allowed_classifications_json": _canonical_text(["C1"]),
+        "canonical_references_json": _canonical_text(
+            [f"communication-scope:{scope_id}"]
+        ),
+        "policy_floor": int(row["policy_revision"]),
+        "policy_revision": int(row["policy_revision"]),
+        "domain_revocation_epoch": int(row["domain_revocation_epoch"]),
+        "control_sequence": 1,
+        "membership_sequence": 1,
+        "proposal_digest": proposal_digest,
+        "scope_digest": scope_digest,
+        "audit_record_hash": audit_record_hash,
+        "revision": 1,
+        "created_at": committed_at,
+        "updated_at": committed_at,
+        "expires_at": None,
+        "revoked_at": None,
+        "archived_at": None,
+        "deleted_at": None,
+    }
+    members = tuple(
+        {
+            **member,
+            "member_digest": _member_digest(
+                scope_id=scope_id,
+                authority_id=principal_id,
+                harness_id=str(member["harness_id"]),
+                role=str(member["role"]),
+                joined_at=committed_at,
+            ),
+        }
+        for member in member_values
+    )
+    return scope, members
+
+
+def _require_exact_existing_projection(
+    connection: Any,
+    *,
+    scope: dict[str, object],
+    members: tuple[dict[str, object], ...],
+    postgres: bool,
+) -> bool:
+    rows = _execute(
+        connection,
+        """SELECT * FROM collaboration_scopes
+            WHERE scope_id=? OR source_communication_scope_id=?
+            ORDER BY scope_id""",
+        (str(scope["scope_id"]), str(scope["scope_id"])),
+        postgres=postgres,
+    ).fetchall()
+    if not rows:
+        return False
+    observed_members = _execute(
+        connection,
+        """SELECT * FROM collaboration_scope_members
+            WHERE scope_id=? ORDER BY harness_id""",
+        (str(scope["scope_id"]),),
+        postgres=postgres,
+    ).fetchall()
+    if (
+        len(rows) != 1
+        or any(rows[0][key] != value for key, value in scope.items())
+        or len(observed_members) != len(members)
+        or any(
+            any(observed[key] != value for key, value in expected.items())
+            for observed, expected in zip(observed_members, members, strict=True)
+        )
+    ):
+        raise GateBlocked(
+            "schema_v7_scope_projection",
+            "existing collaboration scope projection mismatches",
+        )
+    return True
+
+
+def materialize_v6_communication_scope(
+    connection: Any,
+    *,
+    scope_id: str,
+    postgres: bool = False,
+) -> Literal["created", "already_exact"]:
+    """Materialize one exact committed communication scope as v7 authority."""
+
+    row = _execute(
+        connection,
+        "SELECT * FROM communication_scopes WHERE scope_id=? AND state='committed'",
+        (scope_id,),
+        postgres=postgres,
+    ).fetchone()
+    if row is None:
+        raise GateBlocked(
+            "schema_v7_scope_projection",
+            "committed communication scope is unavailable",
+        )
+    scope, members = _scope_projection(connection, row=row, postgres=postgres)
+    if _require_exact_existing_projection(
+        connection,
+        scope=scope,
+        members=members,
+        postgres=postgres,
+    ):
+        return "already_exact"
+    _execute(
+        connection,
+        """INSERT INTO collaboration_scopes(
+            scope_id,schema_version,domain_id,scope_kind,owner_principal_id,
+            owner_harness_id,source_communication_scope_id,state,state_reason,
+            allowed_actions_json,allowed_resource_prefixes_json,
+            allowed_classifications_json,canonical_references_json,policy_floor,
+            policy_revision,domain_revocation_epoch,control_sequence,
+            membership_sequence,proposal_digest,scope_digest,audit_record_hash,
+            revision,created_at,updated_at,expires_at,revoked_at,archived_at,deleted_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        tuple(scope.values()),
+        postgres=postgres,
+    )
+    for member in members:
+        _execute(
+            connection,
+            """INSERT INTO collaboration_scope_members(
+                scope_id,authority_kind,authority_id,harness_id,role,state,
+                joined_sequence,removed_sequence,member_digest,joined_at,removed_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                member["scope_id"],
+                member["authority_kind"],
+                member["authority_id"],
+                member["harness_id"],
+                member["role"],
+                member["state"],
+                member["joined_sequence"],
+                member["removed_sequence"],
+                member["member_digest"],
+                member["joined_at"],
+                member["removed_at"],
+            ),
+            postgres=postgres,
+        )
+    _require_exact_existing_projection(
+        connection,
+        scope=scope,
+        members=members,
+        postgres=postgres,
+    )
+    return "created"
+
+
 def migrate_v6_communication_scopes(
     connection: Any,
     *,
@@ -153,202 +466,37 @@ def migrate_v6_communication_scopes(
 ) -> int:
     """Map each exact current v6 communication scope into schema-v7 authority."""
 
-    def execute(query: str, parameters: tuple[object, ...] = ()) -> Any:
-        if postgres:
-            query = query.replace("?", "%s")
-        return connection.execute(query, parameters)
-
-    rows = execute(
-        "SELECT * FROM communication_scopes WHERE state='committed' "
-        "ORDER BY domain_id,principal_id,scope_id"
+    rows = _execute(
+        connection,
+        "SELECT scope_id,domain_id,principal_id FROM communication_scopes "
+        "WHERE state='committed' ORDER BY domain_id,principal_id,scope_id",
+        postgres=postgres,
     ).fetchall()
     seen_principals: set[tuple[str, str]] = set()
     migrated = 0
     for row in rows:
-        scope_id = str(row["scope_id"])
-        domain_id = str(row["domain_id"])
-        principal_id = str(row["principal_id"])
-        owner_harness_id = str(row["owner_harness_id"])
-        fresh_harness_id = str(row["fresh_harness_id"])
-        principal_key = (domain_id, principal_id)
+        principal_key = (str(row["domain_id"]), str(row["principal_id"]))
         if principal_key in seen_principals:
             raise GateBlocked(
                 "schema_v7_scope_migration",
                 "multiple committed v6 communication scopes are ambiguous",
             )
         seen_principals.add(principal_key)
-        harness_rows = execute(
-            "SELECT harness_id,domain_id,principal_id FROM harnesses "
-            "WHERE harness_id IN (?,?) ORDER BY harness_id",
-            (owner_harness_id, fresh_harness_id),
-        ).fetchall()
         if (
-            len(harness_rows) != 2
-            or owner_harness_id == fresh_harness_id
-            or any(
-                str(harness["domain_id"]) != domain_id
-                or str(harness["principal_id"]) != principal_id
-                for harness in harness_rows
+            materialize_v6_communication_scope(
+                connection,
+                scope_id=str(row["scope_id"]),
+                postgres=postgres,
             )
+            == "created"
         ):
-            raise GateBlocked(
-                "schema_v7_scope_migration",
-                "v6 communication scope exact harness ownership is ambiguous",
-            )
-        item_rows = execute(
-            """SELECT i.harness_id,i.action,i.resource_pattern,i.expires_at,
-                      e.action AS entitlement_action,
-                      e.resource_pattern AS entitlement_resource_pattern,
-                      e.expires_at AS entitlement_expires_at,e.revoked_at,
-                      e.revision AS entitlement_revision
-                 FROM communication_scope_items AS i
-                 JOIN entitlements AS e ON e.entitlement_id=i.entitlement_id
-                WHERE i.scope_id=? ORDER BY i.harness_id,i.action""",
-            (scope_id,),
-        ).fetchall()
-        expected_pairs = {
-            (harness_id, action)
-            for harness_id in (owner_harness_id, fresh_harness_id)
-            for action in _LEGACY_COMMUNICATION_ACTIONS
-        }
-        actual_pairs = {
-            (str(item["harness_id"]), str(item["action"])) for item in item_rows
-        }
-        if (
-            len(item_rows) != len(expected_pairs)
-            or actual_pairs != expected_pairs
-            or any(
-                item["resource_pattern"] != "*"
-                or item["entitlement_resource_pattern"] != "*"
-                or item["action"] != item["entitlement_action"]
-                or item["expires_at"] is not None
-                or item["entitlement_expires_at"] is not None
-                or item["revoked_at"] is not None
-                or int(item["entitlement_revision"]) != int(row["policy_revision"])
-                for item in item_rows
-            )
-        ):
-            raise GateBlocked(
-                "schema_v7_scope_migration",
-                "v6 communication scope authority items are incomplete or not current",
-            )
-        committed_at = int(row["committed_at"])
-        audit_record_hash = str(row["audit_record_hash"])
-        if len(audit_record_hash) != 64:
-            raise GateBlocked(
-                "schema_v7_scope_migration",
-                "v6 communication scope audit lineage is unavailable",
-            )
-        proposal_digest = canonical_digest(
-            {
-                "migration": "v6-communication-scope-to-v7-collaboration-scope",
-                "source_communication_scope_id": scope_id,
-                "source_scope_digest": str(row["scope_digest"]),
-                "source_transaction_digest": str(row["transaction_digest"]),
-            }
-        )
-        member_values = sorted(
-            (
-                (
-                    owner_harness_id,
-                    "owner",
-                    {
-                        "authority_kind": "principal",
-                        "authority_id": principal_id,
-                        "harness_id": owner_harness_id,
-                        "role": "owner",
-                        "state": "active",
-                        "joined_sequence": 1,
-                        "joined_at": committed_at,
-                    },
-                ),
-                (
-                    fresh_harness_id,
-                    "member",
-                    {
-                        "authority_kind": "principal",
-                        "authority_id": principal_id,
-                        "harness_id": fresh_harness_id,
-                        "role": "member",
-                        "state": "active",
-                        "joined_sequence": 1,
-                        "joined_at": committed_at,
-                    },
-                ),
-            ),
-            key=lambda value: value[0],
-        )
-        members = [value[2] for value in member_values]
-        scope_digest = _scope_digest(
-            scope_id=scope_id,
-            domain_id=domain_id,
-            principal_id=principal_id,
-            owner_harness_id=owner_harness_id,
-            members=members,
-            policy_revision=int(row["policy_revision"]),
-            domain_revocation_epoch=int(row["domain_revocation_epoch"]),
-            proposal_digest=proposal_digest,
-            created_at=committed_at,
-        )
-        execute(
-            """INSERT INTO collaboration_scopes(
-                scope_id,schema_version,domain_id,scope_kind,owner_principal_id,
-                owner_harness_id,source_communication_scope_id,state,state_reason,
-                allowed_actions_json,allowed_resource_prefixes_json,
-                allowed_classifications_json,canonical_references_json,policy_floor,
-                policy_revision,domain_revocation_epoch,control_sequence,
-                membership_sequence,proposal_digest,scope_digest,audit_record_hash,
-                revision,created_at,updated_at,expires_at,revoked_at,archived_at,deleted_at
-            ) VALUES(?,1,?,?,?,?,?,'active','migrated_v6_communication_scope',
-                ?,?,?,?, ?,?,?,1,1,?,?,?,1,?,?,NULL,NULL,NULL,NULL)""",
-            (
-                scope_id,
-                domain_id,
-                "direct",
-                principal_id,
-                owner_harness_id,
-                scope_id,
-                _canonical_text(list(_MIGRATED_COLLABORATION_ACTIONS)),
-                _canonical_text(list(_MIGRATED_RESOURCE_PREFIXES)),
-                _canonical_text(["C1"]),
-                _canonical_text([f"communication-scope:{scope_id}"]),
-                int(row["policy_revision"]),
-                int(row["policy_revision"]),
-                int(row["domain_revocation_epoch"]),
-                proposal_digest,
-                scope_digest,
-                audit_record_hash,
-                committed_at,
-                committed_at,
-            ),
-        )
-        for harness_id, role, member in member_values:
-            execute(
-                """INSERT INTO collaboration_scope_members(
-                    scope_id,authority_kind,authority_id,harness_id,role,state,
-                    joined_sequence,removed_sequence,member_digest,joined_at,removed_at
-                ) VALUES(?,'principal',?,?,?,'active',1,NULL,?,?,NULL)""",
-                (
-                    scope_id,
-                    principal_id,
-                    harness_id,
-                    role,
-                    _member_digest(
-                        scope_id=scope_id,
-                        authority_id=principal_id,
-                        harness_id=harness_id,
-                        role=role,
-                        joined_at=int(member["joined_at"]),
-                    ),
-                    committed_at,
-                ),
-            )
-        migrated += 1
+            migrated += 1
     return migrated
 
 
 __all__ = [
     "RELEASE_V7_SCHEMA",
     "RELEASE_V7_SCHEMA_VERSION",
+    "materialize_v6_communication_scope",
     "migrate_v6_communication_scopes",
 ]

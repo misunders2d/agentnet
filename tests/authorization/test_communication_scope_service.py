@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+import agentnet.authorization.communication_scope_service as communication_scope_module
 
 from agentnet.approval.service import (
     IndependentApprovalVerifier,
@@ -22,7 +23,7 @@ from agentnet.authorization.communication_scope_service import (
     CommunicationScopeService,
     CommunicationScopeTerminalError,
 )
-from agentnet.errors import AuthenticationError, ConflictError
+from agentnet.errors import AuthenticationError, ConflictError, GateBlocked
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 
@@ -269,10 +270,21 @@ def test_approved_completion_commits_exact_persistent_scope(communication_stack)
     assert all(row["resource_pattern"] == "*" for row in entitlements)
     assert all(row["expires_at"] is None for row in entitlements)
     row = communication_stack.store.fetch_one(
-        "SELECT state,authority_expires_at FROM communication_scopes"
+        "SELECT scope_id,state,authority_expires_at FROM communication_scopes"
     )
     assert row["state"] == "committed"
     assert row["authority_expires_at"] is None
+    collaboration = communication_stack.store.fetch_one(
+        "SELECT scope_id,source_communication_scope_id,state FROM collaboration_scopes"
+    )
+    assert collaboration is not None
+    assert collaboration["scope_id"] == row["scope_id"]
+    assert collaboration["source_communication_scope_id"] == row["scope_id"]
+    assert collaboration["state"] == "active"
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+        (row["scope_id"],),
+    )["n"] == 2
 
 
 def test_begin_and_complete_are_idempotent(communication_stack) -> None:
@@ -283,6 +295,53 @@ def test_begin_and_complete_are_idempotent(communication_stack) -> None:
     assert _complete(communication_stack) == _complete(communication_stack)
     assert communication_stack.client.retrieve_calls == 1
     assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 38
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM collaboration_scopes"
+    )["n"] == 1
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM collaboration_scope_members"
+    )["n"] == 2
+
+
+def test_projection_failure_rolls_back_terminal_scope_authority(
+    communication_stack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _begin(communication_stack)
+    communication_stack.client.state = "issued"
+    _status(communication_stack)
+    original = communication_scope_module.materialize_v6_communication_scope
+
+    def fail_projection(*_args, **_kwargs):
+        raise GateBlocked("schema_v7_scope_projection", "injected projection failure")
+
+    monkeypatch.setattr(
+        communication_scope_module,
+        "materialize_v6_communication_scope",
+        fail_projection,
+    )
+    with pytest.raises(GateBlocked, match="injected projection failure"):
+        _complete(communication_stack)
+
+    assert communication_stack.store.fetch_one(
+        "SELECT state FROM communication_scopes"
+    )["state"] == "completion_reserved"
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM entitlements"
+    )["n"] == 0
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM communication_scope_items"
+    )["n"] == 0
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM collaboration_scopes"
+    )["n"] == 0
+
+    monkeypatch.setattr(
+        communication_scope_module,
+        "materialize_v6_communication_scope",
+        original,
+    )
+    assert _complete(communication_stack)["status"] == "communication_active"
 
 
 def test_committed_begin_replay_remains_bound_to_original_harness(
