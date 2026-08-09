@@ -808,6 +808,12 @@ terminal historical evidence remains immutable. Core OIDC and approver policy
 files are replaced through journaled compare-and-swap writes. These interfaces
 are setup-owned recovery mechanics, not generic principal migration APIs.
 
+Only the prepared journal phase may contain the replacement signer private PEM,
+under root-only file custody. Setup removes that field immediately after the
+Approval-owned signer file is durably installed and before owner authority is
+mutated; a retry reconstructs the file from the journal or verifies the exact
+existing signer.
+
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two
 active member rows, five entitlements, and five revoke powers from server-held

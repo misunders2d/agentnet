@@ -3617,6 +3617,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "_postgres_peer_gate",
         lambda _account, _database_url: {"status": "validated_exact_local_peer"},
     )
+    monkeypatch.setattr(
+        setup,
+        "_repair_committed_communication_scope_projection_as",
+        lambda _account, _database_url: {"ready": True, "migrated": 0},
+    )
 
     signer = P256KeyPair.generate()
     trusted = IndependentApproverConfig(

@@ -905,6 +905,12 @@ through the existing root-owned upgrade journal. Exact journal phases make an
 interruption resumable; mismatched identity, OIDC subject, domain, signer,
 configuration, database shape, revision, or digest blocks startup.
 
+The prepared journal temporarily holds the replacement signer secret under
+root-only file custody before the Approval-owned signer file is created. The
+secret is removed from the journal immediately after the signer file is
+durably installed and before authority mutation; either durable copy can
+resume the prepared phase, while a missing or mismatched copy fails closed.
+
 Communication-scope completion and legacy-scope repair share one schema-v7
 single-scope materializer. Completion invokes it inside the transaction that
 commits the scope, entitlements, revoke powers, members, audit record, and

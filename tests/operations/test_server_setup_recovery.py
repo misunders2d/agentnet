@@ -558,6 +558,11 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         "_run_v0145_database_operation_as",
         fake_database_operation,
     )
+    monkeypatch.setattr(
+        setup,
+        "_repair_committed_communication_scope_projection_as",
+        lambda _account, _database_url: {"ready": True, "migrated": 0},
+    )
     monkeypatch.setattr(setup, "_run_as", fake_run_as)
     monkeypatch.setattr(setup, "_run_bounded_product_process", fake_bounded_product_process)
     return _Harness(
@@ -572,6 +577,33 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         operation_events=operation_events,
         database_state=database_state,
     )
+
+
+def test_managed_setup_repairs_committed_scope_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    seen: list[tuple[str, str]] = []
+
+    def repair(account: pwd.struct_passwd, database_url: str) -> dict[str, object]:
+        seen.append((account.pw_name, database_url))
+        return {"ready": True, "migrated": 1}
+
+    monkeypatch.setattr(
+        setup,
+        "_repair_committed_communication_scope_projection_as",
+        repair,
+    )
+
+    result = harness.apply(harness.plan_digest())
+
+    assert seen == [("agentnet", harness.request.database_url)]
+    assert {
+        "id": "communication_scope_projection",
+        "status": "repaired",
+        "migrated": 1,
+    } in result["steps"]
 
 
 def _realized_0130_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_Harness, str]:
@@ -1258,9 +1290,11 @@ def test_0149_upgrade_accepts_exact_0148_five_unit_profile(
     assert marker["units"] == list(setup.MANAGED_UNITS)
 
 
+@pytest.mark.parametrize("target_matches_identity", [True, False])
 def test_0151_upgrade_converges_placeholder_approval_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    target_matches_identity: bool,
 ) -> None:
     harness = _harness(tmp_path, monkeypatch)
 
@@ -1377,9 +1411,28 @@ def test_0151_upgrade_converges_placeholder_approval_owner(
         migrate_core_policy,
     )
 
+    enrolled_target = (
+        harness.request.approval_approver_principal_id
+        if target_matches_identity
+        else "different-enrolled-owner"
+    )
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {"actor": {"principal_id": enrolled_target}},
+    )
+
     upgrade_event_offset = len(harness.operation_events)
     harness.install_new_package_runtime()
     monkeypatch.setattr(setup, "__version__", "0.1.51")
+    if not target_matches_identity:
+        with pytest.raises(
+            ServerSetupError,
+            match="recovery target does not match enrolled identity",
+        ):
+            harness.apply(harness.plan_digest())
+        assert seen == {}
+        return
     result = harness.apply(harness.plan_digest())
 
     argv = seen["argv"]

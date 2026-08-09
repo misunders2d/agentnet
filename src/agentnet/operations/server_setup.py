@@ -90,6 +90,7 @@ from agentnet.storage.postgres import (
     validate_ordinary_server_postgres_dsn,
 )
 from agentnet.storage.postgres_catalog import require_exact_postgres_catalog
+from agentnet.storage.release_v7_schema import migrate_v6_communication_scopes
 
 
 CORE_USER = "agentnet"
@@ -3455,6 +3456,47 @@ def _run_postgres_probe_as(
     return evidence
 
 
+def _repair_committed_communication_scope_projection(
+    database_url: str,
+) -> dict[str, Any]:
+    """Materialize every exact committed legacy scope under one transaction."""
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    connection = psycopg.connect(
+        database_url,
+        autocommit=False,
+        row_factory=dict_row,
+        connect_timeout=5,
+        application_name="agentnet:server-setup-scope-projection",
+    )
+    try:
+        with connection.transaction():
+            require_exact_postgres_catalog(connection, migrations=MIGRATIONS)
+            migrated = migrate_v6_communication_scopes(connection, postgres=True)
+        return {"ready": True, "migrated": migrated}
+    finally:
+        connection.close()
+
+
+def _repair_committed_communication_scope_projection_as(
+    account: pwd.struct_passwd,
+    database_url: str,
+) -> dict[str, Any]:
+    try:
+        return _run_postgres_probe_as(
+            account,
+            lambda: _repair_committed_communication_scope_projection(database_url),
+            stage="communication_scope_projection",
+        )
+    except ServerSetupError as exc:
+        raise ServerSetupError(
+            "communication_scope_projection",
+            "committed communication scope projection could not be proven exact",
+        ) from exc
+
+
 def _postgres_relation_digest(connection: Any, relation: str) -> str:
     """Hash one preserved relation without exporting its protected row values."""
 
@@ -6782,6 +6824,28 @@ def _apply_server_setup(
                     stage="approval_status",
                 )
         if canonical_owner_source is not None:
+            recovery_identity = _validated_managed_identity_profile(
+                layout.host(SERVER_AGENT_IDENTITY),
+                layout.host(SERVER_AGENT_KEY),
+                core_account,
+                config=config,
+                request=request,
+            )
+            recovery_identity_actor = recovery_identity.get("actor")
+            recovery_target_principal = (
+                recovery_identity_actor.get("principal_id")
+                if isinstance(recovery_identity_actor, dict)
+                else None
+            )
+            if (
+                not isinstance(recovery_target_principal, str)
+                or recovery_target_principal
+                != request.approval_approver_principal_id
+            ):
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "recovery target does not match enrolled identity",
+                )
             recovery_oidc_issuer = approvers[0].oidc_issuer
             if recovery_oidc_issuer is None:
                 raise ServerSetupError(
@@ -6792,7 +6856,7 @@ def _apply_server_setup(
                 uuid.uuid5(
                     uuid.NAMESPACE_URL,
                     f"agentnet:{request.domain_id}:{canonical_owner_source}:"
-                    f"{request.approval_approver_principal_id}",
+                    f"{recovery_target_principal}",
                 )
             )
             recovery = _run_as(
@@ -6811,7 +6875,7 @@ def _apply_server_setup(
                     "--source-principal",
                     canonical_owner_source,
                     "--target-principal",
-                    request.approval_approver_principal_id,
+                    recovery_target_principal,
                     "--oidc-issuer",
                     recovery_oidc_issuer,
                 ],
@@ -6861,7 +6925,7 @@ def _apply_server_setup(
                     "id": "canonical_owner_recovery",
                     "status": recovery["status"],
                     "source_principal_id": canonical_owner_source,
-                    "target_principal_id": request.approval_approver_principal_id,
+                    "target_principal_id": recovery_target_principal,
                     "core_policy_status": core_policy_status,
                 }
             )
@@ -6928,6 +6992,27 @@ def _apply_server_setup(
             )
         elif rollback_capable_upgrade:
             bootstrap_status = "schema_v7_migrated_preserved_identity"
+        projection_evidence = _repair_committed_communication_scope_projection_as(
+            core_account,
+            request.database_url,
+        )
+        migrated_projections = projection_evidence.get("migrated")
+        if (
+            isinstance(migrated_projections, bool)
+            or not isinstance(migrated_projections, int)
+            or migrated_projections < 0
+        ):
+            raise ServerSetupError(
+                "communication_scope_projection",
+                "committed communication scope projection returned invalid evidence",
+            )
+        steps.append(
+            {
+                "id": "communication_scope_projection",
+                "status": "repaired" if migrated_projections else "already_exact",
+                "migrated": migrated_projections,
+            }
+        )
         if forward_only_transition and not rollback_capable_upgrade:
             _clear_upgrade_journal(journal_path)
         if c0_responder_account is None:

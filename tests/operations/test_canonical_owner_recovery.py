@@ -243,6 +243,112 @@ def test_profile_recovery_rotates_signer_and_converges(tmp_path: Path) -> None:
         store.close()
 
 
+def test_profile_recovery_rejects_email_alias_without_exact_subject(
+    tmp_path: Path,
+) -> None:
+    store, config, config_path, journal_path = _profile(tmp_path)
+    alias_only = config.approvers[0].model_copy(
+        update={
+            "oidc_subject": None,
+            "verified_email_alias": EMAIL,
+        }
+    )
+    config_path.write_text(
+        config.model_copy(update={"approvers": (alias_only,)}).model_dump_json(indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        with pytest.raises(GateBlocked, match="configured owner state is ambiguous"):
+            converge_canonical_approval_owner(
+                store,
+                config_path=config_path,
+                journal_path=journal_path,
+                request=_request(),
+                now=NOW,
+            )
+        assert not journal_path.exists()
+        assert store.fetch_one(
+            "SELECT approver_principal_id FROM approval_owner_bindings "
+            "WHERE binding_id='binding-owner'"
+        )[0] == SOURCE
+    finally:
+        store.close()
+
+
+def test_profile_recovery_resumes_after_prepared_journal_crash(
+    tmp_path: Path,
+) -> None:
+    store, config, config_path, journal_path = _profile(tmp_path)
+    target_path = config.data_dir / "signers" / "canonical-owner-recovery.pem"
+    try:
+        with pytest.raises(RuntimeError, match="injected recovery interruption"):
+            converge_canonical_approval_owner(
+                store,
+                config_path=config_path,
+                journal_path=journal_path,
+                request=_request(),
+                now=NOW,
+                _interrupt_after="prepared_journal",
+            )
+        assert journal_path.exists()
+        assert not target_path.exists()
+
+        result = converge_canonical_approval_owner(
+            store,
+            config_path=config_path,
+            journal_path=journal_path,
+            request=_request(),
+            now=NOW + 1,
+        )
+        assert result["status"] == "recovered"
+        assert ApprovalServiceConfig.model_validate_json(
+            config_path.read_text(encoding="utf-8")
+        ).approvers[0].principal_id == TARGET
+    finally:
+        store.close()
+
+
+def test_profile_recovery_preserves_counts_after_authority_commit_crash(
+    tmp_path: Path,
+) -> None:
+    store, _config, config_path, journal_path = _profile(tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="injected recovery interruption"):
+            converge_canonical_approval_owner(
+                store,
+                config_path=config_path,
+                journal_path=journal_path,
+                request=_request(),
+                now=NOW,
+                _interrupt_after="authority_committed",
+            )
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert journal["phase"] == "prepared"
+        assert store.fetch_one(
+            "SELECT approver_principal_id FROM approval_owner_bindings "
+            "WHERE binding_id='binding-owner'"
+        )[0] == TARGET
+
+        result = converge_canonical_approval_owner(
+            store,
+            config_path=config_path,
+            journal_path=journal_path,
+            request=_request(),
+            now=NOW + 1,
+        )
+        assert result["authority_adoption"] == {
+            "schema": "agentnet.canonical-owner-adoption-result.v1",
+            "status": "already_exact",
+            "recovery_id": "93756ff6-6337-4ed1-9697-250b63fb68a2",
+            "migrated_active_credentials": 1,
+            "revoked_browser_sessions": 0,
+            "canceled_registration_ceremonies": 0,
+        }
+    finally:
+        store.close()
+
+
 def test_profile_recovery_resumes_after_authority_commit(tmp_path: Path) -> None:
     store, _config, config_path, journal_path = _profile(tmp_path)
     try:
@@ -315,6 +421,42 @@ def test_profile_recovery_resumes_after_signer_staging(tmp_path: Path) -> None:
         assert recovered.approvers[0].signer_private_key_path != (
             source_config.approvers[0].signer_private_key_path
         )
+    finally:
+        store.close()
+
+
+def test_profile_recovery_removes_retired_signers_before_completion(
+    tmp_path: Path,
+) -> None:
+    store, config, config_path, journal_path = _profile(tmp_path)
+    source_path = config.approvers[0].signer_private_key_path
+    backup_path = config.data_dir / "canonical-owner-recovery.backup.pem"
+    try:
+        with pytest.raises(RuntimeError, match="injected recovery interruption"):
+            converge_canonical_approval_owner(
+                store,
+                config_path=config_path,
+                journal_path=journal_path,
+                request=_request(),
+                now=NOW,
+                _interrupt_after="retired_signers_removed",
+            )
+        assert not source_path.exists()
+        assert not backup_path.exists()
+        assert json.loads(journal_path.read_text(encoding="utf-8"))["phase"] == (
+            "config_replaced"
+        )
+
+        result = converge_canonical_approval_owner(
+            store,
+            config_path=config_path,
+            journal_path=journal_path,
+            request=_request(),
+            now=NOW + 1,
+        )
+        assert result["status"] == "recovered"
+        assert not source_path.exists()
+        assert not backup_path.exists()
     finally:
         store.close()
 
@@ -512,7 +654,7 @@ def test_adoption_moves_only_current_owner_authority_and_is_idempotent(tmp_path:
             "revoked_browser_sessions": 0,
             "canceled_registration_ceremonies": 0,
         }
-        assert replay == {**result, "status": "already_exact", "migrated_active_credentials": 0}
+        assert replay == {**result, "status": "already_exact"}
         binding = store.fetch_one("SELECT * FROM approval_owner_bindings WHERE binding_id='binding-owner'")
         assert binding is not None
         assert binding["approver_principal_id"] == TARGET
@@ -554,7 +696,10 @@ def test_adoption_moves_only_current_owner_authority_and_is_idempotent(tmp_path:
         )
         assert len(adoption_audits) == 1
         assert adoption_audits[0]["approver_principal_id"] == TARGET
-        assert adoption_audits[0]["detail_code"] == "canonical_owner_adopted"
+        assert (
+            adoption_audits[0]["detail_code"]
+            == "canonical_owner_adopted:v1:1:0:0"
+        )
     finally:
         store.close()
 

@@ -83,6 +83,11 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
     source_signer_public_key_pem: str = Field(min_length=64, max_length=8192)
     target_signer_key_id: str = Field(min_length=16, max_length=256)
     target_signer_public_key_pem: str = Field(min_length=64, max_length=8192)
+    staged_target_signer_private_key_pem: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=65_536,
+    )
     phase: Literal[
         "prepared",
         "authority_adopted",
@@ -100,6 +105,11 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
 
     @model_validator(mode="after")
     def _phase_shape(self) -> "CanonicalOwnerRecoveryJournal":
+        if (
+            self.phase != "prepared"
+            and self.staged_target_signer_private_key_pem is not None
+        ):
+            raise ValueError("staged signer secret is retained after preparation")
         adopted = self.phase != "prepared"
         if adopted != (
             self.authority_adoption is not None
@@ -165,13 +175,49 @@ def _active_credentials(connection: Any, principal_id: str, domain_id: str) -> l
     )
 
 
+def _persisted_adoption_counts(
+    connection: Any,
+    *,
+    request: CanonicalOwnerAdoptionRequest,
+    request_digest: str,
+) -> tuple[int, int, int]:
+    rows = connection.execute(
+        """SELECT detail_code FROM approval_audit
+             WHERE action='owner.canonical_adoption' AND approver_principal_id=?
+               AND domain_id=? AND approval_purpose='owner.canonical_adoption'
+               AND transaction_digest=? AND outcome='adopted'""",
+        (request.target_principal_id, request.domain_id, request_digest),
+    ).fetchall()
+    if len(rows) != 1:
+        raise GateBlocked(
+            "canonical_owner_recovery", "target recovery evidence is incomplete"
+        )
+    parts = str(rows[0]["detail_code"]).split(":")
+    try:
+        counts = tuple(int(value) for value in parts[2:])
+    except ValueError as exc:
+        raise GateBlocked(
+            "canonical_owner_recovery", "target recovery evidence is invalid"
+        ) from exc
+    if (
+        parts[:2] != ["canonical_owner_adopted", "v1"]
+        or len(counts) != 3
+        or any(value < 0 for value in counts)
+        or parts[2:] != [str(value) for value in counts]
+    ):
+        raise GateBlocked(
+            "canonical_owner_recovery", "target recovery evidence is invalid"
+        )
+    return counts
+
+
 def _require_exact_target(
     connection: Any,
     *,
     request: CanonicalOwnerAdoptionRequest,
     binding: Any,
     request_digest: str,
-) -> None:
+) -> tuple[int, int, int]:
     if not _matches_binding(binding, request, request.target_principal_id):
         raise GateBlocked("canonical_owner_recovery", "target authority already exists")
     if connection.execute(
@@ -192,16 +238,11 @@ def _require_exact_target(
     )
     if not credentials or any(row["user_handle_b64"] != expected_handle for row in credentials):
         raise GateBlocked("canonical_owner_recovery", "target authority is incomplete")
-    audits = connection.execute(
-        """SELECT COUNT(*) FROM approval_audit
-             WHERE action='owner.canonical_adoption' AND approver_principal_id=?
-               AND domain_id=? AND approval_purpose='owner.canonical_adoption'
-               AND transaction_digest=? AND outcome='adopted'
-               AND detail_code='canonical_owner_adopted'""",
-        (request.target_principal_id, request.domain_id, request_digest),
-    ).fetchone()
-    if audits is None or int(audits[0]) != 1:
-        raise GateBlocked("canonical_owner_recovery", "target recovery evidence is incomplete")
+    return _persisted_adoption_counts(
+        connection,
+        request=request,
+        request_digest=request_digest,
+    )
 
 
 def adopt_canonical_approval_owner(
@@ -235,7 +276,11 @@ def adopt_canonical_approval_owner(
         binding = active_bindings[0]
 
         if binding["approver_principal_id"] == request.target_principal_id:
-            _require_exact_target(
+            (
+                migrated_active_credentials,
+                revoked_browser_sessions,
+                canceled_registration_ceremonies,
+            ) = _require_exact_target(
                 connection,
                 request=request,
                 binding=binding,
@@ -244,9 +289,9 @@ def adopt_canonical_approval_owner(
             return _result(
                 request,
                 status="already_exact",
-                migrated_active_credentials=0,
-                revoked_browser_sessions=0,
-                canceled_registration_ceremonies=0,
+                migrated_active_credentials=migrated_active_credentials,
+                revoked_browser_sessions=revoked_browser_sessions,
+                canceled_registration_ceremonies=canceled_registration_ceremonies,
             )
 
         if not _matches_binding(binding, request, request.source_principal_id):
@@ -338,15 +383,29 @@ def adopt_canonical_approval_owner(
         )
         if migrated.rowcount != len(credentials):
             raise GateBlocked("canonical_owner_recovery", "approval owner adoption raced")
+        adoption_counts = (
+            len(credentials),
+            int(sessions.rowcount),
+            int(ceremonies.rowcount),
+        )
+        adoption_detail = "canonical_owner_adopted:v1:" + ":".join(
+            str(value) for value in adoption_counts
+        )
         connection.execute(
             """INSERT INTO approval_audit(
                    action,request_id,approver_principal_id,domain_id,approval_purpose,
                    transaction_digest,occurred_at,outcome,detail_code
                ) VALUES('owner.canonical_adoption',NULL,?,?,
-                        'owner.canonical_adoption',?,?,'adopted','canonical_owner_adopted')""",
-            (request.target_principal_id, request.domain_id, digest, now),
+                        'owner.canonical_adoption',?,?,'adopted',?)""",
+            (
+                request.target_principal_id,
+                request.domain_id,
+                digest,
+                now,
+                adoption_detail,
+            ),
         )
-        _require_exact_target(
+        persisted_counts = _require_exact_target(
             connection,
             request=request,
             binding=connection.execute(
@@ -355,6 +414,10 @@ def adopt_canonical_approval_owner(
             ).fetchone(),
             request_digest=digest,
         )
+        if persisted_counts != adoption_counts:
+            raise GateBlocked(
+                "canonical_owner_recovery", "approval owner adoption evidence drifted"
+            )
         foreign_keys = list(connection.execute("PRAGMA foreign_key_check").fetchall())
         if foreign_keys:
             raise GateBlocked("canonical_owner_recovery", "approval owner adoption is inconsistent")
@@ -362,9 +425,9 @@ def adopt_canonical_approval_owner(
         return _result(
             request,
             status="adopted",
-            migrated_active_credentials=len(credentials),
-            revoked_browser_sessions=int(sessions.rowcount),
-            canceled_registration_ceremonies=int(ceremonies.rowcount),
+            migrated_active_credentials=adoption_counts[0],
+            revoked_browser_sessions=adoption_counts[1],
+            canceled_registration_ceremonies=adoption_counts[2],
         )
 
 
@@ -466,6 +529,32 @@ def _private_write(path: Path, payload: bytes) -> None:
         os.close(directory)
 
 
+def _private_unlink(path: Path) -> None:
+    path, directory, parent = _open_private_parent(path, create=False)
+    try:
+        try:
+            metadata = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o077
+            or not metadata.st_mode & 0o600
+        ):
+            raise GateBlocked(
+                "canonical_owner_recovery", "retired signer custody is invalid"
+            )
+        if not _parent_matches(path, parent):
+            raise GateBlocked("canonical_owner_recovery", "recovery path changed")
+        os.unlink(path.name, dir_fd=directory)
+        if not _parent_matches(path, parent):
+            raise GateBlocked("canonical_owner_recovery", "recovery path changed")
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def _private_read(path: Path, *, maximum: int) -> bytes:
     path, directory, _parent = _open_private_parent(path, create=False)
     descriptor = -1
@@ -515,10 +604,7 @@ def _configured_owner(
         for index, item in enumerate(config.approvers)
         if item.domain_id == request.domain_id
         and item.oidc_issuer == request.oidc_issuer
-        and (
-            item.oidc_subject == request.oidc_subject
-            or item.verified_email_alias == request.verified_email
-        )
+        and item.oidc_subject == request.oidc_subject
         and item.principal_id
         in {request.source_principal_id, request.target_principal_id}
     ]
@@ -554,6 +640,13 @@ def _validate_recovery_journal(
         journal = CanonicalOwnerRecoveryJournal.model_validate(value)
         source_public = load_public_key(journal.source_signer_public_key_pem)
         target_public = load_public_key(journal.target_signer_public_key_pem)
+        staged_target = (
+            P256KeyPair.from_private_pem(
+                journal.staged_target_signer_private_key_pem.encode("ascii")
+            )
+            if journal.staged_target_signer_private_key_pem is not None
+            else None
+        )
     except Exception as exc:
         raise GateBlocked(
             "canonical_owner_recovery", "recovery journal is invalid"
@@ -593,6 +686,10 @@ def _validate_recovery_journal(
     if (
         source_thumbprint != journal.source_signer_key_id
         or target_thumbprint != journal.target_signer_key_id
+        or (
+            staged_target is not None
+            and staged_target.thumbprint != journal.target_signer_key_id
+        )
     ):
         raise GateBlocked(
             "canonical_owner_recovery", "recovery signer evidence is invalid"
@@ -609,7 +706,14 @@ def converge_canonical_approval_owner(
     journal_path: Path,
     request: CanonicalOwnerAdoptionRequest,
     now: int,
-    _interrupt_after: Literal["authority_adopted", "signer_replaced"] | None = None,
+    _interrupt_after: Literal[
+        "prepared_journal",
+        "authority_committed",
+        "authority_adopted",
+        "signer_replaced",
+        "retired_signers_removed",
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     """Converge Approval authority, receipt signer, and config after v0.1.50."""
 
@@ -663,7 +767,6 @@ def converge_canonical_approval_owner(
             raise GateBlocked("canonical_owner_recovery", "source signer does not match config")
         target_signer = P256KeyPair.generate()
         _private_write(backup_path, source_signer.private_pem)
-        _private_write(target_path, target_signer.private_pem)
         journal = {
             "schema": "agentnet.canonical-owner-recovery-journal.v1",
             "recovery_id": request.recovery_id,
@@ -682,6 +785,9 @@ def converge_canonical_approval_owner(
             "source_signer_public_key_pem": source_signer.public_pem,
             "target_signer_key_id": target_signer.thumbprint,
             "target_signer_public_key_pem": target_signer.public_pem,
+            "staged_target_signer_private_key_pem": target_signer.private_pem.decode(
+                "ascii"
+            ),
             "phase": "prepared",
             "prepared_at": now,
             "completed_at": None,
@@ -692,6 +798,28 @@ def converge_canonical_approval_owner(
             request_digest=request_digest,
             config_path=config_path,
         )
+        _journal_write(journal_path, journal)
+        if _interrupt_after == "prepared_journal":
+            raise RuntimeError("injected recovery interruption")
+
+    staged_target_pem = journal.get("staged_target_signer_private_key_pem")
+    if target_path.exists() or target_path.is_symlink():
+        target_signer = P256KeyPair.from_private_pem(
+            _private_read(target_path, maximum=65_536)
+        )
+    elif isinstance(staged_target_pem, str):
+        target_signer = P256KeyPair.from_private_pem(staged_target_pem.encode("ascii"))
+        _private_write(target_path, target_signer.private_pem)
+    else:
+        raise GateBlocked(
+            "canonical_owner_recovery", "journaled target signer state is unavailable"
+        )
+    if target_signer.thumbprint != journal["target_signer_key_id"]:
+        raise GateBlocked(
+            "canonical_owner_recovery", "staged signer does not match journal"
+        )
+    if staged_target_pem is not None:
+        journal.pop("staged_target_signer_private_key_pem", None)
         _journal_write(journal_path, journal)
 
     was_complete = journal_exists and journal.get("phase") == "complete"
@@ -713,6 +841,8 @@ def converge_canonical_approval_owner(
                 "canonical_owner_recovery", "source signer backup is invalid"
             )
     verified_adoption = adopt_canonical_approval_owner(store, request=request, now=now)
+    if _interrupt_after == "authority_committed":
+        raise RuntimeError("injected recovery interruption")
     if journal["phase"] != "prepared":
         try:
             recorded_adoption = CanonicalOwnerAdoptionResult.model_validate(
@@ -730,6 +860,12 @@ def converge_canonical_approval_owner(
             recorded_adoption.recovery_id != request.recovery_id
             or observed_adoption.recovery_id != recorded_adoption.recovery_id
             or observed_adoption.status != "already_exact"
+            or observed_adoption.migrated_active_credentials
+            != recorded_adoption.migrated_active_credentials
+            or observed_adoption.revoked_browser_sessions
+            != recorded_adoption.revoked_browser_sessions
+            or observed_adoption.canceled_registration_ceremonies
+            != recorded_adoption.canceled_registration_ceremonies
         ):
             raise GateBlocked(
                 "canonical_owner_recovery",
@@ -821,6 +957,10 @@ def converge_canonical_approval_owner(
             or signer.thumbprint != journal["target_signer_key_id"]
         ):
             raise GateBlocked("canonical_owner_recovery", "target signer state is incomplete")
+        _private_unlink(signer_path)
+        _private_unlink(backup_path)
+        if _interrupt_after == "retired_signers_removed":
+            raise RuntimeError("injected recovery interruption")
         journal["phase"] = "complete"
         journal["completed_at"] = now
         journal = _validate_recovery_journal(
@@ -830,8 +970,8 @@ def converge_canonical_approval_owner(
             config_path=config_path,
         )
         _journal_write(journal_path, journal)
-        signer_path.unlink(missing_ok=True)
-        backup_path.unlink(missing_ok=True)
+    _private_unlink(signer_path)
+    _private_unlink(backup_path)
 
     if journal["phase"] != "complete":
         raise GateBlocked("canonical_owner_recovery", "recovery did not converge")
