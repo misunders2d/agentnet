@@ -16,9 +16,8 @@ permissions:
   id-token: write
 
 jobs:
-  # v0.1.45 ships fresh-install-only: in-place upgrade from 0.1.44 is not a
-  # supported path, so publication is gated on the exact clean-install lane
-  # that operators actually follow, not on the unsupported upgrade chain.
+  # Publication is gated on current clean-install evidence. Historical upgrade
+  # chains remain release records, not mandatory workflows for current changes.
   clean-install-chain:
     if: github.repository == 'misunders2d/agentnet'
     uses: ./.github/workflows/server-setup-e2e.yml

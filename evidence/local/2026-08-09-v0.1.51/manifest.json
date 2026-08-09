@@ -1,10 +1,10 @@
 {
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "evaluated_at": "2026-08-09T10:47:31Z",
+  "evaluated_at": "2026-08-09T13:02:42Z",
   "scope": "v0_1_51_canonical_owner_recovery_candidate",
   "verification_status": "PASS",
   "release_certified": false,
-  "verification_scope": "PASS applies only to the selected local source, focused recovery/communication tests, broad hermetic suite, reproducible package, and installed-byte commands recorded below; it is not release certification and does not include the exact v0.1.51 two-machine flow, fresh installed-host upgrade, dedicated PostgreSQL recovery, installed-harness pin gates, or any owner/privileged/external must-not-ship gate",
+  "verification_scope": "PASS applies only to the selected local source, focused recovery/communication tests, broad hermetic suite, reproducible package, and installed-byte commands recorded below; it is not release certification and does not include release-eligible two-machine proof, fresh installed-host upgrade, dedicated PostgreSQL recovery, installed-harness pin gates, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "working_tree_candidate",
   "release_source_tree_sha256": "0906475b88bb57673fa2ab4ea793803d9931fad36e97a00519d52f7bb39685ea",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
@@ -20,7 +20,7 @@
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 f3ebfa58c5daf263ebf99abe83a9065e928ce2e209aedff58a5492673e881820; wheel sha256 8030d8cbd62ef05f6b3134994ccbd884f343356d16203d02484bbefde59af10e"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 d601e5c8222730f48063a8205bf0f6bf35712871ab5175e12e0cf8dbdeab1d18; wheel sha256 ce2cb08178384f4dfd775fed7b084d6627b31563a7883066b004b0bd5bd38fc1"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -35,12 +35,12 @@
       "result": "NOT RUN: exact same-commit GitHub workflow result awaits commit and push; no source-local result is substituted"
     },
     {
-      "command": "Two isolated Ubuntu 24.04 machines: one-command server setup; server-origin guided laptop join; complete browser OIDC and independent approval; send authenticated messages bidirectionally; prove offline reconnect, duplicate safety, and recipient acknowledgement",
-      "result": "NOT RUN: exact v0.1.51 cross-machine reliability proof awaits two isolated hosts; no historical run is inherited"
+      "command": "Ad-hoc live trial on two isolated Ubuntu 24.04.4 VMs with separate qcow2 disks and exact v0.1.51 wheel: send authenticated messages bidirectionally; stop and restart VM A Core; inspect recovered delivery, duplicate safety, exact attribution, and recipient acknowledgement",
+      "result": "OBSERVED PASS, NOT ACCEPTED AS RELEASE EVIDENCE: fresh A-to-B event f66de4d4-e993-505f-8fe3-d9969e85f83e recovered unchanged after a verified Core offline interval and reached recipient_committed; fresh B-to-A event 8f5f7fa8-dfb0-587a-9c91-784c716e66fe reached recipient_committed. The ad-hoc provisioning driver was not retained, so no must-not-ship gate or formal two-machine evidence status is promoted. Observation: evidence/local/2026-08-09-v0.1.51/two-vm-communication.json"
     },
     {
-      "command": "Fresh Ubuntu 24.04 installed-host matrix: clean v0.1.51 setup and direct installed v0.1.45/v0.1.46/v0.1.47/v0.1.48/v0.1.49/v0.1.50 to v0.1.51 upgrades",
-      "result": "NOT RUN: exact same-commit GitHub setup and upgrade workflow results await commit and push; no historical run is inherited or waived"
+      "command": "Fresh Ubuntu 24.04 installed-host upgrade from published v0.1.50 to candidate v0.1.51",
+      "result": "NOT RUN: no current installed-host upgrade evidence is claimed and no historical mandatory workflow is retained"
     },
     {
       "command": "Dedicated mutation-authorized PostgreSQL recovery and schema-v7 projection suite",
@@ -55,17 +55,17 @@
     "source": "AgentNet v0.1.51 canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
     "callback_incident": "No external workflow result is included in this local candidate evidence",
     "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
-    "two_vm_source_proof": "Not rerun for exact v0.1.51; cross-machine reliability trials await isolated hosts",
-    "root_installed_external_host": "Not rerun for exact v0.1.51; fresh installed-host setup and direct upgrade evidence await GitHub CI"
+    "two_vm_source_proof": "Observed exact packaged v0.1.51 behavior on two live isolated Ubuntu 24.04.4 VMs, but excluded from formal release evidence because the ad-hoc provisioning driver was not retained; production durability and must-not-ship gates remain unproven",
+    "root_installed_external_host": "Not rerun for exact v0.1.51; fresh installed-host setup is covered by current GitHub CI, while current-version upgrade evidence remains unclaimed"
   },
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "f3ebfa58c5daf263ebf99abe83a9065e928ce2e209aedff58a5492673e881820"
+      "sha256": "d601e5c8222730f48063a8205bf0f6bf35712871ab5175e12e0cf8dbdeab1d18"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "8030d8cbd62ef05f6b3134994ccbd884f343356d16203d02484bbefde59af10e"
+      "sha256": "ce2cb08178384f4dfd775fed7b084d6627b31563a7883066b004b0bd5bd38fc1"
     }
   ],
   "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
