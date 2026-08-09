@@ -452,6 +452,25 @@ published and historical release evidence:
   `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is
   promoted.
 
+- The same corrective v0.1.51 candidate adds a bounded recovery for an expired
+  same-principal `member` in an active schema-v7 collaboration scope. A current
+  managed-server harness of the exact scope-owning principal may initiate the
+  ceremony because the expired member cannot authenticate, but the exact human
+  principal remains the source of positive authority through a fresh,
+  single-use Approval receipt bound to the complete scope/member/credential
+  pre-state. One atomic transaction tombstones the old member, activates the
+  exact replacement with the preserved role, advances counters, recomputes
+  digests, and records audit evidence. Current projection membership is the
+  authorization source; schema-v6 provenance remains immutable. All mismatch,
+  stale, replay, partial-projection, and unsupported transfer paths fail closed;
+  crash recovery reuses owner-only pending state. This changes no managed
+  identity/configuration and restarts no service. Affected IDs are `ID-005`,
+  `ID-006`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`,
+  `AUTH-005`, `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `SEC-003`,
+  `SEC-005`, `SEC-007`, `OPS-003`, and `OPS-006`. `PD-002` and all
+  owner/external release gates remain blocked; no requirement or must-not-ship
+  gate is promoted.
+
 
 
 

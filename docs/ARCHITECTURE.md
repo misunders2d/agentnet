@@ -920,5 +920,19 @@ conflicting rows roll back. Thus no success can expose a terminal active scope
 without its canonical collaboration authority, and recovery never replaces
 the active scope or grants generic access.
 
+Expired schema-v7 member recovery is a separate root-managed Approval
+transaction. A current non-lab managed-server harness may initiate it only when
+it belongs to the exact scope-owning human principal; this permits recovery
+when the former owner/member harness can no longer authenticate without
+transferring authority to a sibling harness. Approval by that exact principal
+binds the scope owner, former and replacement harnesses/current credentials,
+preserved `member` role, scope digest/revision/membership sequence, policy and
+revocation epochs, and finite request lifetime. Core consumes the receipt and
+atomically tombstones the former row, inserts the active same-principal
+replacement, advances counters, recomputes digests, and appends audit evidence.
+Current schema-v7 membership becomes the authorization source; immutable
+schema-v6 rows remain provenance. Managed identity/configuration files and
+service state are outside the transaction and are never changed or restarted.
+
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

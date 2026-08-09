@@ -750,6 +750,33 @@ reconstruct the request state, terminal, journal, config, or identity to force
 recovery; absent or conflicting provenance requires a separate owner-approved
 recovery path.
 
+If a freshly enrolled laptop harness cannot use an existing collaboration
+scope because the former same-principal member credential is expired, keep Core
+stopped and run:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> \
+  server-agent replace-expired-scope-harness \
+  --scope-id <active-scope-id> \
+  --old-harness-id <expired-member-harness-id> \
+  --new-harness-id <active-replacement-harness-id>
+```
+
+The managed server harness may initiate this recovery only as a current,
+non-lab harness of the exact scope-owning principal. The first call persists the
+exact scope/member/credential/revision/digest transaction before asking
+Approval and reports `waiting_owner_approval`. After the exact principal
+approves with WebAuthn UV, rerun the identical command. One PostgreSQL
+transaction consumes the single-use receipt, tombstones the old `member`,
+activates the replacement `member`, advances membership sequence and revision,
+recomputes member/scope digests, and appends audit evidence. A crash before
+commit changes nothing; a crash after commit is reconciled by the retained
+request. Rejected or expired ceremonies require explicit
+`--replace-terminal-state`. The command never edits identity/configuration,
+restarts services, changes roles, transfers principals/domains, or accepts an
+unexpired former credential. Never hand-edit scope rows or the private pending
+state.
+
 Guided command defaults to local system browser without printing authorization
 URL. Explicit server-only `--browser remote` stores authorization URL encrypted
 inside Core continuation custody, opens/discloses nothing, and waits. Owner opens

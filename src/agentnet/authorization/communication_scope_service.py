@@ -1509,19 +1509,25 @@ class CollaborationScopeService:
         harness_id: str,
         role: str,
         joined_at: int,
+        state: str = "active",
+        joined_sequence: int = 1,
+        removed_sequence: int | None = None,
+        removed_at: int | None = None,
     ) -> str:
-        return canonical_digest(
-            {
-                "scope_id": scope_id,
-                "authority_kind": authority_kind,
-                "authority_id": authority_id,
-                "harness_id": harness_id,
-                "role": role,
-                "state": "active",
-                "joined_sequence": 1,
-                "joined_at": joined_at,
-            }
-        )
+        member: dict[str, object] = {
+            "scope_id": scope_id,
+            "authority_kind": authority_kind,
+            "authority_id": authority_id,
+            "harness_id": harness_id,
+            "role": role,
+            "state": state,
+            "joined_sequence": joined_sequence,
+            "joined_at": joined_at,
+        }
+        if state == "removed":
+            member["removed_sequence"] = removed_sequence
+            member["removed_at"] = removed_at
+        return canonical_digest(member)
 
     @staticmethod
     def _scope_digest(
@@ -1618,25 +1624,50 @@ class CollaborationScopeService:
         if not member_rows:
             raise AuthorizationError("collaboration scope is unavailable")
         members: list[dict[str, object]] = []
-        harness_ids: list[str] = []
+        active_harness_ids: list[str] = []
         owner_members = 0
+        membership_sequence = int(row["membership_sequence"])
         for member in member_rows:
             authority_kind = str(member["authority_kind"])
             authority_id = str(member["authority_id"])
             harness_id = str(member["harness_id"])
             role = str(member["role"])
+            state = str(member["state"])
+            joined_sequence = int(member["joined_sequence"])
+            removed_sequence = (
+                int(member["removed_sequence"])
+                if member["removed_sequence"] is not None
+                else None
+            )
+            removed_at = (
+                int(member["removed_at"]) if member["removed_at"] is not None else None
+            )
             if (
                 authority_kind not in {"principal", "guest"}
                 or not authority_id
                 or not harness_id
-                or member["state"] != "active"
-                or int(member["joined_sequence"]) != 1
-                or member["removed_sequence"] is not None
-                or member["removed_at"] is not None
+                or state not in {"active", "removed"}
+                or joined_sequence < 1
+                or joined_sequence > membership_sequence
                 or (authority_kind == "guest") != (role == "guest")
+                or (
+                    state == "active"
+                    and (removed_sequence is not None or removed_at is not None)
+                )
+                or (
+                    state == "removed"
+                    and (
+                        removed_sequence is None
+                        or removed_sequence < joined_sequence
+                        or removed_sequence > membership_sequence
+                        or removed_at is None
+                    )
+                )
             ):
                 raise AuthorizationError("collaboration scope membership is unavailable")
             if role == "owner":
+                if state != "active":
+                    raise AuthorizationError("collaboration scope membership is unavailable")
                 owner_members += 1
                 if (
                     authority_kind != "principal"
@@ -1653,24 +1684,35 @@ class CollaborationScopeService:
                 harness_id=harness_id,
                 role=role,
                 joined_at=int(member["joined_at"]),
+                state=state,
+                joined_sequence=joined_sequence,
+                removed_sequence=removed_sequence,
+                removed_at=removed_at,
             )
             if not secrets.compare_digest(expected, str(member["member_digest"])):
                 raise AuthorizationError("collaboration scope membership is unavailable")
-            harness_ids.append(harness_id)
-            members.append(
-                {
-                    "authority_kind": authority_kind,
-                    "authority_id": authority_id,
-                    "harness_id": harness_id,
-                    "role": role,
-                    "state": "active",
-                    "joined_sequence": 1,
-                    "joined_at": int(member["joined_at"]),
-                }
-            )
-        if owner_members != 1 or harness_ids != sorted(set(harness_ids)):
+            value: dict[str, object] = {
+                "authority_kind": authority_kind,
+                "authority_id": authority_id,
+                "harness_id": harness_id,
+                "role": role,
+                "state": state,
+                "joined_sequence": joined_sequence,
+                "joined_at": int(member["joined_at"]),
+            }
+            if state == "removed":
+                value["removed_sequence"] = removed_sequence
+                value["removed_at"] = removed_at
+            else:
+                active_harness_ids.append(harness_id)
+            members.append(value)
+        if (
+            owner_members != 1
+            or active_harness_ids != sorted(set(active_harness_ids))
+            or not active_harness_ids
+        ):
             raise AuthorizationError("collaboration scope membership is unavailable")
-        return tuple(harness_ids), members
+        return tuple(active_harness_ids), members
 
     def _scope_from_row(self, connection: Any, row: Any) -> CollaborationScope:
         actions = self._load_canonical_tuple(

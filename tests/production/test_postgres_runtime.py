@@ -16,9 +16,10 @@ import httpx
 import agentnet.authorization.communication_scope_service as communication_scope_module
 import psycopg
 
-from agentnet.approval.service import (
+from agentnet.approval import (
     IndependentApprovalVerifier,
     TrustedApprover,
+    create_independent_approval_receipt,
 )
 from agentnet.authorization.communication_scope import (
     COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
@@ -28,6 +29,10 @@ from agentnet.authorization.communication_scope_service import (
     CollaborationScopeProposal,
     CommunicationScopeService,
     CollaborationScopeService,
+)
+from agentnet.authorization.scope_harness_replacement import (
+    SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+    ScopeHarnessReplacementService,
 )
 from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.authorization.policy import (
@@ -2295,6 +2300,7 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             for harness_id, kind, display_name in (
                 ("owner-harness", "pi", "Owner laptop"),
                 (actor.harness_id, "codex", "Fresh laptop"),
+                ("replacement-harness", "claude", "Replacement laptop"),
             ):
                 connection.execute(
                     """INSERT INTO harnesses(
@@ -2319,6 +2325,7 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             for credential_id, harness_id, key_id in (
                 ("owner-credential", "owner-harness", "owner-key"),
                 (actor.credential_id, actor.harness_id, "fresh-key"),
+                ("replacement-credential", "replacement-harness", "replacement-key"),
             ):
                 connection.execute(
                     """INSERT INTO credentials(
@@ -2344,7 +2351,12 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             domain_id=domain_id,
             signer_key_id=signer.thumbprint,
             public_key_pem=signer.public_pem,
-            allowed_purposes=frozenset({COMMUNICATION_SCOPE_APPROVAL_PURPOSE}),
+            allowed_purposes=frozenset(
+                {
+                    COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+                    SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+                }
+            ),
         )
         verifier = IndependentApprovalVerifier(
             {signer.thumbprint: approver},
@@ -2445,6 +2457,72 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
             (scope_id,),
         )["n"] == 1
+
+        # Restore the exact source projection, then exercise the package-owned
+        # expired-member replacement through the PostgreSQL adapter.
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM collaboration_scope_members WHERE scope_id=?",
+                (scope_id,),
+            )
+            connection.execute(
+                "DELETE FROM collaboration_scopes WHERE scope_id=?",
+                (scope_id,),
+            )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE credentials SET expires_at=? WHERE credential_id=?",
+                (COMMUNICATION_NOW - 1, "owner-credential"),
+            )
+        replacement_service = ScopeHarnessReplacementService(
+            store,
+            verifier,
+            clock=lambda: COMMUNICATION_NOW,
+        )
+        replacement_request = replacement_service.prepare(
+            actor=actor,
+            scope_id=scope_id,
+            old_harness_id="owner-harness",
+            new_harness_id="replacement-harness",
+            role="member",
+            request_id="postgres-scope-replacement-request-0001",
+            issued_at=COMMUNICATION_NOW,
+            expires_at=COMMUNICATION_NOW + 300,
+        )
+        replacement_approval = create_independent_approval_receipt(
+            signer,
+            approver=approver,
+            verifier_id=verifier.verifier_id,
+            approval_purpose=SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+            canonical_transaction=replacement_request.canonical_transaction,
+            issued_at=COMMUNICATION_NOW,
+            expires_at=COMMUNICATION_NOW + 300,
+            authenticated_at=COMMUNICATION_NOW,
+        )
+        replaced = replacement_service.replace(
+            actor=actor,
+            request=replacement_request,
+            approval=replacement_approval,
+        )
+        repeated = replacement_service.replace(
+            actor=actor,
+            request=replacement_request,
+            approval=replacement_approval,
+        )
+        assert replaced.idempotent_repeat is False
+        assert repeated.idempotent_repeat is True
+        assert repeated.scope_digest == replaced.scope_digest
+        assert store.fetch_one(
+            """SELECT state FROM collaboration_scope_members
+               WHERE scope_id=? AND harness_id=?""",
+            (scope_id, "owner-harness"),
+        )["state"] == "removed"
+        assert store.fetch_one(
+            """SELECT state FROM collaboration_scope_members
+               WHERE scope_id=? AND harness_id=?""",
+            (scope_id, "replacement-harness"),
+        )["state"] == "active"
     finally:
         if store is not None:
             store.close()

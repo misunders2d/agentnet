@@ -353,6 +353,29 @@ only when this audited chain reaches it exactly. Exact same-request replay
 reconciles; same ID with drift, stale/missing links, skipped epochs, changed
 actor/key/files, or missing/conflicting audit rows fails closed.
 
+`agentnet server-agent replace-expired-scope-harness` uses strict owner-only
+`agentnet.managed-scope-harness-replacement-state.v1` local state and an
+`agentnet.scope-harness-replacement.v1` canonical transaction. The local state
+binds exact managed config/identity digests, scope ID, former/replacement
+harness IDs, fixed `member` role, receipt-possession secret, and Approval
+request ID. The signed transaction additionally binds the scope owner
+principal/harness, current credential IDs/epochs, scope
+revision/digest/membership sequence, and a ten-minute maximum lifetime.
+
+Only a current non-lab harness of the exact scope-owning principal may initiate
+the ceremony; the former expired harness need not authenticate. The Approval
+receipt uses the existing `identity.credential.recover.approve` purpose but is
+digest-bound to this distinct complete transaction. Commit consumes that
+single-use receipt in the same transaction that changes the old member to
+`removed`, inserts the exact active same-principal replacement as `member`,
+advances membership sequence and scope revision once, recomputes member/scope
+digests, and appends `collaboration_scope.harness_replaced` audit evidence.
+Exact retained-request replay returns the committed result; drift, replay with
+different bytes, unexpired old credential, inactive new credential,
+principal/domain/role mismatch, partial projection, or stale scope state fails
+closed. No schema-v6 provenance, identity/configuration file, or service
+lifecycle is changed.
+
 The signed persistent communication-scope routes are:
 
 | Route | Exact request/effect |

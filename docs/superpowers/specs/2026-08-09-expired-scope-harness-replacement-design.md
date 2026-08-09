@@ -49,7 +49,7 @@ The managed command writes this request and a receipt-possession secret to an ow
 
 Before requesting approval and again immediately before commit, the operation requires all of the following:
 
-- the scope exists, is active, is not expired, and names the caller as owner harness;
+- the scope exists, is active, is not expired, and the caller is a current non-lab harness of the exact scope-owning principal;
 - the caller is an active verified human harness with a current active credential;
 - scope policy revision and domain revocation epoch are current;
 - exactly one active former member row exists with role `member`;
@@ -59,7 +59,7 @@ Before requesting approval and again immediately before commit, the operation re
 - the replacement harness current credential matches the transaction and is active;
 - the replacement is not already present in the scope;
 - all stored digests and sequence values match the canonical pre-state;
-- the Approval receipt is current, has the exact purpose/domain/transaction digest, and names the exact owner principal.
+- the Approval receipt is current, has the exact `identity.credential.recover.approve` purpose/domain/transaction digest, and names the exact owner principal.
 
 Any mismatch fails closed without mutation.
 

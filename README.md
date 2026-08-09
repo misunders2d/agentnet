@@ -287,6 +287,17 @@ agree. The command performs no authority grant or restart. Exact retry
 reconciles interruption; missing, stale, edited, or unaudited provenance fails
 closed. After completion, rerun the same digest-bound setup apply/start.
 
+An expired laptop or peer harness that still owns an active collaboration-scope
+membership is replaced only through the root-only
+`server-agent replace-expired-scope-harness` command. An active managed-server
+harness of the same verified principal may open the ceremony because the
+expired member cannot authenticate; the exact scope-owning principal must then
+approve the complete transaction through Approval. The atomic commit
+tombstones the former member, activates the named same-principal replacement as
+`member`, advances the scope revision and membership sequence once, and makes
+current schema-v7 membership authoritative immediately. It changes no managed
+identity/configuration file and restarts no service.
+
 Plan and apply bind exact Node/uv/launcher/`systemctl`/`useradd` paths and
 content hashes plus the canonical full AgentNet package-tree content hash to
 the request-versioned approval digest. Apply

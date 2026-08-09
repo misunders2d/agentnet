@@ -417,6 +417,25 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert defaults.config == str(cli.CORE_CONFIG)
     assert defaults.identity == str(cli.SERVER_AGENT_IDENTITY)
     assert defaults.state == str(cli.SETUP_ROOT / "credential-reauthorization.json")
+    replacement = parser.parse_args(
+        [
+            "server-agent",
+            "replace-expired-scope-harness",
+            "--scope-id",
+            "scope-replacement-command-0001",
+            "--old-harness-id",
+            "expired-harness",
+            "--new-harness-id",
+            "replacement-harness",
+        ]
+    )
+    assert replacement.func is cli.command_server_agent_replace_expired_scope_harness
+    assert replacement.role == "member"
+    assert replacement.config == str(cli.CORE_CONFIG)
+    assert replacement.identity == str(cli.SERVER_AGENT_IDENTITY)
+    assert replacement.state == str(cli.SETUP_ROOT / "scope-harness-replacement.json")
+    assert replacement.replace_terminal_state is False
+
     monkeypatch.setattr(cli.os.path, "lexists", lambda _path: True)
     cli._require_managed_server_reauthorization_topology(state.config)
 
@@ -709,6 +728,190 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert all(opened_store.closed for opened_store in stores)
 
 
+
+def test_managed_scope_replacement_is_resumable_and_waits_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import pwd
+
+    state = activation_fixture(tmp_path)
+    setup_root = tmp_path / "setup"
+    setup_root.mkdir(mode=0o700)
+    config_path = tmp_path / "core.json"
+    identity_path = tmp_path / "server-agent-identity.json"
+    key_path = tmp_path / "server-agent.key.pem"
+    pending_path = setup_root / "scope-harness-replacement.json"
+    config = state.config.model_copy(
+        update={
+            "database_url": None,
+            "database_url_env": "AGENTNET_DATABASE_URL",
+            "enrolled_harness_id": state.actor.harness_id,
+        }
+    )
+    identity = dict(state.identity)
+    identity["private_key_path"] = str(key_path)
+    config_raw = config.model_dump_json().encode()
+    identity_raw = json.dumps(identity, sort_keys=True).encode()
+    files = {
+        config_path: config_raw,
+        identity_path: identity_raw,
+        key_path: state.key.private_pem,
+    }
+    monkeypatch.setattr(cli, "CORE_CONFIG", config_path)
+    monkeypatch.setattr(cli, "SERVER_AGENT_IDENTITY", identity_path)
+    monkeypatch.setattr(cli, "SERVER_AGENT_KEY", key_path)
+    monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
+    monkeypatch.setattr(cli, "load_config_json", lambda _raw: config)
+    monkeypatch.setattr(
+        pwd,
+        "getpwnam",
+        lambda _name: SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_private_file",
+        lambda path, **_kwargs: (
+            files[Path(path)],
+            SimpleNamespace(st_gid=os.getgid()),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_parse_environment_file",
+        lambda _path, **_kwargs: {
+            "AGENTNET_DATABASE_URL": "postgresql://runtime@postgres/agentnet",
+            "AGENTNET_APPROVAL_CORE_TOKEN": "x" * 43,
+        },
+    )
+    approval_config = SimpleNamespace(
+        approver_principal_id=state.actor.principal_id,
+        service_credential_env="AGENTNET_APPROVAL_CORE_TOKEN",
+        public_origin="https://approval.corp.example",
+    )
+    verifier = object()
+    monkeypatch.setattr(
+        cli,
+        "_managed_server_reauthorization_verifier",
+        lambda _config: (verifier, approval_config),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_require_managed_server_reauthorization_topology",
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_require_server_agent_activation_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    stores: list[FakeStore] = []
+
+    def open_store(*_args, **_kwargs):
+        opened = FakeStore()
+        stores.append(opened)
+        return opened
+
+    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_store)
+    request = cli.ScopeHarnessReplacementRequest(
+        request_id="scope-replacement-command-request-0001",
+        domain_id=state.actor.domain_id,
+        owner_principal_id=state.actor.principal_id,
+        owner_harness_id="expired-harness",
+        scope_id="scope-replacement-command-0001",
+        expected_scope_revision=1,
+        expected_scope_digest="a" * 64,
+        expected_membership_sequence=1,
+        expected_policy_revision=1,
+        expected_domain_revocation_epoch=1,
+        old_harness_id="expired-harness",
+        old_credential_id="expired-credential",
+        old_credential_epoch=1,
+        new_harness_id="replacement-harness",
+        new_credential_id="replacement-credential",
+        new_credential_epoch=1,
+        role="member",
+        issued_at=1_800_000_000,
+        expires_at=1_800_000_600,
+    )
+    service_calls: list[str] = []
+
+    class FakeReplacementService:
+        def __init__(self, _store, _verifier) -> None:
+            assert _verifier is verifier
+
+        def prepare(self, **_kwargs):
+            service_calls.append("prepare")
+            return request
+
+        def replace(self, **kwargs):
+            assert kwargs["request"] == request
+            assert kwargs["approval"] == {"receipt": "issued"}
+            service_calls.append("replace")
+            return SimpleNamespace(
+                scope_id=request.scope_id,
+                old_harness_id=request.old_harness_id,
+                new_harness_id=request.new_harness_id,
+                scope_revision=2,
+                membership_sequence=2,
+                idempotent_repeat=False,
+            )
+
+    monkeypatch.setattr(cli, "ScopeHarnessReplacementService", FakeReplacementService)
+
+    class FakeApprovalClient:
+        state = "pending"
+        creates = 0
+
+        def create_request(self, **kwargs):
+            assert pending_path.exists()
+            assert kwargs["transaction_digest"] == request.digest
+            self.creates += 1
+            return {"request_id": "approval-request-1"}
+
+        def request_status(self, **_kwargs):
+            return {"state": self.state}
+
+        def retrieve_receipt(self, **_kwargs):
+            return {"receipt": "issued"}
+
+        def close(self) -> None:
+            pass
+
+    broker = FakeApprovalClient()
+    monkeypatch.setattr(
+        cli,
+        "_managed_server_reauthorization_client",
+        lambda *_args, **_kwargs: broker,
+    )
+    monkeypatch.setattr(cli.time, "time", lambda: 1_800_000_000)
+    args = argparse.Namespace(
+        config=str(config_path),
+        identity=str(identity_path),
+        state=str(pending_path),
+        scope_id=request.scope_id,
+        old_harness_id=request.old_harness_id,
+        new_harness_id=request.new_harness_id,
+        role="member",
+        replace_terminal_state=False,
+    )
+
+    assert cli._command_server_agent_replace_expired_scope_harness_locked(args) == 2
+    waiting = json.loads(capsys.readouterr().out)
+    assert waiting["status"] == "waiting_owner_approval"
+    assert waiting["membership_changed"] is False
+    assert service_calls == ["prepare"]
+    assert broker.creates == 1
+    broker.state = "issued"
+    assert cli._command_server_agent_replace_expired_scope_harness_locked(args) == 0
+    completed = json.loads(capsys.readouterr().out)
+    assert completed["status"] == "completed"
+    assert completed["service_restart"] == "not_performed"
+    assert service_calls == ["prepare", "replace"]
+    assert broker.creates == 1
+    assert not pending_path.exists()
+    assert all(opened.closed for opened in stores)
 def test_managed_server_reauthorization_lock_rejects_concurrent_setup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
