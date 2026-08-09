@@ -438,10 +438,10 @@ published and historical release evidence:
   activation now materializes the complete schema-v7 collaboration projection
   atomically with scope commitment, while a committed legacy scope is repaired
   idempotently from its server-held source rows without replacement or generic
-  entitlement minting. The focused recovery lane reports **347 passed**; the
-  broad releasable-source lane reports **2204 passed and 22 expected
+  entitlement minting. The focused recovery lane reports **232 passed**; the
+  broad releasable-source lane reports **2210 passed and 22 expected
   platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
-  generations each report **2231 passed and 22 expected skips**. Two independent
+  generations each report **2237 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
   endpoint routing with zero sibling reactions or residue. Dedicated

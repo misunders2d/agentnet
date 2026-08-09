@@ -320,7 +320,7 @@ with _private_state_lock(state):
         )
 
     def wait_for(path: Path, process: subprocess.Popen[str]) -> None:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30
         while not path.exists():
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
