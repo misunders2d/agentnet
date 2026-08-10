@@ -27,6 +27,7 @@ from agentnet.authorization.communication_scope import (
 from agentnet.authorization.communication_scope_service import (
     COLLABORATION_SCOPE_ISSUE_ACTION,
     CollaborationScopeProposal,
+    CollaborationScopeService,
     CommunicationScopeService,
 )
 from agentnet.authorization.scope_harness_replacement import (
