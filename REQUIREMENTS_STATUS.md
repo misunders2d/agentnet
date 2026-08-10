@@ -445,11 +445,14 @@ published and historical release evidence:
   split. An unrecorded hotfix is accepted only when deriving the published
   300-second form reproduces the marker’s exact canonical config digest;
   retries resume, pre-commit rollback restores the source bytes, and any
-  additional drift fails closed. The
-  focused recovery lane reports **240 passed**; the broad releasable-source
-  lane reports **2228 passed and 22 expected platform/dedicated-PostgreSQL
-  skips**; and source plus two recursive packed generations each report
-  **2255 passed and 22 expected skips**. Two independent
+  additional drift fails closed. A lost PostgreSQL lease heartbeat publishes
+  reconnect-required state while protected operations remain excluded. A later
+  operation opens a fresh verified connection and reacquires a strictly higher
+  same-owner fence; different-owner contention or unverifiable recovery remains
+  unavailable. The focused recovery lane reports **243 passed**; the broad
+  releasable-source lane reports **2231 passed and 22 expected
+  platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
+  generations each report **2258 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
   endpoint routing with zero sibling reactions or residue. Dedicated

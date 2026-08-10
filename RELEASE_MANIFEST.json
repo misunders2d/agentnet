@@ -538,77 +538,94 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "3d63d7ee7a2c8659e14a637bd8ba32e2e76f2a3fc3436202586096c835a6d3d9"
+      "sha256": "0f79214999b95e6b4c86929211d4023645a8973dc5af29de064d2c4566a8db88",
+      "size": 45647
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "4ed20a48f3c97dc8ead5c00d02873a6ba5c58682c8b8a08ec836461840d38faf"
+      "sha256": "7cfdc45e82020305677f76eb731350e0ee5132c6da3fe0763f03db435fdb34a5",
+      "size": 104787
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
-      "sha256": "e0e6d42368772ecb420625d36555400e7b15ee0a4b250a2c7e6ded107f27cd37"
+      "sha256": "e0e6d42368772ecb420625d36555400e7b15ee0a4b250a2c7e6ded107f27cd37",
+      "size": 1188
     },
     "deploy/compose.production.json": {
       "path": "deploy/compose.production.json",
-      "sha256": "a66803887f965dc86862d8a7ef66e44e98f201743f200d826c270a4af1cab822"
+      "sha256": "a66803887f965dc86862d8a7ef66e44e98f201743f200d826c270a4af1cab822",
+      "size": 21622
     },
     "deploy/nginx-agent.conf": {
       "path": "deploy/nginx-agent.conf",
-      "sha256": "1873ee423f222c9f2efbc18c324d2be1fc2ce911dcf8848e2853d5d8fb1288be"
+      "sha256": "1873ee423f222c9f2efbc18c324d2be1fc2ce911dcf8848e2853d5d8fb1288be",
+      "size": 857
     },
     "deploy/render_and_run.py": {
       "path": "deploy/render_and_run.py",
-      "sha256": "11f812ce645ee612ef5c3f2ae07e0d987a516f7f474bd0b89c435fab8432a0e0"
+      "sha256": "11f812ce645ee612ef5c3f2ae07e0d987a516f7f474bd0b89c435fab8432a0e0",
+      "size": 24256
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "1be89389eda3c5005a48455a2de789bfa5a8d1047116c5f5bfb340fefe501afc"
+      "sha256": "41a0794408ad93e08b5ccc4c44a790c823fe3005efbfb0427b91a9a6d12ca4e7",
+      "size": 84438
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "5953a7a3d47c10f145243ba82db76457f09fb7326f1d4373175a29087e776cd5"
+      "sha256": "5953a7a3d47c10f145243ba82db76457f09fb7326f1d4373175a29087e776cd5",
+      "size": 27729
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
-      "sha256": "f691b3a676a518f2bc8c7ee7a099e544c884ebd1f3d8bab7e7d031aa4c86946b"
+      "sha256": "f691b3a676a518f2bc8c7ee7a099e544c884ebd1f3d8bab7e7d031aa4c86946b",
+      "size": 1921
     },
     "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md": {
       "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/REVIEW.md",
-      "sha256": "3ff08c0a0eb296ce2181f634277c4037d7278349b25a9033557dbe50dc52dd42"
+      "sha256": "3ff08c0a0eb296ce2181f634277c4037d7278349b25a9033557dbe50dc52dd42",
+      "size": 3931
     },
     "evidence/gates/G04/2026-07-13-alpha2-http-json/manifest.json": {
       "path": "evidence/gates/G04/2026-07-13-alpha2-http-json/manifest.json",
-      "sha256": "5d7e6526c6da7368046684243502c42a8a31cfee5152affad01e45bdf0b23ead"
+      "sha256": "5d7e6526c6da7368046684243502c42a8a31cfee5152affad01e45bdf0b23ead",
+      "size": 10657
     },
     "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json": {
       "path": "evidence/gates/G09/2026-07-13-postgresql-18.4-local/manifest.json",
-      "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb"
+      "sha256": "fc99d7d2600f031eab99b7bffefd59eabdedfe72be91209dcd0afcd847b2ceeb",
+      "size": 2977
     },
     "scripts/ci/exact_endpoint_routing_e2e.py": {
       "path": "scripts/ci/exact_endpoint_routing_e2e.py",
-      "sha256": "60347eb321bebed08971c24ece0be1d2a72bb32f3c12070bf5b0509606b90e80"
+      "sha256": "60347eb321bebed08971c24ece0be1d2a72bb32f3c12070bf5b0509606b90e80",
+      "size": 16983
     },
     "scripts/ci/packaged_local_communication_e2e.py": {
       "path": "scripts/ci/packaged_local_communication_e2e.py",
-      "sha256": "096bbc1a551c9bd313aa4e0024c40a7cb8b619a63417a7c5b1ef33776c66d27f"
+      "sha256": "096bbc1a551c9bd313aa4e0024c40a7cb8b619a63417a7c5b1ef33776c66d27f",
+      "size": 36776
     },
     "scripts/ci/packaged_v0145_user_journey.py": {
       "path": "scripts/ci/packaged_v0145_user_journey.py",
-      "sha256": "3ac405c76e2b095537c34c9c0bafaf10c0bf9b0e887adcd51647fe99596f2d50"
+      "sha256": "3ac405c76e2b095537c34c9c0bafaf10c0bf9b0e887adcd51647fe99596f2d50",
+      "size": 38600
     },
     "scripts/export_schemas.py": {
       "path": "scripts/export_schemas.py",
-      "sha256": "f8d8cf238c4ce1318331ae60efb1c8db5388cbbd558e2d1d355c80dd870e2ff9"
+      "sha256": "f8d8cf238c4ce1318331ae60efb1c8db5388cbbd558e2d1d355c80dd870e2ff9",
+      "size": 2831
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "548fdc8a2c326efbe4a965027edb7fe93e3a100db3fb002422ae16d1db633c85"
+      "sha256": "dc2327490e1a832655f8a5a9a644b607b234f33f4cf2b5e3c045fb391d54d298",
+      "size": 56697
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "92f3c087df1f697dba25cc6e4258ca697c3e8167434544a5bb880c887b537da1"
+    "sha256": "78724e76457a479ff62b4473e5ee6a87f9b019034b39310d089eaff174b64ad5"
   },
   "runtime": {
     "implementation": "CPython",

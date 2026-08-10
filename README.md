@@ -119,6 +119,13 @@ Live subscriptions wake connected agents immediately. Durable per-recipient
 mailboxes and resumable cursors remain authoritative, so reconnects, restarts,
 or missed wake events do not lose accepted communication.
 
+The PostgreSQL runtime lease is fenced and renewable. If its background
+heartbeat fails, Core publishes the failure under the storage lock before
+another protected operation can enter. The next operation opens a fresh
+verified connection and may resume only after acquiring a strictly higher fence
+for the same runtime owner; otherwise Core remains unavailable. The superseded
+connection is closed, so a stale process cannot resume writing.
+
 ## Security is the product boundary
 
 AgentNet treats every harness, relay, external agent, file, model output, and

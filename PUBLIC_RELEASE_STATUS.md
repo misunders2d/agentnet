@@ -37,6 +37,13 @@ policy cutover is journaled and resumable. New scope activation writes its
 projection atomically, and legacy repair derives it from the existing
 committed scope without replacing authority.
 
+The retained one-hour v0.1.50 Approval hotfix is accepted only when its
+reconstructed published form matches the setup marker, then journaled and
+normalized to separate ordinary and communication-scope deadlines. A lost
+PostgreSQL runtime heartbeat publishes fail-closed state before another
+protected operation can enter; work remains unavailable until a later operation
+verifies a fresh connection and acquires a strictly higher same-owner fence.
+
 The candidate accepts only exact five-unit schema-v7 markers from v0.1.45
 through v0.1.50. Ambiguous, drifted, incomplete, or unsupported state fails
 closed. Package, installed-host, dedicated-PostgreSQL, and live two-machine

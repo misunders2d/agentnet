@@ -708,6 +708,14 @@ migration, table, index, trigger/constraint, noncontiguous history, future
 version, or unsupported older version. The only current N/N-1 Core migration is
 an exact catalog/checksum-verified v6→v7 transition.
 
+`PostgreSQLStore` binds protected transactions to one renewable runtime lease
+and its fence. A heartbeat failure publishes reconnect-required state while the
+storage lock still excludes protected operations, then stops the keeper. The
+next operation opens a fresh connection, revalidates writable primary and exact
+schema, and reacquires only a strictly higher fence before restarting the
+keeper; it closes the superseded connection. Contention by a different owner or
+any unverifiable recovery remains unavailable.
+
 No pre-release or differently named database is accepted as an authority
 source, and no unilateral relationship can be converted into consent. Import
 requires a reviewed non-authority export into a fresh current store followed by

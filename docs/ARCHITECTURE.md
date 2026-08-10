@@ -124,6 +124,12 @@ response loss without creating another credential.
 - Production target: one PostgreSQL transaction for identity/policy/event/
   recipient/receipt/audit-intent/outbox authority plus an immutable artifact
   backend. Startup remains blocked until that backend and evidence are wired.
+  The runtime lease heartbeat fails closed: its failure state is published
+  while protected operations remain excluded. A later storage operation
+  replaces the connection and resumes only after the writable primary, exact
+  schema, and a strictly higher same-owner fence are verified. Different-owner
+  contention, standby/future schema, or a non-increasing fence remains
+  unavailable; the superseded connection is closed.
 - Evidence ledger: `REQUIREMENTS_STATUS.md` and `docs/GATE_EVIDENCE.md`.
 - Generated schemas: `schemas/v1/*.json`.
 

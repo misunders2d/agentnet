@@ -814,11 +814,16 @@ class PostgreSQLStore:
                 "postgres_reconnect_failed",
                 "PostgreSQL recovery connection was not accepted",
             ) from exc
+        previous_connection = self._connection
         self._connection = connection
         self._adapter = PostgreSQLConnectionAdapter(connection)
         self._lease = lease
         self._reconnect_required = False
         self._lease_lost_reason = None
+        try:
+            previous_connection.close()
+        except Exception:
+            pass
         if self._start_lease_keeper and (
             self._keeper_restart_needed or self._keeper is None or not self._keeper.is_alive()
         ):
@@ -891,12 +896,15 @@ class PostgreSQLStore:
     def _keep_lease(self) -> None:
         interval = max(1.0, self._lease_ttl / 3)
         while not self._stop.wait(interval):
-            try:
-                self._lease = self.heartbeat_lease(self._lease)
-            except Exception as exc:  # fail closed until a later operation completes recovery
-                if not self._keeper_restart_needed:
-                    self._lease_lost_reason = type(exc).__name__
-                return
+            with self._lock:
+                try:
+                    self._lease = self.heartbeat_lease(self._lease)
+                except Exception as exc:  # fail closed until a later operation completes recovery
+                    if not self._keeper_restart_needed:
+                        self._lease_lost_reason = type(exc).__name__
+                    self._reconnect_required = True
+                    self._keeper_restart_needed = True
+                    return
 
     def _require_runtime_lease(self, connection: PostgreSQLConnectionAdapter) -> None:
         if self._lease_lost_reason is not None:

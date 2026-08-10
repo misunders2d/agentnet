@@ -1281,6 +1281,13 @@ v7 open.
 Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
 older state fails closed before use.
 
+Core also requires a current fenced PostgreSQL runtime lease. If its background
+heartbeat fails or expires, failure state is published before another protected
+operation can enter. A later request recovers without a service restart only by
+opening a fresh verified connection and acquiring a strictly higher fence for
+the same runtime owner. A different owner, standby, schema mismatch, or
+non-increasing fence remains blocked.
+
 Do not edit version metadata or infer authority from unilateral/prototype
 records. Transition from exploratory data requires reviewed export of
 non-authority content into a fresh current store and fresh exact bilateral

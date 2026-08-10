@@ -1734,6 +1734,145 @@ def test_singleton_lease_requires_expiry_before_different_owner_takeover() -> No
         second.close()
 
 
+
+class _OneHeartbeatThenStop:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.stopped = False
+
+    def wait(self, _timeout: float) -> bool:
+        self.calls += 1
+        return self.calls > 1
+
+    def set(self) -> None:
+        self.stopped = True
+
+
+
+
+class _StoppedKeeper:
+    def is_alive(self) -> bool:
+        return False
+
+    def join(self, *, timeout: float) -> None:
+        del timeout
+
+
+class _RestartedKeeper:
+    def __init__(self, *, target, name: str, daemon: bool) -> None:
+        self.target = target
+        self.name = name
+        self.daemon = daemon
+        self.started = False
+
+    def is_alive(self) -> bool:
+        return self.started
+
+    def start(self) -> None:
+        self.started = True
+
+    def join(self, *, timeout: float) -> None:
+        del timeout
+
+
+def test_keeper_failure_blocks_protected_work_until_recovery_state_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _LeaseDatabase()
+    store = _lease_store(database, _Clock(100), "server-agent-a")
+    heartbeat_entered = threading.Event()
+    operation_completed = threading.Event()
+    operation_crossed_failure_gap: list[bool] = []
+    store._stop = _OneHeartbeatThenStop()
+
+    def fail_heartbeat(_token) -> None:
+        heartbeat_entered.set()
+        operation_crossed_failure_gap.append(operation_completed.wait(timeout=1))
+        raise GateBlocked("lease_lost", "simulated heartbeat failure")
+
+    def run_operation() -> None:
+        assert heartbeat_entered.wait(timeout=1)
+        with store.transaction():
+            pass
+        operation_completed.set()
+
+    monkeypatch.setattr(store, "heartbeat_lease", fail_heartbeat)
+    keeper = threading.Thread(target=store._keep_lease)
+    operation = threading.Thread(target=run_operation)
+    try:
+        operation.start()
+        keeper.start()
+        keeper.join(timeout=2)
+        operation.join(timeout=2)
+
+        assert keeper.is_alive() is False
+        assert operation.is_alive() is False
+        assert operation_crossed_failure_gap == [False]
+        assert store._reconnect_required is False
+        assert database.connect_count == 2
+    finally:
+        store.close()
+
+
+def test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence() -> None:
+    database = _LeaseDatabase()
+    clock = _Clock(100)
+    store = _lease_store(database, clock, "server-agent-a")
+    initial_fence = store._lease.fence
+    stop = _OneHeartbeatThenStop()
+    store._stop = stop
+    try:
+        clock.value = 131
+        store._keep_lease()
+
+        assert store._reconnect_required is True
+        assert store._keeper_restart_needed is True
+        with store.transaction():
+            pass
+        assert database.connect_count == 2
+        assert store._lease.fence > initial_fence
+        assert store._reconnect_required is False
+        assert int(database.leases[store._lease.lease_name]["expires_at"]) > clock.value
+    finally:
+        store.close()
+    assert stop.stopped is True
+
+
+def test_expired_keeper_recovery_starts_new_background_keeper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _LeaseDatabase()
+    clock = _Clock(100)
+    store = _lease_store(database, clock, "server-agent-a")
+    stop = _OneHeartbeatThenStop()
+    restarted: list[_RestartedKeeper] = []
+
+    def restart_keeper(*, target, name: str, daemon: bool) -> _RestartedKeeper:
+        keeper = _RestartedKeeper(target=target, name=name, daemon=daemon)
+        restarted.append(keeper)
+        return keeper
+
+    store._stop = stop
+    store._start_lease_keeper = True
+    store._keeper = _StoppedKeeper()
+    monkeypatch.setattr("agentnet.storage.postgres.threading.Thread", restart_keeper)
+    try:
+        clock.value = 131
+        store._keep_lease()
+        with store.transaction():
+            pass
+
+        assert len(restarted) == 1
+        assert restarted[0].target == store._keep_lease
+        assert restarted[0].name == "agentnet-lease-server-agent-a"
+        assert restarted[0].daemon is True
+        assert restarted[0].started is True
+        assert store._keeper_restart_needed is False
+    finally:
+        store.close()
+
+
+
 def test_connection_loss_is_not_retried_and_next_operation_reconnects_with_higher_fence() -> None:
     database = _LeaseDatabase()
     store = _lease_store(database, _Clock(100), "server-agent-a")
