@@ -438,15 +438,16 @@ published and historical release evidence:
   activation now materializes the complete schema-v7 collaboration projection
   atomically with scope commitment, while a committed legacy scope is repaired
   idempotently from its server-held source rows without replacement or generic
-  entitlement minting. The exact v0.1.50→v0.1.51 path additionally journals
+  entitlement minting. The exact v0.1.50→v0.1.51 path preserves the published
+  300-second generic Approval policy without a rewrite and separately journals
   and atomically normalizes only the retained one-hour generic Approval hotfix
   to the bounded 600-second ordinary and 3600-second communication-scope TTL
   split; retries resume and pre-commit rollback restores the source bytes,
-  while any other shape fails closed. The focused recovery lane reports
-  **237 passed**; the
-  broad releasable-source lane reports **2225 passed and 22 expected
-  platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
-  generations each report **2252 passed and 22 expected skips**. Two independent
+  while already-shortened or otherwise different shapes fail closed. The
+  focused recovery lane reports **238 passed**; the broad releasable-source
+  lane reports **2226 passed and 22 expected platform/dedicated-PostgreSQL
+  skips**; and source plus two recursive packed generations each report
+  **2253 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
   endpoint routing with zero sibling reactions or residue. Dedicated

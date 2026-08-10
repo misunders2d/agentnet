@@ -837,15 +837,17 @@ Approval-owned signer file is durably installed and before owner authority is
 mutated; a retry reconstructs the file from the journal or verifies the exact
 existing signer.
 
-Upgrade journal v3 is reserved for the exact v0.1.50→v0.1.51 Approval TTL
-normalization. It extends the standard forward-only journal with one
+Upgrade journal v3 covers the exact v0.1.50→v0.1.51 Approval TTL boundary. It
+extends the standard forward-only journal with one
 `previous_configs.approval_config` payload under the existing root-only
-custody and size bounds. Only a journaled source with
-`request_ttl_seconds=3600` and an absent or 3600-second
-`communication_scope_request_ttl_seconds` is normalized to the target
-600/3600 split. Compare-and-swap replacement, exact resume, and exact rollback
-use that retained payload; unknown keys, values, versions, or bytes fail
-closed.
+custody and size bounds. The exact published source with
+`request_ttl_seconds=300` and no
+`communication_scope_request_ttl_seconds` is preserved byte-for-byte. Only a
+journaled retained-hotfix source with `request_ttl_seconds=3600` and an absent
+or 3600-second communication-scope field is normalized to the target 600/3600
+split. Compare-and-swap replacement, exact resume, and exact rollback use that
+retained payload; already-shortened, unknown, or otherwise different TTL
+shapes fail closed.
 
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two

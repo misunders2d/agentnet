@@ -1005,6 +1005,44 @@ def test_0151_rejects_one_hour_approval_ttl_from_other_source_release(
     assert not harness.journal_path.exists()
 
 
+def test_0151_preserves_published_0150_approval_ttl_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_one_hour_approval_hotfix(harness)
+    source = json.loads(config_path.read_text(encoding="utf-8"))
+    source["request_ttl_seconds"] = 300
+    _private_json(config_path, source)
+    marker = harness.marker()
+    marker["approval_config_digest"] = setup._managed_config_digest(
+        config_path,
+        SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()),
+        blocker="approval_config",
+    )
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.marker_path.chmod(0o600)
+    source_payload = config_path.read_bytes()
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    result = harness.apply(harness.plan_digest())
+
+    assert config_path.read_bytes() == source_payload
+    assert {
+        "id": "approval_request_ttl_policy_upgrade",
+        "status": "already_satisfied",
+    } in result["steps"]
+    assert harness.marker()["package_version"] == "0.1.51"
+    assert not harness.journal_path.exists()
+
+
 def test_0151_rejects_already_shortened_ttl_as_upgrade_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

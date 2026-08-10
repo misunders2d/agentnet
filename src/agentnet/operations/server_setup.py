@@ -5235,7 +5235,7 @@ def _migrate_0150_approval_request_ttl_policy(
     approval_account: pwd.struct_passwd,
     pending: dict[str, Any],
 ) -> str:
-    """Split the exact retained v0.1.50 one-hour communication TTL hotfix."""
+    """Preserve published v0.1.50 TTLs or split its retained live hotfix."""
 
     journal = pending.get("journal")
     if (
@@ -5257,10 +5257,44 @@ def _migrate_0150_approval_request_ttl_policy(
         label="journaled Approval config",
     )
     request_ttl = previous_document.get("request_ttl_seconds")
-    if request_ttl != 3_600 or previous_document.get(
-        "communication_scope_request_ttl_seconds",
-        3_600,
-    ) != 3_600:
+    other_ttls_are_published_defaults = (
+        previous_document.get("challenge_ttl_seconds") == 180
+        and previous_document.get("receipt_ttl_seconds") == 300
+        and previous_document.get("registration_ttl_seconds") == 600
+    )
+    if (
+        request_ttl == 300
+        and "communication_scope_request_ttl_seconds" not in previous_document
+        and other_ttls_are_published_defaults
+    ):
+        try:
+            ApprovalServiceConfig.model_validate(previous_document)
+        except ValidationError as exc:
+            raise ServerSetupError(
+                "approval_config",
+                "journaled published Approval configuration is invalid",
+            ) from exc
+        current = _read_private_managed_file(
+            approval_config_path,
+            approval_account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        )
+        if current != previous:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "Approval configuration changed after upgrade journal creation",
+            )
+        return "already_satisfied"
+    if (
+        request_ttl != 3_600
+        or previous_document.get(
+            "communication_scope_request_ttl_seconds",
+            3_600,
+        )
+        != 3_600
+        or not other_ttls_are_published_defaults
+    ):
         raise ServerSetupError(
             "approval_config",
             "journaled Approval TTL policy is not an exact supported upgrade source",

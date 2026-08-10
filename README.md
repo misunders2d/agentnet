@@ -567,12 +567,14 @@ from its immutable scope rows without replacing the scope or minting broader
 authority. Exact five-unit schema-v7 markers from v0.1.45 through published
 v0.1.50 may upgrade directly to v0.1.51.
 
-The v0.1.50→v0.1.51 transition also recognizes only the retained one-hour
-Approval hotfix shape. Before loading Approval, setup journals its exact
-configuration, restores the ordinary approval deadline to 600 seconds, keeps
-the communication-scope ceremony ceiling at 3600 seconds, and atomically
-replaces the file. A crash resumes from the journal; any other TTL or
-configuration shape fails closed, and pre-commit rollback restores the exact
+The v0.1.50→v0.1.51 transition preserves the exact published v0.1.50
+Approval TTL policy (`request_ttl_seconds=300` with no separate
+communication-scope field). It separately recognizes the retained one-hour
+hotfix shape: before loading Approval, setup journals its exact configuration,
+restores the ordinary approval deadline to 600 seconds, keeps the
+communication-scope ceremony ceiling at 3600 seconds, and atomically replaces
+the file. A crash resumes from the journal; an already-shortened or otherwise
+different TTL shape fails closed, and pre-commit rollback restores the exact
 source bytes.
 
 
