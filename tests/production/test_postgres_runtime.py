@@ -28,7 +28,6 @@ from agentnet.authorization.communication_scope_service import (
     COLLABORATION_SCOPE_ISSUE_ACTION,
     CollaborationScopeProposal,
     CommunicationScopeService,
-    CollaborationScopeService,
 )
 from agentnet.authorization.scope_harness_replacement import (
     SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
@@ -2277,6 +2276,15 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             credential_epoch=1,
             binding_assurance="os_bound",
         )
+        replacement_caller = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id="owner-harness",
+            credential_id="owner-credential",
+            credential_epoch=1,
+            binding_assurance="os_bound",
+        )
         with store.transaction() as connection:
             connection.execute(
                 "INSERT INTO domains(domain_id,status,created_at) VALUES(?,?,?)",
@@ -2473,7 +2481,7 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
         with store.transaction() as connection:
             connection.execute(
                 "UPDATE credentials SET expires_at=? WHERE credential_id=?",
-                (COMMUNICATION_NOW - 1, "owner-credential"),
+                (COMMUNICATION_NOW - 1, actor.credential_id),
             )
         replacement_service = ScopeHarnessReplacementService(
             store,
@@ -2481,9 +2489,9 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             clock=lambda: COMMUNICATION_NOW,
         )
         replacement_request = replacement_service.prepare(
-            actor=actor,
+            actor=replacement_caller,
             scope_id=scope_id,
-            old_harness_id="owner-harness",
+            old_harness_id=actor.harness_id,
             new_harness_id="replacement-harness",
             role="member",
             request_id="postgres-scope-replacement-request-0001",
@@ -2501,12 +2509,12 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
             authenticated_at=COMMUNICATION_NOW,
         )
         replaced = replacement_service.replace(
-            actor=actor,
+            actor=replacement_caller,
             request=replacement_request,
             approval=replacement_approval,
         )
         repeated = replacement_service.replace(
-            actor=actor,
+            actor=replacement_caller,
             request=replacement_request,
             approval=replacement_approval,
         )
@@ -2516,7 +2524,7 @@ def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
         assert store.fetch_one(
             """SELECT state FROM collaboration_scope_members
                WHERE scope_id=? AND harness_id=?""",
-            (scope_id, "owner-harness"),
+            (scope_id, actor.harness_id),
         )["state"] == "removed"
         assert store.fetch_one(
             """SELECT state FROM collaboration_scope_members
