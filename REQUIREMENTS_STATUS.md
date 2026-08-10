@@ -442,12 +442,14 @@ published and historical release evidence:
   300-second generic Approval policy without a rewrite and separately journals
   and atomically normalizes only the retained one-hour generic Approval hotfix
   to the bounded 600-second ordinary and 3600-second communication-scope TTL
-  split; retries resume and pre-commit rollback restores the source bytes,
-  while already-shortened or otherwise different shapes fail closed. The
-  focused recovery lane reports **238 passed**; the broad releasable-source
-  lane reports **2226 passed and 22 expected platform/dedicated-PostgreSQL
+  split. An unrecorded hotfix is accepted only when deriving the published
+  300-second form reproduces the marker’s exact canonical config digest;
+  retries resume, pre-commit rollback restores the source bytes, and any
+  additional drift fails closed. The
+  focused recovery lane reports **240 passed**; the broad releasable-source
+  lane reports **2228 passed and 22 expected platform/dedicated-PostgreSQL
   skips**; and source plus two recursive packed generations each report
-  **2253 passed and 22 expected skips**. Two independent
+  **2255 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
   endpoint routing with zero sibling reactions or residue. Dedicated

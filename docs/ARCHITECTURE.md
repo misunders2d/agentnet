@@ -914,12 +914,14 @@ resume the prepared phase, while a missing or mismatched copy fails closed.
 That same v0.1.50→v0.1.51 boundary preserves the exact published v0.1.50
 Approval policy with its 300-second generic request TTL and absent
 communication-scope field. It separately recognizes the retained hotfix that
-raised the generic request TTL to one hour. Setup records that Approval
-configuration in upgrade journal v3 before mutation, restores the ordinary
-request ceiling to 600 seconds, and preserves the distinct communication-scope
-ceiling at 3600 seconds. The write uses compare-and-swap; interruption resumes
-from the journal, pre-commit rollback restores the exact source bytes, and
-already-shortened or otherwise non-matching configuration fails closed.
+raised the generic request TTL to one hour. When the setup marker still records
+the published configuration, setup derives that exact 300-second form from the
+realized hotfix and requires its canonical digest to match the marker. Only
+then does it record the realized Approval configuration in upgrade journal v3,
+restore the ordinary request ceiling to 600 seconds, and preserve the distinct
+communication-scope ceiling at 3600 seconds. The write uses compare-and-swap;
+interruption resumes from the journal, pre-commit rollback restores the exact
+source bytes, and any additional configuration drift fails closed.
 
 Communication-scope completion and legacy-scope repair share one schema-v7
 single-scope materializer. Completion invokes it inside the transaction that

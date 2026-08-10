@@ -1,18 +1,18 @@
 {
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "evaluated_at": "2026-08-10T13:54:37Z",
+  "evaluated_at": "2026-08-10T15:52:07Z",
   "scope": "v0_1_51_expired_scope_harness_replacement_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "verification_scope": "PASS applies only to the selected local source, focused replacement/recovery/communication tests, reproducible package, and installed-byte commands recorded below; it is not release certification and does not include release-eligible two-machine proof, fresh installed-host upgrade, dedicated PostgreSQL replacement execution, installed-harness pin gates, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "working_tree_candidate",
-  "release_source_tree_sha256": "453daeb672b69a757d9067e796234f298cb0417026378b74514ee3165cb070b7",
+  "release_source_tree_sha256": "92f3c087df1f697dba25cc6e4258ca697c3e8167434544a5bb880c887b537da1",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
   "change_boundary": "Candidate 0.1.51 retains canonical-owner and schema-v7 projection recovery, normalizes only the exact retained v0.1.50 one-hour generic Approval TTL hotfix to separate 600-second ordinary and 3600-second communication-scope ceilings under a journaled compare-and-swap/resume/rollback boundary, and adds one bounded operation that requires the exact scope owner's independent Approval receipt to replace one expired same-principal member harness in one active schema-v7 collaboration scope. It tombstones the former member, activates the enrolled replacement, increments membership and scope revisions once, recomputes canonical digests, binds audit evidence, recovers exact committed replays after request expiry, and rejects non-owner approvers, cross-principal/domain changes, role drift, active old credentials, inactive replacement credentials, stale state, replay drift, partial state, and unsupported Approval configuration without hand-editing Core or Approval.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py",
-      "result": "PASS: 238 passed"
+      "result": "PASS: 240 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -20,11 +20,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2226 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2228 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 24f1cae65a5705d69c5919e8676695866054babde1e48eb9d29735712eb34b16; wheel sha256 7c89994f4b49afe867f664188f4b18e49465fdd7b6bd5164d05c83c7d5414f68"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 150f73632ac991e8e2aa858a19c00bd7bd84acf2ba0e59700e6f6d2e8f8d8271; wheel sha256 60c9ac32dab7ce2981adf14dfcd478afba26519ca1e58ab30a9dfd8cbaa19559"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -52,7 +52,7 @@
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2253 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2255 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
   "execution_context": {
@@ -66,11 +66,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "24f1cae65a5705d69c5919e8676695866054babde1e48eb9d29735712eb34b16"
+      "sha256": "150f73632ac991e8e2aa858a19c00bd7bd84acf2ba0e59700e6f6d2e8f8d8271"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "7c89994f4b49afe867f664188f4b18e49465fdd7b6bd5164d05c83c7d5414f68"
+      "sha256": "60c9ac32dab7ce2981adf14dfcd478afba26519ca1e58ab30a9dfd8cbaa19559"
     }
   ],
   "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"

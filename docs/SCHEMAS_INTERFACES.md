@@ -842,12 +842,14 @@ extends the standard forward-only journal with one
 `previous_configs.approval_config` payload under the existing root-only
 custody and size bounds. The exact published source with
 `request_ttl_seconds=300` and no
-`communication_scope_request_ttl_seconds` is preserved byte-for-byte. Only a
-journaled retained-hotfix source with `request_ttl_seconds=3600` and an absent
-or 3600-second communication-scope field is normalized to the target 600/3600
-split. Compare-and-swap replacement, exact resume, and exact rollback use that
-retained payload; already-shortened, unknown, or otherwise different TTL
-shapes fail closed.
+`communication_scope_request_ttl_seconds` is preserved byte-for-byte. A
+retained-hotfix source with `request_ttl_seconds=3600` and an absent or
+3600-second communication-scope field may differ from its marker only when
+replacing those fields with the published 300-second form reproduces the
+marker’s canonical Approval-config digest. The realized hotfix is then
+journaled and normalized to the target 600/3600 split. Compare-and-swap
+replacement, exact resume, and exact rollback use that retained payload;
+already-shortened, unknown, or any additionally drifted shape fails closed.
 
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two

@@ -570,11 +570,13 @@ v0.1.50 may upgrade directly to v0.1.51.
 The v0.1.50→v0.1.51 transition preserves the exact published v0.1.50
 Approval TTL policy (`request_ttl_seconds=300` with no separate
 communication-scope field). It separately recognizes the retained one-hour
-hotfix shape: before loading Approval, setup journals its exact configuration,
-restores the ordinary approval deadline to 600 seconds, keeps the
-communication-scope ceremony ceiling at 3600 seconds, and atomically replaces
-the file. A crash resumes from the journal; an already-shortened or otherwise
-different TTL shape fails closed, and pre-commit rollback restores the exact
+hotfix shape. If that operational hotfix was not written into the setup marker,
+setup reconstructs the exact published 300-second form and requires its
+canonical digest to equal the marker before creating a journal. It then
+journals the realized configuration, restores the ordinary approval deadline
+to 600 seconds, keeps the communication-scope ceremony ceiling at 3600
+seconds, and atomically replaces the file. A crash resumes from the journal;
+any additional drift fails closed, and pre-commit rollback restores the exact
 source bytes.
 
 

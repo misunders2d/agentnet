@@ -4677,6 +4677,50 @@ def _managed_config_digest(
     return canonical_digest(value)
 
 
+def _approval_config_digest_for_upgrade_marker(
+    marker: Mapping[str, Any],
+    path: Path,
+    account: pwd.struct_passwd,
+) -> str:
+    """Accept only the exact marker-relative v0.1.50 one-hour TTL hotfix."""
+
+    document = _strict_json_bytes(
+        _read_private_managed_file(
+            path,
+            account,
+            blocker="approval_config",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Approval configuration",
+    )
+    realized_digest = canonical_digest(document)
+    recorded_digest = marker.get("approval_config_digest")
+    if realized_digest == recorded_digest:
+        return realized_digest
+    if (
+        (marker.get("package_version"), __version__) != _APPROVAL_REQUEST_TTL_UPGRADE
+        or document.get("request_ttl_seconds") != 3_600
+        or document.get("communication_scope_request_ttl_seconds", 3_600) != 3_600
+        or document.get("challenge_ttl_seconds") != 180
+        or document.get("receipt_ttl_seconds") != 300
+        or document.get("registration_ttl_seconds") != 600
+    ):
+        return realized_digest
+    published = dict(document)
+    published["request_ttl_seconds"] = 300
+    published.pop("communication_scope_request_ttl_seconds", None)
+    try:
+        ApprovalServiceConfig.model_validate(published)
+    except ValidationError:
+        return realized_digest
+    return (
+        str(recorded_digest)
+        if canonical_digest(published) == recorded_digest
+        else realized_digest
+    )
+
+
+
 def _require_private_directory(path: Path, account: pwd.struct_passwd, *, blocker: str) -> None:
     try:
         metadata = path.lstat()
@@ -5685,10 +5729,10 @@ def _prepare_supported_upgrade(
         )
     _require_marker_realized_state(
         existing_marker,
-        approval_config_digest=_managed_config_digest(
+        approval_config_digest=_approval_config_digest_for_upgrade_marker(
+            existing_marker,
             approval_config_path,
             approval_account,
-            blocker="approval_config",
         ),
         core_config_digest=_managed_config_digest(
             core_config_path,
