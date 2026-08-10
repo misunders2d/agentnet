@@ -393,6 +393,16 @@ success. Unsupported identity, OIDC, signer, row-shape, revision, or file drift
 requires operator investigation; email equality alone is never recovery
 authority.
 
+The retained v0.1.50 live hotfix may have
+`request_ttl_seconds: 3600` and no separate communication-scope field. Do not
+edit that file manually. The exact v0.1.50→v0.1.51 setup path journals the
+source Approval configuration before loading the service, changes the generic
+deadline to 600 seconds, and writes
+`communication_scope_request_ttl_seconds: 3600`. Rerun the same approved
+command after interruption. Any other TTL/configuration shape blocks as
+`approval_config`; a failure before marker commit restores the journaled
+source bytes.
+
 The same setup pass repairs an already committed communication scope that lacks
 its schema-v7 collaboration projection. It materializes only the exact
 committed scope and member authority from server-held rows. It does not replace

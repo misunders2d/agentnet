@@ -266,6 +266,7 @@ _LIFECYCLE_PRESERVED_TABLES = (
 # Blockers that mean "the response was lost", not "the operation was refused".
 # Only these justify one bounded idempotent retry of a product command.
 _RESPONSE_LOSS_BLOCKERS = frozenset({"invalid_product_evidence", "product_command_failed"})
+_APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v3"
 _UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v2"
 _LEGACY_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
 _MAX_UNIT_BYTES = 65_536
@@ -283,6 +284,8 @@ _SCANNER_ENVIRONMENT_KEYS = frozenset(
     }
 )
 _JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
+_JOURNALED_APPROVAL_CONFIG_KEYS = _JOURNALED_CONFIG_KEYS | {"approval_config"}
+_APPROVAL_REQUEST_TTL_UPGRADE = ("0.1.50", "0.1.51")
 
 
 class ServerSetupError(RuntimeError):
@@ -2664,7 +2667,12 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         and all(isinstance(value, str) for value in units.values())
     )
     current_unit_shape = (
-        schema in {_UPGRADE_JOURNAL_SCHEMA, _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA}
+        schema
+        in {
+            _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA,
+            _UPGRADE_JOURNAL_SCHEMA,
+            _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA,
+        }
         and source_profile is not None
         and isinstance(units, dict)
         and set(units) == set(MANAGED_UNITS)
@@ -2703,10 +2711,16 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
             and len(str(journal["previous_marker"])) <= 2 * _MAX_CONFIG_BYTES
         )
     )
+    expected_config_keys = (
+        _JOURNALED_APPROVAL_CONFIG_KEYS
+        if schema == _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA
+        else _JOURNALED_CONFIG_KEYS
+    )
     if (
         schema
         not in {
             _LEGACY_UPGRADE_JOURNAL_SCHEMA,
+            _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA,
             _UPGRADE_JOURNAL_SCHEMA,
             _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA,
         }
@@ -2719,7 +2733,7 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         or not isinstance(to_package_version, str)
         or not (legacy_unit_shape or current_unit_shape)
         or not isinstance(configs, dict)
-        or set(configs) != _JOURNALED_CONFIG_KEYS
+        or set(configs) != expected_config_keys
         or not lifecycle_shape
     ):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
@@ -2777,7 +2791,12 @@ def _journaled_config_payloads(journal: Mapping[str, Any]) -> dict[str, bytes]:
         }
     except (KeyError, ValueError, TypeError) as exc:
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid") from exc
-    if set(payloads) != _JOURNALED_CONFIG_KEYS or any(
+    expected_keys = (
+        _JOURNALED_APPROVAL_CONFIG_KEYS
+        if journal.get("schema") == _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA
+        else _JOURNALED_CONFIG_KEYS
+    )
+    if set(payloads) != expected_keys or any(
         not payload or len(payload) > _MAX_CONFIG_BYTES for payload in payloads.values()
     ):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
@@ -5190,6 +5209,111 @@ def _load_upgrade_compatible_core_config(
     return normalized, core_legacy or standalone_legacy
 
 
+def _record_upgrade_config_replacements(
+    pending: dict[str, Any],
+    replacements: Mapping[str, bytes],
+) -> None:
+    recorded = pending.setdefault("replacement_configs", {})
+    if not isinstance(recorded, dict):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "upgrade replacement config state is invalid",
+        )
+    for key, payload in replacements.items():
+        existing = recorded.get(key)
+        if existing is not None and existing != payload:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "upgrade replacement config state conflicts",
+            )
+        recorded[key] = payload
+
+
+def _migrate_0150_approval_request_ttl_policy(
+    *,
+    approval_config_path: Path,
+    approval_account: pwd.struct_passwd,
+    pending: dict[str, Any],
+) -> str:
+    """Split the exact retained v0.1.50 one-hour communication TTL hotfix."""
+
+    journal = pending.get("journal")
+    if (
+        not isinstance(journal, Mapping)
+        or journal.get("schema") != _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA
+        or (
+            journal.get("from_package_version"),
+            journal.get("to_package_version"),
+        )
+        != _APPROVAL_REQUEST_TTL_UPGRADE
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "Approval TTL migration requires its exact active upgrade journal",
+        )
+    previous = _journaled_config_payloads(journal)["approval_config"]
+    previous_document = _strict_json_bytes(
+        previous,
+        label="journaled Approval config",
+    )
+    request_ttl = previous_document.get("request_ttl_seconds")
+    if request_ttl != 3_600 or previous_document.get(
+        "communication_scope_request_ttl_seconds",
+        3_600,
+    ) != 3_600:
+        raise ServerSetupError(
+            "approval_config",
+            "journaled Approval TTL policy is not an exact supported upgrade source",
+        )
+    normalized_document = dict(previous_document)
+    normalized_document["request_ttl_seconds"] = 600
+    normalized_document["communication_scope_request_ttl_seconds"] = 3_600
+    try:
+        ApprovalServiceConfig.model_validate(normalized_document)
+    except Exception as exc:
+        raise ServerSetupError(
+            "approval_config",
+            "journaled Approval configuration differs beyond the supported TTL migration",
+        ) from exc
+    normalized = (
+        json.dumps(normalized_document, indent=2, sort_keys=True).encode() + b"\n"
+    )
+    _record_upgrade_config_replacements(
+        pending,
+        {"approval_config": normalized},
+    )
+    current = _read_private_managed_file(
+        approval_config_path,
+        approval_account,
+        blocker="setup_upgrade_conflict",
+        max_bytes=_MAX_CONFIG_BYTES,
+    )
+    if current == normalized:
+        return "already_satisfied"
+    if current != previous:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "Approval configuration changed after upgrade journal creation",
+        )
+    return _atomic_replace_exact(
+        approval_config_path,
+        expected=previous,
+        payload=normalized,
+        mode=0o600,
+        uid=approval_account.pw_uid,
+        gid=approval_account.pw_gid,
+        reader=lambda target: _read_private_managed_file(
+            target,
+            approval_account,
+            blocker="setup_upgrade_conflict",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        blocker="setup_upgrade_conflict",
+        label="Approval configuration",
+        result="updated_package_upgrade",
+    )
+
+
 def _migrate_legacy_remote_activation_policy(
     *,
     core_config_path: Path,
@@ -5240,7 +5364,7 @@ def _migrate_legacy_remote_activation_policy(
         "core_config": core_payload,
         "core_oidc_config": oidc_payload,
     }
-    pending["replacement_configs"] = replacements
+    _record_upgrade_config_replacements(pending, replacements)
     core_status = _write_journaled_core_config(
         core_config_path,
         core_payload,
@@ -5310,10 +5434,13 @@ def _migrate_canonical_owner_core_policy(
         json.dumps(replacement_core_document, indent=2, sort_keys=True).encode()
         + b"\n"
     )
-    pending["replacement_configs"] = {
-        "core_config": core_payload,
-        "core_oidc_config": oidc_payload,
-    }
+    _record_upgrade_config_replacements(
+        pending,
+        {
+            "core_config": core_payload,
+            "core_oidc_config": oidc_payload,
+        },
+    )
     core_status = _write_journaled_core_config(
         core_config_path,
         core_payload,
@@ -5477,15 +5604,24 @@ def _prepare_supported_upgrade(
                 "an unrelated interrupted AgentNet setup upgrade is journaled on this host",
             )
         lifecycle_upgrade = journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+        config_paths = {
+            "core_config": core_config_path,
+            "core_oidc_config": core_oidc_path,
+        }
+        config_accounts = {
+            "core_config": core_account,
+            "core_oidc_config": core_account,
+        }
+        if journal.get("schema") == _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA:
+            config_paths["approval_config"] = approval_config_path
+            config_accounts["approval_config"] = approval_account
         pending.update(
             journal=journal,
             journal_path=journal_path,
             marker_path=marker_path,
             unit_paths=dict(unit_paths),
-            config_paths={
-                "core_config": core_config_path,
-                "core_oidc_config": core_oidc_path,
-            },
+            config_paths=config_paths,
+            config_accounts=config_accounts,
             core_account=core_account,
             database_url=database_url,
             systemctl_executable=systemctl_executable,
@@ -5565,6 +5701,19 @@ def _prepare_supported_upgrade(
             )
         ).decode("ascii"),
     }
+    approval_config_upgrade = (
+        str(existing_marker["package_version"]),
+        __version__,
+    ) == _APPROVAL_REQUEST_TTL_UPGRADE
+    if approval_config_upgrade:
+        previous_configs["approval_config"] = base64.b64encode(
+            _read_private_managed_file(
+                approval_config_path,
+                approval_account,
+                blocker="setup_upgrade_conflict",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+        ).decode("ascii")
     lifecycle_upgrade = (
         str(existing_marker["package_version"]),
         __version__,
@@ -5573,7 +5722,11 @@ def _prepare_supported_upgrade(
         "schema": (
             _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
             if lifecycle_upgrade
-            else _UPGRADE_JOURNAL_SCHEMA
+            else (
+                _APPROVAL_CONFIG_UPGRADE_JOURNAL_SCHEMA
+                if approval_config_upgrade
+                else _UPGRADE_JOURNAL_SCHEMA
+            )
         ),
         "from_marker_sha256": hashlib.sha256(existing_marker_payload).hexdigest(),
         "from_package_version": str(existing_marker["package_version"]),
@@ -5616,15 +5769,24 @@ def _prepare_supported_upgrade(
             previous_systemd=previous_systemd,
         )
     _write_upgrade_journal(journal_path, journal, uid=uid, gid=gid)
+    config_paths = {
+        "core_config": core_config_path,
+        "core_oidc_config": core_oidc_path,
+    }
+    config_accounts = {
+        "core_config": core_account,
+        "core_oidc_config": core_account,
+    }
+    if approval_config_upgrade:
+        config_paths["approval_config"] = approval_config_path
+        config_accounts["approval_config"] = approval_account
     pending.update(
         journal=journal,
         journal_path=journal_path,
         marker_path=marker_path,
         unit_paths=dict(unit_paths),
-        config_paths={
-            "core_config": core_config_path,
-            "core_oidc_config": core_oidc_path,
-        },
+        config_paths=config_paths,
+        config_accounts=config_accounts,
         core_account=core_account,
         database_url=database_url,
         systemctl_executable=systemctl_executable,
@@ -5711,11 +5873,25 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
         raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
     core_account = pending["core_account"]
     config_paths = dict(pending["config_paths"])
+    raw_config_accounts = pending.get("config_accounts")
+    config_accounts = (
+        {key: core_account for key in config_paths}
+        if raw_config_accounts is None
+        else dict(raw_config_accounts)
+    )
+    if set(previous_configs) != set(config_paths) or set(config_accounts) != set(
+        config_paths
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "upgrade rollback config state is invalid",
+        )
     current_configs: dict[str, bytes] = {}
     for key, path in config_paths.items():
+        account = config_accounts[key]
         current = _read_private_managed_file(
             path,
-            core_account,
+            account,
             blocker="setup_upgrade_conflict",
             max_bytes=_MAX_CONFIG_BYTES,
         )
@@ -5725,7 +5901,7 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
         ):
             raise ServerSetupError(
                 "setup_upgrade_conflict",
-                "managed Core config changed before upgrade rollback",
+                "managed config changed before upgrade rollback",
             )
         current_configs[key] = current
 
@@ -5808,7 +5984,7 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
         _write_journaled_core_config(
             path,
             previous_configs[key],
-            account=core_account,
+            account=config_accounts[key],
             previous=current,
         )
     for unit, path in unit_paths.items():
@@ -6218,6 +6394,53 @@ def _apply_server_setup(
         prevalidated_config: Any | None = None
         legacy_owner_policy = False
         canonical_owner_source: str | None = None
+        def prepare_upgrade(
+            enrolled_harness_id: str | None,
+            enrolled_credential_id: str | None,
+        ) -> str:
+            return _prepare_supported_upgrade(
+                existing_marker=existing_marker,
+                existing_marker_payload=existing_marker_payload,
+                approved_digest=approved_digest,
+                approval_config_path=approval_config_path,
+                approval_account=approval_account,
+                approval_preexisting=approval_preexisting,
+                core_config_path=core_config_path,
+                core_oidc_path=core_oidc_path,
+                core_account=core_account,
+                core_preexisting=core_preexisting,
+                database_url=request.database_url,
+                domain_id=request.domain_id,
+                enrolled_harness_id=enrolled_harness_id,
+                enrolled_credential_id=enrolled_credential_id,
+                profile_key=request.runtime_instance_id,
+                systemctl_executable=systemctl_executable,
+                unit_paths=unit_paths,
+                marker_path=setup_marker,
+                journal_path=journal_path,
+                uid=root_uid,
+                gid=root_gid,
+                pending=_pending_upgrade,
+            )
+
+        upgrade_status: str | None = None
+        approval_ttl_status: str | None = None
+        approval_ttl_transition = (
+            existing_marker is not None
+            and (
+                existing_marker.get("package_version"),
+                __version__,
+            )
+            == _APPROVAL_REQUEST_TTL_UPGRADE
+            and forward_only_transition
+        )
+        if approval_ttl_transition:
+            upgrade_status = prepare_upgrade(None, None)
+            approval_ttl_status = _migrate_0150_approval_request_ttl_policy(
+                approval_config_path=approval_config_path,
+                approval_account=approval_account,
+                pending=_pending_upgrade,
+            )
         if approval_preexisting and core_preexisting:
             approval_config_before, trusted_before = _approval_trust(
                 approval_config_path,
@@ -6316,39 +6539,27 @@ def _apply_server_setup(
                         scanner_trust=scanner_trust,
                     )
                 )
-        upgrade_status = _prepare_supported_upgrade(
-            existing_marker=existing_marker,
-            existing_marker_payload=existing_marker_payload,
-            approved_digest=approved_digest,
-            approval_config_path=approval_config_path,
-            approval_account=approval_account,
-            approval_preexisting=approval_preexisting,
-            core_config_path=core_config_path,
-            core_oidc_path=core_oidc_path,
-            core_account=core_account,
-            core_preexisting=core_preexisting,
-            database_url=request.database_url,
-            domain_id=request.domain_id,
-            enrolled_harness_id=(
-                prevalidated_config.enrolled_harness_id
-                if prevalidated_config is not None
-                else None
-            ),
-            enrolled_credential_id=(
-                prevalidated_config.enrolled_credential_id
-                if prevalidated_config is not None
-                else None
-            ),
-            profile_key=request.runtime_instance_id,
-            systemctl_executable=systemctl_executable,
-            unit_paths=unit_paths,
-            marker_path=setup_marker,
-            journal_path=journal_path,
-            uid=root_uid,
-            gid=root_gid,
-            pending=_pending_upgrade,
-        )
+        if upgrade_status is None:
+            upgrade_status = prepare_upgrade(
+                (
+                    prevalidated_config.enrolled_harness_id
+                    if prevalidated_config is not None
+                    else None
+                ),
+                (
+                    prevalidated_config.enrolled_credential_id
+                    if prevalidated_config is not None
+                    else None
+                ),
+            )
         steps.append({"id": "package_upgrade", "status": upgrade_status})
+        if approval_ttl_status is not None:
+            steps.append(
+                {
+                    "id": "approval_request_ttl_policy_upgrade",
+                    "status": approval_ttl_status,
+                }
+            )
         attempt_status, attempt_active = _prepare_setup_attempt(
             setup_attempt,
             existing_marker=existing_marker,

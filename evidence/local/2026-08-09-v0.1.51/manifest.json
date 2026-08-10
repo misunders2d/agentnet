@@ -1,18 +1,18 @@
 {
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "evaluated_at": "2026-08-09T17:00:02Z",
+  "evaluated_at": "2026-08-10T13:19:07Z",
   "scope": "v0_1_51_expired_scope_harness_replacement_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "verification_scope": "PASS applies only to the selected local source, focused replacement/recovery/communication tests, reproducible package, and installed-byte commands recorded below; it is not release certification and does not include release-eligible two-machine proof, fresh installed-host upgrade, dedicated PostgreSQL replacement execution, installed-harness pin gates, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "working_tree_candidate",
-  "release_source_tree_sha256": "aecd5b67cf567f94eb68a983d534b7e4038638d941929ae880c2da36cf76492b",
+  "release_source_tree_sha256": "29eca3e8579a1dcad12e3d94500157fd854e804a6cf29bddc17d3182d8685395",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
-  "change_boundary": "Candidate 0.1.51 retains canonical-owner and schema-v7 projection recovery and adds one bounded operation that requires the exact scope owner's independent Approval receipt to replace one expired same-principal member harness in one active schema-v7 collaboration scope. It tombstones the former member, activates the enrolled replacement, increments membership and scope revisions once, recomputes canonical digests, binds audit evidence, recovers exact committed replays after request expiry, and rejects non-owner approvers, cross-principal/domain changes, role drift, active old credentials, inactive replacement credentials, stale state, replay drift, and partial state without hand-editing Core.",
+  "change_boundary": "Candidate 0.1.51 retains canonical-owner and schema-v7 projection recovery, normalizes only the exact retained v0.1.50 one-hour generic Approval TTL hotfix to separate 600-second ordinary and 3600-second communication-scope ceilings under a journaled compare-and-swap/resume/rollback boundary, and adds one bounded operation that requires the exact scope owner's independent Approval receipt to replace one expired same-principal member harness in one active schema-v7 collaboration scope. It tombstones the former member, activates the enrolled replacement, increments membership and scope revisions once, recomputes canonical digests, binds audit evidence, recovers exact committed replays after request expiry, and rejects non-owner approvers, cross-principal/domain changes, role drift, active old credentials, inactive replacement credentials, stale state, replay drift, partial state, and unsupported Approval configuration without hand-editing Core or Approval.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py",
-      "result": "PASS: 232 passed"
+      "result": "PASS: 237 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -20,11 +20,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "SUPERSEDED: 2219 passed and 22 expected platform/dedicated-PostgreSQL skips before the final exact-owner and post-expiry replay review fixes; final source proof is the npm run check lane below"
+      "result": "PASS: 2225 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 2b9f4f218b6a6dbf11fb6ac455b2609e07ebb1dacb4c52f41f2a4acddb7399e5; wheel sha256 96e5402a13c2248ddb6a363c1f9ea2f804d765db10f537bed2425c9e46d0a9b8"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 a139c0cdf167cfb0dce803fb0c2094983fa28e6bbe6c79374889441cafbb48e9; wheel sha256 dc0fefedd3acd6a1228dc895e246b2b00eeeed9e4b6298f8779bb59975db7a1a"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -52,7 +52,7 @@
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2247 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2252 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
   "execution_context": {
@@ -66,11 +66,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "2b9f4f218b6a6dbf11fb6ac455b2609e07ebb1dacb4c52f41f2a4acddb7399e5"
+      "sha256": "a139c0cdf167cfb0dce803fb0c2094983fa28e6bbe6c79374889441cafbb48e9"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "96e5402a13c2248ddb6a363c1f9ea2f804d765db10f537bed2425c9e46d0a9b8"
+      "sha256": "dc0fefedd3acd6a1228dc895e246b2b00eeeed9e4b6298f8779bb59975db7a1a"
     }
   ],
   "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
