@@ -3052,6 +3052,68 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
 
         owner = identity_rows[0][0]
         senders = (identity_rows[1][0], identity_rows[2][0])
+        assert owner.principal_id is not None
+        assert owner.harness_id is not None
+        owner_principal_id = owner.principal_id
+        owner_harness_id = owner.harness_id
+        member_harness_ids: list[str] = []
+        for actor, _key in identity_rows:
+            assert actor.harness_id is not None
+            member_harness_ids.append(actor.harness_id)
+        domain_state = first.fetch_one(
+            "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+            (domain,),
+        )
+        assert domain_state is not None
+        scope_id = f"scope:postgres-task-conflict:{uuid4().hex}"
+        scope_service = CollaborationScopeService(first, clock=lambda: now_epoch)
+        proposal = CollaborationScopeProposal(
+            scope_id=scope_id,
+            scope_kind="shared",
+            member_harness_ids=tuple(sorted(member_harness_ids)),
+            allowed_actions=("task.accept", "task.propose"),
+            allowed_resource_prefixes=("task:",),
+            allowed_classifications=(Classification.C1_INTERNAL,),
+            policy_revision=int(domain_state["policy_revision"]),
+            domain_revocation_epoch=int(domain_state["revocation_epoch"]),
+            expires_at=now_epoch + 3_600,
+        )
+        issuance_resource = f"scope:{scope_id}"
+        issuance_policy = LocalConformancePolicyEngine(first)
+        issuance_policy.bootstrap_entitlement_for_local_conformance(
+            HumanEntitlement(
+                domain_id=domain,
+                principal_id=owner_principal_id,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource_pattern=issuance_resource,
+                revision=int(domain_state["policy_revision"]),
+                expires_at=datetime.fromtimestamp(now_epoch + 3_600, UTC),
+            ),
+            when=now,
+        )
+        issuance_request = scope_service.issuance_request(
+            actor=owner,
+            proposal=proposal,
+        )
+        issuance_decision = issuance_policy.require(
+            AuthorizationRequest(
+                actor=owner,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource=issuance_resource,
+                policy_revision=int(domain_state["policy_revision"]),
+                context=issuance_request,
+            ),
+            when=now,
+        )
+        scope = scope_service.issue(
+            actor=owner,
+            proposal=proposal,
+            authority=IssuanceAuthority(
+                actor=owner,
+                policy_decision_id=issuance_decision.decision_id,
+            ),
+            when=now,
+        )
         intent = TaskExecutionIntent(
             resources=(
                 TaskResourceIntent(
@@ -3068,10 +3130,13 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
                 actor=sender,
                 event_type=EventType.TASK_ASSIGNMENT,
                 classification=Classification.C1_INTERNAL,
-                payload={"instruction": f"exclusive rewrite {index}"},
+                payload={
+                    "instruction": f"exclusive rewrite {index}",
+                    "authorization_context": scope.authorization_context(),
+                },
                 idempotency_key=f"postgres-task-conflict-{index}-{uuid4()}",
-                recipients=(owner.harness_id,),
-                task_id=str(uuid4()),
+                recipients=(owner_harness_id,),
+                task_id=f"task:postgres-conflict:{uuid4()}",
                 effect_deadline=deadline,
                 policy_revision=1,
             )
@@ -3079,10 +3144,7 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
         )
         stores = (first, second)
         mailboxes = (
-            MailboxService(
-                first,
-                collaboration_scopes=CollaborationScopeService(first),
-            ),
+            MailboxService(first, collaboration_scopes=scope_service),
             MailboxService(
                 second,
                 collaboration_scopes=CollaborationScopeService(second),
