@@ -866,10 +866,15 @@ Approval and Core schemas, and the source identity/signer fields needed to
 reconstruct the marker-era documents. The inverse TTL comparison may remove
 only the known communication-scope field and restore the published 300-second
 generic value. Both reconstructed canonical digests must equal the marker
-before upgrade journal v3 is created. The v3 journal stores the realized
-current documents, not synthetic source bytes; subsequent owner and Core
-recovery checks are idempotent. No incomplete recovery phase, caller-selected
-identity, or independent Approval/Core drift is accepted.
+before upgrade journal v3 is created. Every initial or resumed attempt repeats
+the terminal journal, exact single-active-owner, adoption-audit, target
+credential, and signer-custody checks before journal preparation or TTL
+migration. The retained 3600-second source policy has one exact no-write
+compatibility parse; no other invalid current schema is admitted. The v3
+journal stores the realized current documents, not synthetic source bytes;
+subsequent owner and Core recovery checks are idempotent. No incomplete
+recovery phase, caller-selected identity, ambiguous owner state, or independent
+Approval/Core drift is accepted.
 
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two

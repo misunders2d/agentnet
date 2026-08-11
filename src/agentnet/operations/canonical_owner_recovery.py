@@ -245,6 +245,34 @@ def _require_exact_target(
     )
 
 
+def validate_canonical_owner_adoption_state(
+    connection: Any,
+    *,
+    request: CanonicalOwnerAdoptionRequest,
+) -> tuple[int, int, int]:
+    """Require the exact durable authority state produced by owner adoption."""
+
+    active_bindings = list(
+        connection.execute(
+            """SELECT * FROM approval_owner_bindings
+                 WHERE domain_id=? AND status='active'
+                 ORDER BY binding_id""",
+            (request.domain_id,),
+        ).fetchall()
+    )
+    if len(active_bindings) != 1:
+        raise GateBlocked("canonical_owner_recovery", "approval owner state is ambiguous")
+    counts = _require_exact_target(
+        connection,
+        request=request,
+        binding=active_bindings[0],
+        request_digest=_request_digest(request),
+    )
+    if list(connection.execute("PRAGMA foreign_key_check").fetchall()):
+        raise GateBlocked("canonical_owner_recovery", "approval owner adoption is inconsistent")
+    return counts
+
+
 def adopt_canonical_approval_owner(
     store: ApprovalStore,
     *,
@@ -280,11 +308,9 @@ def adopt_canonical_approval_owner(
                 migrated_active_credentials,
                 revoked_browser_sessions,
                 canceled_registration_ceremonies,
-            ) = _require_exact_target(
+            ) = validate_canonical_owner_adoption_state(
                 connection,
                 request=request,
-                binding=binding,
-                request_digest=digest,
             )
             return _result(
                 request,
@@ -405,22 +431,14 @@ def adopt_canonical_approval_owner(
                 adoption_detail,
             ),
         )
-        persisted_counts = _require_exact_target(
+        persisted_counts = validate_canonical_owner_adoption_state(
             connection,
             request=request,
-            binding=connection.execute(
-                "SELECT * FROM approval_owner_bindings WHERE binding_id=?",
-                (binding["binding_id"],),
-            ).fetchone(),
-            request_digest=digest,
         )
         if persisted_counts != adoption_counts:
             raise GateBlocked(
                 "canonical_owner_recovery", "approval owner adoption evidence drifted"
             )
-        foreign_keys = list(connection.execute("PRAGMA foreign_key_check").fetchall())
-        if foreign_keys:
-            raise GateBlocked("canonical_owner_recovery", "approval owner adoption is inconsistent")
 
         return _result(
             request,
@@ -1019,4 +1037,6 @@ __all__ = [
     "CanonicalOwnerRecoveryResult",
     "adopt_canonical_approval_owner",
     "converge_canonical_approval_owner",
+    "validate_canonical_owner_adoption_state",
+    "validate_canonical_owner_recovery_journal",
 ]

@@ -156,31 +156,31 @@ def _bootstrap_evidence(domain_id: str) -> dict[str, object]:
     }
 
 
-def test_canonical_owner_source_reports_incomplete_recovery_phase(tmp_path: Path) -> None:
-    request = load_server_setup_request(_communication_only_request(tmp_path))
-    approval_state = tmp_path / "approval-state"
-    approval_state.mkdir(mode=0o700)
-    _private_json(
-        approval_state / "canonical-owner-recovery.json",
-        {
-            "schema": "agentnet.canonical-owner-recovery-journal.v1",
-            "phase": "authority_adopted",
-            "domain_id": request.domain_id,
-            "source_principal_id": "setup-placeholder-owner",
-            "source_signer_key_id": "source-signer-key-id",
-            "source_signer_public_key_pem": "synthetic-public-key",
-            "target_principal_id": request.approval_approver_principal_id,
-        },
+def test_canonical_owner_source_rejects_tampered_recovery_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+        harness
     )
+    approval_state = harness.layout.host(setup.APPROVAL_STATE)
+    recovery_path = approval_state / "canonical-owner-recovery.json"
+    recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+    recovery["phase"] = "authority_adopted"
+    _private_json(recovery_path, recovery)
 
     with pytest.raises(
         ServerSetupError,
-        match="canonical owner recovery is incomplete",
+        match="canonical owner recovery journal is invalid",
     ):
         getattr(setup, "_canonical_owner_recovery_source")(
             approval_state,
+            config_path,
             pwd.getpwuid(os.geteuid()),
-            request=request,
+            request=harness.request,
         )
 
 
@@ -953,6 +953,56 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
             canonical_json(adoption)
         ).hexdigest(),
     }
+    approval_store = ApprovalStore(
+        Path(approval["database_path"]),
+        LocalEnvelopeCipher(Path(approval["record_key_path"]).read_bytes()),
+    )
+    try:
+        with approval_store.transaction() as connection:
+            target_handle = base64.urlsafe_b64encode(
+                hashlib.sha256(
+                    canonical_json(
+                        {
+                            "schema": "agentnet.approval.webauthn-user.v1",
+                            "verifier_id": harness.request.approval_verifier_id,
+                            "domain_id": harness.request.domain_id,
+                            "approver_principal_id": (
+                                harness.request.approval_approver_principal_id
+                            ),
+                        }
+                    )
+                ).digest()
+            ).rstrip(b"=").decode("ascii")
+            connection.execute(
+                """INSERT INTO approval_webauthn_credentials(
+                       credential_id_b64,approver_principal_id,domain_id,
+                       user_handle_b64,credential_public_key_b64,sign_count,
+                       device_type,backed_up,status,created_at,revoked_at,
+                       revocation_reason
+                   ) VALUES('recovered-owner-credential',?,?,?,'synthetic-key',
+                            0,'single_device',0,'active',1,NULL,NULL)""",
+                (
+                    harness.request.approval_approver_principal_id,
+                    harness.request.domain_id,
+                    target_handle,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO approval_audit(
+                       action,request_id,approver_principal_id,domain_id,
+                       approval_purpose,transaction_digest,occurred_at,outcome,detail_code
+                   ) VALUES('owner.canonical_adoption',NULL,?,?,
+                            'owner.canonical_adoption',?,2,'adopted',
+                            'canonical_owner_adopted:v1:1:0:0')""",
+                (
+                    harness.request.approval_approver_principal_id,
+                    harness.request.domain_id,
+                    journal["request_digest"],
+                ),
+            )
+    finally:
+        approval_store.close()
+
     approval_state = harness.layout.host(setup.APPROVAL_STATE)
     _private_json(approval_state / "canonical-owner-recovery.json", journal)
 
@@ -1203,6 +1253,53 @@ def test_0151_upgrade_converges_unrecorded_0150_one_hour_approval_hotfix(
     } in result["steps"]
     assert harness.marker()["package_version"] == "0.1.51"
     assert not harness.journal_path.exists()
+
+
+def test_0151_rejects_incomplete_owner_recovery_before_ttl_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, source_payload = _stage_0150_one_hour_approval_hotfix(harness)
+    recovery_path = (
+        harness.layout.host(setup.APPROVAL_STATE)
+        / "canonical-owner-recovery.json"
+    )
+    _private_json(
+        recovery_path,
+        {
+            "schema": "agentnet.canonical-owner-recovery-journal.v1",
+            "phase": "prepared",
+        },
+    )
+    recovery_before = recovery_path.read_bytes()
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    real_migrate = getattr(setup, "_migrate_0150_approval_request_ttl_policy")
+    migrations: list[bool] = []
+
+    def tracked_migrate(**kwargs: object) -> str:
+        migrations.append(True)
+        return real_migrate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        setup,
+        "_migrate_0150_approval_request_ttl_policy",
+        tracked_migrate,
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "canonical_owner_recovery"
+    assert migrations == []
+    assert config_path.read_bytes() == source_payload
+    assert recovery_path.read_bytes() == recovery_before
+    assert not harness.journal_path.exists()
 def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1281,6 +1378,10 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
         ("journal_source_config_sha256", "canonical_owner_recovery"),
         ("binding_verified_email", "canonical_owner_recovery"),
         ("binding_pinned_at", "canonical_owner_recovery"),
+        ("binding_second_active", "canonical_owner_recovery"),
+        ("target_credential_removed", "canonical_owner_recovery"),
+        ("source_credential_active", "canonical_owner_recovery"),
+        ("adoption_audit_removed", "canonical_owner_recovery"),
         ("approval_policy", "canonical_owner_recovery"),
         ("core_policy", "setup_upgrade_conflict"),
     ),
@@ -1317,7 +1418,11 @@ def test_0151_rejects_combined_recovery_evidence_or_state_drift(
             else "https://unrelated.example"
         )
         _private_json(recovery_path, recovery)
-    elif tamper.startswith("binding_"):
+    elif tamper.startswith("binding_") or tamper in {
+        "target_credential_removed",
+        "source_credential_active",
+        "adoption_audit_removed",
+    }:
         approval = json.loads(config_path.read_text(encoding="utf-8"))
         record_key = Path(approval["record_key_path"]).read_bytes()
         store = ApprovalStore(
@@ -1325,15 +1430,67 @@ def test_0151_rejects_combined_recovery_evidence_or_state_drift(
             LocalEnvelopeCipher(record_key),
         )
         try:
-            column = tamper.removeprefix("binding_")
-            value: str | int = (
-                "other-owner@corp.example" if column == "verified_email" else 2
-            )
             with store.transaction() as connection:
-                connection.execute(
-                    f"UPDATE approval_owner_bindings SET {column}=?",
-                    (value,),
-                )
+                if tamper == "binding_verified_email":
+                    connection.execute(
+                        "UPDATE approval_owner_bindings SET verified_email=?",
+                        ("other-owner@corp.example",),
+                    )
+                elif tamper == "binding_pinned_at":
+                    connection.execute(
+                        "UPDATE approval_owner_bindings SET pinned_at=?",
+                        (2,),
+                    )
+                elif tamper == "binding_second_active":
+                    connection.execute(
+                        """INSERT INTO approval_owner_bindings(
+                               binding_id,domain_id,approver_principal_id,oidc_issuer,
+                               oidc_subject,verified_email,pin_source,status,pinned_at,
+                               revoked_at,revocation_reason
+                           ) VALUES(?,?,?,'https://other.example','other-subject',
+                                    'other-owner@corp.example','exact_subject','active',
+                                    2,NULL,NULL)""",
+                        (
+                            "ambiguous-owner-binding",
+                            harness.request.domain_id,
+                            "ambiguous-owner",
+                        ),
+                    )
+                elif tamper == "target_credential_removed":
+                    connection.execute(
+                        """DELETE FROM approval_webauthn_credentials
+                           WHERE approver_principal_id=? AND domain_id=?
+                             AND status='active'""",
+                        (
+                            harness.request.approval_approver_principal_id,
+                            harness.request.domain_id,
+                        ),
+                    )
+                elif tamper == "source_credential_active":
+                    connection.execute(
+                        """INSERT INTO approval_webauthn_credentials(
+                               credential_id_b64,approver_principal_id,domain_id,
+                               user_handle_b64,credential_public_key_b64,sign_count,
+                               device_type,backed_up,status,created_at,revoked_at,
+                               revocation_reason
+                           )
+                           SELECT 'stale-source-credential','setup-placeholder-owner',
+                                  domain_id,user_handle_b64,credential_public_key_b64,
+                                  sign_count,device_type,backed_up,status,created_at,
+                                  revoked_at,revocation_reason
+                           FROM approval_webauthn_credentials
+                           WHERE approver_principal_id=? AND domain_id=?
+                             AND status='active' LIMIT 1""",
+                        (
+                            harness.request.approval_approver_principal_id,
+                            harness.request.domain_id,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """DELETE FROM approval_audit
+                           WHERE action='owner.canonical_adoption'"""
+                    )
         finally:
             store.close()
     elif tamper == "approval_policy":
@@ -1351,6 +1508,7 @@ def test_0151_rejects_combined_recovery_evidence_or_state_drift(
     marker_before = harness.marker_path.read_bytes()
     approval_before = config_path.read_bytes()
     core_before = core_config_path.read_bytes()
+    recovery_before = recovery_path.read_bytes()
 
     harness.install_new_package_runtime()
     monkeypatch.setattr(setup, "__version__", "0.1.51")
@@ -1361,6 +1519,7 @@ def test_0151_rejects_combined_recovery_evidence_or_state_drift(
     assert harness.marker_path.read_bytes() == marker_before
     assert config_path.read_bytes() == approval_before
     assert core_config_path.read_bytes() == core_before
+    assert recovery_path.read_bytes() == recovery_before
     assert not harness.journal_path.exists()
 
 
@@ -1604,6 +1763,107 @@ def test_0151_approval_ttl_migration_resumes_after_process_loss(
     assert migrated["communication_scope_request_ttl_seconds"] == 3_600
     assert harness.marker()["package_version"] == "0.1.51"
     assert not harness.journal_path.exists()
+
+
+def test_0151_resume_revalidates_owner_recovery_before_ttl_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+        harness
+    )
+    recovery_path = (
+        harness.layout.host(setup.APPROVAL_STATE)
+        / "canonical-owner-recovery.json"
+    )
+    recovery_before = recovery_path.read_bytes()
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    original_run_as = setup._run_as
+
+    def run_as(
+        account: pwd.struct_passwd,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
+    ) -> dict[str, object]:
+        if argv[2:4] == ["approval", "recover-canonical-owner"]:
+            return {"status": "already_exact"}
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
+        )
+
+    monkeypatch.setattr(setup, "_run_as", run_as)
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {
+            "actor": {
+                "principal_id": harness.request.approval_approver_principal_id
+            }
+        },
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    original_commit = setup._commit_setup_marker
+    original_rollback = setup._rollback_pending_upgrade
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(
+        setup,
+        "_commit_setup_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("injected combined-recovery process loss")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="injected combined-recovery process loss"):
+        harness.apply(harness.plan_digest())
+
+    assert harness.journal_path.exists()
+    approval = json.loads(config_path.read_text(encoding="utf-8"))
+    store = ApprovalStore(
+        Path(approval["database_path"]),
+        LocalEnvelopeCipher(Path(approval["record_key_path"]).read_bytes()),
+    )
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE approval_owner_bindings SET verified_email=?",
+                ("drifted-owner@corp.example",),
+            )
+    finally:
+        store.close()
+    real_migrate = getattr(setup, "_migrate_0150_approval_request_ttl_policy")
+    migrations: list[bool] = []
+
+    def tracked_migrate(**kwargs: object) -> str:
+        migrations.append(True)
+        return real_migrate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        setup,
+        "_migrate_0150_approval_request_ttl_policy",
+        tracked_migrate,
+    )
+    monkeypatch.setattr(setup, "_rollback_pending_upgrade", original_rollback)
+    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "canonical_owner_recovery"
+    assert migrations == []
+    assert recovery_path.read_bytes() == recovery_before
+    assert harness.marker()["package_version"] == "0.1.50"
 
 
 def test_0151_rejects_direct_upgrade_from_pre_lifecycle_release(

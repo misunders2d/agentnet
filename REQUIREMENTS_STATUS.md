@@ -449,18 +449,23 @@ published and historical release evidence:
   completed canonical-owner repair with the retained TTL hotfix: it validates
   terminal recovery and signer evidence, reconstructs both marker-era Approval
   and Core documents, and requires both canonical digests to match before
-  creating an upgrade journal or changing managed state. It then journals the
-  realized current documents, normalizes the TTL policy, and verifies
-  idempotent owner/Core convergence; incomplete, cross-principal,
-  signer-drifted, or independently drifted state remains fail-closed. A lost
+  creating an upgrade journal or changing managed state. Every initial or
+  resumed attempt revalidates the terminal journal, exact single active owner,
+  adoption audit, credential state, and signer custody before journal
+  preparation or TTL migration; the retained 3600-second source shape is parsed
+  without writing and only its exact allowlisted TTL delta is accepted. Setup
+  then journals the realized current documents, normalizes the TTL policy, and
+  verifies idempotent owner/Core convergence; incomplete, cross-principal,
+  signer-drifted, ambiguous-owner, or independently drifted state remains
+  fail-closed. A lost
   PostgreSQL lease heartbeat publishes reconnect-required state while protected
   operations remain excluded. A later operation opens a fresh verified
   connection and reacquires a strictly higher same-owner fence;
   different-owner contention or unverifiable recovery remains unavailable.
-  The focused recovery lane reports **255 passed**; the broad
-  releasable-source lane reports **2243 passed and 22 expected
+  The focused recovery lane reports **261 passed**; the broad
+  releasable-source lane reports **2249 passed and 22 expected
   platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
-  generations each report **2270 passed and 22 expected skips**. Two independent
+  generations each report **2276 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
   endpoint routing with zero sibling reactions or residue. Exact-commit GitHub

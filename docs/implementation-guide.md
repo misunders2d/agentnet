@@ -415,11 +415,15 @@ source. Do not repair that marker manually. Setup validates the completed
 canonical-owner journal and signer custody, reconstructs the exact marker-era
 Approval and Core documents, applies the bounded inverse TTL comparison, and
 requires both reconstructed digests to equal the marker before any setup
-journal or managed write. It then journals the realized current documents,
-normalizes the TTL policy, and rechecks the owner command and Core policy as
-idempotent `already_exact`/`already_satisfied` operations. Incomplete recovery
-evidence, mixed principals, signer drift, or unrelated Approval/Core changes
-fail closed.
+journal or managed write. Setup repeats the terminal journal, exact
+single-active-owner, adoption-audit, target-credential, and signer-custody
+preflight on every initial or resumed attempt. It parses the retained
+3600-second source policy without writing and admits only that exact legacy TTL
+shape. Only then does it journal the realized current documents, normalize the
+TTL policy, and recheck the owner command and Core policy as idempotent
+`already_exact`/`already_satisfied` operations. Incomplete recovery evidence,
+mixed principals, signer drift, ambiguous owner state, or unrelated
+Approval/Core changes fail closed.
 
 The same setup pass repairs an already committed communication scope that lacks
 its schema-v7 collaboration projection. It materializes only the exact

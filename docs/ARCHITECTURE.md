@@ -936,10 +936,14 @@ marker still records the pre-repair source, setup reconstructs both marker-era
 documents from the current typed documents plus proof-bound source identity and
 signer fields. It reverses only the allowlisted TTL delta for comparison and
 requires both canonical digests to equal the marker before creating the setup
-journal. The normal journal then captures the realized current files, TTL
-normalization proceeds, and owner/Core convergence is verified idempotently.
-Unknown, incomplete, cross-principal, signer-mismatched, or additionally
-drifted combinations fail before a managed write.
+journal. Every initial or resumed attempt first revalidates the terminal
+recovery journal, exact single active owner, adoption audit, target credential,
+and signer custody. The retained 3600-second source policy is parsed through an
+exact no-write compatibility path; only after that preflight may the normal
+journal capture the realized current files and TTL normalization proceed.
+Owner/Core convergence is then verified idempotently. Unknown, incomplete,
+cross-principal, signer-mismatched, ambiguous-owner, or additionally drifted
+combinations fail before a managed write.
 
 Communication-scope completion and legacy-scope repair share one schema-v7
 single-scope materializer. Completion invokes it inside the transaction that
