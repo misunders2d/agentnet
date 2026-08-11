@@ -84,7 +84,12 @@ from agentnet.operations.config import (
     ScannerTrustConfig,
 )
 from agentnet.operations.config_migration import load_config_json
-from agentnet.security.signatures import P256KeyPair, canonical_digest, verify_signature
+from agentnet.security.signatures import (
+    P256KeyPair,
+    canonical_digest,
+    canonical_json,
+    verify_signature,
+)
 from agentnet.storage.migrations import MIGRATIONS
 from agentnet.storage.postgres import (
     MIGRATION_LOCK_ID,
@@ -4786,6 +4791,424 @@ def _canonical_owner_recovery_request_for_marker(
     return recovery_request
 
 
+def _reconstruct_completed_canonical_owner_recovery_for_marker(
+    marker: Mapping[str, Any],
+    approval_state: Path,
+    approval_config_path: Path,
+    approval_account: pwd.struct_passwd,
+    core_config_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    observed_at: int,
+) -> dict[str, str] | None:
+    """Record one exact terminal repair when its original journal was lost."""
+
+    journal_path = approval_state / "canonical-owner-recovery.json"
+    if journal_path.exists() or journal_path.is_symlink():
+        return None
+    raw_approval = _strict_json_bytes(
+        _read_private_managed_file(
+            approval_config_path,
+            approval_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Approval configuration",
+    )
+    try:
+        approval_config = _owner_recovery_compatible_approval_config(
+            json.dumps(raw_approval, sort_keys=True).encode("utf-8")
+        )
+    except ValidationError:
+        return None
+    if (
+        len(approval_config.approvers) != 1
+        or approval_config.approvers[0].principal_id
+        != request.approval_approver_principal_id
+    ):
+        return None
+    configured = approval_config.approvers[0]
+    signer_root = approval_config.data_dir / "signers"
+    target_signer_path = configured.signer_private_key_path
+    if target_signer_path.parent != signer_root:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner target signer path conflicts with fixed custody",
+        )
+    try:
+        signer_paths = sorted(
+            (path for path in signer_root.iterdir()),
+            key=lambda path: path.name,
+        )
+    except OSError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner signer evidence is unavailable",
+        ) from exc
+    if signer_paths == [target_signer_path]:
+        return None
+    if (
+        len(signer_paths) != 2
+        or target_signer_path not in signer_paths
+        or any(path.suffix != ".pem" for path in signer_paths)
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner signer evidence is ambiguous",
+        )
+    source_signer_path = next(
+        path for path in signer_paths if path != target_signer_path
+    )
+    for path in signer_paths:
+        _require_private_file(
+            path,
+            approval_account,
+            blocker="canonical_owner_recovery",
+        )
+    try:
+        target_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                target_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+        source_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                source_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+    except Exception as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner signer evidence is invalid",
+        ) from exc
+    if (
+        target_signer.thumbprint != configured.signer_key_id
+        or source_signer.thumbprint == target_signer.thumbprint
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner signer evidence conflicts with current authority",
+        )
+
+    raw_core = _strict_json_bytes(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Core configuration",
+    )
+    oidc = raw_core.get("oidc_enrollment")
+    if not isinstance(oidc, dict):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence is unavailable",
+        )
+    core_trusted = oidc.get("trusted_approvers")
+    approval_service = oidc.get("approval_service")
+    digest_core = dict(raw_core)
+    digest_core.pop("enrolled_harness_id", None)
+    digest_core.pop("enrolled_credential_id", None)
+    if (
+        not isinstance(core_trusted, list)
+        or len(core_trusted) != 1
+        or not isinstance(core_trusted[0], dict)
+        or not isinstance(approval_service, dict)
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence is ambiguous",
+        )
+    target_trust = core_trusted[0]
+    if (
+        target_trust.get("principal_id")
+        != request.approval_approver_principal_id
+        or target_trust.get("signer_key_id") != target_signer.thumbprint
+        or target_trust.get("public_key_pem") != target_signer.public_pem
+        or approval_service.get("approver_principal_id")
+        != request.approval_approver_principal_id
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence conflicts with current authority",
+        )
+
+    database_path = approval_config.database_path
+    _require_private_file(
+        database_path,
+        approval_account,
+        blocker="canonical_owner_recovery",
+    )
+    before = database_path.stat(follow_symlinks=False)
+    connection: sqlite3.Connection | None = None
+    matches: list[
+        tuple[
+            CanonicalOwnerAdoptionRequest,
+            tuple[int, int, int],
+            int,
+            bytes,
+        ]
+    ] = []
+    try:
+        connection = sqlite3.connect(
+            f"{database_path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=5.0,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        bindings = connection.execute(
+            """SELECT * FROM approval_owner_bindings
+                 WHERE domain_id=? AND status='active'
+                 ORDER BY binding_id""",
+            (request.domain_id,),
+        ).fetchall()
+        if (
+            len(bindings) != 1
+            or bindings[0]["approver_principal_id"]
+            != request.approval_approver_principal_id
+            or bindings[0]["oidc_issuer"] != configured.oidc_issuer
+        ):
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "canonical owner binding evidence conflicts with setup",
+            )
+        binding = bindings[0]
+        candidate_rows = connection.execute(
+            """SELECT DISTINCT approver_principal_id
+                 FROM approval_audit
+                WHERE domain_id=? AND approver_principal_id IS NOT NULL
+                  AND approver_principal_id<>?
+                ORDER BY approver_principal_id
+                LIMIT 65""",
+            (
+                request.domain_id,
+                request.approval_approver_principal_id,
+            ),
+        ).fetchall()
+        if not candidate_rows or len(candidate_rows) > 64:
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "canonical owner source evidence is ambiguous",
+            )
+        for candidate_row in candidate_rows:
+            source_principal = str(candidate_row["approver_principal_id"])
+            recovery_request = CanonicalOwnerAdoptionRequest(
+                schema="agentnet.canonical-owner-adoption.v1",
+                recovery_id=str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"agentnet:{request.domain_id}:{source_principal}:"
+                        f"{request.approval_approver_principal_id}",
+                    )
+                ),
+                domain_id=request.domain_id,
+                source_principal_id=source_principal,
+                target_principal_id=request.approval_approver_principal_id,
+                oidc_issuer=str(binding["oidc_issuer"]),
+                oidc_subject=str(binding["oidc_subject"]),
+                verified_email=str(binding["verified_email"]),
+                verifier_id=approval_config.verifier_id,
+                approved_at=int(binding["pinned_at"]),
+            )
+            try:
+                counts = validate_canonical_owner_adoption_state(
+                    connection,
+                    request=recovery_request,
+                )
+            except GateBlocked:
+                continue
+            source_approver = dict(raw_approval["approvers"][0])
+            source_approver.update(
+                principal_id=source_principal,
+                signer_key_id=source_signer.thumbprint,
+                signer_private_key_path=str(source_signer_path),
+            )
+            source_hotfix = dict(raw_approval)
+            source_hotfix["approvers"] = [source_approver]
+            source_hotfix_payload = (
+                json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8")
+                + b"\n"
+            )
+            marker_approval = dict(source_hotfix)
+            marker_approval["request_ttl_seconds"] = 300
+            marker_approval.pop(
+                "communication_scope_request_ttl_seconds",
+                None,
+            )
+            source_core_trust = dict(target_trust)
+            source_core_trust.update(
+                principal_id=source_principal,
+                signer_key_id=source_signer.thumbprint,
+                public_key_pem=source_signer.public_pem,
+            )
+            source_approval_service = dict(approval_service)
+            source_approval_service["approver_principal_id"] = source_principal
+            source_oidc = dict(oidc)
+            source_oidc["trusted_approvers"] = [source_core_trust]
+            source_oidc["approval_service"] = source_approval_service
+            marker_core = dict(digest_core)
+            marker_core["oidc_enrollment"] = source_oidc
+            try:
+                ApprovalServiceConfig.model_validate(marker_approval)
+                OIDCEnrollmentConfig.model_validate(source_oidc)
+            except ValidationError:
+                continue
+            if (
+                canonical_digest(marker_approval)
+                != marker.get("approval_config_digest")
+                or canonical_digest(marker_core)
+                != marker.get("core_config_digest")
+            ):
+                continue
+            request_digest = hashlib.sha256(
+                canonical_json(
+                    recovery_request.model_dump(
+                        by_alias=True,
+                        mode="json",
+                    )
+                )
+            ).hexdigest()
+            audit_rows = connection.execute(
+                """SELECT occurred_at FROM approval_audit
+                     WHERE action='owner.canonical_adoption'
+                       AND approver_principal_id=? AND domain_id=?
+                       AND approval_purpose='owner.canonical_adoption'
+                       AND transaction_digest=? AND outcome='adopted'""",
+                (
+                    request.approval_approver_principal_id,
+                    request.domain_id,
+                    request_digest,
+                ),
+            ).fetchall()
+            if len(audit_rows) != 1:
+                continue
+            matches.append(
+                (
+                    recovery_request,
+                    counts,
+                    int(audit_rows[0]["occurred_at"]),
+                    source_hotfix_payload,
+                )
+            )
+    except (OSError, sqlite3.Error, GateBlocked, ValueError) as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner journal-less evidence is unavailable",
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
+    after = database_path.stat(follow_symlinks=False)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner binding evidence conflicts with setup",
+        )
+    if len(matches) != 1:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner journal-less evidence is ambiguous",
+        )
+    recovery_request, counts, adoption_at, source_hotfix_payload = matches[0]
+    adoption = {
+        "schema": "agentnet.canonical-owner-adoption-result.v1",
+        "status": "adopted",
+        "recovery_id": recovery_request.recovery_id,
+        "migrated_active_credentials": counts[0],
+        "revoked_browser_sessions": counts[1],
+        "canceled_registration_ceremonies": counts[2],
+    }
+    request_digest = hashlib.sha256(
+        canonical_json(
+            recovery_request.model_dump(by_alias=True, mode="json")
+        )
+    ).hexdigest()
+    journal = CanonicalOwnerRecoveryJournal.model_validate(
+        {
+            "schema": "agentnet.canonical-owner-recovery-journal.v1",
+            "recovery_id": recovery_request.recovery_id,
+            "request_digest": request_digest,
+            "config_path": str(approval_config_path.absolute()),
+            "signer_path": str(source_signer_path),
+            "target_signer_path": str(target_signer_path),
+            "source_config_sha256": hashlib.sha256(
+                source_hotfix_payload
+            ).hexdigest(),
+            "domain_id": request.domain_id,
+            "source_principal_id": recovery_request.source_principal_id,
+            "target_principal_id": request.approval_approver_principal_id,
+            "oidc_issuer": recovery_request.oidc_issuer,
+            "source_signer_key_id": source_signer.thumbprint,
+            "source_signer_public_key_pem": source_signer.public_pem,
+            "target_signer_key_id": target_signer.thumbprint,
+            "target_signer_public_key_pem": target_signer.public_pem,
+            "phase": "complete",
+            "prepared_at": adoption_at,
+            "completed_at": observed_at,
+            "authority_adoption": adoption,
+            "authority_adoption_digest": hashlib.sha256(
+                canonical_json(adoption)
+            ).hexdigest(),
+            "reconstruction": {
+                "schema": (
+                    "agentnet.canonical-owner-recovery-reconstruction.v1"
+                ),
+                "observed_at": observed_at,
+                "marker_approval_config_digest": str(
+                    marker["approval_config_digest"]
+                ),
+                "marker_core_config_digest": str(
+                    marker["core_config_digest"]
+                ),
+                "realized_approval_config_digest": canonical_digest(
+                    raw_approval
+                ),
+                "realized_core_config_digest": canonical_digest(digest_core),
+                "source_principal_evidence": (
+                    "approval_audit_marker_digest"
+                ),
+            },
+        }
+    )
+    payload = (
+        json.dumps(
+            journal.model_dump(by_alias=True, mode="json"),
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    _atomic_write(
+        journal_path,
+        payload,
+        mode=0o600,
+        uid=approval_account.pw_uid,
+        gid=approval_account.pw_gid,
+    )
+    recovered = _canonical_owner_recovery_source(
+        approval_state,
+        approval_config_path,
+        approval_account,
+        request=request,
+    )
+    if recovered is None:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner evidence is unavailable",
+        )
+    return recovered
+
+
 def _completed_canonical_owner_recovery_for_marker(
     approval_state: Path,
     approval_config_path: Path,
@@ -4834,6 +5257,104 @@ def _completed_canonical_owner_recovery_for_marker(
         ) from exc
 
 
+def _require_reconstructed_recovery_signer_custody(
+    journal: CanonicalOwnerRecoveryJournal,
+    approval_document: Mapping[str, Any],
+    approval_account: pwd.struct_passwd,
+) -> None:
+    """Recheck the exact two-key custody that justified reconstruction."""
+
+    try:
+        approval_config = _owner_recovery_compatible_approval_config(
+            json.dumps(dict(approval_document), sort_keys=True).encode("utf-8")
+        )
+    except ValidationError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence is invalid",
+        ) from exc
+    if len(approval_config.approvers) != 1:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence is ambiguous",
+        )
+    configured = approval_config.approvers[0]
+    signer_root = approval_config.data_dir / "signers"
+    source_signer_path = Path(journal.signer_path)
+    target_signer_path = Path(journal.target_signer_path)
+    if (
+        source_signer_path.parent != signer_root
+        or target_signer_path.parent != signer_root
+        or source_signer_path == target_signer_path
+        or configured.signer_private_key_path != target_signer_path
+        or configured.signer_key_id != journal.target_signer_key_id
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence conflicts with custody",
+        )
+    _require_private_directory(
+        signer_root,
+        approval_account,
+        blocker="canonical_owner_recovery",
+    )
+    try:
+        signer_paths = sorted(signer_root.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence is unavailable",
+        ) from exc
+    if signer_paths != sorted(
+        (source_signer_path, target_signer_path),
+        key=lambda path: path.name,
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence is ambiguous",
+        )
+    for path in signer_paths:
+        _require_private_file(
+            path,
+            approval_account,
+            blocker="canonical_owner_recovery",
+        )
+    try:
+        source_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                source_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+        target_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                target_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+    except Exception as exc:
+        if isinstance(exc, ServerSetupError):
+            raise
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence is invalid",
+        ) from exc
+    if (
+        source_signer.thumbprint != journal.source_signer_key_id
+        or source_signer.public_pem != journal.source_signer_public_key_pem
+        or target_signer.thumbprint != journal.target_signer_key_id
+        or target_signer.public_pem != journal.target_signer_public_key_pem
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "reconstructed canonical owner signer evidence conflicts with custody",
+        )
+
+
 def _upgrade_marker_config_digests(
     marker: Mapping[str, Any],
     *,
@@ -4874,6 +5395,53 @@ def _upgrade_marker_config_digests(
         marker.get("approval_config_digest"),
         marker.get("core_config_digest"),
     )
+    recovery_journal_path = approval_state / "canonical-owner-recovery.json"
+    if (
+        recovery_journal_path.exists()
+        or recovery_journal_path.is_symlink()
+    ):
+        try:
+            recovery_journal = CanonicalOwnerRecoveryJournal.model_validate(
+                _strict_json_bytes(
+                    _read_private_managed_file(
+                        recovery_journal_path,
+                        approval_account,
+                        blocker="canonical_owner_recovery",
+                        max_bytes=262_144,
+                    ),
+                    label="canonical owner recovery journal",
+                )
+            )
+        except Exception as exc:
+            if isinstance(exc, ServerSetupError):
+                raise
+            raise ServerSetupError(
+                "canonical_owner_recovery",
+                "canonical owner recovery journal is invalid",
+            ) from exc
+        reconstruction = recovery_journal.reconstruction
+        if reconstruction is not None and (
+            (
+                reconstruction.marker_approval_config_digest,
+                reconstruction.marker_core_config_digest,
+            )
+            != recorded
+            or (
+                reconstruction.realized_approval_config_digest,
+                reconstruction.realized_core_config_digest,
+            )
+            != realized
+        ):
+            raise ServerSetupError(
+                "canonical_owner_recovery",
+                "reconstructed canonical owner evidence conflicts with setup",
+            )
+        if reconstruction is not None:
+            _require_reconstructed_recovery_signer_custody(
+                recovery_journal,
+                approval_document,
+                approval_account,
+            )
     if realized == recorded:
         _canonical_owner_recovery_source(
             approval_state,
@@ -5279,14 +5847,25 @@ def _canonical_owner_recovery_source(
                 "canonical_owner_recovery",
                 "canonical owner recovery journal conflicts with setup request",
             )
-        approval_config = _owner_recovery_compatible_approval_config(
-            _read_private_managed_file(
-                approval_config_path,
-                approval_account,
-                blocker="canonical_owner_recovery",
-                max_bytes=_MAX_CONFIG_BYTES,
-            )
+        approval_payload = _read_private_managed_file(
+            approval_config_path,
+            approval_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
         )
+        approval_document = _strict_json_bytes(
+            approval_payload,
+            label="managed Approval configuration",
+        )
+        approval_config = _owner_recovery_compatible_approval_config(
+            approval_payload
+        )
+        if journal.reconstruction is not None:
+            _require_reconstructed_recovery_signer_custody(
+                journal,
+                approval_document,
+                approval_account,
+            )
         recovery_request = _canonical_owner_recovery_request_for_marker(
             journal,
             approval_config=approval_config,
@@ -5688,6 +6267,7 @@ def _migrate_0150_approval_request_ttl_policy(
     approval_config_path: Path,
     approval_account: pwd.struct_passwd,
     pending: dict[str, Any],
+    before_write: Callable[[], None],
 ) -> str:
     """Preserve published v0.1.50 TTLs or split its retained live hotfix."""
 
@@ -5783,6 +6363,7 @@ def _migrate_0150_approval_request_ttl_policy(
             "setup_upgrade_conflict",
             "Approval configuration changed after upgrade journal creation",
         )
+    before_write()
     return _atomic_replace_exact(
         approval_config_path,
         expected=previous,
@@ -6934,11 +7515,55 @@ def _apply_server_setup(
                 approval_account,
                 request=request,
             )
+            if recorded_owner_recovery is None:
+                assert existing_marker is not None
+                recorded_owner_recovery = (
+                    _reconstruct_completed_canonical_owner_recovery_for_marker(
+                        existing_marker,
+                        approval_state,
+                        approval_config_path,
+                        approval_account,
+                        core_config_path,
+                        core_account,
+                        request=request,
+                        observed_at=int(time.time()),
+                    )
+                )
+            def revalidate_ttl_write_source() -> None:
+                assert existing_marker is not None
+                source_profile = _marker_upgrade_unit_profile(existing_marker)
+                if source_profile is None:
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "recorded setup marker is not an exact supported upgrade source",
+                    )
+                approval_digest, core_digest = _upgrade_marker_config_digests(
+                    existing_marker,
+                    approval_config_path=approval_config_path,
+                    approval_account=approval_account,
+                    approval_state=approval_state,
+                    core_config_path=core_config_path,
+                    core_account=core_account,
+                    request=request,
+                )
+                _require_marker_realized_state(
+                    existing_marker,
+                    approval_config_digest=approval_digest,
+                    core_config_digest=core_digest,
+                    unit_paths={
+                        unit: unit_paths[unit]
+                        for unit in source_profile
+                    },
+                    uid=root_uid,
+                    gid=root_gid,
+                )
+
             upgrade_status = prepare_upgrade(None, None)
             approval_ttl_status = _migrate_0150_approval_request_ttl_policy(
                 approval_config_path=approval_config_path,
                 approval_account=approval_account,
                 pending=_pending_upgrade,
+                before_write=revalidate_ttl_write_source,
             )
         if approval_preexisting and core_preexisting:
             approval_config_before, trusted_before = _approval_trust(

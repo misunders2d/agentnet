@@ -917,6 +917,19 @@ secret is removed from the journal immediately after the signer file is
 durably installed and before authority mutation; either durable copy can
 resume the prepared phase, while a missing or mismatched copy fails closed.
 
+If the exact terminal live repair completed but its recovery journal was never
+retained, setup does not repeat adoption or infer authority from the current
+principal alone. It reconstructs a terminal journal only when one retained
+v0.1.50 marker, exactly two fixed-custody signer keys, current typed
+Approval/Core policy, one active canonical owner binding, target credential
+state, and one immutable adoption audit jointly reproduce the exact marker-era
+source and current realized digests. The reconstruction write is the first
+mutation and changes no authority. Its strict evidence is revalidated after
+process loss. A resumed upgrade journal rechecks the exact two-signer custody
+and current Core digest immediately before the Approval TTL compare-and-swap;
+missing, additional, ambiguous, or drifted evidence leaves Approval unchanged
+and fails closed.
+
 That same v0.1.50→v0.1.51 boundary preserves the exact published v0.1.50
 Approval policy with its 300-second generic request TTL and absent
 communication-scope field. It separately recognizes the retained hotfix that

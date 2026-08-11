@@ -817,6 +817,8 @@ def _stage_0150_one_hour_approval_hotfix(harness: _Harness) -> tuple[Path, bytes
 
 def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
     harness: _Harness,
+    *,
+    include_journal: bool = True,
 ) -> tuple[Path, bytes]:
     """Materialize the exact combined live repair over one retained marker."""
 
@@ -825,10 +827,19 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
     target_approver = approval["approvers"][0]
     source_principal = "setup-placeholder-owner"
     source_signer = P256KeyPair.generate()
-    source_signer_path = Path(target_approver["signer_private_key_path"]).with_name(
-        "placeholder-owner.pem"
-    )
-    target_signer_path = Path(target_approver["signer_private_key_path"])
+    original_signer_path = Path(target_approver["signer_private_key_path"])
+    if include_journal:
+        source_signer_path = original_signer_path.with_name(
+            "placeholder-owner.pem"
+        )
+        target_signer_path = original_signer_path
+    else:
+        source_signer_path = original_signer_path.with_name(
+            "placeholder-owner.pem"
+        )
+        target_signer_path = original_signer_path
+        source_signer_path.write_bytes(source_signer.private_pem)
+        source_signer_path.chmod(0o600)
 
     source_approval = copy.deepcopy(approval)
     source_approval["request_ttl_seconds"] = 300
@@ -1000,11 +1011,25 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
                     journal["request_digest"],
                 ),
             )
+            connection.execute(
+                """INSERT INTO approval_audit(
+                       action,request_id,approver_principal_id,domain_id,
+                       approval_purpose,transaction_digest,occurred_at,outcome,detail_code
+                   ) VALUES('approval.request',NULL,?,?,
+                            'legacy.owner.evidence',?,1,'approved',
+                            'legacy_owner_source:v1')""",
+                (
+                    source_principal,
+                    harness.request.domain_id,
+                    "f" * 64,
+                ),
+            )
     finally:
         approval_store.close()
 
     approval_state = harness.layout.host(setup.APPROVAL_STATE)
-    _private_json(approval_state / "canonical-owner-recovery.json", journal)
+    if include_journal:
+        _private_json(approval_state / "canonical-owner-recovery.json", journal)
 
     marker = harness.marker()
     marker["approval_config_digest"] = setup.canonical_digest(source_approval)
@@ -1336,6 +1361,7 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     monkeypatch.setattr(setup, "_run_as", run_as)
     monkeypatch.setattr(
         setup,
+
         "_validated_managed_identity_profile",
         lambda *_args, **_kwargs: {
             "actor": {
@@ -1365,6 +1391,385 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     } in result["steps"]
     assert harness.marker()["package_version"] == "0.1.51"
     assert not harness.journal_path.exists()
+
+def test_0151_upgrade_reconstructs_journalless_completed_owner_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, repaired_payload = (
+        _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+            harness,
+            include_journal=False,
+        )
+    )
+    approval_state = harness.layout.host(setup.APPROVAL_STATE)
+    recovery_path = approval_state / "canonical-owner-recovery.json"
+    assert not recovery_path.exists()
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    original_run_as = setup._run_as
+
+    def run_as(
+        account: pwd.struct_passwd,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
+    ) -> dict[str, object]:
+        if argv[2:4] == ["approval", "recover-canonical-owner"]:
+            harness.operation_events.append(("product", stage))
+            return {"status": "already_exact"}
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
+        )
+
+    monkeypatch.setattr(setup, "_run_as", run_as)
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {
+            "actor": {
+                "principal_id": harness.request.approval_approver_principal_id
+            }
+        },
+    )
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    result = harness.apply(harness.plan_digest())
+
+    migrated = json.loads(config_path.read_text(encoding="utf-8"))
+    reconstructed = json.loads(recovery_path.read_text(encoding="utf-8"))
+    assert config_path.read_bytes() != repaired_payload
+    assert migrated["request_ttl_seconds"] == 600
+    assert migrated["communication_scope_request_ttl_seconds"] == 3_600
+    assert reconstructed["phase"] == "complete"
+    assert reconstructed["reconstruction"]["schema"] == (
+        "agentnet.canonical-owner-recovery-reconstruction.v1"
+    )
+    assert {
+        "id": "canonical_owner_recovery",
+        "status": "already_exact",
+        "source_principal_id": "setup-placeholder-owner",
+        "target_principal_id": harness.request.approval_approver_principal_id,
+        "core_policy_status": "already_satisfied",
+    } in result["steps"]
+    assert harness.marker()["package_version"] == "0.1.51"
+    assert not harness.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    "tamper_after_upgrade_journal",
+    (None, "core", "extra_signer", "source_signer"),
+)
+def test_0151_resume_revalidates_reconstructed_journal_before_ttl_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper_after_upgrade_journal: str | None,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, repaired_payload = (
+        _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+            harness,
+            include_journal=False,
+        )
+    )
+    approval_state = harness.layout.host(setup.APPROVAL_STATE)
+    recovery_path = approval_state / "canonical-owner-recovery.json"
+    marker_before = harness.marker_path.read_bytes()
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    original_run_as = setup._run_as
+
+    def run_as(
+        account: pwd.struct_passwd,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
+    ) -> dict[str, object]:
+        if argv[2:4] == ["approval", "recover-canonical-owner"]:
+            harness.operation_events.append(("product", stage))
+            return {"status": "already_exact"}
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
+        )
+
+    monkeypatch.setattr(setup, "_run_as", run_as)
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {
+            "actor": {
+                "principal_id": harness.request.approval_approver_principal_id
+            }
+        },
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    real_atomic_write = setup._atomic_write
+    real_write_upgrade_journal = setup._write_upgrade_journal
+    interrupted = False
+
+    def interrupt_after_reconstruction(
+        path: Path,
+        payload: bytes,
+        *,
+        mode: int,
+        uid: int,
+        gid: int,
+    ) -> str:
+        nonlocal interrupted
+        result = real_atomic_write(
+            path,
+            payload,
+            mode=mode,
+            uid=uid,
+            gid=gid,
+        )
+        if path == recovery_path and not interrupted:
+            interrupted = True
+            raise RuntimeError("injected reconstructed-journal process loss")
+        return result
+
+    monkeypatch.setattr(setup, "_atomic_write", interrupt_after_reconstruction)
+    with pytest.raises(
+        RuntimeError,
+        match="injected reconstructed-journal process loss",
+    ):
+        harness.apply(harness.plan_digest())
+
+    assert interrupted
+    assert recovery_path.exists()
+    assert harness.marker_path.read_bytes() == marker_before
+    assert config_path.read_bytes() == repaired_payload
+
+    monkeypatch.setattr(setup, "_atomic_write", real_atomic_write)
+    if tamper_after_upgrade_journal is not None:
+        interrupted = False
+
+        def interrupt_after_upgrade_journal(
+            path: Path,
+            journal: dict[str, object],
+            *,
+            uid: int,
+            gid: int,
+        ) -> None:
+            nonlocal interrupted
+            real_write_upgrade_journal(path, journal, uid=uid, gid=gid)
+            if path == harness.journal_path and not interrupted:
+                interrupted = True
+                raise RuntimeError("injected setup-upgrade journal process loss")
+
+        monkeypatch.setattr(
+            setup,
+            "_write_upgrade_journal",
+            interrupt_after_upgrade_journal,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="injected setup-upgrade journal process loss",
+        ):
+            harness.apply(harness.plan_digest())
+        assert interrupted
+        assert harness.journal_path.exists()
+        assert config_path.read_bytes() == repaired_payload
+        if tamper_after_upgrade_journal == "core":
+            core_path = harness.layout.host(setup.CORE_CONFIG)
+            core = json.loads(core_path.read_text(encoding="utf-8"))
+            core["oidc_enrollment"]["client_id"] = "unrelated-client"
+            _private_json(core_path, core)
+        elif tamper_after_upgrade_journal in {"extra_signer", "source_signer"}:
+            approval = json.loads(config_path.read_text(encoding="utf-8"))
+            target_signer_path = Path(
+                approval["approvers"][0]["signer_private_key_path"]
+            )
+            if tamper_after_upgrade_journal == "extra_signer":
+                changed_signer_path = target_signer_path.with_name(
+                    "unrelated-owner.pem"
+                )
+            else:
+                changed_signer_path = next(
+                    path
+                    for path in target_signer_path.parent.iterdir()
+                    if path != target_signer_path
+                )
+            changed_signer_path.write_bytes(P256KeyPair.generate().private_pem)
+            changed_signer_path.chmod(0o600)
+        monkeypatch.setattr(
+            setup,
+            "_write_upgrade_journal",
+            real_write_upgrade_journal,
+        )
+        with pytest.raises(ServerSetupError) as exc_info:
+            harness.apply(harness.plan_digest())
+        assert exc_info.value.blocker == (
+            "setup_upgrade_conflict"
+            if tamper_after_upgrade_journal == "core"
+            else "canonical_owner_recovery"
+        )
+        assert config_path.read_bytes() == repaired_payload
+        assert harness.marker_path.read_bytes() == marker_before
+        return
+
+    result = harness.apply(harness.plan_digest())
+
+    migrated = json.loads(config_path.read_text(encoding="utf-8"))
+    reconstructed = json.loads(recovery_path.read_text(encoding="utf-8"))
+    assert reconstructed["phase"] == "complete"
+    assert reconstructed["reconstruction"]["schema"] == (
+        "agentnet.canonical-owner-recovery-reconstruction.v1"
+    )
+    assert migrated["request_ttl_seconds"] == 600
+    assert migrated["communication_scope_request_ttl_seconds"] == 3_600
+    assert {
+        "id": "canonical_owner_recovery",
+        "status": "already_exact",
+        "source_principal_id": "setup-placeholder-owner",
+        "target_principal_id": harness.request.approval_approver_principal_id,
+        "core_policy_status": "already_satisfied",
+    } in result["steps"]
+    assert harness.marker()["package_version"] == "0.1.51"
+    assert not harness.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "extra_signer",
+        "source_signer",
+        "marker_approval_digest",
+        "binding_pinned_at",
+    ),
+)
+def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, repaired_payload = (
+        _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+            harness,
+            include_journal=False,
+        )
+    )
+    approval = json.loads(config_path.read_text(encoding="utf-8"))
+    target_signer_path = Path(
+        approval["approvers"][0]["signer_private_key_path"]
+    )
+    source_signer_path = next(
+        path for path in target_signer_path.parent.iterdir()
+        if path != target_signer_path
+    )
+    if tamper == "extra_signer":
+        extra_signer_path = target_signer_path.with_name("unrelated-owner.pem")
+        extra_signer_path.write_bytes(P256KeyPair.generate().private_pem)
+        extra_signer_path.chmod(0o600)
+    elif tamper == "source_signer":
+        source_signer_path.write_bytes(P256KeyPair.generate().private_pem)
+        source_signer_path.chmod(0o600)
+    elif tamper == "marker_approval_digest":
+        marker = harness.marker()
+        marker["approval_config_digest"] = "a" * 64
+        _private_json(harness.marker_path, marker)
+    elif tamper == "binding_pinned_at":
+        store = ApprovalStore(
+            Path(approval["database_path"]),
+            LocalEnvelopeCipher(Path(approval["record_key_path"]).read_bytes()),
+        )
+        try:
+            with store.transaction() as connection:
+                connection.execute(
+                    """UPDATE approval_owner_bindings SET pinned_at=pinned_at+1
+                        WHERE domain_id=? AND status='active'""",
+                    (harness.request.domain_id,),
+                )
+        finally:
+            store.close()
+    else:
+        raise AssertionError(tamper)
+
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "canonical_owner_recovery"
+    assert config_path.read_bytes() == repaired_payload
+    assert not (
+        harness.layout.host(setup.APPROVAL_STATE)
+        / "canonical-owner-recovery.json"
+    ).exists()
+    assert not harness.journal_path.exists()
+
+
+def test_0151_rejects_tampered_reconstructed_marker_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+        harness,
+        include_journal=False,
+    )
+    account = pwd.getpwuid(os.geteuid())
+    approval_state = harness.layout.host(setup.APPROVAL_STATE)
+    recovery_path = approval_state / "canonical-owner-recovery.json"
+    reconstructed = getattr(
+        setup,
+        "_reconstruct_completed_canonical_owner_recovery_for_marker",
+    )(
+        harness.marker(),
+        approval_state,
+        config_path,
+        account,
+        harness.layout.host(setup.CORE_CONFIG),
+        account,
+        request=harness.request,
+        observed_at=42,
+    )
+    assert reconstructed is not None
+    journal = json.loads(recovery_path.read_text(encoding="utf-8"))
+    journal["reconstruction"]["marker_core_config_digest"] = "a" * 64
+    _private_json(recovery_path, journal)
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+
+    with pytest.raises(ServerSetupError) as exc_info:
+        getattr(setup, "_upgrade_marker_config_digests")(
+            harness.marker(),
+            approval_config_path=config_path,
+            approval_account=account,
+            approval_state=approval_state,
+            core_config_path=harness.layout.host(setup.CORE_CONFIG),
+            core_account=account,
+            request=harness.request,
+        )
+
+    assert exc_info.value.blocker == "canonical_owner_recovery"
+
+
 
 
 @pytest.mark.parametrize(

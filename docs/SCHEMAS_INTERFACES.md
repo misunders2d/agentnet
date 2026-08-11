@@ -845,6 +845,19 @@ Approval-owned signer file is durably installed and before owner authority is
 mutated; a retry reconstructs the file from the journal or verifies the exact
 existing signer.
 
+A journal-less terminal live repair may create the same schema-v1 terminal
+journal only from exact marker-relative evidence. Its nested strict
+`agentnet.canonical-owner-recovery-reconstruction.v1` record binds the
+observation time, retained marker Approval/Core digests, realized current
+Approval/Core digests, and the fixed `approval_audit_marker_digest` source
+classification. Reconstruction additionally requires exactly two
+fixed-custody signer keys, one active canonical owner binding, target
+credential state, and one matching immutable adoption audit. The journal write
+changes no authority and is atomic; every retry revalidates the journal and its
+marker/current digest bindings before TTL migration. Unknown fields, missing
+or extra signers, ambiguous historical principals, tampered audit/binding
+state, or any digest mismatch fail closed.
+
 Upgrade journal v3 covers the exact v0.1.50→v0.1.51 Approval TTL boundary. It
 extends the standard forward-only journal with one
 `previous_configs.approval_config` payload under the existing root-only
@@ -868,8 +881,9 @@ only the known communication-scope field and restore the published 300-second
 generic value. Both reconstructed canonical digests must equal the marker
 before upgrade journal v3 is created. Every initial or resumed attempt repeats
 the terminal journal, exact single-active-owner, adoption-audit, target
-credential, and signer-custody checks before journal preparation or TTL
-migration. The retained 3600-second source policy has one exact no-write
+credential, and signer-custody checks. An upgrade-journal resume rechecks exact
+two-signer custody and the current Core digest immediately before the Approval
+TTL compare-and-swap. The retained 3600-second source policy has one exact no-write
 compatibility parse; no other invalid current schema is admitted. The v3
 journal stores the realized current documents, not synthetic source bytes;
 subsequent owner and Core recovery checks are idempotent. No incomplete

@@ -411,19 +411,27 @@ source bytes.
 A live host may contain both corrections: canonical-owner recovery is complete,
 Core and Approval contain the canonical target, the one-hour Approval hotfix is
 still realized, and the retained setup marker still names the pre-repair
-source. Do not repair that marker manually. Setup validates the completed
-canonical-owner journal and signer custody, reconstructs the exact marker-era
-Approval and Core documents, applies the bounded inverse TTL comparison, and
-requires both reconstructed digests to equal the marker before any setup
-journal or managed write. Setup repeats the terminal journal, exact
-single-active-owner, adoption-audit, target-credential, and signer-custody
-preflight on every initial or resumed attempt. It parses the retained
-3600-second source policy without writing and admits only that exact legacy TTL
-shape. Only then does it journal the realized current documents, normalize the
-TTL policy, and recheck the owner command and Core policy as idempotent
-`already_exact`/`already_satisfied` operations. Incomplete recovery evidence,
-mixed principals, signer drift, ambiguous owner state, or unrelated
-Approval/Core changes fail closed.
+source. Do not repair that marker or create a recovery journal manually. If the
+terminal recovery journal is absent, setup reconstructs it only when the
+retained marker, exactly two signer keys, current typed Approval/Core files,
+single active owner binding, target credential state, and matching adoption
+audit identify one exact completed repair. It writes that terminal journal
+without changing authority, then validates the journal, signer custody, and
+marker/current digests before any setup journal or managed-state write. A
+process loss after this write is safe: rerun the same approved command. If an
+upgrade journal was already retained, setup rechecks exact two-signer custody
+and the current Core digest immediately before the Approval TTL
+compare-and-swap; intervening drift leaves Approval unchanged.
+
+Setup reconstructs the exact marker-era Approval and Core documents, applies
+the bounded inverse TTL comparison, and requires both reconstructed digests to
+equal the marker. It parses the retained 3600-second source policy without
+writing and admits only that exact legacy TTL shape. Only then does it journal
+the realized current documents, normalize the TTL policy, and recheck the owner
+command and Core policy as idempotent
+`already_exact`/`already_satisfied` operations. Missing or extra signer
+evidence, incomplete adoption evidence, mixed principals, signer drift,
+ambiguous owner state, or unrelated Approval/Core changes fail closed.
 
 The same setup pass repairs an already committed communication scope that lacks
 its schema-v7 collaboration projection. It materializes only the exact

@@ -449,15 +449,22 @@ published and historical release evidence:
   completed canonical-owner repair with the retained TTL hotfix: it validates
   terminal recovery and signer evidence, reconstructs both marker-era Approval
   and Core documents, and requires both canonical digests to match before
-  creating an upgrade journal or changing managed state. Every initial or
-  resumed attempt revalidates the terminal journal, exact single active owner,
-  adoption audit, credential state, and signer custody before journal
-  preparation or TTL migration; the retained 3600-second source shape is parsed
-  without writing and only its exact allowlisted TTL delta is accepted. Setup
-  then journals the realized current documents, normalizes the TTL policy, and
-  verifies idempotent owner/Core convergence; incomplete, cross-principal,
-  signer-drifted, ambiguous-owner, or independently drifted state remains
-  fail-closed. A lost
+  creating an upgrade journal or changing managed state. If that exact
+  terminal live repair lost its recovery journal, setup may reconstruct one
+  only from the retained source marker, the unique historical and current
+  signer keys, current typed Approval/Core configuration, the exact active
+  owner binding, target credential state, and one matching immutable adoption
+  audit. It first writes a strict terminal reconstruction journal without
+  changing authority; missing, extra, or conflicting evidence fails closed.
+  Every initial or resumed attempt revalidates that terminal journal and its
+  marker/current digests. A resumed upgrade journal rechecks the exact
+  two-signer custody and current Core digest immediately before the Approval
+  TTL compare-and-swap, so intervening drift leaves Approval unchanged. The
+  retained 3600-second source shape is parsed without writing and only its exact
+  allowlisted TTL delta is accepted. Setup then journals the realized current
+  documents, normalizes the TTL policy, and verifies idempotent owner/Core
+  convergence; incomplete, cross-principal, signer-drifted, ambiguous-owner,
+  or independently drifted state remains fail-closed. A lost
   PostgreSQL lease heartbeat publishes reconnect-required state while protected
   operations remain excluded. A later operation opens a fresh verified
   connection and reacquires a strictly higher same-owner fence;

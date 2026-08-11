@@ -61,6 +61,22 @@ class CanonicalOwnerAdoptionResult(BaseModel):
     revoked_browser_sessions: int = Field(ge=0)
     canceled_registration_ceremonies: int = Field(ge=0)
 
+
+class CanonicalOwnerRecoveryReconstruction(BaseModel):
+    """Exact observation proving a journal-less terminal repair."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.canonical-owner-recovery-reconstruction.v1"
+    ] = Field(alias="schema")
+    observed_at: int = Field(ge=0)
+    marker_approval_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    marker_core_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    realized_approval_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    realized_core_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_principal_evidence: Literal["approval_audit_marker_digest"]
+
 class CanonicalOwnerRecoveryJournal(BaseModel):
     """Strict resumable evidence for one owner/signer cutover."""
 
@@ -102,6 +118,7 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
     authority_adoption_digest: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
+    reconstruction: CanonicalOwnerRecoveryReconstruction | None = None
 
     @model_validator(mode="after")
     def _phase_shape(self) -> "CanonicalOwnerRecoveryJournal":
@@ -118,6 +135,11 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
             raise ValueError("authority adoption evidence does not match journal phase")
         if (self.phase == "complete") != (self.completed_at is not None):
             raise ValueError("completion timestamp does not match journal phase")
+        if self.reconstruction is not None and (
+            self.phase != "complete"
+            or self.completed_at != self.reconstruction.observed_at
+        ):
+            raise ValueError("reconstructed evidence does not match terminal phase")
         if (
             self.authority_adoption is not None
             and hashlib.sha256(canonical_json(self.authority_adoption)).hexdigest()
@@ -1033,6 +1055,7 @@ def converge_canonical_approval_owner(
 __all__ = [
     "CanonicalOwnerAdoptionRequest",
     "CanonicalOwnerAdoptionResult",
+    "CanonicalOwnerRecoveryReconstruction",
     "CanonicalOwnerRecoveryJournal",
     "CanonicalOwnerRecoveryResult",
     "adopt_canonical_approval_owner",
