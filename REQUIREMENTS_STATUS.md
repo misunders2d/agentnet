@@ -455,9 +455,14 @@ published and historical release evidence:
   generations each report **2258 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
-  endpoint routing with zero sibling reactions or residue. Dedicated
-  PostgreSQL, installed-host setup/upgrade, same-commit CI, and live two-machine
-  evidence remain pending. Affected IDs are `ID-001`, `ID-002`, `ID-005`,
+  endpoint routing with zero sibling reactions or residue. Exact commit
+  `4e8ebd72d6b5e39550e438816abb1e2d30a5326a` passed same-commit GitHub
+  PostgreSQL 18 clean setup, installed-package communication, v0.1.50→v0.1.51
+  installed-host upgrade, and cross-platform package lanes. Its unchanged
+  release source tree passed the complete disposable PostgreSQL 18.4 runtime
+  file with **93 passed, 0 skipped, 0 failed** plus release verification; the
+  database and checkout were destroyed and live Core remained unchanged. Live
+  server/laptop convergence and two-machine reliability evidence remain pending. Affected IDs are `ID-001`, `ID-002`, `ID-005`,
   `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-005`,
   `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `AVL-005`, `SEC-003`, `SEC-005`,
   `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is

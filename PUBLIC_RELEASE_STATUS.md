@@ -46,8 +46,10 @@ verifies a fresh connection and acquires a strictly higher same-owner fence.
 
 The candidate accepts only exact five-unit schema-v7 markers from v0.1.45
 through v0.1.50. Ambiguous, drifted, incomplete, or unsupported state fails
-closed. Package, installed-host, dedicated-PostgreSQL, and live two-machine
-validation remain pending; no production or gate claim is made.
+closed. Exact-commit package, PostgreSQL 18 clean setup, v0.1.50→v0.1.51
+installed-host upgrade, cross-platform, and disposable PostgreSQL 18.4 runtime
+validation pass. Live convergence and two-machine reliability remain pending;
+no production or gate claim is made.
 
 
 ## Corrective `0.1.49` candidate

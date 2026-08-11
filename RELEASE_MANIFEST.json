@@ -543,7 +543,7 @@
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "7cfdc45e82020305677f76eb731350e0ee5132c6da3fe0763f03db435fdb34a5",
+      "sha256": "c33f43df67317253dee72237cffea3bb876f59b0efe5d3c48653b428ea0bacba",
       "size": 104787
     },
     "deploy/Dockerfile": {
@@ -568,12 +568,12 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "41a0794408ad93e08b5ccc4c44a790c823fe3005efbfb0427b91a9a6d12ca4e7",
+      "sha256": "d2b5265a6d10fcd8eeb950b9b74af4aa45a99069078ebae78534114fe6772ce8",
       "size": 84438
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "5953a7a3d47c10f145243ba82db76457f09fb7326f1d4373175a29087e776cd5",
+      "sha256": "de4ac3f8ea0b46a339774b9f0ea07e4ee0a84114bf3323eae16eaca08c12eed7",
       "size": 27729
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
