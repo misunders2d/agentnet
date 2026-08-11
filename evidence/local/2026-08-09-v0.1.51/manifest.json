@@ -1,18 +1,18 @@
 {
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "evaluated_at": "2026-08-11T08:56:31Z",
+  "evaluated_at": "2026-08-11T11:17:48Z",
   "scope": "v0_1_51_expired_scope_harness_replacement_candidate",
   "verification_status": "PASS",
   "release_certified": false,
-  "verification_scope": "PASS applies to the selected local source, focused replacement/recovery/communication tests, reproducible package, installed-byte commands, exact-commit GitHub installed-host lanes, and exact-source-tree disposable PostgreSQL 18.4 runtime suite recorded below; it is not release certification and does not include live two-machine convergence proof, installed-harness pin gates, multi-node durability, or any owner/privileged/external must-not-ship gate",
+  "verification_scope": "PASS applies to the selected local source, focused replacement/recovery/communication tests, reproducible package, and recursive installed-byte commands recorded below; it is not release certification and does not include same-commit GitHub installed-host lanes, same-commit disposable PostgreSQL runtime evidence, live two-machine convergence proof, installed-harness pin gates, multi-node durability, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "working_tree_candidate",
-  "release_source_tree_sha256": "78724e76457a479ff62b4473e5ee6a87f9b019034b39310d089eaff174b64ad5",
+  "release_source_tree_sha256": "6cc0b2e39060e4db7eaa528b36c1c6f2831cb54051069fbcd34499ceffd1c1da",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
-  "change_boundary": "Candidate 0.1.51 atomically publishes a failed PostgreSQL runtime heartbeat while protected operations remain excluded, then recovers only through a fresh verified connection and strictly higher same-owner fence, and retains canonical-owner and schema-v7 projection recovery, normalizes only the exact retained v0.1.50 one-hour generic Approval TTL hotfix to separate 600-second ordinary and 3600-second communication-scope ceilings under a journaled compare-and-swap/resume/rollback boundary, and adds one bounded operation that requires the exact scope owner's independent Approval receipt to replace one expired same-principal member harness in one active schema-v7 collaboration scope. It tombstones the former member, activates the enrolled replacement, increments membership and scope revisions once, recomputes canonical digests, binds audit evidence, recovers exact committed replays after request expiry, and rejects non-owner approvers, cross-principal/domain changes, role drift, active old credentials, inactive replacement credentials, stale state, replay drift, partial state, and unsupported Approval configuration without hand-editing Core or Approval.",
+  "change_boundary": "Candidate 0.1.51 recognizes the exact live state in which canonical-owner recovery already completed while the retained v0.1.50 one-hour Approval TTL hotfix remained outside the setup marker. It reconstructs marker-era Approval and Core documents only from the completed signed recovery journal plus the known TTL delta, requires both canonical digests to equal the marker, then journals and converges the realized state; incomplete evidence or unrelated drift fails closed before managed writes. It also atomically publishes a failed PostgreSQL runtime heartbeat while protected operations remain excluded, recovers only through a fresh verified connection and strictly higher same-owner fence, retains schema-v7 projection recovery, normalizes the exact retained TTL hotfix to separate 600-second ordinary and 3600-second communication-scope ceilings, and preserves the bounded exact-owner expired same-principal scope-member replacement operation.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
-      "result": "PASS: 243 passed"
+      "result": "PASS: 255 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -20,11 +20,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2231 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2243 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 8333a08ca246b46fb93d1b18d0494ebe98faf7357ba0cad605c7fd1d1749d6c3; wheel sha256 f1e721b97c0a03f239b936ff729d4f159107db95a2e9696ed854818e5193b4e5"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 1786c2c26eb88df361fa1d1408120ca5a7b3f2556568cc1f5c95cc9a9278ec28; wheel sha256 175556a010aebc8c3bc12bbd1b8800791805692fdded1ab1276036eb7dba22d4"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -36,7 +36,7 @@
     },
     {
       "command": "Fresh GitHub ubuntu-24.04 installed-package lane: npm pack, install into unrelated prefix, run scripts/ci/packaged_local_communication_e2e.py from installed bytes",
-      "result": "PASS: exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a GitHub run 31426401551 completed Ubuntu 24.04 PostgreSQL 18 clean install and installed-package communication roundtrip"
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior exact-commit result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only"
     },
     {
       "command": "Ad-hoc live trial on two isolated Ubuntu 24.04.4 VMs with separate qcow2 disks and exact v0.1.51 wheel: send authenticated messages bidirectionally; stop and restart VM A Core; inspect recovered delivery, duplicate safety, exact attribution, and recipient acknowledgement",
@@ -44,15 +44,15 @@
     },
     {
       "command": "Fresh Ubuntu 24.04 installed-host upgrade from published v0.1.50 to candidate v0.1.51",
-      "result": "PASS: exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a GitHub run 31426401244 completed Ubuntu 24.04 PostgreSQL 18 installed-host v0.1.50 to v0.1.51 state-preserving upgrade"
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior exact-commit result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only"
     },
     {
       "command": "AGENTNET_TEST_POSTGRES_URL='<fresh disposable PostgreSQL 18.4 DSN>' AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/production/test_postgres_runtime.py",
-      "result": "PASS: exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a; PostgreSQL 18.4 runtime suite 93 passed, 0 skipped, 0 failed in 36.14s; release verifier PASS; disposable database destroyed; live Core unchanged"
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior 93-pass PostgreSQL result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only; current same-commit server validation is required"
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2258 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2270 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
   "execution_context": {
@@ -61,23 +61,23 @@
     "local_retry_incident": "The first corrected recursive run failed only in generation 2 when retained pytest data consumed 4.4 GiB on the 16 GiB /tmp tmpfs; all 23 implicated provenance tests passed in isolation. A separate attempted rerun with a long external basetemp was rejected by four Unix-socket path-limit tests and by this manifest's deliberately non-PASS interim state. Those runs are not counted as PASS evidence; the final clean-/tmp rerun below is authoritative.",
     "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
     "two_vm_source_proof": "Observed exact packaged v0.1.51 behavior on two live isolated Ubuntu 24.04.4 VMs, but excluded from formal release evidence because the ad-hoc provisioning driver was not retained; production durability and must-not-ship gates remain unproven",
-    "root_installed_external_host": "Exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a passed GitHub Ubuntu 24.04 PostgreSQL 18 clean setup and v0.1.50 to v0.1.51 installed-host upgrade; live convergence remains unexecuted"
+    "root_installed_external_host": "Prior exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a passed GitHub Ubuntu 24.04 PostgreSQL 18 clean setup and v0.1.50 to v0.1.51 installed-host upgrade; those results do not bind this corrective source delta, whose exact-commit CI and server PostgreSQL validation remain required"
   },
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "8333a08ca246b46fb93d1b18d0494ebe98faf7357ba0cad605c7fd1d1749d6c3"
+      "sha256": "1786c2c26eb88df361fa1d1408120ca5a7b3f2556568cc1f5c95cc9a9278ec28"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "f1e721b97c0a03f239b936ff729d4f159107db95a2e9696ed854818e5193b4e5"
+      "sha256": "175556a010aebc8c3bc12bbd1b8800791805692fdded1ab1276036eb7dba22d4"
     }
   ],
-  "source_revision": "PostgreSQL and exact-commit CI evidence bind source revision 4e8ebd72d6b5e39550e438816abb1e2d30a5326a; authoritative runtime binding is release_source_tree_sha256, unchanged by this evidence-only correction",
+  "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI and disposable PostgreSQL evidence must be refreshed after commit",
   "external_evidence": {
     "manifest": "evidence/local/2026-08-11-v0.1.51-server-postgres/manifest.json",
     "pr_comment": "https://github.com/misunders2d/agentnet/pull/3#issuecomment-5250983948",
     "source_revision": "4e8ebd72d6b5e39550e438816abb1e2d30a5326a",
-    "source_tree_unchanged_by_evidence_correction": true
+    "applies_to_current_source_tree": false
   }
 }

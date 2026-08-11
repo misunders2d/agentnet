@@ -408,6 +408,19 @@ command after interruption. Any additional TTL/configuration drift blocks as
 `setup_upgrade_conflict`; a failure before marker commit restores the journaled
 source bytes.
 
+A live host may contain both corrections: canonical-owner recovery is complete,
+Core and Approval contain the canonical target, the one-hour Approval hotfix is
+still realized, and the retained setup marker still names the pre-repair
+source. Do not repair that marker manually. Setup validates the completed
+canonical-owner journal and signer custody, reconstructs the exact marker-era
+Approval and Core documents, applies the bounded inverse TTL comparison, and
+requires both reconstructed digests to equal the marker before any setup
+journal or managed write. It then journals the realized current documents,
+normalizes the TTL policy, and rechecks the owner command and Core policy as
+idempotent `already_exact`/`already_satisfied` operations. Incomplete recovery
+evidence, mixed principals, signer drift, or unrelated Approval/Core changes
+fail closed.
+
 The same setup pass repairs an already committed communication scope that lacks
 its schema-v7 collaboration projection. It materializes only the exact
 committed scope and member authority from server-held rows. It does not replace

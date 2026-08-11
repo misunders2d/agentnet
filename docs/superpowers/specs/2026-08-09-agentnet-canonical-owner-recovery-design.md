@@ -71,6 +71,24 @@ The reconciler accepts only:
 
 Each state is identified by typed configuration, exact signer thumbprints, database schema versions, bounded row shapes, current/revoked state, and digests. Package source hashes are handled by the existing immutable package-upgrade mechanism, not trusted as authority evidence.
 
+For the exact v0.1.50→v0.1.51 edge, a retained marker may precede both the
+known one-hour Approval TTL hotfix and a completed canonical-owner repair.
+Before creating the setup upgrade journal, setup may reverse only those two
+documented transformations in memory: the TTL fields are restored to the
+published v0.1.50 shape, and the Approval/Core owner and signer fields are
+restored from the completed canonical-owner recovery journal. Both reconstructed
+configuration digests must equal the retained marker. The realized target
+signer, domain, target principal, and fixed setup request must also agree with
+the journal. This reconstruction never writes managed state.
+
+An incomplete or malformed recovery journal, a wrong domain or target,
+unverifiable signer state, extra configuration drift, or either reconstructed
+digest mismatch blocks before journal creation. Once the exact source is
+recognized, the existing setup upgrade journal owns compare-and-swap mutation,
+resume, and rollback; the TTL normalization runs before current-model Approval
+loading, and canonical-owner convergence must return an exact recovered or
+already-converged result.
+
 Anything else returns a redacted `canonical_owner_recovery` blocker before mutation.
 
 ### 5.3 Approval database transition

@@ -538,13 +538,13 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "0f79214999b95e6b4c86929211d4023645a8973dc5af29de064d2c4566a8db88",
-      "size": 45647
+      "sha256": "2a8d1fac12577a8fe8d6f21284c1fb3d1d6aac908c01d6fda310aed750c069de",
+      "size": 46176
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "c33f43df67317253dee72237cffea3bb876f59b0efe5d3c48653b428ea0bacba",
-      "size": 104787
+      "sha256": "3b22449a5408533bce522b7b918e787b2ec2f7b931b0c110c9378430776741f4",
+      "size": 105637
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -568,13 +568,13 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "d2b5265a6d10fcd8eeb950b9b74af4aa45a99069078ebae78534114fe6772ce8",
-      "size": 84438
+      "sha256": "6696577dab5285d01c07a88bbecfda72969171f4adbe95aa82ea6faec58deebc",
+      "size": 85015
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "de4ac3f8ea0b46a339774b9f0ea07e4ee0a84114bf3323eae16eaca08c12eed7",
-      "size": 27729
+      "sha256": "c04c1a93d52121f84c15f81859ecdefe85ae11d5f67ddf57e925e58a8e1c4cf6",
+      "size": 27861
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -618,14 +618,14 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "dc2327490e1a832655f8a5a9a644b607b234f33f4cf2b5e3c045fb391d54d298",
+      "sha256": "c439f24cb01d8e3ea5fdc1769bfa283b01a70745e1d238519e44573a391fc2d6",
       "size": 56697
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "78724e76457a479ff62b4473e5ee6a87f9b019034b39310d089eaff174b64ad5"
+    "sha256": "6cc0b2e39060e4db7eaa528b36c1c6f2831cb54051069fbcd34499ceffd1c1da"
   },
   "runtime": {
     "implementation": "CPython",

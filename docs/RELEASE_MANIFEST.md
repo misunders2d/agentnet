@@ -3,7 +3,7 @@
 Snapshot: 2026-08-09
 Candidate: `agentnet 0.1.51`
 Latest published package: `agentnet 0.1.50`
-Evidence profile: package-owned canonical-owner/signer recovery, atomic schema-v7 communication-scope projection, installed-byte communication, direct allowlisted 0.1.45→0.1.51 through 0.1.50→0.1.51 package/config/unit transitions, exact-commit installed-host CI, and disposable PostgreSQL 18.4 runtime verification
+Evidence profile: package-owned combined canonical-owner/retained-TTL recovery, atomic schema-v7 communication-scope projection, installed-byte communication, direct allowlisted 0.1.45→0.1.51 through 0.1.50→0.1.51 package/config/unit transitions, with fresh exact-commit installed-host CI and disposable PostgreSQL 18.4 runtime verification pending
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local and exact-service evidence cannot promote

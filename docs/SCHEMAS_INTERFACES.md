@@ -859,6 +859,18 @@ journaled and normalized to the target 600/3600 split. Compare-and-swap
 replacement, exact resume, and exact rollback use that retained payload;
 already-shortened, unknown, or any additionally drifted shape fails closed.
 
+The marker gate composes journal-v1 canonical-owner evidence with upgrade
+journal v3 only for one exact already-recovered v0.1.50 shape. It validates the
+terminal recovery record, target signer private/public binding, current target
+Approval and Core schemas, and the source identity/signer fields needed to
+reconstruct the marker-era documents. The inverse TTL comparison may remove
+only the known communication-scope field and restore the published 300-second
+generic value. Both reconstructed canonical digests must equal the marker
+before upgrade journal v3 is created. The v3 journal stores the realized
+current documents, not synthetic source bytes; subsequent owner and Core
+recovery checks are idempotent. No incomplete recovery phase, caller-selected
+identity, or independent Approval/Core drift is accepted.
+
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two
 active member rows, five entitlements, and five revoke powers from server-held

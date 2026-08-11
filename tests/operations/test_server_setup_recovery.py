@@ -21,6 +21,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,9 @@ from agentnet.artifacts.clamav import (
     clamav_rules_digest,
 )
 from agentnet.approval.config import MANDATORY_APPROVAL_PURPOSES
+from agentnet.approval.store import ApprovalStore
+from agentnet.operations.canonical_owner_recovery import CanonicalOwnerAdoptionRequest
+from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.operations.config import IndependentApproverConfig, OIDCEnrollmentConfig
 from agentnet.operations.server_reset import ServerSetupResetError, reset_server_setup
 from agentnet.operations.server_setup import (
@@ -44,7 +48,7 @@ from agentnet.operations.server_setup import (
     load_server_setup_request,
     plan_server_setup,
 )
-from agentnet.security.signatures import P256KeyPair
+from agentnet.security.signatures import P256KeyPair, canonical_json
 from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 
 BROKER = "synthetic-shared-test-token-0123456789abcdef0123456789"
@@ -725,7 +729,32 @@ def _stage_0150_one_hour_approval_hotfix(harness: _Harness) -> tuple[Path, bytes
     record_key.write_bytes(b"k" * 32)
     record_key.chmod(0o600)
     database = approval_state / "approval.sqlite3"
-    database.write_bytes(b"synthetic-approval-store")
+    database.touch(mode=0o600)
+    store = ApprovalStore(
+        database,
+        LocalEnvelopeCipher(b"k" * 32),
+        initialize=True,
+    )
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                """INSERT INTO approval_owner_bindings(
+                       binding_id,domain_id,approver_principal_id,oidc_issuer,
+                       oidc_subject,verified_email,pin_source,status,pinned_at
+                   ) VALUES(?,?,?,?,?,?,?,'active',?)""",
+                (
+                    "owner-binding-1",
+                    harness.request.domain_id,
+                    harness.request.approval_approver_principal_id,
+                    "https://accounts.example",
+                    "owner-subject",
+                    "owner@corp.example",
+                    "exact_subject",
+                    1,
+                ),
+            )
+    finally:
+        store.close()
     database.chmod(0o600)
     signer = harness.approval_signer
     signer_path = signers / "approver-1.pem"
@@ -785,6 +814,156 @@ def _stage_0150_one_hour_approval_hotfix(harness: _Harness) -> tuple[Path, bytes
     )
     harness.marker_path.chmod(0o600)
     return config_path, source_payload
+
+def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+    harness: _Harness,
+) -> tuple[Path, bytes]:
+    """Materialize the exact combined live repair over one retained marker."""
+
+    config_path, _hotfix_payload = _stage_0150_one_hour_approval_hotfix(harness)
+    approval = json.loads(config_path.read_text(encoding="utf-8"))
+    target_approver = approval["approvers"][0]
+    source_principal = "setup-placeholder-owner"
+    source_signer = P256KeyPair.generate()
+    source_signer_path = Path(target_approver["signer_private_key_path"]).with_name(
+        "placeholder-owner.pem"
+    )
+    target_signer_path = Path(target_approver["signer_private_key_path"])
+
+    source_approval = copy.deepcopy(approval)
+    source_approval["request_ttl_seconds"] = 300
+    source_approval["approvers"][0]["principal_id"] = source_principal
+    source_approval["approvers"][0]["signer_key_id"] = source_signer.thumbprint
+    source_approval["approvers"][0]["signer_private_key_path"] = str(
+        source_signer_path
+    )
+    source_hotfix = copy.deepcopy(source_approval)
+    source_hotfix["request_ttl_seconds"] = 3_600
+    source_hotfix_payload = (
+        json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    )
+
+    oidc_provider = setup.SetupOIDCProvider.model_validate(
+        json.loads(harness.request.oidc_provider_file.read_text(encoding="utf-8"))
+    )
+    target_policy = setup.SetupApprover.model_validate(
+        json.loads(
+            harness.request.approval_approvers_file.read_text(encoding="utf-8")
+        )["approvers"][0]
+    )
+    source_policy = target_policy.model_copy(
+        update={"principal_id": source_principal}
+    )
+    target_trust = IndependentApproverConfig(
+        principal_id=harness.request.approval_approver_principal_id,
+        authority_kind=target_policy.authority_kind,
+        signer_key_id=harness.approval_signer.thumbprint,
+        public_key_pem=harness.approval_signer.public_pem,
+        allowed_purposes=target_policy.allowed_purposes,
+    )
+    source_trust = target_trust.model_copy(
+        update={
+            "principal_id": source_principal,
+            "signer_key_id": source_signer.thumbprint,
+            "public_key_pem": source_signer.public_pem,
+        }
+    )
+    target_oidc = setup._build_core_oidc_config(
+        harness.request,
+        oidc_provider,
+        trusted=(target_trust,),
+        approvers=(target_policy,),
+    )
+    source_request = harness.request.model_copy(
+        update={"approval_approver_principal_id": source_principal}
+    )
+    source_oidc = setup._build_core_oidc_config(
+        source_request,
+        oidc_provider,
+        trusted=(source_trust,),
+        approvers=(source_policy,),
+    )
+    core_config_path = harness.layout.host(setup.CORE_CONFIG)
+    core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
+    target_core = {"oidc_enrollment": target_oidc.model_dump(mode="json")}
+    source_core = {"oidc_enrollment": source_oidc.model_dump(mode="json")}
+    core_config_path.write_text(
+        json.dumps(target_core, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    core_config_path.chmod(0o600)
+    core_oidc_path.write_text(
+        json.dumps(target_oidc.model_dump(mode="json"), indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    core_oidc_path.chmod(0o600)
+
+    recovery_id = str(
+        uuid5(
+            NAMESPACE_URL,
+            f"agentnet:{harness.request.domain_id}:{source_principal}:"
+            f"{harness.request.approval_approver_principal_id}",
+        )
+    )
+    adoption = {
+        "schema": "agentnet.canonical-owner-adoption-result.v1",
+        "status": "adopted",
+        "recovery_id": recovery_id,
+        "migrated_active_credentials": 1,
+        "revoked_browser_sessions": 0,
+        "canceled_registration_ceremonies": 0,
+    }
+    journal = {
+        "schema": "agentnet.canonical-owner-recovery-journal.v1",
+        "recovery_id": recovery_id,
+        "request_digest": hashlib.sha256(
+            canonical_json(
+                CanonicalOwnerAdoptionRequest(
+                    schema="agentnet.canonical-owner-adoption.v1",
+                    recovery_id=recovery_id,
+                    domain_id=harness.request.domain_id,
+                    source_principal_id=source_principal,
+                    target_principal_id=harness.request.approval_approver_principal_id,
+                    oidc_issuer=target_policy.oidc_issuer,
+                    oidc_subject="owner-subject",
+                    verified_email="owner@corp.example",
+                    verifier_id=harness.request.approval_verifier_id,
+                    approved_at=1,
+                ).model_dump(by_alias=True, mode="json")
+            )
+        ).hexdigest(),
+        "config_path": str(config_path.absolute()),
+        "signer_path": str(source_signer_path),
+        "target_signer_path": str(target_signer_path),
+        "source_config_sha256": hashlib.sha256(source_hotfix_payload).hexdigest(),
+        "domain_id": harness.request.domain_id,
+        "source_principal_id": source_principal,
+        "target_principal_id": harness.request.approval_approver_principal_id,
+        "oidc_issuer": target_policy.oidc_issuer,
+        "source_signer_key_id": source_signer.thumbprint,
+        "source_signer_public_key_pem": source_signer.public_pem,
+        "target_signer_key_id": harness.approval_signer.thumbprint,
+        "target_signer_public_key_pem": harness.approval_signer.public_pem,
+        "phase": "complete",
+        "prepared_at": 1,
+        "completed_at": 2,
+        "authority_adoption": adoption,
+        "authority_adoption_digest": hashlib.sha256(
+            canonical_json(adoption)
+        ).hexdigest(),
+    }
+    approval_state = harness.layout.host(setup.APPROVAL_STATE)
+    _private_json(approval_state / "canonical-owner-recovery.json", journal)
+
+    marker = harness.marker()
+    marker["approval_config_digest"] = setup.canonical_digest(source_approval)
+    marker["core_config_digest"] = setup.canonical_digest(source_core)
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.marker_path.chmod(0o600)
+    return config_path, config_path.read_bytes()
 
 
 
@@ -1006,6 +1185,7 @@ def test_0151_upgrade_converges_unrecorded_0150_one_hour_approval_hotfix(
     )
     harness.marker_path.chmod(0o600)
     _private_json(config_path, hotfix_document)
+
     source_payload = config_path.read_bytes()
     monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
 
@@ -1022,6 +1202,195 @@ def test_0151_upgrade_converges_unrecorded_0150_one_hour_approval_hotfix(
         "status": "updated_package_upgrade",
     } in result["steps"]
     assert harness.marker()["package_version"] == "0.1.51"
+    assert not harness.journal_path.exists()
+def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_approval_trust = setup._approval_trust
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, repaired_payload = (
+        _stage_0150_completed_owner_repair_and_one_hour_hotfix(harness)
+    )
+    monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
+    original_run_as = setup._run_as
+
+    def run_as(
+        account: pwd.struct_passwd,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+        stage: str,
+        accepted_returncodes: frozenset[int] = frozenset({0}),
+    ) -> dict[str, object]:
+        if argv[2:4] == ["approval", "recover-canonical-owner"]:
+            harness.operation_events.append(("product", stage))
+            return {"status": "already_exact"}
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
+        )
+
+    monkeypatch.setattr(setup, "_run_as", run_as)
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: {
+            "actor": {
+                "principal_id": harness.request.approval_approver_principal_id
+            }
+        },
+    )
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    result = harness.apply(harness.plan_digest())
+
+    migrated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config_path.read_bytes() != repaired_payload
+    assert migrated["request_ttl_seconds"] == 600
+    assert migrated["communication_scope_request_ttl_seconds"] == 3_600
+    assert {
+        "id": "approval_request_ttl_policy_upgrade",
+        "status": "updated_package_upgrade",
+    } in result["steps"]
+    assert {
+        "id": "canonical_owner_recovery",
+        "status": "already_exact",
+        "source_principal_id": "setup-placeholder-owner",
+        "target_principal_id": harness.request.approval_approver_principal_id,
+        "core_policy_status": "already_satisfied",
+    } in result["steps"]
+    assert harness.marker()["package_version"] == "0.1.51"
+    assert not harness.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected_blocker"),
+    (
+        ("journal_target", "canonical_owner_recovery"),
+        ("journal_request_digest", "canonical_owner_recovery"),
+        ("journal_oidc_issuer", "canonical_owner_recovery"),
+        ("journal_signer_path", "canonical_owner_recovery"),
+        ("journal_target_signer_path", "canonical_owner_recovery"),
+        ("journal_source_config_sha256", "canonical_owner_recovery"),
+        ("binding_verified_email", "canonical_owner_recovery"),
+        ("binding_pinned_at", "canonical_owner_recovery"),
+        ("approval_policy", "canonical_owner_recovery"),
+        ("core_policy", "setup_upgrade_conflict"),
+    ),
+)
+def test_0151_rejects_combined_recovery_evidence_or_state_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+    expected_blocker: str,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+        harness
+    )
+    recovery_path = (
+        harness.layout.host(setup.APPROVAL_STATE)
+        / "canonical-owner-recovery.json"
+    )
+    core_config_path = harness.layout.host(setup.CORE_CONFIG)
+    if tamper == "journal_target":
+        recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+        recovery["target_principal_id"] = "unrelated-owner"
+        _private_json(recovery_path, recovery)
+    elif tamper.startswith("journal_"):
+        recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+        journal_field = tamper.removeprefix("journal_")
+        recovery[journal_field] = (
+            "b" * 64
+            if journal_field in {"request_digest", "source_config_sha256"}
+            else str(tmp_path / "unrelated.pem")
+            if journal_field in {"signer_path", "target_signer_path"}
+            else "https://unrelated.example"
+        )
+        _private_json(recovery_path, recovery)
+    elif tamper.startswith("binding_"):
+        approval = json.loads(config_path.read_text(encoding="utf-8"))
+        record_key = Path(approval["record_key_path"]).read_bytes()
+        store = ApprovalStore(
+            Path(approval["database_path"]),
+            LocalEnvelopeCipher(record_key),
+        )
+        try:
+            column = tamper.removeprefix("binding_")
+            value: str | int = (
+                "other-owner@corp.example" if column == "verified_email" else 2
+            )
+            with store.transaction() as connection:
+                connection.execute(
+                    f"UPDATE approval_owner_bindings SET {column}=?",
+                    (value,),
+                )
+        finally:
+            store.close()
+    elif tamper == "approval_policy":
+        approval = json.loads(config_path.read_text(encoding="utf-8"))
+        approval["rp_name"] = "Unrelated Approval"
+        _private_json(config_path, approval)
+    else:
+        core = json.loads(core_config_path.read_text(encoding="utf-8"))
+        core["oidc_enrollment"]["client_id"] = "unrelated-client"
+        core_config_path.write_text(
+            json.dumps(core, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        core_config_path.chmod(0o600)
+    marker_before = harness.marker_path.read_bytes()
+    approval_before = config_path.read_bytes()
+    core_before = core_config_path.read_bytes()
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == expected_blocker
+    assert harness.marker_path.read_bytes() == marker_before
+    assert config_path.read_bytes() == approval_before
+    assert core_config_path.read_bytes() == core_before
+    assert not harness.journal_path.exists()
+
+
+def test_0151_rejects_completed_owner_repair_without_retained_one_hour_hotfix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    harness.apply(harness.plan_digest())
+    config_path, _ = _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+        harness
+    )
+    approval = json.loads(config_path.read_text(encoding="utf-8"))
+    approval["request_ttl_seconds"] = 300
+    _private_json(config_path, approval)
+    core_config_path = harness.layout.host(setup.CORE_CONFIG)
+    marker_before = harness.marker_path.read_bytes()
+    approval_before = config_path.read_bytes()
+    core_before = core_config_path.read_bytes()
+
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    with pytest.raises(ServerSetupError) as exc_info:
+        harness.apply(harness.plan_digest())
+
+    assert exc_info.value.blocker == "setup_upgrade_conflict"
+    assert harness.marker_path.read_bytes() == marker_before
+    assert config_path.read_bytes() == approval_before
+    assert core_config_path.read_bytes() == core_before
     assert not harness.journal_path.exists()
 
 

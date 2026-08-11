@@ -697,6 +697,22 @@ def _validate_recovery_journal(
     return journal.model_dump(by_alias=True)
 
 
+def validate_canonical_owner_recovery_journal(
+    value: object,
+    *,
+    request: CanonicalOwnerAdoptionRequest,
+    config_path: Path,
+) -> dict[str, Any]:
+    """Validate one persisted journal against its exact recovery request."""
+
+    return _validate_recovery_journal(
+        value,
+        request=request,
+        request_digest=_request_digest(request),
+        config_path=config_path,
+    )
+
+
 
 
 def converge_canonical_approval_owner(

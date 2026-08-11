@@ -929,6 +929,18 @@ communication-scope ceiling at 3600 seconds. The write uses compare-and-swap;
 interruption resumes from the journal, pre-commit rollback restores the exact
 source bytes, and any additional configuration drift fails closed.
 
+Marker validation also handles the exact composition of those two corrective
+states. When the live owner/Core policy is already canonical, the Approval
+recovery journal is terminal, the one-hour hotfix remains realized, and the
+marker still records the pre-repair source, setup reconstructs both marker-era
+documents from the current typed documents plus proof-bound source identity and
+signer fields. It reverses only the allowlisted TTL delta for comparison and
+requires both canonical digests to equal the marker before creating the setup
+journal. The normal journal then captures the realized current files, TTL
+normalization proceeds, and owner/Core convergence is verified idempotently.
+Unknown, incomplete, cross-principal, signer-mismatched, or additionally
+drifted combinations fail before a managed write.
+
 Communication-scope completion and legacy-scope repair share one schema-v7
 single-scope materializer. Completion invokes it inside the transaction that
 commits the scope, entitlements, revoke powers, members, audit record, and

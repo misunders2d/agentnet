@@ -445,24 +445,31 @@ published and historical release evidence:
   split. An unrecorded hotfix is accepted only when deriving the published
   300-second form reproduces the marker’s exact canonical config digest;
   retries resume, pre-commit rollback restores the source bytes, and any
-  additional drift fails closed. A lost PostgreSQL lease heartbeat publishes
-  reconnect-required state while protected operations remain excluded. A later
-  operation opens a fresh verified connection and reacquires a strictly higher
-  same-owner fence; different-owner contention or unverifiable recovery remains
-  unavailable. The focused recovery lane reports **243 passed**; the broad
-  releasable-source lane reports **2231 passed and 22 expected
+  additional drift fails closed. The same marker gate composes the exact
+  completed canonical-owner repair with the retained TTL hotfix: it validates
+  terminal recovery and signer evidence, reconstructs both marker-era Approval
+  and Core documents, and requires both canonical digests to match before
+  creating an upgrade journal or changing managed state. It then journals the
+  realized current documents, normalizes the TTL policy, and verifies
+  idempotent owner/Core convergence; incomplete, cross-principal,
+  signer-drifted, or independently drifted state remains fail-closed. A lost
+  PostgreSQL lease heartbeat publishes reconnect-required state while protected
+  operations remain excluded. A later operation opens a fresh verified
+  connection and reacquires a strictly higher same-owner fence;
+  different-owner contention or unverifiable recovery remains unavailable.
+  The focused recovery lane reports **255 passed**; the broad
+  releasable-source lane reports **2243 passed and 22 expected
   platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
-  generations each report **2258 passed and 22 expected skips**. Two independent
+  generations each report **2270 passed and 22 expected skips**. Two independent
   builds are byte-identical, packaged local message/obligation processing
   reaches `recipient_committed`, and a fresh installed npm package passes exact
-  endpoint routing with zero sibling reactions or residue. Exact commit
-  `4e8ebd72d6b5e39550e438816abb1e2d30a5326a` passed same-commit GitHub
-  PostgreSQL 18 clean setup, installed-package communication, v0.1.50→v0.1.51
-  installed-host upgrade, and cross-platform package lanes. Its unchanged
-  release source tree passed the complete disposable PostgreSQL 18.4 runtime
-  file with **93 passed, 0 skipped, 0 failed** plus release verification; the
-  database and checkout were destroyed and live Core remained unchanged. Live
-  server/laptop convergence and two-machine reliability evidence remain pending. Affected IDs are `ID-001`, `ID-002`, `ID-005`,
+  endpoint routing with zero sibling reactions or residue. Exact-commit GitHub
+  installed-host and disposable PostgreSQL 18.4 evidence for predecessor
+  commit `4e8ebd72d6b5e39550e438816abb1e2d30a5326a` remains retained but does not
+  bind this corrective source delta. Fresh same-commit CI and server PostgreSQL
+  validation are required before owner-authorized live convergence. Live
+  server/laptop convergence and two-machine reliability evidence remain pending.
+  Affected IDs are `ID-001`, `ID-002`, `ID-005`,
   `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-005`,
   `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `AVL-005`, `SEC-003`, `SEC-005`,
   `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is

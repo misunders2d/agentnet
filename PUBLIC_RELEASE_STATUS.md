@@ -39,17 +39,23 @@ committed scope without replacing authority.
 
 The retained one-hour v0.1.50 Approval hotfix is accepted only when its
 reconstructed published form matches the setup marker, then journaled and
-normalized to separate ordinary and communication-scope deadlines. A lost
-PostgreSQL runtime heartbeat publishes fail-closed state before another
+normalized to separate ordinary and communication-scope deadlines. When that
+hotfix and an already-completed canonical-owner repair coexist while the marker
+still records the pre-repair source, setup accepts the host only by validating
+the terminal recovery journal and reconstructing both marker-era Approval and
+Core documents. Both digests must match before journaling or managed writes;
+incomplete evidence or unrelated drift fails closed.
+
+A lost PostgreSQL runtime heartbeat publishes fail-closed state before another
 protected operation can enter; work remains unavailable until a later operation
 verifies a fresh connection and acquires a strictly higher same-owner fence.
 
 The candidate accepts only exact five-unit schema-v7 markers from v0.1.45
 through v0.1.50. Ambiguous, drifted, incomplete, or unsupported state fails
-closed. Exact-commit package, PostgreSQL 18 clean setup, v0.1.50→v0.1.51
-installed-host upgrade, cross-platform, and disposable PostgreSQL 18.4 runtime
-validation pass. Live convergence and two-machine reliability remain pending;
-no production or gate claim is made.
+closed. Installed-host, cross-platform, and disposable PostgreSQL 18.4 evidence
+for the preceding exact commit remains retained but does not bind this
+corrective source delta. Fresh same-commit CI and server PostgreSQL validation
+remain pending before live convergence; no production or gate claim is made.
 
 
 ## Corrective `0.1.49` candidate

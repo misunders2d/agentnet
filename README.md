@@ -586,6 +586,14 @@ seconds, and atomically replaces the file. A crash resumes from the journal;
 any additional drift fails closed, and pre-commit rollback restores the exact
 source bytes.
 
+If the canonical-owner repair already completed while that one-hour hotfix
+remained outside the marker, setup accepts the combined state only after the
+completed recovery journal reconstructs both marker-era Approval and Core
+documents and both canonical digests equal the marker. The realized current
+documents are then journaled, the TTL policy is normalized, and owner/Core
+convergence is rechecked idempotently. Incomplete evidence or unrelated drift
+fails before setup creates its upgrade journal or changes managed state.
+
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a
