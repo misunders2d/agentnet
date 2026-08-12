@@ -1,14 +1,14 @@
 {
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "evaluated_at": "2026-08-11T17:47:47Z",
-  "scope": "v0_1_51_journalless_canonical_owner_recovery_candidate",
+  "evaluated_at": "2026-08-12T08:24:53Z",
+  "scope": "v0_1_51_explicit_scope_ttl_journalless_owner_recovery_candidate",
   "verification_status": "PASS",
   "release_certified": false,
   "verification_scope": "PASS applies to the selected local source, focused replacement/recovery/communication tests, reproducible package, and recursive installed-byte commands recorded below; it is not release certification and does not include same-commit GitHub installed-host lanes, same-commit disposable PostgreSQL runtime evidence, live two-machine convergence proof, installed-harness pin gates, multi-node durability, or any owner/privileged/external must-not-ship gate",
   "source_revision_kind": "working_tree_candidate",
-  "release_source_tree_sha256": "c8eb0a72af85aa7871c5511ba65b39b041d49f1e2ad46053a8f0875c7a79f170",
+  "release_source_tree_sha256": "01c36459f8c795c314bb333ee883b4ac0125e8591a211b1a0fc16b98b00aac6c",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
-  "change_boundary": "Candidate 0.1.51 recognizes the exact live state in which canonical-owner recovery already completed while the retained v0.1.50 one-hour Approval TTL hotfix remained outside the setup marker. When the terminal recovery journal is absent, it reconstructs a resumable journal only from exact marker-relative Approval/Core documents, current single-owner database authority and signer evidence, and the known TTL delta; it requires both reconstructed canonical digests to equal the marker before retaining the journal or changing managed state. Every resume revalidates that evidence, while incomplete, ambiguous, tampered, or unrelated drift fails closed. It also atomically publishes a failed PostgreSQL runtime heartbeat while protected operations remain excluded, recovers only through a fresh verified connection and strictly higher same-owner fence, retains schema-v7 projection recovery, normalizes the exact retained TTL hotfix to separate 600-second ordinary and 3600-second communication-scope ceilings, and preserves the bounded exact-owner expired same-principal scope-member replacement operation.",
+  "change_boundary": "Candidate 0.1.51 recognizes the exact retained live state where canonical-owner recovery serialized the default communication_scope_request_ttl_seconds=3600 into the already-repaired Approval configuration while the v0.1.50 marker still binds the pre-repair published source with that field absent. The journal-less reconstruction now accepts only an absent or exactly 3600-second scope field alongside request_ttl_seconds=3600, removes the default only when reconstructing marker-era and source-journal bytes, and continues to require exact marker-relative Approval/Core digests, two-signer custody, single-owner database authority, target credential state, and immutable adoption audit evidence. Any other value or drift fails closed before managed mutation.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
@@ -24,7 +24,7 @@
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 d161a088bf4306a9baa3ce01be1ede819954761e7d474b706c9d77bf27fb2c3a; wheel sha256 ef94a91eae4dbb1b4a2741048850dfe636d03593e28dbea97b0b5da001f6b404"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 5066b836517d931ed8842300a710e508b36987ff2e21fa5b6e4cb940e7cce458; wheel sha256 d415ae7f944c01a5a19e08b3b7b4dc96edd2754c79b906fd9333f9f6ee9f3a42"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -66,14 +66,14 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "d161a088bf4306a9baa3ce01be1ede819954761e7d474b706c9d77bf27fb2c3a"
+      "sha256": "5066b836517d931ed8842300a710e508b36987ff2e21fa5b6e4cb940e7cce458"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "ef94a91eae4dbb1b4a2741048850dfe636d03593e28dbea97b0b5da001f6b404"
+      "sha256": "d415ae7f944c01a5a19e08b3b7b4dc96edd2754c79b906fd9333f9f6ee9f3a42"
     }
   ],
-  "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI and disposable PostgreSQL evidence must be refreshed after commit",
+  "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI, disposable PostgreSQL evidence, and live convergence must be refreshed after commit",
   "external_evidence": {
     "manifest": "evidence/local/2026-08-11-v0.1.51-server-postgres/manifest.json",
     "pr_comment": "https://github.com/misunders2d/agentnet/pull/3#issuecomment-5250983948",

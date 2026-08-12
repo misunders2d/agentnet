@@ -5035,6 +5035,7 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
             )
             source_hotfix = dict(raw_approval)
             source_hotfix["approvers"] = [source_approver]
+            source_hotfix.pop("communication_scope_request_ttl_seconds", None)
             source_hotfix_payload = (
                 json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8")
                 + b"\n"
@@ -5800,7 +5801,7 @@ def _owner_recovery_compatible_approval_config(
         document = _strict_json_bytes(payload, label="managed Approval configuration")
         if (
             document.get("request_ttl_seconds") != 3_600
-            or "communication_scope_request_ttl_seconds" in document
+            or document.get("communication_scope_request_ttl_seconds", 3_600) != 3_600
             or document.get("challenge_ttl_seconds") != 180
             or document.get("receipt_ttl_seconds") != 300
             or document.get("registration_ttl_seconds") != 600

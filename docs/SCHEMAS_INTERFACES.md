@@ -883,8 +883,11 @@ before upgrade journal v3 is created. Every initial or resumed attempt repeats
 the terminal journal, exact single-active-owner, adoption-audit, target
 credential, and signer-custody checks. An upgrade-journal resume rechecks exact
 two-signer custody and the current Core digest immediately before the Approval
-TTL compare-and-swap. The retained 3600-second source policy has one exact no-write
-compatibility parse; no other invalid current schema is admitted. The v3
+TTL compare-and-swap. The retained 3600-second source policy has one exact
+no-write compatibility parse; it accepts the absent released field or the
+explicit 3600-second default materialized by canonical-owner configuration
+replacement, and no other invalid current schema.
+The v3
 journal stores the realized current documents, not synthetic source bytes;
 subsequent owner and Core recovery checks are idempotent. No incomplete
 recovery phase, caller-selected identity, ambiguous owner state, or independent

@@ -824,6 +824,8 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
 
     config_path, _hotfix_payload = _stage_0150_one_hour_approval_hotfix(harness)
     approval = json.loads(config_path.read_text(encoding="utf-8"))
+    approval["communication_scope_request_ttl_seconds"] = 3_600
+    _private_json(config_path, approval)
     target_approver = approval["approvers"][0]
     source_principal = "setup-placeholder-owner"
     source_signer = P256KeyPair.generate()
@@ -843,6 +845,7 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
 
     source_approval = copy.deepcopy(approval)
     source_approval["request_ttl_seconds"] = 300
+    source_approval.pop("communication_scope_request_ttl_seconds")
     source_approval["approvers"][0]["principal_id"] = source_principal
     source_approval["approvers"][0]["signer_key_id"] = source_signer.thumbprint
     source_approval["approvers"][0]["signer_private_key_path"] = str(

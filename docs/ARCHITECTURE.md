@@ -933,7 +933,9 @@ and fails closed.
 That same v0.1.50→v0.1.51 boundary preserves the exact published v0.1.50
 Approval policy with its 300-second generic request TTL and absent
 communication-scope field. It separately recognizes the retained hotfix that
-raised the generic request TTL to one hour. When the setup marker still records
+raised the generic request TTL to one hour with either an absent or explicit
+3600-second communication-scope field.
+When the setup marker still records
 the published configuration, setup derives that exact 300-second form from the
 realized hotfix and requires its canonical digest to match the marker. Only
 then does it record the realized Approval configuration in upgrade journal v3,

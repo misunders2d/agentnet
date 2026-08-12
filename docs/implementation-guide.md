@@ -396,8 +396,10 @@ authority.
 The exact published v0.1.50 Approval configuration has
 `request_ttl_seconds: 300` and no separate communication-scope field; setup
 preserves it without rewriting. A retained live hotfix may instead have
-`request_ttl_seconds: 3600` and no separate communication-scope field. The
-setup marker may still contain the digest of the published 300-second form;
+`request_ttl_seconds: 3600` with the separate communication-scope field absent
+or explicitly set to `3600`; canonical-owner replacement materializes the
+explicit default. The setup marker may still contain the digest of the
+published 300-second form;
 setup accepts that difference only when reconstructing the published form from
 the realized file reproduces the marker digest exactly. Do not edit either file
 manually. For that hotfix only, the exact v0.1.50→v0.1.51 setup path journals
