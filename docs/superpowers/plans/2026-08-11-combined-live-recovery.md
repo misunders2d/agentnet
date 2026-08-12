@@ -4,7 +4,7 @@
 
 **Goal:** Allow the exact retained v0.1.50 marker to safely recognize the already-applied canonical-owner repair plus the known one-hour Approval TTL hotfix before the existing v0.1.51 journaled upgrade runs.
 
-**Architecture:** Add one marker-relative reconstruction helper in `server_setup.py`. It reads the current Approval/Core configuration and completed canonical-owner journal under existing private-file custody checks, reverses only the journal-bound owner/signer fields and the exact known TTL hotfix in memory, and accepts the source marker only when both reconstructed canonical digests match. All mutation remains in the existing upgrade journal, TTL migration, canonical-owner verification, and rollback paths.
+**Architecture:** Add one marker-relative reconstruction helper in `server_setup.py`. It reads the current Approval/Core configuration and completed canonical-owner journal under existing private-file custody checks, reverses only the journal-bound Approval owner/signer fields and the exact known TTL hotfix in memory, and accepts the source marker only when the reconstructed Approval digest and unchanged current Core digest match. All mutation remains in the existing upgrade journal, TTL migration, canonical-owner verification, and rollback paths.
 
 **Tech Stack:** Python 3.13, Pydantic v2, pytest, AgentNet setup journals and canonical JSON digests.
 
@@ -31,7 +31,7 @@
 
 - [ ] **Step 1: Write the failing combined-state test**
 
-Create an exact v0.1.50 harness state, retain its marker, materialize the known one-hour TTL hotfix, then materialize a completed canonical-owner recovery journal and target owner/signer fields in Approval and Core. Assert v0.1.51 apply succeeds, normalizes ordinary request TTL to `600`, retains communication-scope TTL `3600`, verifies canonical authority as already exact, advances the marker, and clears the setup upgrade journal.
+Create an exact v0.1.50 harness state, retain its marker, materialize the known one-hour TTL hotfix, then materialize a completed canonical-owner recovery journal and target owner/signer fields in Approval while Core remains marker-identical. Assert v0.1.51 apply succeeds, normalizes ordinary request TTL to `600`, retains communication-scope TTL `3600`, verifies canonical authority as already exact, advances the marker, and clears the setup upgrade journal.
 
 - [ ] **Step 2: Write fail-closed tests**
 
@@ -55,10 +55,10 @@ Add a helper that:
 2. returns realized digests immediately when both equal the marker;
 3. requires the exact package edge and a completed canonical-owner journal bound to the fixed request;
 4. validates the realized target approver and Core trust entry against the journal target signer;
-5. replaces only target principal/key/path/public-key fields with journal source values in copies;
+5. replaces only target Approval principal/key/path fields with journal source values in a copy;
 6. reverses only the exact one-hour TTL shape to the published v0.1.50 shape;
-7. validates reconstructed Approval/Core models; and
-8. returns marker digests only when both reconstructed canonical digests match, otherwise returns realized digests so the existing gate rejects.
+7. validates the reconstructed Approval and unchanged current Core models; and
+8. returns marker digests only when the reconstructed Approval and current Core canonical digests match, otherwise returns realized digests so the existing gate rejects.
 
 Pass the fixed request and Approval state into `_prepare_supported_upgrade`; do not mutate files in this helper.
 

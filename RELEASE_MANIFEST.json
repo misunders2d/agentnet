@@ -538,7 +538,7 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "2a8d1fac12577a8fe8d6f21284c1fb3d1d6aac908c01d6fda310aed750c069de",
+      "sha256": "3886ce9019599a8f6e92c9e7d075c4ab2dcbc35315331c622ebf69d3fd8909b5",
       "size": 46176
     },
     "REQUIREMENTS_STATUS.md": {
@@ -625,7 +625,7 @@
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "01c36459f8c795c314bb333ee883b4ac0125e8591a211b1a0fc16b98b00aac6c"
+    "sha256": "5c4c0e339344420df8977c9e311386db307412c78dd666713ad278a5054ed220"
   },
   "runtime": {
     "implementation": "CPython",

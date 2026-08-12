@@ -876,17 +876,18 @@ The marker gate composes journal-v1 canonical-owner evidence with upgrade
 journal v3 only for one exact already-recovered v0.1.50 shape. It validates the
 terminal recovery record, target signer private/public binding, current target
 Approval and Core schemas, and the source identity/signer fields needed to
-reconstruct the marker-era documents. The inverse TTL comparison may remove
-only the known communication-scope field and restore the published 300-second
-generic value. Both reconstructed canonical digests must equal the marker
-before upgrade journal v3 is created. Every initial or resumed attempt repeats
-the terminal journal, exact single-active-owner, adoption-audit, target
-credential, and signer-custody checks. An upgrade-journal resume rechecks exact
-two-signer custody and the current Core digest immediately before the Approval
-TTL compare-and-swap. The retained 3600-second source policy has one exact
-no-write compatibility parse; it accepts the absent released field or the
-explicit 3600-second default materialized by canonical-owner configuration
-replacement, and no other invalid current schema.
+reconstruct the marker-era Approval document. The inverse TTL comparison may
+remove only the known communication-scope field and restore the published
+300-second generic value. The reconstructed Approval digest and unchanged
+current Core digest must equal the marker before upgrade journal v3 is created.
+Every initial or resumed attempt repeats the terminal journal, exact
+single-active-owner, adoption-audit, target credential, and signer-custody
+checks. An upgrade-journal resume rechecks exact two-signer custody and the
+current Core digest immediately before the Approval TTL compare-and-swap. The
+retained 3600-second source policy has one exact no-write compatibility parse;
+it accepts the absent released field or the explicit 3600-second default
+materialized by canonical-owner configuration replacement, and no other
+invalid current schema.
 The v3
 journal stores the realized current documents, not synthetic source bytes;
 subsequent owner and Core recovery checks are idempotent. No incomplete

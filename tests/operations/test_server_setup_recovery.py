@@ -824,8 +824,6 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
 
     config_path, _hotfix_payload = _stage_0150_one_hour_approval_hotfix(harness)
     approval = json.loads(config_path.read_text(encoding="utf-8"))
-    approval["communication_scope_request_ttl_seconds"] = 3_600
-    _private_json(config_path, approval)
     target_approver = approval["approvers"][0]
     source_principal = "setup-placeholder-owner"
     source_signer = P256KeyPair.generate()
@@ -845,7 +843,7 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
 
     source_approval = copy.deepcopy(approval)
     source_approval["request_ttl_seconds"] = 300
-    source_approval.pop("communication_scope_request_ttl_seconds")
+    source_approval.pop("communication_scope_request_ttl_seconds", None)
     source_approval["approvers"][0]["principal_id"] = source_principal
     source_approval["approvers"][0]["signer_key_id"] = source_signer.thumbprint
     source_approval["approvers"][0]["signer_private_key_path"] = str(
@@ -865,9 +863,6 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
             harness.request.approval_approvers_file.read_text(encoding="utf-8")
         )["approvers"][0]
     )
-    source_policy = target_policy.model_copy(
-        update={"principal_id": source_principal}
-    )
     target_trust = IndependentApproverConfig(
         principal_id=harness.request.approval_approver_principal_id,
         authority_kind=target_policy.authority_kind,
@@ -875,32 +870,16 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
         public_key_pem=harness.approval_signer.public_pem,
         allowed_purposes=target_policy.allowed_purposes,
     )
-    source_trust = target_trust.model_copy(
-        update={
-            "principal_id": source_principal,
-            "signer_key_id": source_signer.thumbprint,
-            "public_key_pem": source_signer.public_pem,
-        }
-    )
     target_oidc = setup._build_core_oidc_config(
         harness.request,
         oidc_provider,
         trusted=(target_trust,),
         approvers=(target_policy,),
     )
-    source_request = harness.request.model_copy(
-        update={"approval_approver_principal_id": source_principal}
-    )
-    source_oidc = setup._build_core_oidc_config(
-        source_request,
-        oidc_provider,
-        trusted=(source_trust,),
-        approvers=(source_policy,),
-    )
     core_config_path = harness.layout.host(setup.CORE_CONFIG)
     core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
     target_core = {"oidc_enrollment": target_oidc.model_dump(mode="json")}
-    source_core = {"oidc_enrollment": source_oidc.model_dump(mode="json")}
+    source_core = copy.deepcopy(target_core)
     core_config_path.write_text(
         json.dumps(target_core, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

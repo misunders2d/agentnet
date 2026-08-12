@@ -73,16 +73,17 @@ Each state is identified by typed configuration, exact signer thumbprints, datab
 
 For the exact v0.1.50→v0.1.51 edge, a retained marker may precede both the
 known one-hour Approval TTL hotfix and a completed canonical-owner repair.
-Before creating the setup upgrade journal, setup may reverse only those two
-documented transformations in memory: the TTL fields are restored to the
-published v0.1.50 shape, and the Approval/Core owner and signer fields are
-restored from the completed canonical-owner recovery journal. Both reconstructed
-configuration digests must equal the retained marker. The realized target
-signer, domain, target principal, and fixed setup request must also agree with
-the journal. This reconstruction never writes managed state.
+Before creating the setup upgrade journal, setup may reverse only the
+documented Approval transformation in memory: the TTL fields are restored to
+the published v0.1.50 shape and the Approval owner and signer fields are
+restored from the completed canonical-owner recovery journal. The reconstructed
+Approval digest and unchanged current Core digest must equal the retained
+marker. The realized target signer, domain, target principal, and fixed setup
+request must also agree with the journal. This reconstruction never writes
+managed state.
 
 An incomplete or malformed recovery journal, a wrong domain or target,
-unverifiable signer state, extra configuration drift, or either reconstructed
+unverifiable signer state, extra configuration drift, or either required
 digest mismatch blocks before journal creation. Once the exact source is
 recognized, the existing setup upgrade journal owns compare-and-swap mutation,
 resume, and rollback; the TTL normalization runs before current-model Approval

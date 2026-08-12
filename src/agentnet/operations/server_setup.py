@@ -5046,22 +5046,10 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
                 "communication_scope_request_ttl_seconds",
                 None,
             )
-            source_core_trust = dict(target_trust)
-            source_core_trust.update(
-                principal_id=source_principal,
-                signer_key_id=source_signer.thumbprint,
-                public_key_pem=source_signer.public_pem,
-            )
-            source_approval_service = dict(approval_service)
-            source_approval_service["approver_principal_id"] = source_principal
-            source_oidc = dict(oidc)
-            source_oidc["trusted_approvers"] = [source_core_trust]
-            source_oidc["approval_service"] = source_approval_service
-            marker_core = dict(digest_core)
-            marker_core["oidc_enrollment"] = source_oidc
+            marker_core = digest_core
             try:
                 ApprovalServiceConfig.model_validate(marker_approval)
-                OIDCEnrollmentConfig.model_validate(source_oidc)
+                OIDCEnrollmentConfig.model_validate(oidc)
             except ValidationError:
                 continue
             if (
@@ -5598,22 +5586,9 @@ def _upgrade_marker_config_digests(
             "canonical_owner_recovery",
             "canonical owner source config does not match recovery evidence",
         )
-    source_trust = dict(target_trust)
-    source_trust.update(
-        principal_id=journal["source_principal_id"],
-        signer_key_id=journal["source_signer_key_id"],
-        public_key_pem=journal["source_signer_public_key_pem"],
-    )
-    source_service = dict(approval_service)
-    source_service["approver_principal_id"] = journal["source_principal_id"]
-    source_oidc = dict(oidc)
-    source_oidc["trusted_approvers"] = [source_trust]
-    source_oidc["approval_service"] = source_service
-    marker_core = dict(marker_core)
-    marker_core["oidc_enrollment"] = source_oidc
     try:
         ApprovalServiceConfig.model_validate(marker_approval)
-        OIDCEnrollmentConfig.model_validate(source_oidc)
+        OIDCEnrollmentConfig.model_validate(oidc)
     except ValidationError:
         return candidate
     reconstructed = (

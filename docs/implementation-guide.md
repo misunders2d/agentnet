@@ -425,12 +425,12 @@ upgrade journal was already retained, setup rechecks exact two-signer custody
 and the current Core digest immediately before the Approval TTL
 compare-and-swap; intervening drift leaves Approval unchanged.
 
-Setup reconstructs the exact marker-era Approval and Core documents, applies
-the bounded inverse TTL comparison, and requires both reconstructed digests to
-equal the marker. It parses the retained 3600-second source policy without
-writing and admits only that exact legacy TTL shape. Only then does it journal
-the realized current documents, normalize the TTL policy, and recheck the owner
-command and Core policy as idempotent
+Setup reconstructs the exact marker-era Approval document, applies the bounded
+inverse TTL comparison, and requires its digest plus the unchanged current Core
+digest to equal the marker. It parses the retained 3600-second source policy
+without writing and admits only that exact legacy TTL shape. Only then does it
+journal the realized current documents, normalize the TTL policy, and recheck
+the owner command and Core policy as idempotent
 `already_exact`/`already_satisfied` operations. Missing or extra signer
 evidence, incomplete adoption evidence, mixed principals, signer drift,
 ambiguous owner state, or unrelated Approval/Core changes fail closed.
