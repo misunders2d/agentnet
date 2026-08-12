@@ -925,12 +925,15 @@ Approval/Core policy, one active canonical owner binding, target credential
 state, and one immutable adoption audit jointly reproduce the exact marker-era
 source and current realized digests. Reconstructing the marker-era source
 reverses only the exact evidence-bound Approval and Core owner/signer policy
-fields. The reconstruction write is the first mutation and changes no
-authority. Its strict evidence is revalidated after process loss. A resumed
-upgrade journal rechecks the exact two-signer custody and matching current
-Core/Core-OIDC policy immediately before the Approval TTL compare-and-swap;
-missing, additional, ambiguous, or drifted evidence leaves Approval unchanged
-and fails closed.
+fields. Because the historical policy writer serialized a `frozenset`, marker
+matching may search only permutations of the exact mandatory approval-purpose
+set to recover its former byte order. Added, removed, duplicated, or changed
+purposes cannot enter that path. The reconstruction write is the first
+mutation and changes no authority. Its strict evidence is revalidated after
+process loss. A resumed upgrade journal rechecks the exact two-signer custody
+and matching current Core/Core-OIDC policy immediately before the Approval TTL
+compare-and-swap; missing, additional, ambiguous, or drifted evidence leaves
+Approval unchanged and fails closed.
 
 That same v0.1.50→v0.1.51 boundary preserves the exact published v0.1.50
 Approval policy with its 300-second generic request TTL and absent

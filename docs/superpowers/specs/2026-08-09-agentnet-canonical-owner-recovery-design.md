@@ -77,11 +77,15 @@ Before creating the setup upgrade journal, setup may reverse only the
 documented recovery transformations in memory: the TTL fields are restored to
 the published v0.1.50 shape, while the Approval and Core owner/signer policy
 fields are restored from the exact recovery evidence. The reconstructed
-Approval and Core digests must equal the retained marker. The current Core OIDC
-sidecar must equal Core, and the realized target signer, domain, target
-principal, and fixed setup request must agree with the recovery evidence. This
-reconstruction writes only a strict terminal evidence journal when the
-original journal is absent; it does not change authority.
+Approval and Core digests must equal the retained marker. The historical writer
+serialized the fixed mandatory approval-purpose `frozenset` in
+process-dependent order. Digest reconstruction may therefore try only
+permutations of that exact set; membership, cardinality, every other field, and
+both retained digests remain exact. The current Core OIDC sidecar must equal
+Core, and the realized target signer, domain, target principal, and fixed setup
+request must agree with the recovery evidence. This reconstruction writes only
+a strict terminal evidence journal when the original journal is absent; it
+does not change authority.
 
 An incomplete or malformed recovery journal, a wrong domain or target,
 unverifiable signer state, extra configuration drift, Core/Core-OIDC

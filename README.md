@@ -591,10 +591,14 @@ remained outside the marker, setup accepts the combined state only after the
 completed recovery evidence reconstructs the marker-era Approval and Core
 documents. It reverses only the evidence-bound owner and signer fields in
 memory, then requires both reconstructed canonical digests to equal the
-marker. The realized current documents are journaled, the TTL policy is
-normalized, and owner/Core convergence is rechecked idempotently. Missing
-Core-OIDC agreement, incomplete evidence, or unrelated drift fails before
-setup creates its upgrade journal or changes managed state.
+marker. Historical marker matching treats only the fixed mandatory
+approval-purpose set as order-insensitive; it may reconstruct that set's
+serialized order to reproduce the retained digest, but any added, removed,
+duplicated, or changed purpose fails closed. The realized current documents
+are journaled, the TTL policy is normalized, and owner/Core convergence is
+rechecked idempotently. Missing Core-OIDC agreement, incomplete evidence, or
+unrelated drift fails before setup creates its upgrade journal or changes
+managed state.
 
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm

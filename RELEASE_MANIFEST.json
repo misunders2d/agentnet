@@ -538,8 +538,8 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "04c40c68406ab67f430cb1d3eaf5adb702137d015ff4acfc0dd8fe68110c50b3",
-      "size": 46300
+      "sha256": "fb8b10a622b64f024462047ba82708cc090270b27f13e9f94e045c8208ad99b8",
+      "size": 46552
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
@@ -618,14 +618,14 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "ae5cc17c04aa8d2e3895d6ae5e2408b947a06a25ce33d755e01048d694f143a9",
+      "sha256": "119c226d6f87f100e2e41e4c974339417859b6f6c1d5212896ec799898541e3b",
       "size": 56697
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "9baef70ed843decde60e73ce6eb22718a29754c6087177672f5c5c6d1633e212"
+    "sha256": "e00067bb4365b9089d45af45a726ff3d4f080baca6b39f3e2e4a017226857a10"
   },
   "runtime": {
     "implementation": "CPython",

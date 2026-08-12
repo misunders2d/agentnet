@@ -429,7 +429,11 @@ Approval unchanged.
 Setup reconstructs the exact marker-era Approval and Core documents by
 reversing only the recovery-evidence-bound owner and signer fields, applies the
 bounded inverse TTL comparison, and requires both reconstructed digests to
-equal the marker. It parses the retained 3600-second source policy without
+equal the marker. The old writer emitted the fixed mandatory
+`allowed_purposes` set in process-dependent order. Setup may therefore try only
+permutations of that exact set when reproducing the retained Approval/Core
+digests. It never accepts different membership, duplicates, or unrelated
+policy drift. Setup parses the retained 3600-second source policy without
 writing and admits only that exact legacy TTL shape. Only then does it journal
 the realized current documents, normalize the TTL policy, and recheck the
 owner command and Core policy as idempotent

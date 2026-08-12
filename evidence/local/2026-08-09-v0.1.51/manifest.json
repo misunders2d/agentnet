@@ -2,18 +2,18 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "46064f63be8e8b0d2b0cfe2b5d118c0d6749e40045575ebd3284eabdd15c24fd"
+      "sha256": "c557316e5bfe8ae1d3332390754ed74e73da9d1e06508dded5c37825cefa4897"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "ebee10aecef0bcb947d6facfad83adb8f0deee9934a98cd7f02fa0aa002d9d47"
+      "sha256": "615dd15d58da962d21727a1852eec320ba2a95e5bf6fc2e80a09f376b61878fb"
     }
   ],
   "change_boundary": "Candidate 0.1.51 recognizes only the exact retained live state where completed canonical-owner recovery changed the Approval and Core owner/signer policy while the one-hour Approval TTL hotfix remained outside the retained v0.1.50 marker. Marker-relative recovery reverses only evidence-bound source/target principal and signer fields in current typed Approval/Core documents, requires both reconstructed canonical digests to equal the marker, and requires the current Core OIDC sidecar to equal Core. Journal-less recovery additionally requires one active canonical owner binding, one matching adoption audit, exact target credential state, and exactly two fixed-custody signer keys; every resumed write revalidates marker/current digests, Core/Core-OIDC agreement, database evidence, and signer custody before mutation.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
-      "result": "PASS: 281 passed"
+      "result": "PASS: 287 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -21,11 +21,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2269 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2275 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 46064f63be8e8b0d2b0cfe2b5d118c0d6749e40045575ebd3284eabdd15c24fd; wheel sha256 ebee10aecef0bcb947d6facfad83adb8f0deee9934a98cd7f02fa0aa002d9d47"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 c557316e5bfe8ae1d3332390754ed74e73da9d1e06508dded5c37825cefa4897; wheel sha256 615dd15d58da962d21727a1852eec320ba2a95e5bf6fc2e80a09f376b61878fb"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -61,14 +61,14 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
-      "result": "PASS: 2296 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2302 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2296 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2302 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
-  "evaluated_at": "2026-08-12T13:39:04Z",
+  "evaluated_at": "2026-08-12T16:41:11Z",
   "execution_context": {
     "callback_incident": "Exact-commit GitHub workflow and server PostgreSQL results are included; no callback result is claimed",
     "local_retry_incident": "No retry is counted as evidence for this corrective tree. The final exact focused lane, broad lane, release verifier, release-manifest contract, recursive npm check, and source agentnet verify completed green with the recorded counts.",
@@ -84,7 +84,7 @@
     "source_revision": "4e8ebd72d6b5e39550e438816abb1e2d30a5326a"
   },
   "release_certified": false,
-  "release_source_tree_sha256": "9baef70ed843decde60e73ce6eb22718a29754c6087177672f5c5c6d1633e212",
+  "release_source_tree_sha256": "e00067bb4365b9089d45af45a726ff3d4f080baca6b39f3e2e4a017226857a10",
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
   "scope": "v0_1_51_dual_policy_drift_journalless_owner_recovery_candidate",
   "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI, disposable PostgreSQL evidence, and live convergence must be refreshed after commit",

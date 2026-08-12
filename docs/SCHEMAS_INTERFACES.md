@@ -879,7 +879,11 @@ Approval and Core schemas, and the exact source/target identity and signer
 fields needed to reconstruct both marker-era documents. The inverse TTL
 comparison may remove only the known communication-scope field and restore the
 published 300-second generic value. The reconstructed Approval and Core
-digests must equal the marker before upgrade journal v3 is created. Every
+digests must equal the marker before upgrade journal v3 is created. Historical
+`allowed_purposes` ordering is not authority-bearing: marker matching may
+permute only the exact fixed mandatory set to reproduce either retained
+digest. Set membership, cardinality, all other fields, and the digest remain
+exact; any added, removed, duplicated, or changed purpose fails closed. Every
 initial or resumed attempt repeats the terminal journal,
 exact-single-active-owner, adoption-audit, target-credential, and
 signer-custody checks. An upgrade-journal resume also requires the current Core

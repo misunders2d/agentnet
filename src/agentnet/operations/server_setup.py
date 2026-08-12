@@ -9,8 +9,10 @@ private roots, environment files, and systemd units.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import ipaddress
+import itertools
 import json
 import os
 import re
@@ -4908,6 +4910,48 @@ def _canonical_owner_source_documents(
     return source_approval, source_core
 
 
+def _marker_ordered_policy_document(
+    document: Mapping[str, Any],
+    *,
+    expected_digest: str,
+    policy_path: Sequence[str | int],
+) -> dict[str, Any] | None:
+    """Recover only historical ordering of one fixed approval-purpose set."""
+
+    candidate = copy.deepcopy(dict(document))
+    policy: object = candidate
+    for segment in policy_path:
+        if isinstance(segment, str) and isinstance(policy, dict):
+            policy = policy.get(segment)
+        elif (
+            isinstance(segment, int)
+            and isinstance(policy, list)
+            and 0 <= segment < len(policy)
+        ):
+            policy = policy[segment]
+        else:
+            return None
+    if not isinstance(policy, dict):
+        return None
+    purposes = policy.get("allowed_purposes")
+    if (
+        not isinstance(purposes, list)
+        or len(purposes) != len(MANDATORY_APPROVAL_PURPOSES)
+        or any(not isinstance(purpose, str) for purpose in purposes)
+        or frozenset(purposes) != MANDATORY_APPROVAL_PURPOSES
+    ):
+        return None
+    if canonical_digest(candidate) == expected_digest:
+        return candidate
+    for ordered in itertools.permutations(sorted(MANDATORY_APPROVAL_PURPOSES)):
+        if list(ordered) == purposes:
+            continue
+        policy["allowed_purposes"] = list(ordered)
+        if canonical_digest(candidate) == expected_digest:
+            return candidate
+    return None
+
+
 def _reconstruct_completed_canonical_owner_recovery_for_marker(
     marker: Mapping[str, Any],
     approval_state: Path,
@@ -5175,25 +5219,39 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
                 )
             except ServerSetupError:
                 continue
-            source_hotfix = dict(source_approval)
-            source_hotfix.pop("communication_scope_request_ttl_seconds", None)
-            source_hotfix_payload = (
-                json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8")
-                + b"\n"
-            )
-            marker_approval = dict(source_hotfix)
+            marker_approval = copy.deepcopy(source_approval)
             marker_approval["request_ttl_seconds"] = 300
             marker_approval.pop(
                 "communication_scope_request_ttl_seconds",
                 None,
             )
-            if (
-                canonical_digest(marker_approval)
-                != marker.get("approval_config_digest")
-                or canonical_digest(marker_core)
-                != marker.get("core_config_digest")
+            approval_digest = marker.get("approval_config_digest")
+            core_digest = marker.get("core_config_digest")
+            if not isinstance(approval_digest, str) or not isinstance(
+                core_digest,
+                str,
             ):
                 continue
+            marker_approval = _marker_ordered_policy_document(
+                marker_approval,
+                expected_digest=approval_digest,
+                policy_path=("approvers", 0),
+            )
+            marker_core = _marker_ordered_policy_document(
+                marker_core,
+                expected_digest=core_digest,
+                policy_path=("oidc_enrollment", "trusted_approvers", 0),
+            )
+            if marker_approval is None or marker_core is None:
+                continue
+            source_hotfix = copy.deepcopy(marker_approval)
+            source_hotfix["request_ttl_seconds"] = source_approval[
+                "request_ttl_seconds"
+            ]
+            source_hotfix_payload = (
+                json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8")
+                + b"\n"
+            )
             request_digest = hashlib.sha256(
                 canonical_json(
                     recovery_request.model_dump(
@@ -5696,6 +5754,21 @@ def _upgrade_marker_config_digests(
         ),
         target_signer_path=str(journal["target_signer_path"]),
     )
+    marker_approval = _marker_ordered_policy_document(
+        marker_approval,
+        expected_digest=str(recorded[0]),
+        policy_path=("approvers", 0),
+    )
+    marker_core = _marker_ordered_policy_document(
+        marker_core,
+        expected_digest=str(recorded[1]),
+        policy_path=("oidc_enrollment", "trusted_approvers", 0),
+    )
+    if marker_approval is None or marker_core is None:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner source config does not match recovery evidence",
+        )
     source_hotfix = dict(marker_approval)
     source_hotfix["request_ttl_seconds"] = 3_600
     source_hotfix.pop("communication_scope_request_ttl_seconds", None)
@@ -6275,6 +6348,40 @@ def _legacy_remote_activation_oidc(
     )
 
 
+def _oidc_document_matches_exact_policy(
+    document: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    """Allow only ordering changes within exact approver purpose sets."""
+
+    candidate_approvers = document.get("trusted_approvers")
+    expected_approvers = expected.get("trusted_approvers")
+    if (
+        not isinstance(candidate_approvers, list)
+        or not isinstance(expected_approvers, list)
+        or len(candidate_approvers) != len(expected_approvers)
+    ):
+        return False
+    for candidate_approver, expected_approver in zip(
+        candidate_approvers, expected_approvers, strict=True
+    ):
+        if not isinstance(candidate_approver, dict) or not isinstance(
+            expected_approver, dict
+        ):
+            return False
+        candidate_purposes = candidate_approver.get("allowed_purposes")
+        expected_purposes = expected_approver.get("allowed_purposes")
+        if (
+            not isinstance(candidate_purposes, list)
+            or not isinstance(expected_purposes, list)
+            or len(candidate_purposes) != len(expected_purposes)
+            or any(not isinstance(purpose, str) for purpose in candidate_purposes)
+            or sorted(candidate_purposes) != sorted(expected_purposes)
+        ):
+            return False
+    return True
+
+
 def _load_upgrade_compatible_core_config(
     core_config_path: Path,
     core_oidc_path: Path,
@@ -6288,6 +6395,8 @@ def _load_upgrade_compatible_core_config(
     """Validate exact current semantics, allowing only missing 0.1.30 owner pins."""
 
     legacy_oidc = _legacy_remote_activation_oidc(oidc)
+    desired_document = oidc.model_dump(mode="json")
+    legacy_document = legacy_oidc.model_dump(mode="json")
     config = load_config_json(
         _read_private_managed_file(
             core_config_path,
@@ -6325,10 +6434,23 @@ def _load_upgrade_compatible_core_config(
         ),
         label="Core OIDC config",
     )
-    desired_document = oidc.model_dump(mode="json")
-    legacy_document = legacy_oidc.model_dump(mode="json")
-    standalone_legacy = standalone == legacy_document
-    if standalone != desired_document and not standalone_legacy:
+    if not (
+        _oidc_document_matches_exact_policy(standalone, desired_document)
+        or _oidc_document_matches_exact_policy(standalone, legacy_document)
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "standalone Core OIDC policy differs beyond supported owner binding migration",
+        )
+    try:
+        standalone_oidc = OIDCEnrollmentConfig.model_validate(standalone)
+    except ValidationError as exc:
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "standalone Core OIDC policy differs beyond supported owner binding migration",
+        ) from exc
+    standalone_legacy = standalone_oidc == legacy_oidc
+    if standalone_oidc != oidc and not standalone_legacy:
         raise ServerSetupError(
             "setup_upgrade_conflict",
             "standalone Core OIDC policy differs beyond supported owner binding migration",
@@ -8144,7 +8266,32 @@ def _apply_server_setup(
                     "Approval trust changed during setup",
                 )
         oidc_path = core_oidc_path
-        oidc_payload = json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
+        if core_preexisting:
+            oidc_payload = _read_private_managed_file(
+                oidc_path,
+                core_account,
+                blocker="core_custody",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+            try:
+                realized_oidc = OIDCEnrollmentConfig.model_validate_json(
+                    oidc_payload
+                )
+            except ValidationError as exc:
+                raise ServerSetupError(
+                    "core_conflict",
+                    "Core OIDC policy changed after preflight",
+                ) from exc
+            if realized_oidc != oidc:
+                raise ServerSetupError(
+                    "core_conflict",
+                    "Core OIDC policy changed after preflight",
+                )
+        else:
+            oidc_payload = (
+                json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode()
+                + b"\n"
+            )
         steps.append({"id": "core_oidc_config", "status": _atomic_write(oidc_path, oidc_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
         scanner_path = core_data / "scanner-trust.json"
         if scanner_trust is not None:
