@@ -52,11 +52,23 @@
       "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior 93-pass PostgreSQL result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only; current same-commit server validation is required"
     },
     {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "PASS: release manifest verification"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/conformance/test_release_manifest.py",
+      "result": "PASS: 27 passed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: 2296 passed and 22 expected platform/dedicated-PostgreSQL skips"
+    },
+    {
       "command": "npm run check",
       "result": "PASS: source plus generations 1 and 2 each reported 2296 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
-  "evaluated_at": "2026-08-12T13:36:33Z",
+  "evaluated_at": "2026-08-12T13:39:04Z",
   "execution_context": {
     "callback_incident": "Exact-commit GitHub workflow and server PostgreSQL results are included; no callback result is claimed",
     "local_retry_incident": "No retry is counted as evidence for this corrective tree. The final exact focused lane, broad lane, release verifier, release-manifest contract, recursive npm check, and source agentnet verify completed green with the recorded counts.",
