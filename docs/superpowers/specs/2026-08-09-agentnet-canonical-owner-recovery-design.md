@@ -74,23 +74,25 @@ Each state is identified by typed configuration, exact signer thumbprints, datab
 For the exact v0.1.50→v0.1.51 edge, a retained marker may precede both the
 known one-hour Approval TTL hotfix and a completed canonical-owner repair.
 Before creating the setup upgrade journal, setup may reverse only the
-documented Approval transformation in memory: the TTL fields are restored to
-the published v0.1.50 shape and the Approval owner and signer fields are
-restored from the completed canonical-owner recovery journal. The reconstructed
-Approval digest and unchanged current Core digest must equal the retained
-marker. The realized target signer, domain, target principal, and fixed setup
-request must also agree with the journal. This reconstruction never writes
-managed state.
+documented recovery transformations in memory: the TTL fields are restored to
+the published v0.1.50 shape, while the Approval and Core owner/signer policy
+fields are restored from the exact recovery evidence. The reconstructed
+Approval and Core digests must equal the retained marker. The current Core OIDC
+sidecar must equal Core, and the realized target signer, domain, target
+principal, and fixed setup request must agree with the recovery evidence. This
+reconstruction writes only a strict terminal evidence journal when the
+original journal is absent; it does not change authority.
 
 An incomplete or malformed recovery journal, a wrong domain or target,
-unverifiable signer state, extra configuration drift, or either required
-digest mismatch blocks before journal creation. Once the exact source is
-recognized, the existing setup upgrade journal owns compare-and-swap mutation,
-resume, and rollback; the TTL normalization runs before current-model Approval
-loading, and canonical-owner convergence must return an exact recovered or
-already-converged result.
+unverifiable signer state, extra configuration drift, Core/Core-OIDC
+disagreement, or either required digest mismatch blocks before upgrade-journal
+creation. Once the exact source is recognized, the existing setup upgrade
+journal owns compare-and-swap mutation, resume, and rollback; the TTL
+normalization runs before current-model Approval loading, and canonical-owner
+convergence must return an exact recovered or already-converged result.
 
-Anything else returns a redacted `canonical_owner_recovery` blocker before mutation.
+Anything else returns a redacted `canonical_owner_recovery` or
+`setup_upgrade_conflict` blocker before protected mutation.
 
 ### 5.3 Approval database transition
 

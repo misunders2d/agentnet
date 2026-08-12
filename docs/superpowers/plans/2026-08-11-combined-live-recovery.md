@@ -4,7 +4,7 @@
 
 **Goal:** Allow the exact retained v0.1.50 marker to safely recognize the already-applied canonical-owner repair plus the known one-hour Approval TTL hotfix before the existing v0.1.51 journaled upgrade runs.
 
-**Architecture:** Add one marker-relative reconstruction helper in `server_setup.py`. It reads the current Approval/Core configuration and completed canonical-owner journal under existing private-file custody checks, reverses only the journal-bound Approval owner/signer fields and the exact known TTL hotfix in memory, and accepts the source marker only when the reconstructed Approval digest and unchanged current Core digest match. All mutation remains in the existing upgrade journal, TTL migration, canonical-owner verification, and rollback paths.
+**Architecture:** Add one marker-relative reconstruction helper in `server_setup.py`. It reads the current Approval/Core configuration and exact canonical-owner evidence under existing private-file custody checks, reverses only the evidence-bound Approval and Core owner/signer fields plus the known TTL hotfix in memory, and accepts the source marker only when both reconstructed digests match. All mutation remains in the existing recovery/upgrade journals, TTL migration, canonical-owner recovery command, and Core policy cutover.
 
 **Tech Stack:** Python 3.13, Pydantic v2, pytest, AgentNet setup journals and canonical JSON digests.
 
@@ -57,8 +57,8 @@ Add a helper that:
 4. validates the realized target approver and Core trust entry against the journal target signer;
 5. replaces only target Approval principal/key/path fields with journal source values in a copy;
 6. reverses only the exact one-hour TTL shape to the published v0.1.50 shape;
-7. validates the reconstructed Approval and unchanged current Core models; and
-8. returns marker digests only when the reconstructed Approval and current Core canonical digests match, otherwise returns realized digests so the existing gate rejects.
+7. validates the reconstructed Approval and Core models; and
+8. returns marker digests only when both reconstructed canonical digests match, otherwise fails closed so the existing gate rejects.
 
 Pass the fixed request and Approval state into `_prepare_supported_upgrade`; do not mutate files in this helper.
 

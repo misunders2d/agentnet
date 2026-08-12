@@ -538,13 +538,13 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "3886ce9019599a8f6e92c9e7d075c4ab2dcbc35315331c622ebf69d3fd8909b5",
-      "size": 46176
+      "sha256": "04c40c68406ab67f430cb1d3eaf5adb702137d015ff4acfc0dd8fe68110c50b3",
+      "size": 46300
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "89e6623b6a98d72a3035d3f24056a57042b61b534b037f31c4633319ba1cc1e2",
-      "size": 106543
+      "sha256": "3afd7cfecd7199ccb142f2701aa9a8920f7542ffa52b36f8157cfd177e2e88e2",
+      "size": 106532
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -618,14 +618,14 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "743df28a2924f9bea039c6b4d4e8ba4a22a4e49b8b3eb8e5850130cc3a272084",
+      "sha256": "ae5cc17c04aa8d2e3895d6ae5e2408b947a06a25ce33d755e01048d694f143a9",
       "size": 56697
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "5c4c0e339344420df8977c9e311386db307412c78dd666713ad278a5054ed220"
+    "sha256": "9baef70ed843decde60e73ce6eb22718a29754c6087177672f5c5c6d1633e212"
   },
   "runtime": {
     "implementation": "CPython",

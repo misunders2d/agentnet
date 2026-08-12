@@ -458,10 +458,10 @@ published and historical release evidence:
   changing authority; missing, extra, or conflicting evidence fails closed.
   Every initial or resumed attempt revalidates that terminal journal and its
   marker/current digests. A resumed upgrade journal rechecks the exact
-  two-signer custody and current Core digest immediately before the Approval
-  TTL compare-and-swap, so intervening drift leaves Approval unchanged. The
-  retained 3600-second source shape is parsed without writing and only its exact
-  allowlisted TTL delta is accepted. Setup then journals the realized current
+  two-signer custody and matching current Core/Core-OIDC policy immediately
+  before the Approval TTL compare-and-swap, so intervening drift leaves
+  Approval unchanged. The retained 3600-second source shape is parsed without
+  writing and only its exact allowlisted TTL delta is accepted. Setup then
   documents, normalizes the TTL policy, and verifies idempotent owner/Core
   convergence; incomplete, cross-principal, signer-drifted, ambiguous-owner,
   or independently drifted state remains fail-closed. A lost

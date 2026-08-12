@@ -923,10 +923,12 @@ principal alone. It reconstructs a terminal journal only when one retained
 v0.1.50 marker, exactly two fixed-custody signer keys, current typed
 Approval/Core policy, one active canonical owner binding, target credential
 state, and one immutable adoption audit jointly reproduce the exact marker-era
-source and current realized digests. The reconstruction write is the first
-mutation and changes no authority. Its strict evidence is revalidated after
-process loss. A resumed upgrade journal rechecks the exact two-signer custody
-and current Core digest immediately before the Approval TTL compare-and-swap;
+source and current realized digests. Reconstructing the marker-era source
+reverses only the exact evidence-bound Approval and Core owner/signer policy
+fields. The reconstruction write is the first mutation and changes no
+authority. Its strict evidence is revalidated after process loss. A resumed
+upgrade journal rechecks the exact two-signer custody and matching current
+Core/Core-OIDC policy immediately before the Approval TTL compare-and-swap;
 missing, additional, ambiguous, or drifted evidence leaves Approval unchanged
 and fails closed.
 

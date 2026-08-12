@@ -4791,16 +4791,135 @@ def _canonical_owner_recovery_request_for_marker(
     return recovery_request
 
 
+def _canonical_owner_source_documents(
+    approval_document: Mapping[str, Any],
+    core_document: Mapping[str, Any],
+    *,
+    source_principal_id: str,
+    source_signer_key_id: str,
+    source_signer_public_key_pem: str,
+    source_signer_path: str,
+    target_principal_id: str,
+    target_signer_key_id: str,
+    target_signer_public_key_pem: str,
+    target_signer_path: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Invert only the exact proof-bound canonical-owner policy cutover."""
+    approvers = approval_document.get("approvers")
+    if (
+        not isinstance(approvers, list)
+        or len(approvers) != 1
+        or not isinstance(approvers[0], dict)
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner target state conflicts with recovery evidence",
+        )
+    target_approver = approvers[0]
+    if (
+        target_approver.get("principal_id") != target_principal_id
+        or target_approver.get("signer_key_id") != target_signer_key_id
+        or target_approver.get("signer_private_key_path") != target_signer_path
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner target state conflicts with recovery evidence",
+        )
+    source_approver = dict(target_approver)
+    source_approver.update(
+        principal_id=source_principal_id,
+        signer_key_id=source_signer_key_id,
+        signer_private_key_path=source_signer_path,
+    )
+    source_approval = dict(approval_document)
+    source_approval["approvers"] = [source_approver]
+
+    oidc = core_document.get("oidc_enrollment")
+    if not isinstance(oidc, dict):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence is unavailable",
+        )
+    trusted = oidc.get("trusted_approvers")
+    approval_service = oidc.get("approval_service")
+    if (
+        not isinstance(trusted, list)
+        or len(trusted) != 1
+        or not isinstance(trusted[0], dict)
+        or not isinstance(approval_service, dict)
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence is ambiguous",
+        )
+    current_trust = trusted[0]
+    current_core_authority = (
+        current_trust.get("principal_id"),
+        current_trust.get("signer_key_id"),
+        current_trust.get("public_key_pem"),
+        approval_service.get("approver_principal_id"),
+    )
+    target_core_authority = (
+        target_principal_id,
+        target_signer_key_id,
+        target_signer_public_key_pem,
+        target_principal_id,
+    )
+    source_core_authority = (
+        source_principal_id,
+        source_signer_key_id,
+        source_signer_public_key_pem,
+        source_principal_id,
+    )
+    if current_core_authority == target_core_authority:
+        source_trust = dict(current_trust)
+        source_trust.update(
+            principal_id=source_principal_id,
+            signer_key_id=source_signer_key_id,
+            public_key_pem=source_signer_public_key_pem,
+        )
+        source_approval_service = dict(approval_service)
+        source_approval_service["approver_principal_id"] = source_principal_id
+        source_oidc = dict(oidc)
+        source_oidc["trusted_approvers"] = [source_trust]
+        source_oidc["approval_service"] = source_approval_service
+        source_core = dict(core_document)
+        source_core["oidc_enrollment"] = source_oidc
+    elif current_core_authority == source_core_authority:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core cutover is incomplete",
+        )
+    else:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core evidence conflicts with recovery evidence",
+        )
+    try:
+        _owner_recovery_compatible_approval_config(
+            json.dumps(source_approval, sort_keys=True).encode("utf-8")
+        )
+        OIDCEnrollmentConfig.model_validate(source_core["oidc_enrollment"])
+    except ValidationError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner source policy is invalid",
+        ) from exc
+    return source_approval, source_core
+
+
 def _reconstruct_completed_canonical_owner_recovery_for_marker(
     marker: Mapping[str, Any],
     approval_state: Path,
     approval_config_path: Path,
     approval_account: pwd.struct_passwd,
     core_config_path: Path,
+    core_oidc_path: Path,
     core_account: pwd.struct_passwd,
     *,
     request: ServerSetupRequest,
     observed_at: int,
+    before_write: Callable[[], None],
 ) -> dict[str, str] | None:
     """Record one exact terminal repair when its original journal was lost."""
 
@@ -4911,6 +5030,20 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
         raise ServerSetupError(
             "canonical_owner_recovery",
             "canonical owner Core evidence is unavailable",
+        )
+    raw_core_oidc = _strict_json_bytes(
+        _read_private_managed_file(
+            core_oidc_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Core OIDC configuration",
+    )
+    if raw_core_oidc != oidc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "canonical owner Core OIDC evidence conflicts with Core",
         )
     core_trusted = oidc.get("trusted_approvers")
     approval_service = oidc.get("approval_service")
@@ -5027,14 +5160,22 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
                 )
             except GateBlocked:
                 continue
-            source_approver = dict(raw_approval["approvers"][0])
-            source_approver.update(
-                principal_id=source_principal,
-                signer_key_id=source_signer.thumbprint,
-                signer_private_key_path=str(source_signer_path),
-            )
-            source_hotfix = dict(raw_approval)
-            source_hotfix["approvers"] = [source_approver]
+            try:
+                source_approval, marker_core = _canonical_owner_source_documents(
+                    raw_approval,
+                    digest_core,
+                    source_principal_id=source_principal,
+                    source_signer_key_id=source_signer.thumbprint,
+                    source_signer_public_key_pem=source_signer.public_pem,
+                    source_signer_path=str(source_signer_path),
+                    target_principal_id=request.approval_approver_principal_id,
+                    target_signer_key_id=target_signer.thumbprint,
+                    target_signer_public_key_pem=target_signer.public_pem,
+                    target_signer_path=str(target_signer_path),
+                )
+            except ServerSetupError:
+                continue
+            source_hotfix = dict(source_approval)
             source_hotfix.pop("communication_scope_request_ttl_seconds", None)
             source_hotfix_payload = (
                 json.dumps(source_hotfix, indent=2, sort_keys=True).encode("utf-8")
@@ -5046,12 +5187,6 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
                 "communication_scope_request_ttl_seconds",
                 None,
             )
-            marker_core = digest_core
-            try:
-                ApprovalServiceConfig.model_validate(marker_approval)
-                OIDCEnrollmentConfig.model_validate(oidc)
-            except ValidationError:
-                continue
             if (
                 canonical_digest(marker_approval)
                 != marker.get("approval_config_digest")
@@ -5177,6 +5312,7 @@ def _reconstruct_completed_canonical_owner_recovery_for_marker(
         ).encode("utf-8")
         + b"\n"
     )
+    before_write()
     _atomic_write(
         journal_path,
         payload,
@@ -5351,6 +5487,7 @@ def _upgrade_marker_config_digests(
     approval_account: pwd.struct_passwd,
     approval_state: Path,
     core_config_path: Path,
+    core_oidc_path: Path,
     core_account: pwd.struct_passwd,
     request: ServerSetupRequest,
 ) -> tuple[str, str]:
@@ -5426,6 +5563,20 @@ def _upgrade_marker_config_digests(
                 "reconstructed canonical owner evidence conflicts with setup",
             )
         if reconstruction is not None:
+            core_oidc_document = _strict_json_bytes(
+                _read_private_managed_file(
+                    core_oidc_path,
+                    core_account,
+                    blocker="core_custody",
+                    max_bytes=_MAX_CONFIG_BYTES,
+                ),
+                label="managed Core OIDC configuration",
+            )
+            if core_document.get("oidc_enrollment") != core_oidc_document:
+                raise ServerSetupError(
+                    "setup_upgrade_conflict",
+                    "managed Core OIDC configuration conflicts with Core",
+                )
             _require_reconstructed_recovery_signer_custody(
                 recovery_journal,
                 approval_document,
@@ -5493,43 +5644,6 @@ def _upgrade_marker_config_digests(
     )
     if journal is None:
         return candidate
-    approvers = marker_approval.get("approvers")
-    oidc = marker_core.get("oidc_enrollment")
-    if not isinstance(oidc, dict):
-        return candidate
-    trusted = oidc.get("trusted_approvers")
-    approval_service = oidc.get("approval_service")
-    if (
-        not isinstance(approvers, list)
-        or len(approvers) != 1
-        or not isinstance(approvers[0], dict)
-        or not isinstance(trusted, list)
-        or len(trusted) != 1
-        or not isinstance(trusted[0], dict)
-        or not isinstance(approval_service, dict)
-    ):
-        raise ServerSetupError(
-            "canonical_owner_recovery",
-            "canonical owner target state conflicts with recovery evidence",
-        )
-    target_approver = approvers[0]
-    target_trust = trusted[0]
-    if (
-        target_approver.get("principal_id") != journal["target_principal_id"]
-        or target_approver.get("signer_key_id") != journal["target_signer_key_id"]
-        or target_approver.get("signer_private_key_path")
-        != journal["target_signer_path"]
-        or target_trust.get("principal_id") != journal["target_principal_id"]
-        or target_trust.get("signer_key_id") != journal["target_signer_key_id"]
-        or target_trust.get("public_key_pem")
-        != journal["target_signer_public_key_pem"]
-        or approval_service.get("approver_principal_id")
-        != journal["target_principal_id"]
-    ):
-        raise ServerSetupError(
-            "canonical_owner_recovery",
-            "canonical owner target state conflicts with recovery evidence",
-        )
     signer_root = current_approval_config.data_dir / "signers"
     source_signer_path = Path(str(journal["signer_path"]))
     target_signer_path = Path(str(journal["target_signer_path"]))
@@ -5566,13 +5680,22 @@ def _upgrade_marker_config_digests(
             "canonical owner target signer does not match recovery evidence",
         )
 
-    source_approver = dict(target_approver)
-    source_approver.update(
-        principal_id=journal["source_principal_id"],
-        signer_key_id=journal["source_signer_key_id"],
-        signer_private_key_path=journal["signer_path"],
+    marker_approval, marker_core = _canonical_owner_source_documents(
+        marker_approval,
+        marker_core,
+        source_principal_id=str(journal["source_principal_id"]),
+        source_signer_key_id=str(journal["source_signer_key_id"]),
+        source_signer_public_key_pem=str(
+            journal["source_signer_public_key_pem"]
+        ),
+        source_signer_path=str(journal["signer_path"]),
+        target_principal_id=str(journal["target_principal_id"]),
+        target_signer_key_id=str(journal["target_signer_key_id"]),
+        target_signer_public_key_pem=str(
+            journal["target_signer_public_key_pem"]
+        ),
+        target_signer_path=str(journal["target_signer_path"]),
     )
-    marker_approval["approvers"] = [source_approver]
     source_hotfix = dict(marker_approval)
     source_hotfix["request_ttl_seconds"] = 3_600
     source_hotfix.pop("communication_scope_request_ttl_seconds", None)
@@ -5586,11 +5709,6 @@ def _upgrade_marker_config_digests(
             "canonical_owner_recovery",
             "canonical owner source config does not match recovery evidence",
         )
-    try:
-        ApprovalServiceConfig.model_validate(marker_approval)
-        OIDCEnrollmentConfig.model_validate(oidc)
-    except ValidationError:
-        return candidate
     reconstructed = (
         canonical_digest(marker_approval),
         canonical_digest(marker_core),
@@ -6702,6 +6820,7 @@ def _prepare_supported_upgrade(
         approval_account=approval_account,
         approval_state=approval_state,
         core_config_path=core_config_path,
+        core_oidc_path=core_oidc_path,
         core_account=core_account,
         request=request,
     )
@@ -7493,6 +7612,30 @@ def _apply_server_setup(
             )
             if recorded_owner_recovery is None:
                 assert existing_marker is not None
+
+                def validate_reconstructed_marker_state() -> None:
+                    source_profile = _marker_upgrade_unit_profile(existing_marker)
+                    if source_profile is None:
+                        raise ServerSetupError(
+                            "setup_upgrade_conflict",
+                            "recorded setup marker is not an exact supported upgrade source",
+                        )
+                    _require_marker_realized_state(
+                        existing_marker,
+                        approval_config_digest=str(
+                            existing_marker["approval_config_digest"]
+                        ),
+                        core_config_digest=str(
+                            existing_marker["core_config_digest"]
+                        ),
+                        unit_paths={
+                            unit: unit_paths[unit]
+                            for unit in source_profile
+                        },
+                        uid=root_uid,
+                        gid=root_gid,
+                    )
+
                 recorded_owner_recovery = (
                     _reconstruct_completed_canonical_owner_recovery_for_marker(
                         existing_marker,
@@ -7500,11 +7643,14 @@ def _apply_server_setup(
                         approval_config_path,
                         approval_account,
                         core_config_path,
+                        core_oidc_path,
                         core_account,
                         request=request,
                         observed_at=int(time.time()),
+                        before_write=validate_reconstructed_marker_state,
                     )
                 )
+
             def revalidate_ttl_write_source() -> None:
                 assert existing_marker is not None
                 source_profile = _marker_upgrade_unit_profile(existing_marker)
@@ -7519,6 +7665,7 @@ def _apply_server_setup(
                     approval_account=approval_account,
                     approval_state=approval_state,
                     core_config_path=core_config_path,
+                    core_oidc_path=core_oidc_path,
                     core_account=core_account,
                     request=request,
                 )

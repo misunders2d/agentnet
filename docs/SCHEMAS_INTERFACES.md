@@ -875,24 +875,23 @@ already-shortened, unknown, or any additionally drifted shape fails closed.
 The marker gate composes journal-v1 canonical-owner evidence with upgrade
 journal v3 only for one exact already-recovered v0.1.50 shape. It validates the
 terminal recovery record, target signer private/public binding, current target
-Approval and Core schemas, and the source identity/signer fields needed to
-reconstruct the marker-era Approval document. The inverse TTL comparison may
-remove only the known communication-scope field and restore the published
-300-second generic value. The reconstructed Approval digest and unchanged
-current Core digest must equal the marker before upgrade journal v3 is created.
-Every initial or resumed attempt repeats the terminal journal, exact
-single-active-owner, adoption-audit, target credential, and signer-custody
-checks. An upgrade-journal resume rechecks exact two-signer custody and the
-current Core digest immediately before the Approval TTL compare-and-swap. The
-retained 3600-second source policy has one exact no-write compatibility parse;
-it accepts the absent released field or the explicit 3600-second default
+Approval and Core schemas, and the exact source/target identity and signer
+fields needed to reconstruct both marker-era documents. The inverse TTL
+comparison may remove only the known communication-scope field and restore the
+published 300-second generic value. The reconstructed Approval and Core
+digests must equal the marker before upgrade journal v3 is created. Every
+initial or resumed attempt repeats the terminal journal,
+exact-single-active-owner, adoption-audit, target-credential, and
+signer-custody checks. An upgrade-journal resume also requires the current Core
+OIDC sidecar to remain identical to Core and rechecks exact two-signer custody
+immediately before the Approval TTL compare-and-swap. The retained
+3600-second source policy has one exact no-write compatibility parse; it
+accepts the absent released field or the explicit 3600-second default
 materialized by canonical-owner configuration replacement, and no other
-invalid current schema.
-The v3
-journal stores the realized current documents, not synthetic source bytes;
-subsequent owner and Core recovery checks are idempotent. No incomplete
-recovery phase, caller-selected identity, ambiguous owner state, or independent
-Approval/Core drift is accepted.
+invalid current schema. The v3 journal stores the realized current documents,
+not synthetic source bytes; subsequent owner and Core recovery checks are
+idempotent. No incomplete recovery phase, caller-selected identity, ambiguous
+owner state, or independently unexplained Approval/Core drift is accepted.
 
 The schema-v7 communication projection has one canonical single-scope mapping.
 Both normal activation and repair write the exact collaboration scope, two

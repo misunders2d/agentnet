@@ -819,11 +819,18 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
     harness: _Harness,
     *,
     include_journal: bool = True,
+    current_core_target: bool = True,
+    communication_scope_ttl_present: bool = True,
 ) -> tuple[Path, bytes]:
     """Materialize the exact combined live repair over one retained marker."""
 
     config_path, _hotfix_payload = _stage_0150_one_hour_approval_hotfix(harness)
     approval = json.loads(config_path.read_text(encoding="utf-8"))
+    if communication_scope_ttl_present:
+        approval["communication_scope_request_ttl_seconds"] = 3_600
+    else:
+        approval.pop("communication_scope_request_ttl_seconds", None)
+    _private_json(config_path, approval)
     target_approver = approval["approvers"][0]
     source_principal = "setup-placeholder-owner"
     source_signer = P256KeyPair.generate()
@@ -876,17 +883,48 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
         trusted=(target_trust,),
         approvers=(target_policy,),
     )
+    source_policy = target_policy.model_copy(
+        update={"principal_id": source_principal}
+    )
+    source_request = harness.request.model_copy(
+        update={"approval_approver_principal_id": source_principal}
+    )
+    source_trust = IndependentApproverConfig(
+        principal_id=source_principal,
+        authority_kind=source_policy.authority_kind,
+        signer_key_id=source_signer.thumbprint,
+        public_key_pem=source_signer.public_pem,
+        allowed_purposes=source_policy.allowed_purposes,
+    )
+    source_oidc = setup._build_core_oidc_config(
+        source_request,
+        oidc_provider,
+        trusted=(source_trust,),
+        approvers=(source_policy,),
+    )
     core_config_path = harness.layout.host(setup.CORE_CONFIG)
     core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
-    target_core = {"oidc_enrollment": target_oidc.model_dump(mode="json")}
-    source_core = copy.deepcopy(target_core)
+    enrolled_identity = {
+        "enrolled_harness_id": str(uuid4()),
+        "enrolled_credential_id": str(uuid4()),
+    }
+    target_core = {
+        "oidc_enrollment": target_oidc.model_dump(mode="json"),
+        **enrolled_identity,
+    }
+    source_core = {"oidc_enrollment": source_oidc.model_dump(mode="json")}
+    realized_core = target_core if current_core_target else {
+        **source_core,
+        **enrolled_identity,
+    }
     core_config_path.write_text(
-        json.dumps(target_core, indent=2, sort_keys=True) + "\n",
+        json.dumps(realized_core, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     core_config_path.chmod(0o600)
+    realized_oidc = target_oidc if current_core_target else source_oidc
     core_oidc_path.write_text(
-        json.dumps(target_oidc.model_dump(mode="json"), indent=2, sort_keys=True)
+        json.dumps(realized_oidc.model_dump(mode="json"), indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -1307,17 +1345,41 @@ def test_0151_rejects_incomplete_owner_recovery_before_ttl_migration(
     assert config_path.read_bytes() == source_payload
     assert recovery_path.read_bytes() == recovery_before
     assert not harness.journal_path.exists()
+
+@pytest.mark.parametrize(
+    "communication_scope_ttl_present",
+    (False, True),
+    ids=("scope-ttl-absent", "scope-ttl-explicit"),
+)
 def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    communication_scope_ttl_present: bool,
 ) -> None:
     real_approval_trust = setup._approval_trust
     harness = _harness(tmp_path, monkeypatch)
     monkeypatch.setattr(setup, "__version__", "0.1.50")
     harness.apply(harness.plan_digest())
     config_path, repaired_payload = (
-        _stage_0150_completed_owner_repair_and_one_hour_hotfix(harness)
+        _stage_0150_completed_owner_repair_and_one_hour_hotfix(
+            harness,
+            communication_scope_ttl_present=communication_scope_ttl_present,
+        )
     )
+    marker = harness.marker()
+    realized_approval = json.loads(config_path.read_text(encoding="utf-8"))
+    realized_core = json.loads(
+        harness.layout.host(setup.CORE_CONFIG).read_text(encoding="utf-8")
+    )
+    realized_core.pop("enrolled_harness_id", None)
+    realized_core.pop("enrolled_credential_id", None)
+    assert setup.canonical_digest(realized_approval) != marker[
+        "approval_config_digest"
+    ]
+    assert setup.canonical_digest(realized_core) != marker["core_config_digest"]
+    assert (
+        "communication_scope_request_ttl_seconds" in realized_approval
+    ) is communication_scope_ttl_present
     monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
     original_run_as = setup._run_as
 
@@ -1374,9 +1436,16 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     assert harness.marker()["package_version"] == "0.1.51"
     assert not harness.journal_path.exists()
 
+
+@pytest.mark.parametrize(
+    "communication_scope_ttl_present",
+    (False, True),
+    ids=("scope-ttl-absent", "scope-ttl-explicit"),
+)
 def test_0151_upgrade_reconstructs_journalless_completed_owner_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    communication_scope_ttl_present: bool,
 ) -> None:
     real_approval_trust = setup._approval_trust
     harness = _harness(tmp_path, monkeypatch)
@@ -1386,6 +1455,7 @@ def test_0151_upgrade_reconstructs_journalless_completed_owner_repair(
         _stage_0150_completed_owner_repair_and_one_hour_hotfix(
             harness,
             include_journal=False,
+            communication_scope_ttl_present=communication_scope_ttl_present,
         )
     )
     approval_state = harness.layout.host(setup.APPROVAL_STATE)
@@ -1450,7 +1520,14 @@ def test_0151_upgrade_reconstructs_journalless_completed_owner_repair(
 
 @pytest.mark.parametrize(
     "tamper_after_upgrade_journal",
-    (None, "core", "extra_signer", "source_signer"),
+    (
+        None,
+        "core",
+        "core_oidc",
+        "binding",
+        "extra_signer",
+        "source_signer",
+    ),
 )
 def test_0151_resume_revalidates_reconstructed_journal_before_ttl_migration(
     tmp_path: Path,
@@ -1576,6 +1653,29 @@ def test_0151_resume_revalidates_reconstructed_journal_before_ttl_migration(
             core = json.loads(core_path.read_text(encoding="utf-8"))
             core["oidc_enrollment"]["client_id"] = "unrelated-client"
             _private_json(core_path, core)
+        elif tamper_after_upgrade_journal == "core_oidc":
+            core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
+            core_oidc = json.loads(core_oidc_path.read_text(encoding="utf-8"))
+            core_oidc["client_id"] = "unrelated-client"
+            _private_json(core_oidc_path, core_oidc)
+        elif tamper_after_upgrade_journal == "binding":
+            approval = json.loads(config_path.read_text(encoding="utf-8"))
+            store = ApprovalStore(
+                Path(approval["database_path"]),
+                LocalEnvelopeCipher(
+                    Path(approval["record_key_path"]).read_bytes()
+                ),
+            )
+            try:
+                with store.transaction() as connection:
+                    connection.execute(
+                        """UPDATE approval_owner_bindings
+                              SET pinned_at=pinned_at+1
+                            WHERE domain_id=? AND status='active'""",
+                        (harness.request.domain_id,),
+                    )
+            finally:
+                store.close()
         elif tamper_after_upgrade_journal in {"extra_signer", "source_signer"}:
             approval = json.loads(config_path.read_text(encoding="utf-8"))
             target_signer_path = Path(
@@ -1602,7 +1702,7 @@ def test_0151_resume_revalidates_reconstructed_journal_before_ttl_migration(
             harness.apply(harness.plan_digest())
         assert exc_info.value.blocker == (
             "setup_upgrade_conflict"
-            if tamper_after_upgrade_journal == "core"
+            if tamper_after_upgrade_journal in {"core", "core_oidc"}
             else "canonical_owner_recovery"
         )
         assert config_path.read_bytes() == repaired_payload
@@ -1636,7 +1736,13 @@ def test_0151_resume_revalidates_reconstructed_journal_before_ttl_migration(
         "extra_signer",
         "source_signer",
         "marker_approval_digest",
+        "marker_core_digest",
+        "core_oidc_sidecar",
+        "core_policy",
+        "source_core",
+        "source_core_with_journal",
         "binding_pinned_at",
+        "unit",
     ),
 )
 def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
@@ -1651,7 +1757,8 @@ def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
     config_path, repaired_payload = (
         _stage_0150_completed_owner_repair_and_one_hour_hotfix(
             harness,
-            include_journal=False,
+            include_journal=tamper == "source_core_with_journal",
+            current_core_target=not tamper.startswith("source_core"),
         )
     )
     approval = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1659,20 +1766,42 @@ def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
         approval["approvers"][0]["signer_private_key_path"]
     )
     source_signer_path = next(
-        path for path in target_signer_path.parent.iterdir()
-        if path != target_signer_path
+        (
+            path
+            for path in target_signer_path.parent.iterdir()
+            if path != target_signer_path
+        ),
+        None,
     )
     if tamper == "extra_signer":
+        assert source_signer_path is not None
         extra_signer_path = target_signer_path.with_name("unrelated-owner.pem")
         extra_signer_path.write_bytes(P256KeyPair.generate().private_pem)
         extra_signer_path.chmod(0o600)
     elif tamper == "source_signer":
+        assert source_signer_path is not None
         source_signer_path.write_bytes(P256KeyPair.generate().private_pem)
         source_signer_path.chmod(0o600)
     elif tamper == "marker_approval_digest":
         marker = harness.marker()
         marker["approval_config_digest"] = "a" * 64
         _private_json(harness.marker_path, marker)
+    elif tamper == "marker_core_digest":
+        marker = harness.marker()
+        marker["core_config_digest"] = "a" * 64
+        _private_json(harness.marker_path, marker)
+    elif tamper == "core_oidc_sidecar":
+        core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
+        core_oidc = json.loads(core_oidc_path.read_text(encoding="utf-8"))
+        core_oidc["client_id"] = "unrelated-client"
+        _private_json(core_oidc_path, core_oidc)
+    elif tamper == "core_policy":
+        core_path = harness.layout.host(setup.CORE_CONFIG)
+        core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
+        core = json.loads(core_path.read_text(encoding="utf-8"))
+        core["oidc_enrollment"]["client_id"] = "unrelated-client"
+        _private_json(core_path, core)
+        _private_json(core_oidc_path, core["oidc_enrollment"])
     elif tamper == "binding_pinned_at":
         store = ApprovalStore(
             Path(approval["database_path"]),
@@ -1687,7 +1816,10 @@ def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
                 )
         finally:
             store.close()
-    else:
+    elif tamper == "unit":
+        unit_path = harness.layout.unit(setup.CORE_UNIT)
+        unit_path.write_bytes(unit_path.read_bytes() + b"\n# unrelated drift\n")
+    elif not tamper.startswith("source_core"):
         raise AssertionError(tamper)
 
     monkeypatch.setattr(setup, "_approval_trust", real_approval_trust)
@@ -1696,13 +1828,17 @@ def test_0151_journalless_reconstruction_rejects_ambiguous_evidence(
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
-    assert exc_info.value.blocker == "canonical_owner_recovery"
+    assert exc_info.value.blocker == (
+        "setup_upgrade_conflict"
+        if tamper == "unit"
+        else "canonical_owner_recovery"
+    )
     assert config_path.read_bytes() == repaired_payload
-    assert not (
+    recovery_path = (
         harness.layout.host(setup.APPROVAL_STATE)
         / "canonical-owner-recovery.json"
-    ).exists()
-    assert not harness.journal_path.exists()
+    )
+    assert recovery_path.exists() is (tamper == "source_core_with_journal")
 
 
 def test_0151_rejects_tampered_reconstructed_marker_evidence(
@@ -1728,9 +1864,11 @@ def test_0151_rejects_tampered_reconstructed_marker_evidence(
         config_path,
         account,
         harness.layout.host(setup.CORE_CONFIG),
+        harness.layout.host(setup.CORE_OIDC_CONFIG),
         account,
         request=harness.request,
         observed_at=42,
+        before_write=lambda: None,
     )
     assert reconstructed is not None
     journal = json.loads(recovery_path.read_text(encoding="utf-8"))
@@ -1746,6 +1884,7 @@ def test_0151_rejects_tampered_reconstructed_marker_evidence(
             approval_state=approval_state,
             core_config_path=harness.layout.host(setup.CORE_CONFIG),
             core_account=account,
+            core_oidc_path=harness.layout.host(setup.CORE_OIDC_CONFIG),
             request=harness.request,
         )
 

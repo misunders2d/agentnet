@@ -2,18 +2,18 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "d50b73a9dd0448c5c41733279a97d6da5919c69f1bb301af151b95f2774a1d2b"
+      "sha256": "46064f63be8e8b0d2b0cfe2b5d118c0d6749e40045575ebd3284eabdd15c24fd"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "5f8f8d2993e8a7b38453104049c3ee6d75ae65fd409647613bbfa5fa02f598b0"
+      "sha256": "ebee10aecef0bcb947d6facfad83adb8f0deee9934a98cd7f02fa0aa002d9d47"
     }
   ],
-  "change_boundary": "Candidate 0.1.51 recognizes the exact retained live state where canonical-owner recovery changed Approval owner/signer authority while the managed Core document remained byte-equivalent to the retained v0.1.50 marker and the one-hour Approval TTL hotfix remained outside that marker. Marker-relative recovery now reconstructs only the exact journal-bound Approval owner/signer and TTL source shape, while requiring the validated unchanged current Core canonical digest to equal the marker. It continues to require exact marker/database/adoption-audit/two-signer evidence and fails closed on any Approval or Core drift before managed mutation.",
+  "change_boundary": "Candidate 0.1.51 recognizes only the exact retained live state where completed canonical-owner recovery changed the Approval and Core owner/signer policy while the one-hour Approval TTL hotfix remained outside the retained v0.1.50 marker. Marker-relative recovery reverses only evidence-bound source/target principal and signer fields in current typed Approval/Core documents, requires both reconstructed canonical digests to equal the marker, and requires the current Core OIDC sidecar to equal Core. Journal-less recovery additionally requires one active canonical owner binding, one matching adoption audit, exact target credential state, and exactly two fixed-custody signer keys; every resumed write revalidates marker/current digests, Core/Core-OIDC agreement, database evidence, and signer custody before mutation.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
-      "result": "PASS: 271 passed"
+      "result": "PASS: 281 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -21,11 +21,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2259 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2269 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 d50b73a9dd0448c5c41733279a97d6da5919c69f1bb301af151b95f2774a1d2b; wheel sha256 5f8f8d2993e8a7b38453104049c3ee6d75ae65fd409647613bbfa5fa02f598b0"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 46064f63be8e8b0d2b0cfe2b5d118c0d6749e40045575ebd3284eabdd15c24fd; wheel sha256 ebee10aecef0bcb947d6facfad83adb8f0deee9934a98cd7f02fa0aa002d9d47"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -53,16 +53,16 @@
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2286 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2296 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
-  "evaluated_at": "2026-08-12T10:33:36Z",
+  "evaluated_at": "2026-08-12T13:36:33Z",
   "execution_context": {
     "callback_incident": "Exact-commit GitHub workflow and server PostgreSQL results are included; no callback result is claimed",
-    "local_retry_incident": "The first corrected recursive run failed only in generation 2 when retained pytest data consumed 4.4 GiB on the 16 GiB /tmp tmpfs; all 23 implicated provenance tests passed in isolation. A separate attempted rerun with a long external basetemp was rejected by four Unix-socket path-limit tests and by this manifest's deliberately non-PASS interim state. Those runs are not counted as PASS evidence; the final clean-/tmp rerun below is authoritative.",
+    "local_retry_incident": "No retry is counted as evidence for this corrective tree. The final exact focused lane, broad lane, release verifier, release-manifest contract, recursive npm check, and source agentnet verify completed green with the recorded counts.",
     "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
     "root_installed_external_host": "Prior exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a passed GitHub Ubuntu 24.04 PostgreSQL 18 clean setup and v0.1.50 to v0.1.51 installed-host upgrade; those results do not bind this corrective source delta, whose exact-commit CI and server PostgreSQL validation remain required",
-    "source": "AgentNet v0.1.51 journal-less canonical-owner recovery corrective candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "source": "AgentNet v0.1.51 dual Approval/Core policy-drift journal-less canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
     "two_vm_source_proof": "Observed exact packaged v0.1.51 behavior on two live isolated Ubuntu 24.04.4 VMs, but excluded from formal release evidence because the ad-hoc provisioning driver was not retained; production durability and must-not-ship gates remain unproven"
   },
   "external_evidence": {
@@ -72,9 +72,9 @@
     "source_revision": "4e8ebd72d6b5e39550e438816abb1e2d30a5326a"
   },
   "release_certified": false,
-  "release_source_tree_sha256": "5c4c0e339344420df8977c9e311386db307412c78dd666713ad278a5054ed220",
+  "release_source_tree_sha256": "9baef70ed843decde60e73ce6eb22718a29754c6087177672f5c5c6d1633e212",
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
-  "scope": "v0_1_51_marker_identical_core_journalless_owner_recovery_candidate",
+  "scope": "v0_1_51_dual_policy_drift_journalless_owner_recovery_candidate",
   "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI, disposable PostgreSQL evidence, and live convergence must be refreshed after commit",
   "source_revision_kind": "working_tree_candidate",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",

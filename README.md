@@ -588,13 +588,13 @@ source bytes.
 
 If the canonical-owner repair already completed while that one-hour hotfix
 remained outside the marker, setup accepts the combined state only after the
-completed recovery journal reconstructs the marker-era Approval document and
-the current typed Core document already matches the marker. The reconstructed
-Approval and unchanged Core canonical digests must both equal the marker. The
-realized current documents are then journaled, the TTL policy is normalized,
-and owner/Core convergence is rechecked idempotently. Incomplete evidence or
-unrelated drift fails before setup creates its upgrade journal or changes
-managed state.
+completed recovery evidence reconstructs the marker-era Approval and Core
+documents. It reverses only the evidence-bound owner and signer fields in
+memory, then requires both reconstructed canonical digests to equal the
+marker. The realized current documents are journaled, the TTL policy is
+normalized, and owner/Core convergence is rechecked idempotently. Missing
+Core-OIDC agreement, incomplete evidence, or unrelated drift fails before
+setup creates its upgrade journal or changes managed state.
 
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
