@@ -5203,7 +5203,7 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
     ):
         return None
     expected_dual = target_oidc.model_copy(
-        update={"trusted_approvers": (source_trust, target_trust)}
+        update={"trusted_approvers": embedded.trusted_approvers}
     )
     if embedded != expected_dual:
         return None
@@ -7045,22 +7045,55 @@ def _load_partial_owner_recovery_core_config(
     embedded_oidc: OIDCEnrollmentConfig,
     standalone_oidc: OIDCEnrollmentConfig,
     scanner_trust: ScannerTrustConfig | None,
-) -> Any:
+) -> tuple[Any, OIDCEnrollmentConfig]:
     """Validate the exact journaled dual-trust Core split state."""
 
-    config = load_config_json(
-        _read_private_managed_file(
-            core_config_path,
-            core_account,
-            blocker="canonical_owner_recovery",
-            max_bytes=_MAX_CONFIG_BYTES,
-        ).decode("utf-8")
+    core_payload = _read_private_managed_file(
+        core_config_path,
+        core_account,
+        blocker="canonical_owner_recovery",
+        max_bytes=_MAX_CONFIG_BYTES,
     )
+    config = load_config_json(core_payload.decode("utf-8"))
+    core_document = _strict_json_bytes(
+        core_payload,
+        label="Core configuration",
+    )
+    try:
+        observed_embedded = OIDCEnrollmentConfig.model_validate(
+            core_document.get("oidc_enrollment")
+        )
+    except ValidationError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "embedded Core OIDC policy conflicts with partial recovery",
+        ) from exc
+    if (
+        observed_embedded is None
+        or {
+            trust.principal_id: trust
+            for trust in observed_embedded.trusted_approvers
+        }
+        != {
+            trust.principal_id: trust
+            for trust in embedded_oidc.trusted_approvers
+        }
+        or observed_embedded.model_copy(
+            update={
+                "trusted_approvers": embedded_oidc.trusted_approvers
+            }
+        )
+        != embedded_oidc
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "embedded Core OIDC policy conflicts with partial recovery",
+        )
     _require_core_config_matches(
         config,
         request=request,
         core_data=core_data,
-        oidc=embedded_oidc,
+        oidc=observed_embedded,
         scanner_trust=scanner_trust,
     )
     standalone = _strict_json_bytes(
@@ -7090,7 +7123,7 @@ def _load_partial_owner_recovery_core_config(
             "canonical_owner_recovery",
             "standalone Core OIDC policy conflicts with partial recovery",
         )
-    return config
+    return config, observed_embedded
 
 
 def _record_upgrade_config_replacements(
@@ -8588,17 +8621,18 @@ def _apply_server_setup(
                             }
                         )
                     )
-                    prevalidated_config = (
-                        _load_partial_owner_recovery_core_config(
-                            core_config_path,
-                            core_oidc_path,
-                            core_account,
-                            request=request,
-                            core_data=core_data,
-                            embedded_oidc=prevalidated_source_oidc,
-                            standalone_oidc=prevalidated_oidc,
-                            scanner_trust=scanner_trust,
-                        )
+                    (
+                        prevalidated_config,
+                        prevalidated_source_oidc,
+                    ) = _load_partial_owner_recovery_core_config(
+                        core_config_path,
+                        core_oidc_path,
+                        core_account,
+                        request=request,
+                        core_data=core_data,
+                        embedded_oidc=prevalidated_source_oidc,
+                        standalone_oidc=prevalidated_oidc,
+                        scanner_trust=scanner_trust,
                     )
                     legacy_owner_policy = False
                 else:

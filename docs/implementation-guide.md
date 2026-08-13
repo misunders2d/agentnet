@@ -292,6 +292,14 @@ writes exact units, then commits the request-versioned marker through
 same-request, prior-byte compare-and-swap. Manual marker/config/unit surgery is
 unsupported.
 
+For the proof-bound canonical-owner split-state recovery, the embedded Core
+source/target trust pair may appear in either serialized order. Setup verifies
+the exact two trust records and target-only sidecar, records current config
+digests before mutation, and carries the observed order into rollback and
+replacement checks. Added, duplicated, altered, or unrelated trust remains a
+fail-closed conflict.
+
+
 Released five-unit correction upgrades are a narrow forward-only exception:
 only an explicitly allowlisted exact predecessor marker is accepted, and the
 target marker is committed before service quiescence and bootstrap so an

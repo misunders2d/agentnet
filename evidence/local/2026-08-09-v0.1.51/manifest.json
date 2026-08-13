@@ -2,18 +2,18 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "ccb043ec289c900e07e8ab42686c247168f7ff311cc98a7cc971e6514f29ad68"
+      "sha256": "c38e5ae78cea523c1666dc342a9657c17744123fe7c466e7ad5261e090dae32c"
     },
     {
       "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "43d6680348da11f147a901b15af1e3e527ee6f96c0e44006bf9a151340f571a7"
+      "sha256": "10ed59111142448049608044fee10a0d4811eb22ebdc5634a150faf005fe09a3"
     }
   ],
-  "change_boundary": "Candidate 0.1.51 recognizes two exact marker-relative canonical-owner recovery states without broadening authority: (1) a pre-adoption split state with source-owned Approval, exactly two source/target signer keys, dual-trust embedded Core OIDC, target-only standalone Core OIDC, and no retained recovery journal; and (2) the already-completed canonical-owner repair with its recovery journal absent or terminal. The partial path reconstructs a strict prepared journal bound to marker and realized Approval/Core/Core-OIDC digests plus active source-owner evidence before authority mutation. The terminal path requires one active canonical owner binding, target credential state, one matching immutable adoption audit, and exact signer custody. Both compose only with the retained v0.1.50 one-hour Approval TTL hotfix when inverse reconstruction reproduces the marker, then normalize to the 600/3600 target under the ordinary upgrade journal. Unknown identity, signer, trust topology, row shape, digest, or additional file drift fails closed.",
+  "change_boundary": "Candidate 0.1.51 recognizes two exact marker-relative canonical-owner recovery states without broadening authority: (1) a pre-adoption split state with source-owned Approval, exactly two source/target signer keys, dual-trust embedded Core OIDC, target-only standalone Core OIDC, and no retained recovery journal; and (2) the already-completed canonical-owner repair with its recovery journal absent or terminal. The partial path reconstructs a strict prepared journal bound to marker and realized Approval/Core/Core-OIDC digests plus active source-owner evidence before authority mutation. The terminal path requires one active canonical owner binding, target credential state, one matching immutable adoption audit, and exact signer custody. Both compose only with the retained v0.1.50 one-hour Approval TTL hotfix when inverse reconstruction reproduces the marker, then normalize to the 600/3600 target under the ordinary upgrade journal. Unknown identity, signer, trust topology, row shape, digest, or additional file drift fails closed. This focused correction treats the two already-bound embedded source/target trust records as an unordered authority set while preserving their observed serialized order through journaled migration; every trust field, sidecar field, marker digest, signer, and non-trust OIDC field remains exact.",
   "commands": [
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
-      "result": "PASS: 292 passed"
+      "result": "PASS: 295 passed"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
@@ -21,11 +21,11 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2280 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2283 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
-      "result": "PASS: two independent builds are byte-identical; sdist sha256 ccb043ec289c900e07e8ab42686c247168f7ff311cc98a7cc971e6514f29ad68; wheel sha256 43d6680348da11f147a901b15af1e3e527ee6f96c0e44006bf9a151340f571a7"
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 c38e5ae78cea523c1666dc342a9657c17744123fe7c466e7ad5261e090dae32c; wheel sha256 10ed59111142448049608044fee10a0d4811eb22ebdc5634a150faf005fe09a3"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
@@ -61,20 +61,20 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
-      "result": "PASS: 2307 passed and 22 expected platform/dedicated-PostgreSQL skips"
+      "result": "PASS: 2310 passed and 22 expected platform/dedicated-PostgreSQL skips"
     },
     {
       "command": "npm run check",
-      "result": "PASS: source plus generations 1 and 2 each reported 2307 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+      "result": "PASS: source plus generations 1 and 2 each reported 2310 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
     }
   ],
-  "evaluated_at": "2026-08-13T09:00:34Z",
+  "evaluated_at": "2026-08-13T11:06:41Z",
   "execution_context": {
     "callback_incident": "Exact-commit GitHub workflow and server PostgreSQL results are included; no callback result is claimed",
-    "local_retry_incident": "The final exact focused lane reported 292 passed and the broad lane reported 2280 passed with 22 expected skips. Release verifier, manifest contract, source agentnet verify, and recursive npm check are recorded only after their final green runs.",
+    "local_retry_incident": "The final exact focused lane reported 295 passed and the broad lane reported 2283 passed with 22 expected skips. Release verifier, manifest contract, source agentnet verify, and recursive npm check are recorded only after their final green runs.",
     "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
     "root_installed_external_host": "Prior exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a passed GitHub Ubuntu 24.04 PostgreSQL 18 clean setup and v0.1.50 to v0.1.51 installed-host upgrade; those results do not bind this corrective source delta, whose exact-commit CI and server PostgreSQL validation remain required",
-    "source": "AgentNet v0.1.51 proof-bound partial and terminal canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies",
+    "source": "AgentNet v0.1.51 proof-bound partial and terminal canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies; exact trust records are order-independent while observed bytes remain journal-bound.",
     "two_vm_source_proof": "Observed exact packaged v0.1.51 behavior on two live isolated Ubuntu 24.04.4 VMs, but excluded from formal release evidence because the ad-hoc provisioning driver was not retained; production durability and must-not-ship gates remain unproven"
   },
   "external_evidence": {
@@ -84,7 +84,7 @@
     "source_revision": "4e8ebd72d6b5e39550e438816abb1e2d30a5326a"
   },
   "release_certified": false,
-  "release_source_tree_sha256": "bc61a68a9544fb4e811d58f5649871a7e0c4535a4e6b0bf63b726763590becae",
+  "release_source_tree_sha256": "87fcb1eb04e0810571719de391683967b424931a7fcc9fd6788422373b4c2107",
   "run_id": "2026-08-09-v0.1.51-local-package-candidate",
   "scope": "v0_1_51_partial_and_terminal_owner_recovery_candidate",
   "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI, disposable PostgreSQL evidence, and live convergence must be refreshed after commit",

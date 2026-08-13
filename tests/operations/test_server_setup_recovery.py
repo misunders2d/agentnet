@@ -1066,6 +1066,8 @@ def _stage_0150_completed_owner_repair_and_one_hour_hotfix(
 
 def _stage_0150_partial_owner_repair_and_one_hour_hotfix(
     harness: _Harness,
+    *,
+    reverse_embedded_trust: bool = False,
 ) -> tuple[Path, CanonicalOwnerAdoptionRequest]:
     """Materialize the exact retained source/dual-trust/target-sidecar shape."""
 
@@ -1163,7 +1165,13 @@ def _stage_0150_partial_owner_repair_and_one_hour_hotfix(
         approvers=(target_policy,),
     )
     dual_oidc = target_oidc.model_copy(
-        update={"trusted_approvers": (source_trust, target_trust)}
+        update={
+            "trusted_approvers": (
+                (target_trust, source_trust)
+                if reverse_embedded_trust
+                else (source_trust, target_trust)
+            )
+        }
     )
     core_config_path = harness.layout.host(setup.CORE_CONFIG)
     core_oidc_path = harness.layout.host(setup.CORE_OIDC_CONFIG)
@@ -1637,6 +1645,11 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
 
 
 @pytest.mark.parametrize(
+    "reverse_embedded_trust",
+    (False, True),
+    ids=("source-target-trust", "target-source-trust"),
+)
+@pytest.mark.parametrize(
     "interrupt_before_recovery",
     (False, True),
     ids=("single-pass", "resume-after-pre-recovery-rollback"),
@@ -1645,6 +1658,7 @@ def test_0151_upgrade_converges_exact_partial_owner_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     interrupt_before_recovery: bool,
+    reverse_embedded_trust: bool,
 ) -> None:
     real_approval_trust = setup._approval_trust
     real_require_exact_approval_policy = setup._require_exact_approval_policy
@@ -1652,8 +1666,15 @@ def test_0151_upgrade_converges_exact_partial_owner_repair(
     monkeypatch.setattr(setup, "__version__", "0.1.50")
     harness.apply(harness.plan_digest())
     config_path, recovery_request = (
-        _stage_0150_partial_owner_repair_and_one_hour_hotfix(harness)
+        _stage_0150_partial_owner_repair_and_one_hour_hotfix(
+            harness,
+            reverse_embedded_trust=reverse_embedded_trust,
+        )
     )
+    if reverse_embedded_trust:
+        approval = json.loads(config_path.read_text(encoding="utf-8"))
+        approval["approvers"][0]["allowed_purposes"].reverse()
+        _private_json(config_path, approval)
     recovery_path = (
         harness.layout.host(setup.APPROVAL_STATE)
         / "canonical-owner-recovery.json"
@@ -1759,7 +1780,12 @@ def test_0151_upgrade_converges_exact_partial_owner_repair(
 
 @pytest.mark.parametrize(
     "tamper",
-    ("extra-signer", "embedded-target-only", "sidecar-source"),
+    (
+        "extra-signer",
+        "embedded-target-only",
+        "reordered-source-authority",
+        "sidecar-source",
+    ),
 )
 def test_0151_upgrade_rejects_near_partial_owner_repair_without_writes(
     tmp_path: Path,
@@ -1789,6 +1815,13 @@ def test_0151_upgrade_rejects_near_partial_owner_repair_without_writes(
         core["oidc_enrollment"]["trusted_approvers"] = [
             core["oidc_enrollment"]["trusted_approvers"][1]
         ]
+        _private_json(core_path, core)
+    elif tamper == "reordered-source-authority":
+        core = json.loads(core_path.read_text(encoding="utf-8"))
+        core["oidc_enrollment"]["trusted_approvers"].reverse()
+        core["oidc_enrollment"]["trusted_approvers"][1][
+            "authority_kind"
+        ] = "guest"
         _private_json(core_path, core)
     else:
         core = json.loads(core_path.read_text(encoding="utf-8"))

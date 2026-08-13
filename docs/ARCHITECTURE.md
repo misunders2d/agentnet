@@ -116,6 +116,13 @@ authority and restarts no service. Inode-checked owner/mode-preserving CAS
 updates config, identity, and journal, and exact retry reconciles crashes or
 response loss without creating another credential.
 
+Canonical-owner setup recovery treats the exact source/target approver pair as
+an unordered trust set. It still verifies both principals, signer keys, public
+keys, authority kinds, purpose sets, sidecar policy, and all non-trust OIDC
+fields. The observed serialized order is retained through the prepared journal
+and compare-and-swap migration so recovery never rewrites unjournaled bytes.
+
+
 ## Canonical state and evidence
 
 - Canonical implementation state: this repository.

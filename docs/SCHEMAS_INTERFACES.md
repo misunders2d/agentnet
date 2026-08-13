@@ -152,6 +152,12 @@ purposes must collectively cover all six mandatory approval consumers, and
 every approver must cover enrollment. Signer private keys remain file
 references; load verifies each key's configured thumbprint.
 
+`OIDCEnrollmentConfig.trusted_approvers` serialization order does not grant or
+remove authority. Canonical-owner recovery accepts either ordering only for the
+exact proof-bound source/target pair, verifies every trust record and all other
+OIDC fields, and preserves the observed order until journaled replacement.
+
+
 The approval SQLite catalog is version 4 and is checked on every open against
 both exact `sqlite_master` objects, stored catalog SHA-256, and immutable
 migration names/checksums. The default self-hosted profile may run this service
