@@ -3642,7 +3642,14 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     drift_trust_during_apply = False
     trust_reads = 0
 
-    def fake_approval_trust(_path: Path, _account: object, _state: Path):
+    def fake_approval_trust(
+        _path: Path,
+        _account: object,
+        _state: Path,
+        *,
+        recovery_source: object | None = None,
+    ):
+        assert recovery_source is None
         nonlocal trust_reads
         trust_reads += 1
         effective = changed_trusted if drift_trust_during_apply and trust_reads % 2 == 0 else trusted

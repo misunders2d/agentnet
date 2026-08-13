@@ -75,6 +75,7 @@ from agentnet.operations.canonical_owner_recovery import (
     CanonicalOwnerRecoveryJournal,
     validate_canonical_owner_adoption_state,
     validate_canonical_owner_recovery_journal,
+    validate_canonical_owner_source_state,
 )
 from agentnet.operations.config import (
     ExtensionConfig,
@@ -4793,6 +4794,97 @@ def _canonical_owner_recovery_request_for_marker(
     return recovery_request
 
 
+def _canonical_owner_source_request_for_partial(
+    journal: CanonicalOwnerRecoveryJournal,
+    *,
+    approval_config: ApprovalServiceConfig,
+    approval_account: pwd.struct_passwd,
+    request: ServerSetupRequest,
+    observed_at: int,
+) -> CanonicalOwnerAdoptionRequest:
+    if (
+        journal.partial_recovery is None
+        or len(approval_config.approvers) != 1
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner evidence conflicts with setup",
+        )
+    configured = approval_config.approvers[0]
+    if (
+        configured.domain_id != request.domain_id
+        or configured.principal_id != journal.source_principal_id
+        or journal.target_principal_id
+        != request.approval_approver_principal_id
+        or configured.oidc_issuer != journal.oidc_issuer
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner evidence conflicts with setup",
+        )
+    database_path = approval_config.database_path
+    _require_private_file(
+        database_path,
+        approval_account,
+        blocker="canonical_owner_recovery",
+    )
+    before = database_path.stat(follow_symlinks=False)
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            f"{database_path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=5.0,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        bindings = connection.execute(
+            """SELECT * FROM approval_owner_bindings
+                 WHERE domain_id=? AND status='active'
+                 ORDER BY binding_id""",
+            (request.domain_id,),
+        ).fetchall()
+        if len(bindings) != 1:
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "partial canonical owner binding is ambiguous",
+            )
+        binding = bindings[0]
+        recovery_request = CanonicalOwnerAdoptionRequest(
+            schema="agentnet.canonical-owner-adoption.v1",
+            recovery_id=journal.recovery_id,
+            domain_id=request.domain_id,
+            source_principal_id=journal.source_principal_id,
+            target_principal_id=request.approval_approver_principal_id,
+            oidc_issuer=str(binding["oidc_issuer"]),
+            oidc_subject=str(binding["oidc_subject"]),
+            verified_email=str(binding["verified_email"]),
+            verifier_id=approval_config.verifier_id,
+            approved_at=int(binding["pinned_at"]),
+        )
+        validate_canonical_owner_source_state(
+            connection,
+            request=recovery_request,
+            now=observed_at,
+        )
+    except (OSError, sqlite3.Error, GateBlocked, ValueError) as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner binding evidence is unavailable",
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
+    after = database_path.stat(follow_symlinks=False)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner binding evidence changed",
+        )
+    return recovery_request
+
+
 def _canonical_owner_source_documents(
     approval_document: Mapping[str, Any],
     core_document: Mapping[str, Any],
@@ -4950,6 +5042,319 @@ def _marker_ordered_policy_document(
         if canonical_digest(candidate) == expected_digest:
             return candidate
     return None
+
+
+def _reconstruct_partial_canonical_owner_recovery_for_marker(
+    marker: Mapping[str, Any],
+    approval_state: Path,
+    approval_config_path: Path,
+    approval_account: pwd.struct_passwd,
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    observed_at: int,
+    before_write: Callable[[], None],
+) -> dict[str, str] | None:
+    """Journal only the exact source/dual-trust/target-sidecar repair shape."""
+
+    journal_path = approval_state / "canonical-owner-recovery.json"
+    if journal_path.exists() or journal_path.is_symlink():
+        return None
+    if (
+        marker.get("package_version"),
+        __version__,
+    ) != _APPROVAL_REQUEST_TTL_UPGRADE:
+        return None
+    approval_payload = _read_private_managed_file(
+        approval_config_path,
+        approval_account,
+        blocker="canonical_owner_recovery",
+        max_bytes=_MAX_CONFIG_BYTES,
+    )
+    approval_document = _strict_json_bytes(
+        approval_payload,
+        label="managed Approval configuration",
+    )
+    try:
+        approval_config = _owner_recovery_compatible_approval_config(
+            approval_payload
+        )
+    except ValidationError:
+        return None
+    if (
+        len(approval_config.approvers) != 1
+        or approval_config.approvers[0].principal_id
+        == request.approval_approver_principal_id
+    ):
+        return None
+    configured_source = approval_config.approvers[0]
+    signer_root = approval_config.data_dir / "signers"
+    source_signer_path = configured_source.signer_private_key_path
+    target_signer_path = next(
+        (
+            path
+            for path in sorted(signer_root.iterdir(), key=lambda item: item.name)
+            if path != source_signer_path
+        ),
+        None,
+    )
+    signer_paths = sorted(signer_root.iterdir(), key=lambda item: item.name)
+    if (
+        target_signer_path is None
+        or signer_paths
+        != sorted([source_signer_path, target_signer_path])
+    ):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner signer evidence is ambiguous",
+        )
+    for signer_path in signer_paths:
+        _require_private_file(
+            signer_path,
+            approval_account,
+            blocker="canonical_owner_recovery",
+        )
+    try:
+        source_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                source_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+        target_signer = P256KeyPair.from_private_pem(
+            _read_private_managed_file(
+                target_signer_path,
+                approval_account,
+                blocker="canonical_owner_recovery",
+                max_bytes=65_536,
+            )
+        )
+    except Exception as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner signer evidence is invalid",
+        ) from exc
+    if source_signer.thumbprint != configured_source.signer_key_id:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "partial canonical owner source signer conflicts with Approval",
+        )
+
+    core_document = _strict_json_bytes(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Core configuration",
+    )
+    core_oidc_document = _strict_json_bytes(
+        _read_private_managed_file(
+            core_oidc_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="managed Core OIDC configuration",
+    )
+    digest_core = dict(core_document)
+    digest_core.pop("enrolled_harness_id", None)
+    digest_core.pop("enrolled_credential_id", None)
+    embedded_oidc = digest_core.get("oidc_enrollment")
+    if not isinstance(embedded_oidc, dict):
+        return None
+    try:
+        embedded = OIDCEnrollmentConfig.model_validate(embedded_oidc)
+        target_oidc = OIDCEnrollmentConfig.model_validate(core_oidc_document)
+    except ValidationError:
+        return None
+    if (
+        len(embedded.trusted_approvers) != 2
+        or len(target_oidc.trusted_approvers) != 1
+        or target_oidc.approval_service is None
+        or target_oidc.approval_service.approver_principal_id
+        != request.approval_approver_principal_id
+    ):
+        return None
+    trusts = {
+        trust.principal_id: trust for trust in embedded.trusted_approvers
+    }
+    if len(trusts) != 2 or set(trusts) != {
+        configured_source.principal_id,
+        request.approval_approver_principal_id,
+    }:
+        return None
+    source_trust = trusts[configured_source.principal_id]
+    target_trust = trusts[request.approval_approver_principal_id]
+    if (
+        source_trust.signer_key_id != source_signer.thumbprint
+        or source_trust.public_key_pem != source_signer.public_pem
+        or source_trust.authority_kind != configured_source.authority_kind
+        or source_trust.allowed_purposes
+        != configured_source.allowed_purposes
+        or target_oidc.trusted_approvers != (target_trust,)
+        or target_trust.signer_key_id != target_signer.thumbprint
+        or target_trust.public_key_pem != target_signer.public_pem
+    ):
+        return None
+    expected_dual = target_oidc.model_copy(
+        update={"trusted_approvers": (source_trust, target_trust)}
+    )
+    if embedded != expected_dual:
+        return None
+    assert target_oidc.approval_service is not None
+    source_oidc = target_oidc.model_copy(
+        update={
+            "trusted_approvers": (source_trust,),
+            "approval_service": target_oidc.approval_service.model_copy(
+                update={
+                    "approver_principal_id": configured_source.principal_id
+                }
+            ),
+        }
+    )
+    marker_approval = dict(approval_document)
+    if (
+        marker_approval.get("request_ttl_seconds") != 3_600
+        or marker_approval.get(
+            "communication_scope_request_ttl_seconds",
+            3_600,
+        )
+        != 3_600
+    ):
+        return None
+    marker_approval["request_ttl_seconds"] = 300
+    marker_approval.pop("communication_scope_request_ttl_seconds", None)
+    marker_core = dict(digest_core)
+    marker_core["oidc_enrollment"] = source_oidc.model_dump(mode="json")
+    marker_approval = _marker_ordered_policy_document(
+        marker_approval,
+        expected_digest=str(marker.get("approval_config_digest")),
+        policy_path=("approvers", 0),
+    )
+    marker_core = _marker_ordered_policy_document(
+        marker_core,
+        expected_digest=str(marker.get("core_config_digest")),
+        policy_path=("oidc_enrollment", "trusted_approvers", 0),
+    )
+    if marker_approval is None or marker_core is None:
+        return None
+    normalized_source_document = dict(approval_document)
+    normalized_source_document["request_ttl_seconds"] = 600
+    normalized_source_document[
+        "communication_scope_request_ttl_seconds"
+    ] = 3_600
+    normalized_source_payload = (
+        json.dumps(
+            normalized_source_document,
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+    provisional = CanonicalOwnerRecoveryJournal.model_validate(
+        {
+            "schema": "agentnet.canonical-owner-recovery-journal.v1",
+            "recovery_id": str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"agentnet:{request.domain_id}:"
+                    f"{configured_source.principal_id}:"
+                    f"{request.approval_approver_principal_id}",
+                )
+            ),
+            "request_digest": "0" * 64,
+            "config_path": str(approval_config_path.absolute()),
+            "signer_path": str(source_signer_path),
+            "target_signer_path": str(target_signer_path),
+            "source_config_sha256": hashlib.sha256(
+                normalized_source_payload
+            ).hexdigest(),
+            "domain_id": request.domain_id,
+            "source_principal_id": configured_source.principal_id,
+            "target_principal_id": request.approval_approver_principal_id,
+            "oidc_issuer": configured_source.oidc_issuer,
+            "source_signer_key_id": source_signer.thumbprint,
+            "source_signer_public_key_pem": source_signer.public_pem,
+            "target_signer_key_id": target_signer.thumbprint,
+            "target_signer_public_key_pem": target_signer.public_pem,
+            "phase": "prepared",
+            "prepared_at": observed_at,
+            "partial_recovery": {
+                "schema": "agentnet.canonical-owner-partial-recovery.v1",
+                "observed_at": observed_at,
+                "marker_approval_config_digest": str(
+                    marker["approval_config_digest"]
+                ),
+                "marker_core_config_digest": str(
+                    marker["core_config_digest"]
+                ),
+                "realized_approval_config_digest": canonical_digest(
+                    approval_document
+                ),
+                "realized_core_config_digest": canonical_digest(digest_core),
+                "realized_core_oidc_config_digest": canonical_digest(
+                    core_oidc_document
+                ),
+                "source_principal_evidence": "active_owner_binding",
+            },
+        }
+    )
+    recovery_request = _canonical_owner_source_request_for_partial(
+        provisional,
+        approval_config=approval_config,
+        approval_account=approval_account,
+        request=request,
+        observed_at=observed_at,
+    )
+    request_digest = hashlib.sha256(
+        canonical_json(
+            recovery_request.model_dump(by_alias=True, mode="json")
+        )
+    ).hexdigest()
+    journal = provisional.model_copy(
+        update={"request_digest": request_digest}
+    )
+    validate_canonical_owner_recovery_journal(
+        journal.model_dump(by_alias=True, mode="json"),
+        request=recovery_request,
+        config_path=approval_config_path.absolute(),
+    )
+    payload = (
+        json.dumps(
+            journal.model_dump(by_alias=True, mode="json"),
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    before_write()
+    _atomic_write(
+        journal_path,
+        payload,
+        mode=0o600,
+        uid=approval_account.pw_uid,
+        gid=approval_account.pw_gid,
+    )
+    return {
+        "source_principal_id": journal.source_principal_id,
+        "source_signer_key_id": journal.source_signer_key_id,
+        "source_signer_public_key_pem": journal.source_signer_public_key_pem,
+        "source_signer_path": journal.signer_path,
+        "target_signer_key_id": journal.target_signer_key_id,
+        "target_signer_public_key_pem": journal.target_signer_public_key_pem,
+        "marker_approval_config_digest": str(
+            marker["approval_config_digest"]
+        ),
+        "marker_core_config_digest": str(marker["core_config_digest"]),
+        "partial_recovery": "true",
+    }
 
 
 def _reconstruct_completed_canonical_owner_recovery_for_marker(
@@ -5444,6 +5849,8 @@ def _require_reconstructed_recovery_signer_custody(
     journal: CanonicalOwnerRecoveryJournal,
     approval_document: Mapping[str, Any],
     approval_account: pwd.struct_passwd,
+    *,
+    configured_role: Literal["source", "target"] = "target",
 ) -> None:
     """Recheck the exact two-key custody that justified reconstruction."""
 
@@ -5465,12 +5872,28 @@ def _require_reconstructed_recovery_signer_custody(
     signer_root = approval_config.data_dir / "signers"
     source_signer_path = Path(journal.signer_path)
     target_signer_path = Path(journal.target_signer_path)
+    configured_path = (
+        source_signer_path
+        if configured_role == "source"
+        else target_signer_path
+    )
+    configured_key_id = (
+        journal.source_signer_key_id
+        if configured_role == "source"
+        else journal.target_signer_key_id
+    )
+    configured_principal = (
+        journal.source_principal_id
+        if configured_role == "source"
+        else journal.target_principal_id
+    )
     if (
         source_signer_path.parent != signer_root
         or target_signer_path.parent != signer_root
         or source_signer_path == target_signer_path
-        or configured.signer_private_key_path != target_signer_path
-        or configured.signer_key_id != journal.target_signer_key_id
+        or configured.signer_private_key_path != configured_path
+        or configured.signer_key_id != configured_key_id
+        or configured.principal_id != configured_principal
     ):
         raise ServerSetupError(
             "canonical_owner_recovery",
@@ -5551,13 +5974,14 @@ def _upgrade_marker_config_digests(
 ) -> tuple[str, str]:
     """Recognize only exact marker-relative package-owned live repairs."""
 
+    approval_payload = _read_private_managed_file(
+        approval_config_path,
+        approval_account,
+        blocker="approval_config",
+        max_bytes=_MAX_CONFIG_BYTES,
+    )
     approval_document = _strict_json_bytes(
-        _read_private_managed_file(
-            approval_config_path,
-            approval_account,
-            blocker="approval_config",
-            max_bytes=_MAX_CONFIG_BYTES,
-        ),
+        approval_payload,
         label="managed Approval configuration",
     )
     core_document = _strict_json_bytes(
@@ -5603,6 +6027,84 @@ def _upgrade_marker_config_digests(
                 "canonical_owner_recovery",
                 "canonical owner recovery journal is invalid",
             ) from exc
+        partial = recovery_journal.partial_recovery
+        if partial is not None:
+            core_oidc_document = _strict_json_bytes(
+                _read_private_managed_file(
+                    core_oidc_path,
+                    core_account,
+                    blocker="core_custody",
+                    max_bytes=_MAX_CONFIG_BYTES,
+                ),
+                label="managed Core OIDC configuration",
+            )
+            normalized_approval_document = dict(approval_document)
+            normalized_approval_document["request_ttl_seconds"] = 600
+            normalized_approval_document[
+                "communication_scope_request_ttl_seconds"
+            ] = 3_600
+            normalized_approval_payload = (
+                json.dumps(
+                    normalized_approval_document,
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8")
+                + b"\n"
+            )
+            source_config_sha256 = recovery_journal.source_config_sha256
+            approval_state_matches = (
+                partial.realized_approval_config_digest == realized[0]
+                or source_config_sha256
+                == hashlib.sha256(approval_payload).hexdigest()
+            )
+            if (
+                recovery_journal.phase != "prepared"
+                or (
+                    partial.marker_approval_config_digest,
+                    partial.marker_core_config_digest,
+                )
+                != recorded
+                or not approval_state_matches
+                or partial.realized_core_config_digest != realized[1]
+                or partial.realized_core_oidc_config_digest
+                != canonical_digest(core_oidc_document)
+                or source_config_sha256
+                != hashlib.sha256(normalized_approval_payload).hexdigest()
+            ):
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "partial canonical owner evidence conflicts with setup",
+                )
+            try:
+                approval_config = (
+                    _owner_recovery_compatible_approval_config(
+                        approval_payload
+                    )
+                )
+            except ValidationError as exc:
+                raise ServerSetupError(
+                    "canonical_owner_recovery",
+                    "partial canonical owner Approval state is invalid",
+                ) from exc
+            recovery_request = _canonical_owner_source_request_for_partial(
+                recovery_journal,
+                approval_config=approval_config,
+                approval_account=approval_account,
+                request=request,
+                observed_at=int(time.time()),
+            )
+            validate_canonical_owner_recovery_journal(
+                recovery_journal.model_dump(by_alias=True, mode="json"),
+                request=recovery_request,
+                config_path=approval_config_path.absolute(),
+            )
+            _require_reconstructed_recovery_signer_custody(
+                recovery_journal,
+                approval_document,
+                approval_account,
+                configured_role="source",
+            )
+            return str(recorded[0]), str(recorded[1])
         reconstruction = recovery_journal.reconstruction
         if reconstruction is not None and (
             (
@@ -5847,6 +6349,8 @@ def _approval_trust(
     config_path: Path,
     account: pwd.struct_passwd,
     approval_state: Path,
+    *,
+    recovery_source: Mapping[str, str] | None = None,
 ) -> tuple[ApprovalServiceConfig, list[IndependentApproverConfig]]:
     _require_private_file(config_path, account, blocker="approval_config")
     _require_private_directory(approval_state, account, blocker="approval_custody")
@@ -5877,8 +6381,26 @@ def _approval_trust(
     for index, item in enumerate(config.approvers, start=1):
         expected_signer = approval_state / "signers" / f"approver-{index}.pem"
         if item.signer_private_key_path != expected_signer:
-            raise ServerSetupError("approval_custody", "Approval signer path conflicts with fixed profile")
-        _require_private_file(expected_signer, account, blocker="approval_custody")
+            if (
+                recovery_source is None
+                or recovery_source.get("partial_recovery") != "true"
+                or item.principal_id
+                != recovery_source.get("source_principal_id")
+                or item.signer_key_id
+                != recovery_source.get("source_signer_key_id")
+                or str(item.signer_private_key_path)
+                != recovery_source.get("source_signer_path")
+            ):
+                raise ServerSetupError(
+                    "approval_custody",
+                    "Approval signer path conflicts with fixed profile",
+                )
+            expected_signer = item.signer_private_key_path
+        _require_private_file(
+            expected_signer,
+            account,
+            blocker="approval_custody",
+        )
         try:
             signer = P256KeyPair.from_private_pem(
                 _read_private_managed_file(
@@ -5890,8 +6412,19 @@ def _approval_trust(
             )
         except Exception as exc:
             raise ServerSetupError("approval_custody", "Approval signer custody is invalid") from exc
-        if signer.thumbprint != item.signer_key_id:
-            raise ServerSetupError("approval_custody", "Approval signer key identifier mismatch")
+        if (
+            signer.thumbprint != item.signer_key_id
+            or (
+                recovery_source is not None
+                and recovery_source.get("partial_recovery") == "true"
+                and signer.public_pem
+                != recovery_source.get("source_signer_public_key_pem")
+            )
+        ):
+            raise ServerSetupError(
+                "approval_custody",
+                "Approval signer key identifier mismatch",
+            )
         trusted.append(
             IndependentApproverConfig(
                 principal_id=item.principal_id,
@@ -6000,13 +6533,29 @@ def _canonical_owner_recovery_source(
             label="canonical owner recovery journal",
         )
         journal = CanonicalOwnerRecoveryJournal.model_validate(raw_journal)
-        if journal.phase in {"prepared", "authority_adopted", "signer_replaced"}:
+        partial = journal.partial_recovery
+        if (
+            partial is None
+            and journal.phase in {
+                "prepared",
+                "authority_adopted",
+                "signer_replaced",
+            }
+        ):
             raise ServerSetupError(
                 "canonical_owner_recovery",
                 "canonical owner recovery is incomplete",
             )
         if (
-            journal.phase not in {"config_replacing", "config_replaced", "complete"}
+            journal.phase
+            not in {
+                "prepared",
+                "authority_adopted",
+                "signer_replaced",
+                "config_replacing",
+                "config_replaced",
+                "complete",
+            }
             or journal.source_principal_id
             == request.approval_approver_principal_id
         ):
@@ -6033,13 +6582,33 @@ def _canonical_owner_recovery_source(
                 approval_document,
                 approval_account,
             )
-        recovery_request = _canonical_owner_recovery_request_for_marker(
-            journal,
-            approval_config=approval_config,
-            approval_account=approval_account,
-            request=request,
-            allow_source_config=journal.phase == "config_replacing",
-        )
+        if partial is not None and journal.phase == "prepared":
+            _require_reconstructed_recovery_signer_custody(
+                journal,
+                approval_document,
+                approval_account,
+                configured_role="source",
+            )
+            recovery_request = _canonical_owner_source_request_for_partial(
+                journal,
+                approval_config=approval_config,
+                approval_account=approval_account,
+                request=request,
+                observed_at=int(time.time()),
+            )
+        else:
+            recovery_request = _canonical_owner_recovery_request_for_marker(
+                journal,
+                approval_config=approval_config,
+                approval_account=approval_account,
+                request=request,
+                allow_source_config=journal.phase
+                in {
+                    "authority_adopted",
+                    "signer_replaced",
+                    "config_replacing",
+                },
+            )
         validated = validate_canonical_owner_recovery_journal(
             raw_journal,
             request=recovery_request,
@@ -6080,7 +6649,7 @@ def _canonical_owner_recovery_source(
             "canonical_owner_recovery",
             "canonical owner recovery journal is invalid",
         ) from exc
-    return {
+    result = {
         key: str(validated[key])
         for key in (
             "source_principal_id",
@@ -6088,6 +6657,14 @@ def _canonical_owner_recovery_source(
             "source_signer_public_key_pem",
         )
     }
+    if partial is not None:
+        result["partial_recovery"] = "true"
+        result["source_signer_path"] = journal.signer_path
+        result["target_signer_key_id"] = journal.target_signer_key_id
+        result["target_signer_public_key_pem"] = (
+            journal.target_signer_public_key_pem
+        )
+    return result
 
 
 
@@ -6456,6 +7033,64 @@ def _load_upgrade_compatible_core_config(
             "standalone Core OIDC policy differs beyond supported owner binding migration",
         )
     return normalized, core_legacy or standalone_legacy
+
+
+def _load_partial_owner_recovery_core_config(
+    core_config_path: Path,
+    core_oidc_path: Path,
+    core_account: pwd.struct_passwd,
+    *,
+    request: ServerSetupRequest,
+    core_data: Path,
+    embedded_oidc: OIDCEnrollmentConfig,
+    standalone_oidc: OIDCEnrollmentConfig,
+    scanner_trust: ScannerTrustConfig | None,
+) -> Any:
+    """Validate the exact journaled dual-trust Core split state."""
+
+    config = load_config_json(
+        _read_private_managed_file(
+            core_config_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ).decode("utf-8")
+    )
+    _require_core_config_matches(
+        config,
+        request=request,
+        core_data=core_data,
+        oidc=embedded_oidc,
+        scanner_trust=scanner_trust,
+    )
+    standalone = _strict_json_bytes(
+        _read_private_managed_file(
+            core_oidc_path,
+            core_account,
+            blocker="canonical_owner_recovery",
+            max_bytes=_MAX_CONFIG_BYTES,
+        ),
+        label="Core OIDC config",
+    )
+    expected = standalone_oidc.model_dump(mode="json")
+    if not _oidc_document_matches_exact_policy(standalone, expected):
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "standalone Core OIDC policy conflicts with partial recovery",
+        )
+    try:
+        observed = OIDCEnrollmentConfig.model_validate(standalone)
+    except ValidationError as exc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "standalone Core OIDC policy conflicts with partial recovery",
+        ) from exc
+    if observed != standalone_oidc:
+        raise ServerSetupError(
+            "canonical_owner_recovery",
+            "standalone Core OIDC policy conflicts with partial recovery",
+        )
+    return config
 
 
 def _record_upgrade_config_replacements(
@@ -7758,8 +8393,9 @@ def _apply_server_setup(
                         gid=root_gid,
                     )
 
+                observed_at = int(time.time())
                 recorded_owner_recovery = (
-                    _reconstruct_completed_canonical_owner_recovery_for_marker(
+                    _reconstruct_partial_canonical_owner_recovery_for_marker(
                         existing_marker,
                         approval_state,
                         approval_config_path,
@@ -7768,7 +8404,19 @@ def _apply_server_setup(
                         core_oidc_path,
                         core_account,
                         request=request,
-                        observed_at=int(time.time()),
+                        observed_at=observed_at,
+                        before_write=validate_reconstructed_marker_state,
+                    )
+                    or _reconstruct_completed_canonical_owner_recovery_for_marker(
+                        existing_marker,
+                        approval_state,
+                        approval_config_path,
+                        approval_account,
+                        core_config_path,
+                        core_oidc_path,
+                        core_account,
+                        request=request,
+                        observed_at=observed_at,
                         before_write=validate_reconstructed_marker_state,
                     )
                 )
@@ -7815,6 +8463,7 @@ def _apply_server_setup(
                 approval_config_path,
                 approval_account,
                 approval_state,
+                recovery_source=recorded_owner_recovery,
             )
             canonical_owner_source = _require_exact_approval_policy(
                 approval_config_before,
@@ -7900,23 +8549,71 @@ def _apply_server_setup(
                 source_request = request.model_copy(
                     update={"approval_approver_principal_id": canonical_owner_source}
                 )
-                prevalidated_source_oidc = _build_core_oidc_config(
+                source_oidc = _build_core_oidc_config(
                     source_request,
                     oidc_provider,
                     trusted=trusted_before,
                     approvers=(selected,),
                 )
-                prevalidated_config, legacy_owner_policy = (
-                    _load_upgrade_compatible_core_config(
-                        core_config_path,
-                        core_oidc_path,
-                        core_account,
-                        request=source_request,
-                        core_data=core_data,
-                        oidc=prevalidated_source_oidc,
-                        scanner_trust=scanner_trust,
+                if (
+                    recorded_owner_recovery is not None
+                    and recorded_owner_recovery.get("partial_recovery")
+                    == "true"
+                ):
+                    target = approvers[0]
+                    target_trust = IndependentApproverConfig(
+                        principal_id=target.principal_id,
+                        authority_kind=target.authority_kind,
+                        signer_key_id=recorded_owner_recovery[
+                            "target_signer_key_id"
+                        ],
+                        public_key_pem=recorded_owner_recovery[
+                            "target_signer_public_key_pem"
+                        ],
+                        allowed_purposes=target.allowed_purposes,
                     )
-                )
+                    prevalidated_oidc = _build_core_oidc_config(
+                        request,
+                        oidc_provider,
+                        trusted=(target_trust,),
+                        approvers=approvers,
+                    )
+                    prevalidated_source_oidc = (
+                        prevalidated_oidc.model_copy(
+                            update={
+                                "trusted_approvers": (
+                                    *source_oidc.trusted_approvers,
+                                    *prevalidated_oidc.trusted_approvers,
+                                )
+                            }
+                        )
+                    )
+                    prevalidated_config = (
+                        _load_partial_owner_recovery_core_config(
+                            core_config_path,
+                            core_oidc_path,
+                            core_account,
+                            request=request,
+                            core_data=core_data,
+                            embedded_oidc=prevalidated_source_oidc,
+                            standalone_oidc=prevalidated_oidc,
+                            scanner_trust=scanner_trust,
+                        )
+                    )
+                    legacy_owner_policy = False
+                else:
+                    prevalidated_source_oidc = source_oidc
+                    prevalidated_config, legacy_owner_policy = (
+                        _load_upgrade_compatible_core_config(
+                            core_config_path,
+                            core_oidc_path,
+                            core_account,
+                            request=source_request,
+                            core_data=core_data,
+                            oidc=prevalidated_source_oidc,
+                            scanner_trust=scanner_trust,
+                        )
+                    )
         if upgrade_status is None:
             upgrade_status = prepare_upgrade(
                 (
@@ -8214,6 +8911,7 @@ def _apply_server_setup(
             approval_config_path,
             approval_account,
             approval_state,
+            recovery_source=recorded_owner_recovery,
         )
         observed_owner_source = _require_exact_approval_policy(
             approval_config,
@@ -8282,7 +8980,16 @@ def _apply_server_setup(
                     "core_conflict",
                     "Core OIDC policy changed after preflight",
                 ) from exc
-            if realized_oidc != oidc:
+            if (
+                realized_oidc != oidc
+                and not (
+                    recorded_owner_recovery is not None
+                    and recorded_owner_recovery.get("partial_recovery")
+                    == "true"
+                    and prevalidated_oidc is not None
+                    and realized_oidc == prevalidated_oidc
+                )
+            ):
                 raise ServerSetupError(
                     "core_conflict",
                     "Core OIDC policy changed after preflight",
@@ -8366,7 +9073,13 @@ def _apply_server_setup(
         unit_payloads: dict[str, bytes] | None = None
         if rollback_capable_upgrade:
             unit_payloads = write_setup_units()
-        elif forward_only_upgrade:
+        elif (
+            forward_only_upgrade
+            and not (
+                recorded_owner_recovery is not None
+                and recorded_owner_recovery.get("partial_recovery") == "true"
+            )
+        ):
             unit_payloads = commit_setup_profile()
             profile_committed_early = True
         c0_runtime_prepared = False
@@ -8638,7 +9351,11 @@ def _apply_server_setup(
                 "migrated": migrated_projections,
             }
         )
-        if forward_only_transition and not rollback_capable_upgrade:
+        if (
+            forward_only_transition
+            and not rollback_capable_upgrade
+            and profile_committed_early
+        ):
             _clear_upgrade_journal(journal_path)
         if c0_responder_account is None:
             c0_responder_account = _ensure_account(
@@ -8768,6 +9485,8 @@ def _apply_server_setup(
 
         if unit_payloads is None:
             unit_payloads = commit_setup_profile()
+            if forward_only_transition and not rollback_capable_upgrade:
+                _clear_upgrade_journal(journal_path)
         assert unit_payloads is not None
         if start:
             approval_health = {

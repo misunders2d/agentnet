@@ -917,6 +917,18 @@ secret is removed from the journal immediately after the signer file is
 durably installed and before authority mutation; either durable copy can
 resume the prepared phase, while a missing or mismatched copy fails closed.
 
+One exact pre-adoption split state is also resumable when the original recovery
+journal was lost. In that state Approval still names the source owner and
+signer, signer custody contains exactly the source and staged target keys, the
+embedded Core policy contains source-plus-target trust, and the standalone Core
+OIDC sidecar contains only the canonical target. Setup reconstructs a
+`prepared` journal only when the retained v0.1.50 marker, current typed files,
+key bindings, and active source-owner state reproduce that exact transition.
+The reconstruction records marker and realized Approval/Core/Core-OIDC digests
+before any authority mutation. Ordinary journaled adoption then resumes; extra
+keys, reversed or incomplete trust, target-only Approval state, ambiguous
+owner state, or any unrelated drift fails closed.
+
 If the exact terminal live repair completed but its recovery journal was never
 retained, setup does not repeat adoption or infer authority from the current
 principal alone. It reconstructs a terminal journal only when one retained

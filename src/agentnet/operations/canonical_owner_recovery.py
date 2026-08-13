@@ -77,6 +77,25 @@ class CanonicalOwnerRecoveryReconstruction(BaseModel):
     realized_core_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_principal_evidence: Literal["approval_audit_marker_digest"]
 
+
+
+class CanonicalOwnerPartialRecovery(BaseModel):
+    """Exact pre-adoption split state captured before any recovery mutation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.canonical-owner-partial-recovery.v1"
+    ] = Field(alias="schema")
+    observed_at: int = Field(ge=0)
+    marker_approval_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    marker_core_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    realized_approval_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    realized_core_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    realized_core_oidc_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_principal_evidence: Literal["active_owner_binding"]
+
+
 class CanonicalOwnerRecoveryJournal(BaseModel):
     """Strict resumable evidence for one owner/signer cutover."""
 
@@ -119,6 +138,7 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     reconstruction: CanonicalOwnerRecoveryReconstruction | None = None
+    partial_recovery: CanonicalOwnerPartialRecovery | None = None
 
     @model_validator(mode="after")
     def _phase_shape(self) -> "CanonicalOwnerRecoveryJournal":
@@ -140,6 +160,13 @@ class CanonicalOwnerRecoveryJournal(BaseModel):
             or self.completed_at != self.reconstruction.observed_at
         ):
             raise ValueError("reconstructed evidence does not match terminal phase")
+        if self.reconstruction is not None and self.partial_recovery is not None:
+            raise ValueError("recovery evidence classifications are ambiguous")
+        if (
+            self.partial_recovery is not None
+            and self.prepared_at != self.partial_recovery.observed_at
+        ):
+            raise ValueError("partial recovery evidence does not match preparation")
         if (
             self.authority_adoption is not None
             and hashlib.sha256(canonical_json(self.authority_adoption)).hexdigest()
@@ -295,6 +322,117 @@ def validate_canonical_owner_adoption_state(
     return counts
 
 
+def _validated_source_state(
+    connection: Any,
+    *,
+    request: CanonicalOwnerAdoptionRequest,
+    now: int,
+) -> tuple[Any, list[Any]]:
+    active_bindings = list(
+        connection.execute(
+            """SELECT * FROM approval_owner_bindings
+                 WHERE domain_id=? AND status='active'
+                 ORDER BY binding_id""",
+            (request.domain_id,),
+        ).fetchall()
+    )
+    if (
+        len(active_bindings) != 1
+        or not _matches_binding(
+            active_bindings[0],
+            request,
+            request.source_principal_id,
+        )
+    ):
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "source state does not match",
+        )
+    if connection.execute(
+        """SELECT 1 FROM approval_owner_bindings
+             WHERE domain_id=? AND approver_principal_id=?""",
+        (request.domain_id, request.target_principal_id),
+    ).fetchone() is not None or connection.execute(
+        """SELECT 1 FROM approval_webauthn_credentials
+             WHERE domain_id=? AND approver_principal_id=?""",
+        (request.domain_id, request.target_principal_id),
+    ).fetchone() is not None:
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "target authority already exists",
+        )
+    pending_request = connection.execute(
+        """SELECT 1 FROM approval_requests
+             WHERE approver_principal_id=? AND domain_id=? AND state='pending'
+             LIMIT 1""",
+        (request.source_principal_id, request.domain_id),
+    ).fetchone()
+    pending_registration = connection.execute(
+        """SELECT 1 FROM approval_registration_sessions
+             WHERE approver_principal_id=? AND domain_id=?
+               AND consumed_at IS NULL AND expires_at>? LIMIT 1""",
+        (request.source_principal_id, request.domain_id, now),
+    ).fetchone()
+    pending_oidc = connection.execute(
+        """SELECT 1 FROM approval_oidc_login_transactions
+             WHERE state IN ('pending','callback_claimed') LIMIT 1"""
+    ).fetchone()
+    if (
+        pending_request is not None
+        or pending_registration is not None
+        or pending_oidc is not None
+    ):
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "nonterminal approval state exists",
+        )
+    credentials = _active_credentials(
+        connection,
+        request.source_principal_id,
+        request.domain_id,
+    )
+    source_handle = b64url_encode(
+        approval_user_handle(
+            verifier_id=request.verifier_id,
+            principal_id=request.source_principal_id,
+            domain_id=request.domain_id,
+        )
+    )
+    if not credentials or any(
+        row["user_handle_b64"] != source_handle for row in credentials
+    ):
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "source credential state does not match",
+        )
+    if connection.execute(
+        """SELECT 1 FROM approval_audit
+             WHERE action='owner.canonical_adoption' AND domain_id=? LIMIT 1""",
+        (request.domain_id,),
+    ).fetchone() is not None:
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "canonical owner adoption evidence already exists",
+        )
+    return active_bindings[0], credentials
+
+
+def validate_canonical_owner_source_state(
+    connection: Any,
+    *,
+    request: CanonicalOwnerAdoptionRequest,
+    now: int,
+) -> None:
+    """Require the exact durable pre-adoption owner state without mutation."""
+
+    _validated_source_state(connection, request=request, now=now)
+    if list(connection.execute("PRAGMA foreign_key_check").fetchall()):
+        raise GateBlocked(
+            "canonical_owner_recovery",
+            "approval owner source state is inconsistent",
+        )
+
+
 def adopt_canonical_approval_owner(
     store: ApprovalStore,
     *,
@@ -342,52 +480,11 @@ def adopt_canonical_approval_owner(
                 canceled_registration_ceremonies=canceled_registration_ceremonies,
             )
 
-        if not _matches_binding(binding, request, request.source_principal_id):
-            raise GateBlocked("canonical_owner_recovery", "source state does not match")
-
-        target_binding = connection.execute(
-            """SELECT 1 FROM approval_owner_bindings
-                 WHERE domain_id=? AND approver_principal_id=?""",
-            (request.domain_id, request.target_principal_id),
-        ).fetchone()
-        target_credential = connection.execute(
-            """SELECT 1 FROM approval_webauthn_credentials
-                 WHERE domain_id=? AND approver_principal_id=?""",
-            (request.domain_id, request.target_principal_id),
-        ).fetchone()
-        if target_binding is not None or target_credential is not None:
-            raise GateBlocked("canonical_owner_recovery", "target authority already exists")
-
-        pending_request = connection.execute(
-            """SELECT 1 FROM approval_requests
-                 WHERE approver_principal_id=? AND domain_id=? AND state='pending' LIMIT 1""",
-            (request.source_principal_id, request.domain_id),
-        ).fetchone()
-        pending_registration = connection.execute(
-            """SELECT 1 FROM approval_registration_sessions
-                 WHERE approver_principal_id=? AND domain_id=?
-                   AND consumed_at IS NULL AND expires_at>? LIMIT 1""",
-            (request.source_principal_id, request.domain_id, now),
-        ).fetchone()
-        pending_oidc = connection.execute(
-            """SELECT 1 FROM approval_oidc_login_transactions
-                 WHERE state IN ('pending','callback_claimed') LIMIT 1"""
-        ).fetchone()
-        if pending_request is not None or pending_registration is not None or pending_oidc is not None:
-            raise GateBlocked("canonical_owner_recovery", "nonterminal approval state exists")
-
-        credentials = _active_credentials(
-            connection, request.source_principal_id, request.domain_id
+        binding, credentials = _validated_source_state(
+            connection,
+            request=request,
+            now=now,
         )
-        source_handle = b64url_encode(
-            approval_user_handle(
-                verifier_id=request.verifier_id,
-                principal_id=request.source_principal_id,
-                domain_id=request.domain_id,
-            )
-        )
-        if not credentials or any(row["user_handle_b64"] != source_handle for row in credentials):
-            raise GateBlocked("canonical_owner_recovery", "source credential state does not match")
 
         ceremonies = connection.execute(
             """UPDATE approval_registration_ceremonies
@@ -779,7 +876,7 @@ def converge_canonical_approval_owner(
     )
     index, configured = _configured_owner(config, request)
     journal_exists = journal_path.exists() or journal_path.is_symlink()
-    journal: dict[str, Any]
+    journal: dict[str, Any] = {}
     if journal_exists:
         try:
             raw_journal = json.loads(
@@ -877,6 +974,29 @@ def converge_canonical_approval_owner(
     if staged_target_pem is not None:
         journal.pop("staged_target_signer_private_key_pem", None)
         _journal_write(journal_path, journal)
+    if (
+        journal.get("partial_recovery") is not None
+        and journal["phase"] == "prepared"
+    ):
+        source_signer = P256KeyPair.from_private_pem(
+            _private_read(signer_path, maximum=65_536)
+        )
+        if source_signer.thumbprint != journal["source_signer_key_id"]:
+            raise GateBlocked(
+                "canonical_owner_recovery",
+                "source signer state conflicts with partial recovery",
+            )
+        if backup_path.exists() or backup_path.is_symlink():
+            backup_signer = P256KeyPair.from_private_pem(
+                _private_read(backup_path, maximum=65_536)
+            )
+            if backup_signer.thumbprint != source_signer.thumbprint:
+                raise GateBlocked(
+                    "canonical_owner_recovery",
+                    "source signer backup is invalid",
+                )
+        else:
+            _private_write(backup_path, source_signer.private_pem)
 
     was_complete = journal_exists and journal.get("phase") == "complete"
     if journal["phase"] in {"prepared", "authority_adopted", "signer_replaced"}:

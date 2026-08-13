@@ -845,6 +845,19 @@ Approval-owned signer file is durably installed and before owner authority is
 mutated; a retry reconstructs the file from the journal or verifies the exact
 existing signer.
 
+The same journal schema may carry a strict
+`agentnet.canonical-owner-partial-recovery.v1` record only in its `prepared`
+phase. This record binds observation time, retained marker Approval/Core
+digests, realized Approval/Core/Core-OIDC digests, and the fixed
+`active_owner_binding` source classification. It represents only the exact
+pre-adoption split state: source-owned Approval, exactly two source/target
+signers, dual-trust embedded Core OIDC, and target-only standalone Core OIDC.
+Setup derives the recovery request from store-bound source authority and the
+enrolled target identity, writes the journal atomically without changing
+authority, and then uses the ordinary recovery command. Unknown fields,
+additional signers, nonmatching key material, alternate trust topology, or
+digest/state drift are rejected.
+
 A journal-less terminal live repair may create the same schema-v1 terminal
 journal only from exact marker-relative evidence. Its nested strict
 `agentnet.canonical-owner-recovery-reconstruction.v1` record binds the

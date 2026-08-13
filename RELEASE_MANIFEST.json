@@ -618,14 +618,14 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "119c226d6f87f100e2e41e4c974339417859b6f6c1d5212896ec799898541e3b",
+      "sha256": "b93ee9e5cd53997ec0f1bd3cbc058404914346caff589524d2b92a61dd50afaf",
       "size": 56697
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "e00067bb4365b9089d45af45a726ff3d4f080baca6b39f3e2e4a017226857a10"
+    "sha256": "bc61a68a9544fb4e811d58f5649871a7e0c4535a4e6b0bf63b726763590becae"
   },
   "runtime": {
     "implementation": "CPython",

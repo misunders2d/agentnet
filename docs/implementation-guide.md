@@ -393,6 +393,17 @@ success. Unsupported identity, OIDC, signer, row-shape, revision, or file drift
 requires operator investigation; email equality alone is never recovery
 authority.
 
+One interrupted live repair may have no recovery journal even though the
+target signer and Core policy staging completed before Approval owner adoption.
+Do not delete either signer, copy Core OIDC files over one another, or create a
+journal manually. Rerun the same approved setup command. Setup accepts only the
+exact source-owned Approval / dual-trust embedded Core / target-only standalone
+Core OIDC shape with exactly two matching signer keys and one active source
+owner. It records a strict prepared recovery journal before changing authority,
+then resumes normal adoption. Any extra signer, target-owned Approval,
+incomplete/reversed trust, ambiguous owner, or unrelated digest drift remains
+blocked.
+
 The exact published v0.1.50 Approval configuration has
 `request_ttl_seconds: 300` and no separate communication-scope field; setup
 preserves it without rewriting. A retained live hotfix may instead have
