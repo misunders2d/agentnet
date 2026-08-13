@@ -858,11 +858,16 @@ digests, realized Approval/Core/Core-OIDC digests, and the fixed
 `active_owner_binding` source classification. It represents only the exact
 pre-adoption split state: source-owned Approval, exactly two source/target
 signers, dual-trust embedded Core OIDC, and target-only standalone Core OIDC.
+The retained Approval marker may encode either the source policy or the exact
+target policy from the frozen request and target signer; one reconstructed
+policy must reproduce the marker digest exactly. Before writing the journal,
+setup requires exactly one frozen target approver and proves that the live
+source policy differs only in the source principal and signer references.
 Setup derives the recovery request from store-bound source authority and the
 enrolled target identity, writes the journal atomically without changing
 authority, and then uses the ordinary recovery command. Unknown fields,
-additional signers, nonmatching key material, alternate trust topology, or
-digest/state drift are rejected.
+additional signers or approvers, nonmatching key material, alternate trust
+topology, or digest/state drift are rejected.
 
 A journal-less terminal live repair may create the same schema-v1 terminal
 journal only from exact marker-relative evidence. Its nested strict

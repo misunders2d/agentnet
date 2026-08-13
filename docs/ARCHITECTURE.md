@@ -119,8 +119,13 @@ response loss without creating another credential.
 Canonical-owner setup recovery treats the exact source/target approver pair as
 an unordered trust set. It still verifies both principals, signer keys, public
 keys, authority kinds, purpose sets, sidecar policy, and all non-trust OIDC
-fields. The observed serialized order is retained through the prepared journal
-and compare-and-swap migration so recovery never rewrites unjournaled bytes.
+fields. The live source policy must equal the sole frozen target policy except
+for the journal-bound source principal and signer references; setup proves that
+equivalence before any recovery-journal write. A retained marker may bind
+either that source policy or the exact target policy from the frozen setup
+request; acceptance requires one candidate to reproduce the marker digest.
+The observed trust order is retained through the prepared journal and
+compare-and-swap migration so recovery never rewrites unjournaled bytes.
 
 
 ## Canonical state and evidence

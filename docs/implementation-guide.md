@@ -294,10 +294,12 @@ unsupported.
 
 For the proof-bound canonical-owner split-state recovery, the embedded Core
 source/target trust pair may appear in either serialized order. Setup verifies
-the exact two trust records and target-only sidecar, records current config
-digests before mutation, and carries the observed order into rollback and
-replacement checks. Added, duplicated, altered, or unrelated trust remains a
-fail-closed conflict.
+the exact two trust records and target-only sidecar. It also requires the
+retained Approval marker to match either the source policy or the exact target
+policy derived from the frozen setup request and target signer. Setup records
+current config digests before mutation and carries the observed trust order
+into rollback and replacement checks. Added, duplicated, altered, or unrelated
+trust remains a fail-closed conflict.
 
 
 Released five-unit correction upgrades are a narrow forward-only exception:
@@ -407,10 +409,13 @@ Do not delete either signer, copy Core OIDC files over one another, or create a
 journal manually. Rerun the same approved setup command. Setup accepts only the
 exact source-owned Approval / dual-trust embedded Core / target-only standalone
 Core OIDC shape with exactly two matching signer keys and one active source
-owner. It records a strict prepared recovery journal before changing authority,
-then resumes normal adoption. Any extra signer, target-owned Approval,
-incomplete/reversed trust, ambiguous owner, or unrelated digest drift remains
-blocked.
+owner. Its retained marker must match either the source Approval policy or the
+exact target policy from the frozen request and target signer. The live source
+policy must otherwise equal that sole frozen target policy; setup checks this
+before recording a strict prepared recovery journal, then resumes normal
+adoption. Any extra signer or approver, target-owned live Approval,
+incomplete/reversed trust, ambiguous owner, or unrelated policy/digest drift
+remains blocked.
 
 The exact published v0.1.50 Approval configuration has
 `request_ttl_seconds: 300` and no separate communication-scope field; setup

@@ -5054,6 +5054,7 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
     core_account: pwd.struct_passwd,
     *,
     request: ServerSetupRequest,
+    approvers: Sequence[SetupApprover],
     observed_at: int,
     before_write: Callable[[], None],
 ) -> dict[str, str] | None:
@@ -5173,12 +5174,31 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
         target_oidc = OIDCEnrollmentConfig.model_validate(core_oidc_document)
     except ValidationError:
         return None
+    target_policies = [
+        policy
+        for policy in approvers
+        if policy.principal_id == request.approval_approver_principal_id
+        and policy.domain_id == request.domain_id
+    ]
     if (
-        len(embedded.trusted_approvers) != 2
+        len(approvers) != 1
+        or len(embedded.trusted_approvers) != 2
         or len(target_oidc.trusted_approvers) != 1
         or target_oidc.approval_service is None
         or target_oidc.approval_service.approver_principal_id
         != request.approval_approver_principal_id
+        or len(target_policies) != 1
+    ):
+        return None
+    target_policy = target_policies[0]
+    if (
+        configured_source.authority_kind != target_policy.authority_kind
+        or configured_source.domain_id != target_policy.domain_id
+        or configured_source.allowed_purposes != target_policy.allowed_purposes
+        or configured_source.oidc_issuer != target_policy.oidc_issuer
+        or configured_source.oidc_subject != target_policy.oidc_subject
+        or configured_source.verified_email_alias
+        != target_policy.verified_email_alias
     ):
         return None
     trusts = {
@@ -5200,6 +5220,8 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
         or target_oidc.trusted_approvers != (target_trust,)
         or target_trust.signer_key_id != target_signer.thumbprint
         or target_trust.public_key_pem != target_signer.public_pem
+        or target_trust.authority_kind != target_policy.authority_kind
+        or target_trust.allowed_purposes != target_policy.allowed_purposes
     ):
         return None
     expected_dual = target_oidc.model_copy(
@@ -5218,25 +5240,42 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
             ),
         }
     )
-    marker_approval = dict(approval_document)
+    marker_approval_source = dict(approval_document)
     if (
-        marker_approval.get("request_ttl_seconds") != 3_600
-        or marker_approval.get(
+        marker_approval_source.get("request_ttl_seconds") != 3_600
+        or marker_approval_source.get(
             "communication_scope_request_ttl_seconds",
             3_600,
         )
         != 3_600
     ):
         return None
-    marker_approval["request_ttl_seconds"] = 300
-    marker_approval.pop("communication_scope_request_ttl_seconds", None)
+    marker_approval_source["request_ttl_seconds"] = 300
+    marker_approval_source.pop(
+        "communication_scope_request_ttl_seconds",
+        None,
+    )
+    marker_approval_target = copy.deepcopy(marker_approval_source)
+    marker_target_approver = dict(
+        target_policy.model_dump(mode="json", exclude_none=True)
+    )
+    marker_target_approver.update(
+        signer_key_id=target_signer.thumbprint,
+        signer_private_key_path=str(target_signer_path),
+    )
+    marker_approval_target["approvers"] = [marker_target_approver]
+    marker_approval = None
+    for candidate in (marker_approval_source, marker_approval_target):
+        matched = _marker_ordered_policy_document(
+            candidate,
+            expected_digest=str(marker.get("approval_config_digest")),
+            policy_path=("approvers", 0),
+        )
+        if matched is not None:
+            marker_approval = matched
+            break
     marker_core = dict(digest_core)
     marker_core["oidc_enrollment"] = source_oidc.model_dump(mode="json")
-    marker_approval = _marker_ordered_policy_document(
-        marker_approval,
-        expected_digest=str(marker.get("approval_config_digest")),
-        policy_path=("approvers", 0),
-    )
     marker_core = _marker_ordered_policy_document(
         marker_core,
         expected_digest=str(marker.get("core_config_digest")),
@@ -8437,6 +8476,7 @@ def _apply_server_setup(
                         core_oidc_path,
                         core_account,
                         request=request,
+                        approvers=approvers,
                         observed_at=observed_at,
                         before_write=validate_reconstructed_marker_state,
                     )
