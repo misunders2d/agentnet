@@ -1069,6 +1069,7 @@ def _stage_0150_partial_owner_repair_and_one_hour_hotfix(
     *,
     reverse_embedded_trust: bool = False,
     marker_approval_role: Literal["source", "target"] = "source",
+    embedded_service_role: Literal["source", "target"] = "target",
 ) -> tuple[Path, CanonicalOwnerAdoptionRequest]:
     """Materialize the exact retained source/dual-trust/target-sidecar shape."""
 
@@ -1165,7 +1166,9 @@ def _stage_0150_partial_owner_repair_and_one_hour_hotfix(
         trusted=(target_trust,),
         approvers=(target_policy,),
     )
-    dual_oidc = target_oidc.model_copy(
+    dual_oidc = (
+        source_oidc if embedded_service_role == "source" else target_oidc
+    ).model_copy(
         update={
             "trusted_approvers": (
                 (target_trust, source_trust)
@@ -1658,6 +1661,11 @@ def test_0151_upgrade_converges_completed_owner_repair_and_one_hour_ttl_hotfix(
     ids=("source-target-trust", "target-source-trust"),
 )
 @pytest.mark.parametrize(
+    "embedded_service_role",
+    ("source", "target"),
+    ids=("source-service", "target-service"),
+)
+@pytest.mark.parametrize(
     "interrupt_before_recovery",
     (False, True),
     ids=("single-pass", "resume-after-pre-recovery-rollback"),
@@ -1666,6 +1674,7 @@ def test_0151_upgrade_converges_exact_partial_owner_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     interrupt_before_recovery: bool,
+    embedded_service_role: Literal["source", "target"],
     reverse_embedded_trust: bool,
     marker_approval_role: Literal["source", "target"],
 ) -> None:
@@ -1679,6 +1688,7 @@ def test_0151_upgrade_converges_exact_partial_owner_repair(
             harness,
             reverse_embedded_trust=reverse_embedded_trust,
             marker_approval_role=marker_approval_role,
+            embedded_service_role=embedded_service_role,
         )
     )
     if reverse_embedded_trust:

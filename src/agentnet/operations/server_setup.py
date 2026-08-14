@@ -5224,11 +5224,6 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
         or target_trust.allowed_purposes != target_policy.allowed_purposes
     ):
         return None
-    expected_dual = target_oidc.model_copy(
-        update={"trusted_approvers": embedded.trusted_approvers}
-    )
-    if embedded != expected_dual:
-        return None
     assert target_oidc.approval_service is not None
     source_oidc = target_oidc.model_copy(
         update={
@@ -5240,6 +5235,12 @@ def _reconstruct_partial_canonical_owner_recovery_for_marker(
             ),
         }
     )
+    expected_dual_trusts = {"trusted_approvers": embedded.trusted_approvers}
+    if embedded not in (
+        target_oidc.model_copy(update=expected_dual_trusts),
+        source_oidc.model_copy(update=expected_dual_trusts),
+    ):
+        return None
     marker_approval_source = dict(approval_document)
     if (
         marker_approval_source.get("request_ttl_seconds") != 3_600
@@ -7083,6 +7084,7 @@ def _load_partial_owner_recovery_core_config(
     core_data: Path,
     embedded_oidc: OIDCEnrollmentConfig,
     standalone_oidc: OIDCEnrollmentConfig,
+    source_principal_id: str,
     scanner_trust: ScannerTrustConfig | None,
 ) -> tuple[Any, OIDCEnrollmentConfig]:
     """Validate the exact journaled dual-trust Core split state."""
@@ -7107,9 +7109,20 @@ def _load_partial_owner_recovery_core_config(
             "canonical_owner_recovery",
             "embedded Core OIDC policy conflicts with partial recovery",
         ) from exc
+    source_service_oidc = embedded_oidc
+    if embedded_oidc.approval_service is not None:
+        source_service_oidc = embedded_oidc.model_copy(
+            update={
+                "approval_service": embedded_oidc.approval_service.model_copy(
+                    update={"approver_principal_id": source_principal_id}
+                )
+            }
+        )
+    normalized_embedded = observed_embedded.model_copy(
+        update={"trusted_approvers": embedded_oidc.trusted_approvers}
+    )
     if (
-        observed_embedded is None
-        or {
+        {
             trust.principal_id: trust
             for trust in observed_embedded.trusted_approvers
         }
@@ -7117,12 +7130,7 @@ def _load_partial_owner_recovery_core_config(
             trust.principal_id: trust
             for trust in embedded_oidc.trusted_approvers
         }
-        or observed_embedded.model_copy(
-            update={
-                "trusted_approvers": embedded_oidc.trusted_approvers
-            }
-        )
-        != embedded_oidc
+        or normalized_embedded not in (embedded_oidc, source_service_oidc)
     ):
         raise ServerSetupError(
             "canonical_owner_recovery",
@@ -8672,6 +8680,9 @@ def _apply_server_setup(
                         core_data=core_data,
                         embedded_oidc=prevalidated_source_oidc,
                         standalone_oidc=prevalidated_oidc,
+                        source_principal_id=recorded_owner_recovery[
+                            "source_principal_id"
+                        ],
                         scanner_trust=scanner_trust,
                     )
                     legacy_owner_policy = False
