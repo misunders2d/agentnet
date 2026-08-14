@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from cryptography.hazmat.primitives import serialization
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentnet.approval.service import (
     IndependentApprovalVerifier,
@@ -35,8 +36,9 @@ _BINDING_QUERY = """
 SELECT
   c.credential_id, c.key_id, c.public_key_pem, c.status AS credential_status,
   c.epoch AS credential_epoch, c.not_before, c.expires_at,
-  h.harness_id, h.domain_id, h.principal_id, h.guest_id, h.status AS harness_status,
-  h.binding_assurance, h.credential_epoch AS harness_credential_epoch,
+  h.harness_id, h.domain_id, h.principal_id, h.guest_id, h.kind AS harness_kind,
+  h.status AS harness_status, h.binding_assurance,
+  h.credential_epoch AS harness_credential_epoch,
   p.status AS principal_status,
   g.status AS guest_status, g.host_domain_id AS guest_host_domain_id,
   g.expires_at AS guest_expires_at,
@@ -64,6 +66,7 @@ class CredentialBinding:
     principal_id: str | None
     guest_id: str | None
     harness_status: str
+    harness_kind: str
     binding_assurance: str
     harness_credential_epoch: int
     principal_status: str | None
@@ -132,6 +135,7 @@ def credential_binding_from_row(row: Any) -> CredentialBinding:
         domain_id=row["domain_id"],
         principal_id=row["principal_id"],
         guest_id=row["guest_id"],
+        harness_kind=row["harness_kind"],
         harness_status=row["harness_status"],
         binding_assurance=row["binding_assurance"],
         harness_credential_epoch=row["harness_credential_epoch"],
@@ -158,6 +162,165 @@ MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_SCHEMA = (
 MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_SCHEMA_V2 = (
     "agentnet.managed-server-credential-reauthorization.v2"
 )
+
+
+LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE = (
+    MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE
+)
+LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE = (
+    "agentnet.laptop-credential-reauthorization.pop.v1"
+)
+LAPTOP_CREDENTIAL_REAUTHORIZATION_SCHEMA = (
+    "agentnet.laptop-credential-reauthorization.v1"
+)
+
+_LAPTOP_HARNESS_KINDS = frozenset(
+    {"omp", "pi", "claude", "codex", "antigravity"}
+)
+
+class LaptopCredentialReauthorizationPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.laptop-credential-reauthorization-prepare.v1"
+    ] = Field(
+        default="agentnet.laptop-credential-reauthorization-prepare.v1",
+        alias="schema",
+    )
+    request_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    identity_profile_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LaptopCredentialReauthorizationRequest(BaseModel):
+    """Immutable owner-review transaction for one exact expired laptop binding."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.laptop-credential-reauthorization.v1"
+    ] = Field(default=LAPTOP_CREDENTIAL_REAUTHORIZATION_SCHEMA, alias="schema")
+    approval_purpose: Literal["identity.credential.recover.approve"] = (
+        LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE
+    )
+    request_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    domain_id: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{2,127}$")
+    principal_id: str = Field(min_length=1, max_length=256)
+    harness_id: str = Field(min_length=1, max_length=256)
+    expired_credential_id: str = Field(min_length=1, max_length=256)
+    expected_credential_epoch: int = Field(ge=1)
+    successor_credential_epoch: int = Field(ge=2)
+    expected_expired_at: int = Field(ge=1)
+    expected_key_id: str = Field(min_length=16, max_length=256)
+    expected_public_key_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_binding_assurance: Literal["os_bound", "hardware_bound"]
+    identity_profile_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prepared_at: int = Field(ge=1)
+    expires_at: int = Field(ge=1)
+    maximum_new_credential_ttl_seconds: int = Field(ge=3_600, le=604_800)
+    key_binding: Literal[
+        "same_laptop_key_with_fresh_possession_proof"
+    ] = "same_laptop_key_with_fresh_possession_proof"
+    old_credential_action: Literal["retire_without_extension"] = (
+        "retire_without_extension"
+    )
+    key_preserved: Literal[True] = True
+    authority_granted: Literal[False] = False
+
+    @model_validator(mode="after")
+    def exact_epochs_and_window(self) -> "LaptopCredentialReauthorizationRequest":
+        if self.successor_credential_epoch != self.expected_credential_epoch + 1:
+            raise ValueError("successor credential epoch must be the exact next epoch")
+        if (
+            self.expected_expired_at > self.prepared_at
+            or self.expires_at <= self.prepared_at
+            or self.expires_at - self.prepared_at > 600
+        ):
+            raise ValueError("credential reauthorization approval window is invalid")
+        return self
+
+    def transaction_fields(self) -> dict[str, object]:
+        return self.model_dump(mode="json", by_alias=True)
+
+    @property
+    def canonical_transaction(self) -> bytes:
+        return canonical_json(self.transaction_fields())
+
+    def possession_fields(self) -> dict[str, object]:
+        return {
+            "schema": LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+            "request_id": self.request_id,
+            "domain_id": self.domain_id,
+            "principal_id": self.principal_id,
+            "harness_id": self.harness_id,
+            "expired_credential_id": self.expired_credential_id,
+            "expected_credential_epoch": self.expected_credential_epoch,
+            "successor_credential_epoch": self.successor_credential_epoch,
+            "expected_key_id": self.expected_key_id,
+            "transaction_sha256": hashlib.sha256(
+                self.canonical_transaction
+            ).hexdigest(),
+        }
+
+
+class LaptopCredentialReauthorizationProgressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.laptop-credential-reauthorization-progress.v1"
+    ] = Field(
+        default="agentnet.laptop-credential-reauthorization-progress.v1",
+        alias="schema",
+    )
+    transaction: LaptopCredentialReauthorizationRequest
+    old_key_possession_signature: str = Field(min_length=1, max_length=2_048)
+    possession_secret: str = Field(
+        min_length=32,
+        max_length=128,
+        pattern=r"^[\x21-\x7e]+$",
+    )
+
+
+class LaptopCredentialReauthorizationPendingResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.laptop-credential-reauthorization-pending.v1"
+    ] = Field(
+        default="agentnet.laptop-credential-reauthorization-pending.v1",
+        alias="schema",
+    )
+    status: Literal["approval_pending"] = "approval_pending"
+    approval_url: str = Field(pattern=r"^https://")
+    expires_at: int = Field(ge=1)
+
+
+class LaptopCredentialReauthorizationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[
+        "agentnet.laptop-credential-reauthorization-result.v1"
+    ] = Field(
+        default="agentnet.laptop-credential-reauthorization-result.v1",
+        alias="schema",
+    )
+    status: Literal["current"] = "current"
+    request_id: str
+    domain_id: str
+    principal_id: str
+    harness_id: str
+    previous_credential_id: str
+    credential_id: str
+    key_id: str
+    credential_epoch: int = Field(ge=2)
+    not_before: int
+    expires_at: int
+    idempotent_repeat: bool
+    key_preserved: Literal[True] = True
+    authority_granted: Literal[False] = False
 
 
 class CredentialRotationRequest(BaseModel):
@@ -893,6 +1056,527 @@ class ManagedServerCredentialReauthorizationService:
                 audit_record_hash=audit_record_hash,
             )
         return ManagedServerCredentialReauthorizationResult(**result_fields)
+
+
+class LaptopCredentialReauthorizationService:
+    """Prepare and atomically commit one same-binding laptop credential successor."""
+
+    def __init__(
+        self,
+        store: StoreBackend,
+        approval_verifier: IndependentApprovalVerifier,
+        *,
+        credential_ttl_seconds: int = 3_600,
+        approval_ttl_seconds: int = 300,
+        outage_gate: OutageGate | None = None,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
+        if not isinstance(approval_verifier, IndependentApprovalVerifier):
+            raise ValueError("laptop credential reauthorization requires independent approval")
+        if not 3_600 <= credential_ttl_seconds <= 604_800:
+            raise ValueError("laptop credential TTL is outside the supported range")
+        if not 60 <= approval_ttl_seconds <= 600:
+            raise ValueError("laptop credential approval TTL is outside the supported range")
+        self.store = store
+        self.approval_verifier = approval_verifier
+        self.credential_ttl_seconds = credential_ttl_seconds
+        self.approval_ttl_seconds = approval_ttl_seconds
+        self.outage_gate = outage_gate
+        self.clock = clock or (lambda: int(time.time()))
+
+    @staticmethod
+    def _new_credential_id(
+        transaction: LaptopCredentialReauthorizationRequest,
+    ) -> str:
+        transaction_digest = hashlib.sha256(transaction.canonical_transaction).hexdigest()
+        return str(
+            uuid5(
+                NAMESPACE_URL,
+                "agentnet:laptop-credential-reauthorization:"
+                f"{transaction.domain_id}:{transaction.harness_id}:"
+                f"{transaction.request_id}:{transaction_digest}",
+            )
+        )
+
+    @staticmethod
+    def _require_authority(binding: CredentialBinding) -> None:
+        if (
+            binding.domain_status != "active"
+            or binding.principal_id is None
+            or binding.principal_status != "active"
+            or binding.guest_id is not None
+            or binding.harness_status != "active"
+        ):
+            raise AuthorizationError("laptop expired binding is not eligible for reauthorization")
+        if binding.binding_assurance not in {"os_bound", "hardware_bound"}:
+            raise AuthorizationError("laptop expired binding assurance is not eligible")
+        if binding.harness_kind not in _LAPTOP_HARNESS_KINDS:
+            raise AuthorizationError("expired binding is not a laptop harness")
+
+    @staticmethod
+    def _public_key_sha256(public_key_pem: str) -> str:
+        return hashlib.sha256(public_key_pem.encode("utf-8")).hexdigest()
+
+    def _require_service_parameters(
+        self,
+        transaction: LaptopCredentialReauthorizationRequest,
+    ) -> None:
+        if (
+            transaction.maximum_new_credential_ttl_seconds
+            != self.credential_ttl_seconds
+            or transaction.expires_at - transaction.prepared_at
+            != self.approval_ttl_seconds
+        ):
+            raise ConflictError("approved laptop credential parameters changed")
+
+    def _require_initial_binding(
+        self,
+        binding: CredentialBinding,
+        *,
+        now: int,
+    ) -> None:
+        self._require_authority(binding)
+        if binding.credential_status != "active":
+            raise AuthorizationError("laptop expired binding is not eligible for reauthorization")
+        if binding.credential_epoch != binding.harness_credential_epoch:
+            raise ConflictError("laptop credential epoch is stale")
+        if now < binding.not_before or now < binding.expires_at:
+            raise AuthorizationError("laptop credential is not expired")
+        if public_key_thumbprint(binding.public_key_pem) != binding.key_id:
+            raise AuthenticationError("laptop credential key binding is invalid")
+
+    def prepare(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationPrepareRequest,
+    ) -> LaptopCredentialReauthorizationRequest:
+        now = int(self.clock())
+        if now < 0:
+            raise ValidationError("laptop credential reauthorization time is invalid")
+        with self.store.transaction() as connection:
+            binding = load_credential_binding_from_connection(
+                connection,
+                presented_credential_id,
+            )
+            self._require_initial_binding(binding, now=now)
+            if binding.principal_id is None:
+                raise AuthorizationError(
+                    "laptop expired binding is not eligible for reauthorization"
+                )
+            return LaptopCredentialReauthorizationRequest(
+                request_id=request.request_id,
+                domain_id=binding.domain_id,
+                principal_id=binding.principal_id,
+                harness_id=binding.harness_id,
+                expired_credential_id=binding.credential_id,
+                expected_credential_epoch=binding.credential_epoch,
+                successor_credential_epoch=binding.credential_epoch + 1,
+                expected_expired_at=binding.expires_at,
+                expected_key_id=binding.key_id,
+                expected_public_key_sha256=self._public_key_sha256(
+                    binding.public_key_pem
+                ),
+                expected_binding_assurance=cast(
+                    Literal["os_bound", "hardware_bound"],
+                    binding.binding_assurance,
+                ),
+                identity_profile_sha256=request.identity_profile_sha256,
+                prepared_at=now,
+                expires_at=now + self.approval_ttl_seconds,
+                maximum_new_credential_ttl_seconds=self.credential_ttl_seconds,
+            )
+
+    def _require_exact_active_binding(
+        self,
+        binding: CredentialBinding,
+        transaction: LaptopCredentialReauthorizationRequest,
+        *,
+        now: int,
+    ) -> None:
+        if (
+            binding.domain_id != transaction.domain_id
+            or binding.principal_id != transaction.principal_id
+            or binding.guest_id is not None
+            or binding.harness_id != transaction.harness_id
+            or binding.credential_id != transaction.expired_credential_id
+            or binding.credential_epoch != transaction.expected_credential_epoch
+            or binding.harness_credential_epoch != transaction.expected_credential_epoch
+            or binding.expires_at != transaction.expected_expired_at
+            or binding.key_id != transaction.expected_key_id
+            or self._public_key_sha256(binding.public_key_pem)
+            != transaction.expected_public_key_sha256
+            or binding.binding_assurance != transaction.expected_binding_assurance
+        ):
+            raise ConflictError("laptop expired binding changed")
+        self._require_initial_binding(binding, now=now)
+
+    def _idempotent_result(
+        self,
+        connection: Any,
+        *,
+        transaction: LaptopCredentialReauthorizationRequest,
+        signature: str,
+        credential_id: str,
+    ) -> LaptopCredentialReauthorizationResult | None:
+        successor_row = connection.execute(
+            "SELECT credential_id FROM credentials WHERE credential_id=?",
+            (credential_id,),
+        ).fetchone()
+        if successor_row is None:
+            return None
+        old = load_credential_binding_from_connection(
+            connection,
+            transaction.expired_credential_id,
+        )
+        successor = load_credential_binding_from_connection(connection, credential_id)
+        if (
+            old.credential_status != "retired"
+            or old.domain_id != transaction.domain_id
+            or old.principal_id != transaction.principal_id
+            or old.guest_id is not None
+            or old.harness_id != transaction.harness_id
+            or old.credential_epoch != transaction.expected_credential_epoch
+            or old.expires_at != transaction.expected_expired_at
+            or old.key_id != transaction.expected_key_id
+            or self._public_key_sha256(old.public_key_pem)
+            != transaction.expected_public_key_sha256
+            or old.binding_assurance != transaction.expected_binding_assurance
+            or successor.domain_id != transaction.domain_id
+            or successor.principal_id != transaction.principal_id
+            or successor.guest_id is not None
+            or successor.harness_id != transaction.harness_id
+            or successor.credential_status != "active"
+            or successor.credential_epoch != transaction.successor_credential_epoch
+            or successor.harness_credential_epoch
+            != transaction.successor_credential_epoch
+            or successor.key_id != transaction.expected_key_id
+            or successor.public_key_pem != old.public_key_pem
+            or successor.binding_assurance != transaction.expected_binding_assurance
+            or successor.expires_at - successor.not_before
+            != self.credential_ttl_seconds
+        ):
+            raise ConflictError("laptop credential reauthorization request conflicts")
+        self._require_authority(successor)
+        verify_signature(
+            old.public_key_pem,
+            LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+            transaction.possession_fields(),
+            signature,
+        )
+        return LaptopCredentialReauthorizationResult(
+            request_id=transaction.request_id,
+            domain_id=transaction.domain_id,
+            principal_id=transaction.principal_id,
+            harness_id=transaction.harness_id,
+            previous_credential_id=transaction.expired_credential_id,
+            credential_id=credential_id,
+            key_id=transaction.expected_key_id,
+            credential_epoch=transaction.successor_credential_epoch,
+            not_before=successor.not_before,
+            expires_at=successor.expires_at,
+            idempotent_repeat=True,
+        )
+
+    def validate_progress(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationProgressRequest,
+    ) -> LaptopCredentialReauthorizationResult | None:
+        transaction = request.transaction
+        if not secrets.compare_digest(
+            presented_credential_id,
+            transaction.expired_credential_id,
+        ):
+            raise AuthenticationError(
+                "presented credential does not match the approved laptop binding"
+            )
+        self._require_service_parameters(transaction)
+        credential_id = self._new_credential_id(transaction)
+        now = int(self.clock())
+        with self.store.transaction() as connection:
+            binding = load_credential_binding_from_connection(
+                connection,
+                presented_credential_id,
+            )
+            if binding.credential_status == "retired":
+                repeated = self._idempotent_result(
+                    connection,
+                    transaction=transaction,
+                    signature=request.old_key_possession_signature,
+                    credential_id=credential_id,
+                )
+                if repeated is None:
+                    raise AuthenticationError(
+                        "retired credential is not the completed predecessor"
+                    )
+                return repeated
+            if transaction.prepared_at > now or now >= transaction.expires_at:
+                raise AuthorizationError(
+                    "laptop credential reauthorization transaction expired"
+                )
+            self._require_exact_active_binding(binding, transaction, now=now)
+            verify_signature(
+                binding.public_key_pem,
+                LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                transaction.possession_fields(),
+                request.old_key_possession_signature,
+            )
+        return None
+
+    def reauthorize(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationProgressRequest,
+        approval: Mapping[str, Any],
+    ) -> LaptopCredentialReauthorizationResult:
+        transaction = request.transaction
+        if not secrets.compare_digest(
+            presented_credential_id,
+            transaction.expired_credential_id,
+        ):
+            raise AuthenticationError(
+                "presented credential does not match the approved laptop binding"
+            )
+        self._require_service_parameters(transaction)
+        now = int(self.clock())
+        credential_id = self._new_credential_id(transaction)
+        with self.store.transaction() as connection:
+            repeated = self._idempotent_result(
+                connection,
+                transaction=transaction,
+                signature=request.old_key_possession_signature,
+                credential_id=credential_id,
+            )
+            if repeated is not None:
+                return repeated
+            if transaction.prepared_at > now or now >= transaction.expires_at:
+                raise AuthorizationError(
+                    "laptop credential reauthorization transaction expired"
+                )
+            current = load_credential_binding_from_connection(
+                connection,
+                transaction.expired_credential_id,
+            )
+            self._require_exact_active_binding(current, transaction, now=now)
+            verify_signature(
+                current.public_key_pem,
+                LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                transaction.possession_fields(),
+                request.old_key_possession_signature,
+            )
+            verified = self.approval_verifier.verify(
+                canonical_transaction=transaction.canonical_transaction,
+                approval=approval,
+                expected_purpose=LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+                expected_domain_id=transaction.domain_id,
+                when=datetime.fromtimestamp(now, UTC),
+            )
+            if (
+                verified.approver_authority_kind != "human"
+                or verified.approver_principal_id != transaction.principal_id
+            ):
+                raise AuthorizationError(
+                    "laptop credential reauthorization requires the current owner"
+                )
+            if self.outage_gate is not None:
+                self.outage_gate.require_issuance()
+            not_before = now
+            expires_at = now + self.credential_ttl_seconds
+            harness_update = connection.execute(
+                """UPDATE harnesses SET credential_epoch=?
+                     WHERE harness_id=? AND domain_id=? AND principal_id=?
+                       AND credential_epoch=? AND status='active'""",
+                (
+                    transaction.successor_credential_epoch,
+                    transaction.harness_id,
+                    transaction.domain_id,
+                    transaction.principal_id,
+                    transaction.expected_credential_epoch,
+                ),
+            )
+            if harness_update.rowcount != 1:
+                raise ConflictError(
+                    "laptop harness epoch changed before reauthorization commit"
+                )
+            retired = connection.execute(
+                """UPDATE credentials SET status='retired'
+                     WHERE credential_id=? AND harness_id=? AND epoch=?
+                       AND status='active' AND expires_at=?""",
+                (
+                    transaction.expired_credential_id,
+                    transaction.harness_id,
+                    transaction.expected_credential_epoch,
+                    transaction.expected_expired_at,
+                ),
+            )
+            if retired.rowcount != 1:
+                raise ConflictError(
+                    "laptop expired credential changed before reauthorization commit"
+                )
+            connection.execute(
+                """INSERT INTO credentials(
+                       credential_id,harness_id,key_id,public_key_pem,status,epoch,
+                       not_before,expires_at
+                   ) VALUES(?,?,?,?,'active',?,?,?)""",
+                (
+                    credential_id,
+                    transaction.harness_id,
+                    transaction.expected_key_id,
+                    current.public_key_pem,
+                    transaction.successor_credential_epoch,
+                    not_before,
+                    expires_at,
+                ),
+            )
+            consume_independent_approval(connection, receipt=verified)
+            self.store.append_audit(
+                connection,
+                {
+                    "action": "credential.laptop_reauthorized",
+                    "domain_id": transaction.domain_id,
+                    "principal_id": transaction.principal_id,
+                    "harness_id": transaction.harness_id,
+                    "request_id": transaction.request_id,
+                    "approval_receipt_id": verified.receipt_id,
+                    "old_credential_id": transaction.expired_credential_id,
+                    "new_credential_id": credential_id,
+                    "key_id": transaction.expected_key_id,
+                    "previous_credential_epoch": transaction.expected_credential_epoch,
+                    "new_credential_epoch": transaction.successor_credential_epoch,
+                    "old_expires_at": transaction.expected_expired_at,
+                    "not_before": not_before,
+                    "expires_at": expires_at,
+                    "identity_profile_sha256": transaction.identity_profile_sha256,
+                    "key_preserved": True,
+                    "authority_granted": False,
+                },
+            )
+        return LaptopCredentialReauthorizationResult(
+            request_id=transaction.request_id,
+            domain_id=transaction.domain_id,
+            principal_id=transaction.principal_id,
+            harness_id=transaction.harness_id,
+            previous_credential_id=transaction.expired_credential_id,
+            credential_id=credential_id,
+            key_id=transaction.expected_key_id,
+            credential_epoch=transaction.successor_credential_epoch,
+            not_before=not_before,
+            expires_at=expires_at,
+            idempotent_repeat=False,
+        )
+
+
+class LaptopCredentialReauthorizationCoordinator:
+    """Idempotently orchestrate Approval without storing client possession state."""
+
+    def __init__(
+        self,
+        service: LaptopCredentialReauthorizationService,
+        approval_client: Any,
+        *,
+        public_approval_url: str,
+    ) -> None:
+        if (
+            not public_approval_url.startswith("https://")
+            or not public_approval_url.endswith("/approval")
+        ):
+            raise ValueError("public Approval URL must be exact HTTPS /approval")
+        self.service = service
+        self.approval_client = approval_client
+        self.public_approval_url = public_approval_url
+
+    def prepare(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationPrepareRequest,
+    ) -> LaptopCredentialReauthorizationRequest:
+        return self.service.prepare(
+            presented_credential_id=presented_credential_id,
+            request=request,
+        )
+
+    def progress(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationProgressRequest,
+    ) -> LaptopCredentialReauthorizationPendingResult | LaptopCredentialReauthorizationResult:
+        repeated = self.service.validate_progress(
+            presented_credential_id=presented_credential_id,
+            request=request,
+        )
+        if repeated is not None:
+            return repeated
+        transaction = request.transaction
+        transaction_digest = hashlib.sha256(
+            transaction.canonical_transaction
+        ).hexdigest()
+        created = self.approval_client.create_request(
+            idempotency_key=f"laptop-credential-reauthorization:{transaction.request_id}",
+            domain_id=transaction.domain_id,
+            approval_purpose=LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+            canonical_transaction=transaction.canonical_transaction,
+            transaction_digest=transaction_digest,
+            possession_hash=hashlib.sha256(
+                request.possession_secret.encode("utf-8")
+            ).hexdigest(),
+            request_expires_at=transaction.expires_at,
+        )
+        approval_request_id = created.get("request_id")
+        if (
+            not isinstance(approval_request_id, str)
+            or not secrets.compare_digest(
+                str(created.get("transaction_digest", "")),
+                transaction_digest,
+            )
+            or created.get("expires_at") != transaction.expires_at
+        ):
+            raise AuthenticationError("approval service response denied")
+        remote = self.approval_client.request_status(
+            request_id=approval_request_id,
+            transaction_digest=transaction_digest,
+        )
+        if (
+            remote.get("request_id") != approval_request_id
+            or not secrets.compare_digest(
+                str(remote.get("transaction_digest", "")),
+                transaction_digest,
+            )
+            or remote.get("expires_at") != transaction.expires_at
+        ):
+            raise AuthenticationError("approval service response denied")
+        state = remote.get("state")
+        if state == "pending":
+            return LaptopCredentialReauthorizationPendingResult(
+                approval_url=self.public_approval_url,
+                expires_at=transaction.expires_at,
+            )
+        if state != "issued":
+            if state in {"rejected", "canceled", "expired"}:
+                raise AuthorizationError(
+                    "laptop credential reauthorization approval is terminal"
+                )
+            raise AuthenticationError("approval service response denied")
+        receipt = self.approval_client.retrieve_receipt(
+            request_id=approval_request_id,
+            possession_secret=request.possession_secret,
+            domain_id=transaction.domain_id,
+            approval_purpose=LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+            transaction_digest=transaction_digest,
+            idempotency_key=(
+                "laptop-credential-reauthorization-retrieve:"
+                f"{transaction.request_id}"
+            ),
+        )
+        return self.service.reauthorize(
+            presented_credential_id=presented_credential_id,
+            request=request,
+            approval=receipt,
+        )
 
 
 class CredentialRenewalRequest(BaseModel):

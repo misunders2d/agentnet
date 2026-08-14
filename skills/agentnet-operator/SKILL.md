@@ -1,6 +1,6 @@
 ---
 name: agentnet-operator
-description: Safely install, initialize, enroll, verify, configure, operate, reset, recover, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, enrollment or authority, Pi bindings, server-agent deployment, or destructive package-owned server reset/reinstall.
+description: Safely install, initialize, enroll, verify, configure, operate, reset, recover, and troubleshoot AgentNet. Use for AgentNet, the `agentnet` CLI, `@misunders2d/agentnet`, human-mediated fresh-laptop bootstrap, expired laptop credential reauthorization, enrollment or authority, Pi bindings, server-agent deployment, or destructive package-owned server reset/reinstall.
 license: Apache-2.0
 compatibility: Bundled AgentNet npm/Pi package on Linux, macOS, and Windows local profiles; production deployment remains Linux-first. Follow the installed release's exact Node.js, uv, and Python requirements.
 ---
@@ -18,8 +18,9 @@ Use the smallest safe workflow matching the request. AgentNet installation is co
 5. **Always-on server agent** — PostgreSQL, HTTPS, secret injection, identity and recovery prerequisites.
 6. **Enrollment or authority** — workforce OIDC, proof of possession, WebAuthn/OOB human approval independent of the enrolling harness, explicit grants.
 7. **Fresh-laptop bootstrap** — one complete public instruction packet for a human to paste into a newly installed generic agent with no prior AgentNet/A2A knowledge.
-8. **Server reset or recovery** — destructive package-owned cleanup, retained external prerequisites, interrupted setup/upgrade, and clean reinstall.
-9. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
+8. **Expired laptop credential** — package-owned same-binding reauthorization with the retained owner-private identity and key.
+9. **Server reset or recovery** — destructive package-owned cleanup, retained external prerequisites, interrupted setup/upgrade, and clean reinstall.
+10. **Troubleshooting** — distinguish package, config, identity, storage, binding, and evidence failures.
 
 ## Enforce the exact product contract
 
@@ -122,6 +123,18 @@ agentnet supervisor-run --config agentnet-supervisor.json --check
 
 A normal foreground Pi process does not receive AgentNet tools merely because the package is installed. Activation requires `local_bindings_required=true` in the separate supervisor configuration plus an enrolled, measured supervisor-launched child.
 
+### Expired laptop credential
+
+When Core or the CLI gives the exact expired-laptop reauthorization instruction,
+read the canonical [safe commands](references/safe-commands.md) entry and use
+only its package-owned laptop workflow. Never substitute `join guided`,
+enrollment, generic recovery, active renewal, key rotation, or the root-only
+managed-server workflow. The safe-command reference owns all flags, paths,
+states, retry rules, preserved fields, and rejection conditions. Laptop
+reauthorization remains owner-local; managed-server reauthorization remains a
+separate root/server-manager operation. Any state that does not match the exact
+retained expired binding fails closed.
+
 ### Real server-agent network
 
 Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md) and [safe commands](references/safe-commands.md) before any host change. Those references own exact request schemas, commands, runtime pins, PostgreSQL peer contract, digest/marker versions, secret syntax, systemd profile, activation sequence, recovery, and reset command surface. Do not duplicate or improvise them here.
@@ -159,6 +172,8 @@ Always distinguish:
 - **Core config failure:** run `agentnet status --config agentnet.json` and preserve its named blocker.
 - **Supervisor/Pi binding failure:** run `agentnet supervisor-run --config agentnet-supervisor.json --check`; never fall back to ambient tools or a foreground process.
 - **Identity/enrollment failure:** distinguish OIDC endpoint validation, proof of possession, approval-service config/catalog/key custody, registration, RP/origin/UV/challenge verification, exact transaction/purpose/digest, receipt expiry/replay, credential revocation, and the selected deployment profile's evidence. Use `agentnet approval status`; never substitute synthetic identity, enrolling-harness control, or chat approval. Do not reject default server colocation merely because it is not the optional high-assurance tier.
+- **Expired laptop credential:** use the dedicated workflow above and its canonical safe-command reference; never improvise state repair.
+- **Expired managed-server credential:** keep Core stopped and use only the root package-owned `server-agent reauthorize-expired-credential` provenance/journal workflow; never substitute the laptop command or restart automatically.
 - **Storage/durability failure:** report the actual backend/readiness evidence and state vocabulary; never promote `accepted_local` to durable acceptance.
 - **Artifact failure:** distinguish reservation, exact byte upload, quarantine promotion, scan, release, capability issuance, and single-use download. Never pass bytes/base64 or arbitrary host paths through model-visible tools, print capabilities/private object keys, or treat quarantine as availability.
 - **Task execution failure:** distinguish `accepted_queued` custody from exact recipient-owned `task.process` authorization, durable local queue custody, protected payload release, and separately authorized result/effect handling. Generic reads stay redacted. If installed release predates schema migration 2, report a version/component gap; never add an `include_payload` workaround.
@@ -170,7 +185,7 @@ Do not print secrets, private keys, credential-bearing DSNs, reusable approval m
 - Read [product-owned ordinary Linux server setup](references/ordinary-server-setup.md), the unchanged [scanner-backed request-v1 example](references/examples/ordinary-server-setup-request.json), and the restricted [communication-only request-v2 example](references/examples/ordinary-server-communication-only-setup-request.json) before selecting an always-on profile.
 - Read [the fresh-laptop onboarding contract](references/fresh-laptop-onboarding.md) and issue only the resolved [single-paste example](references/examples/fresh-laptop-single-prompt.md) for human-copyable bootstrap instructions.
 - Read [required communication scope](references/required-communication-scope.md) before judging installation or network readiness; one direct-message round trip is not full requirement coverage.
-- Read [safe commands](references/safe-commands.md) for installation, local examples, package checks, supervisor validation, and server preflight.
+- Read [safe commands](references/safe-commands.md) for installation, local examples, package checks, supervisor validation, expired laptop credential reauthorization, and server preflight.
 - Read [fail-closed boundaries](references/fail-closed-boundaries.md) before identity, authority, server, Pi binding, secrets, or production-readiness work.
 
 ## Report clearly

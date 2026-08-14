@@ -92,8 +92,10 @@ from agentnet.gateways.a2a import (
 )
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import (
+    LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+    LaptopCredentialReauthorizationRequest,
     ManagedServerCredentialReauthorizationRequestV2,
     ManagedServerCredentialReauthorizationService,
     load_credential_binding,
@@ -4302,6 +4304,707 @@ def command_credential_renew(args: argparse.Namespace) -> int:
     print(json.dumps({"schema": "agentnet.credential-renewal-cli-result.v1", "status": result["status"]}, indent=2, sort_keys=True))
     return 0
 
+_LAPTOP_CREDENTIAL_REAUTHORIZATION_STATE_SCHEMA = (
+    "agentnet.laptop-credential-reauthorization-cli-state.v1"
+)
+_LAPTOP_CREDENTIAL_REAUTHORIZATION_STATE_KEYS = {
+    "schema",
+    "identity_path",
+    "identity_profile_sha256",
+    "private_key_sha256",
+    "request_id",
+    "possession_secret",
+    "transaction",
+    "old_key_possession_signature",
+    "approval_url_sha256",
+    "approval_url_opened",
+    "result",
+    "successor_identity_sha256",
+}
+_LAPTOP_CREDENTIAL_REAUTHORIZATION_RESULT_KEYS = {
+    "schema",
+    "status",
+    "request_id",
+    "domain_id",
+    "principal_id",
+    "harness_id",
+    "previous_credential_id",
+    "credential_id",
+    "key_id",
+    "credential_epoch",
+    "not_before",
+    "expires_at",
+    "idempotent_repeat",
+    "key_preserved",
+    "authority_granted",
+}
+
+
+def _private_json_bytes(value: dict[str, object]) -> bytes:
+    return json.dumps(value, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+
+
+def _load_laptop_reauthorization_identity(
+    path: Path,
+) -> tuple[
+    Path,
+    bytes,
+    dict[str, object],
+    VerifiedActor,
+    Path,
+    bytes,
+    P256KeyPair,
+]:
+    identity_path = path.resolve()
+    identity_raw = _owner_only_file(
+        identity_path,
+        label="AgentNet identity profile",
+    )
+    try:
+        identity = json.loads(identity_raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("AgentNet identity profile is not readable JSON") from exc
+    if (
+        not isinstance(identity, dict)
+        or set(identity)
+        != {
+            "schema",
+            "server_base_url",
+            "audience",
+            "actor",
+            "private_key_path",
+        }
+        or identity.get("schema") != "agentnet.identity-profile.v1"
+    ):
+        raise SystemExit("AgentNet identity profile does not match the exact schema")
+    try:
+        actor = VerifiedActor.model_validate(identity["actor"])
+    except Exception as exc:
+        raise SystemExit("AgentNet identity profile actor is invalid") from exc
+    if (
+        actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS
+        or actor.principal_id is None
+        or actor.harness_id is None
+        or actor.credential_id is None
+        or actor.binding_assurance not in {"os_bound", "hardware_bound"}
+    ):
+        raise SystemExit(
+            "expired credential reauthorization requires an exact bound laptop identity"
+        )
+    key_path = Path(str(identity["private_key_path"]))
+    if not key_path.is_absolute():
+        raise SystemExit("AgentNet identity private key path must be absolute")
+    key_raw = _owner_only_file(
+        key_path,
+        label="AgentNet identity private key",
+    )
+    try:
+        key = P256KeyPair.from_private_pem(key_raw)
+    except Exception as exc:
+        raise SystemExit("AgentNet identity private key is invalid") from exc
+    return (
+        identity_path,
+        identity_raw,
+        identity,
+        actor,
+        key_path,
+        key_raw,
+        key,
+    )
+
+
+def _laptop_reauthorization_state(
+    *,
+    path: Path,
+    identity_path: Path,
+    identity_raw: bytes,
+    key_raw: bytes,
+) -> tuple[dict[str, object], bytes]:
+    identity_digest = hashlib.sha256(identity_raw).hexdigest()
+    key_digest = hashlib.sha256(key_raw).hexdigest()
+    if not os.path.lexists(path):
+        state: dict[str, object] = {
+            "schema": _LAPTOP_CREDENTIAL_REAUTHORIZATION_STATE_SCHEMA,
+            "identity_path": str(identity_path),
+            "identity_profile_sha256": identity_digest,
+            "private_key_sha256": key_digest,
+            "request_id": str(uuid4()),
+            "possession_secret": secrets.token_urlsafe(32),
+            "transaction": None,
+            "old_key_possession_signature": None,
+            "approval_url_sha256": None,
+            "approval_url_opened": False,
+            "result": None,
+            "successor_identity_sha256": None,
+        }
+        raw = _private_json_bytes(state)
+        _write_private_config(path, state)
+        return state, raw
+    try:
+        raw = _owner_only_file(
+            path,
+            label="laptop credential reauthorization state",
+        )
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(
+            "laptop credential reauthorization state is not readable JSON"
+        ) from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != _LAPTOP_CREDENTIAL_REAUTHORIZATION_STATE_KEYS
+        or value.get("schema")
+        != _LAPTOP_CREDENTIAL_REAUTHORIZATION_STATE_SCHEMA
+        or value.get("identity_path") != str(identity_path)
+        or value.get("private_key_sha256") != key_digest
+        or not isinstance(value.get("identity_profile_sha256"), str)
+        or len(str(value.get("identity_profile_sha256"))) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in str(value.get("identity_profile_sha256"))
+        )
+        or not isinstance(value.get("approval_url_opened"), bool)
+    ):
+        raise SystemExit(
+            "laptop credential reauthorization state does not match the exact binding"
+        )
+    try:
+        request_id = UUID(str(value["request_id"]))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise SystemExit(
+            "laptop credential reauthorization state does not match the exact binding"
+        ) from exc
+    possession_secret = value.get("possession_secret")
+    transaction = value.get("transaction")
+    signature = value.get("old_key_possession_signature")
+    approval_url_sha256 = value.get("approval_url_sha256")
+    result = value.get("result")
+    successor_digest = value.get("successor_identity_sha256")
+    if (
+        str(request_id) != value["request_id"]
+        or not isinstance(possession_secret, str)
+        or len(possession_secret) != 43
+        or (transaction is None) != (signature is None)
+        or (
+            signature is not None
+            and (
+                not isinstance(signature, str)
+                or not 1 <= len(signature) <= 2_048
+            )
+        )
+        or (
+            approval_url_sha256 is not None
+            and (
+                not isinstance(approval_url_sha256, str)
+                or len(approval_url_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in approval_url_sha256)
+            )
+        )
+        or (value["approval_url_opened"] and approval_url_sha256 is None)
+        or (result is None) != (successor_digest is None)
+        or (result is not None and transaction is None)
+        or (
+            successor_digest is not None
+            and (
+                not isinstance(successor_digest, str)
+                or len(successor_digest) != 64
+                or any(character not in "0123456789abcdef" for character in successor_digest)
+            )
+        )
+    ):
+        raise SystemExit(
+            "laptop credential reauthorization state does not match the exact binding"
+        )
+    if transaction is not None:
+        try:
+            parsed = LaptopCredentialReauthorizationRequest.model_validate(transaction)
+        except Exception as exc:
+            raise SystemExit(
+                "laptop credential reauthorization state transaction is invalid"
+            ) from exc
+        if parsed.request_id != value["request_id"]:
+            raise SystemExit(
+                "laptop credential reauthorization state transaction binding changed"
+            )
+    return value, raw
+
+
+def _replace_laptop_reauthorization_state(
+    path: Path,
+    state: dict[str, object],
+    *,
+    expected_raw: bytes,
+) -> bytes:
+    replacement = _private_json_bytes(state)
+    _write_private_config(
+        path,
+        state,
+        force=True,
+        expected_content=expected_raw,
+    )
+    return replacement
+
+
+def _laptop_reauthorization_transaction(
+    value: object,
+    *,
+    state: dict[str, object],
+    actor: VerifiedActor,
+    key: P256KeyPair,
+    now: int,
+    require_active: bool = True,
+) -> LaptopCredentialReauthorizationRequest:
+    try:
+        transaction = LaptopCredentialReauthorizationRequest.model_validate(value)
+    except Exception as exc:
+        raise SystemExit(
+            "laptop credential reauthorization transaction is invalid"
+        ) from exc
+    public_key_sha256 = hashlib.sha256(key.public_pem.encode("utf-8")).hexdigest()
+    if (
+        transaction.request_id != state["request_id"]
+        or transaction.domain_id != actor.domain_id
+        or transaction.principal_id != actor.principal_id
+        or transaction.harness_id != actor.harness_id
+        or transaction.expired_credential_id != actor.credential_id
+        or transaction.expected_credential_epoch != actor.credential_epoch
+        or transaction.successor_credential_epoch != actor.credential_epoch + 1
+        or transaction.expected_key_id != key.thumbprint
+        or transaction.expected_public_key_sha256 != public_key_sha256
+        or transaction.expected_binding_assurance != actor.binding_assurance
+        or transaction.identity_profile_sha256
+        != state["identity_profile_sha256"]
+        or (
+            require_active
+            and (
+                transaction.prepared_at > now
+                or transaction.expires_at <= now
+            )
+        )
+    ):
+        raise SystemExit(
+            "laptop credential reauthorization transaction binding changed"
+        )
+    return transaction
+
+
+def _laptop_reauthorization_result(
+    value: object,
+    *,
+    transaction: LaptopCredentialReauthorizationRequest,
+) -> dict[str, object]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _LAPTOP_CREDENTIAL_REAUTHORIZATION_RESULT_KEYS
+        or value.get("schema")
+        != "agentnet.laptop-credential-reauthorization-result.v1"
+        or value.get("status") != "current"
+        or value.get("request_id") != transaction.request_id
+        or value.get("domain_id") != transaction.domain_id
+        or value.get("principal_id") != transaction.principal_id
+        or value.get("harness_id") != transaction.harness_id
+        or value.get("previous_credential_id")
+        != transaction.expired_credential_id
+        or value.get("key_id") != transaction.expected_key_id
+        or value.get("credential_epoch")
+        != transaction.successor_credential_epoch
+        or not isinstance(value.get("credential_id"), str)
+        or not 1 <= len(str(value["credential_id"])) <= 256
+        or value.get("credential_id") == transaction.expired_credential_id
+        or type(value.get("not_before")) is not int
+        or type(value.get("expires_at")) is not int
+        or int(value["expires_at"]) <= int(value["not_before"])
+        or type(value.get("idempotent_repeat")) is not bool
+        or value.get("key_preserved") is not True
+        or value.get("authority_granted") is not False
+    ):
+        raise SystemExit(
+            "laptop credential reauthorization completion response is invalid"
+        )
+    return value
+
+
+def _laptop_reauthorization_output(
+    *,
+    status: str,
+    credential_epoch: int | None = None,
+) -> dict[str, object]:
+    output: dict[str, object] = {
+        "schema": "agentnet.laptop-credential-reauthorization-cli-result.v1",
+        "status": status,
+    }
+    if status == "current":
+        output.update(
+            {
+                "credential_epoch": credential_epoch,
+                "identity_saved_locally": True,
+                "key_preserved": True,
+                "authority_granted": False,
+            }
+        )
+    return output
+
+
+def _print_laptop_reauthorization_output(
+    *,
+    status: str,
+    credential_epoch: int | None = None,
+) -> None:
+    print(
+        json.dumps(
+            _laptop_reauthorization_output(
+                status=status,
+                credential_epoch=credential_epoch,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def _remove_laptop_reauthorization_state(path: Path) -> None:
+    if not os.path.lexists(path):
+        return
+    _owner_only_file(
+        path,
+        label="laptop credential reauthorization state",
+    )
+    path.unlink()
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _complete_laptop_identity_reauthorization(
+    *,
+    identity_path: Path,
+    identity_raw: bytes,
+    identity: dict[str, object],
+    actor: VerifiedActor,
+    key_path: Path,
+    key_raw: bytes,
+    state_path: Path,
+    state: dict[str, object],
+    state_raw: bytes,
+    result: dict[str, object],
+) -> int:
+    updated_actor = actor.model_copy(
+        update={
+            "credential_id": result["credential_id"],
+            "credential_epoch": result["credential_epoch"],
+        }
+    )
+    updated_identity = {
+        **identity,
+        "actor": updated_actor.model_dump(mode="json"),
+    }
+    updated_raw = _private_json_bytes(updated_identity)
+    successor_digest = hashlib.sha256(updated_raw).hexdigest()
+    state["result"] = result
+    state["successor_identity_sha256"] = successor_digest
+    _replace_laptop_reauthorization_state(
+        state_path,
+        state,
+        expected_raw=state_raw,
+    )
+    if not secrets.compare_digest(
+        _owner_only_file(key_path, label="AgentNet identity private key"),
+        key_raw,
+    ):
+        raise SystemExit(
+            "AgentNet identity private key changed before credential replacement"
+        )
+    _write_private_config(
+        identity_path,
+        updated_identity,
+        force=True,
+        expected_content=identity_raw,
+    )
+    replaced_identity = _owner_only_file(
+        identity_path,
+        label="AgentNet identity profile",
+    )
+    if (
+        not secrets.compare_digest(replaced_identity, updated_raw)
+        or hashlib.sha256(replaced_identity).hexdigest()
+        != state["successor_identity_sha256"]
+        or not secrets.compare_digest(
+            _owner_only_file(key_path, label="AgentNet identity private key"),
+            key_raw,
+        )
+    ):
+        raise SystemExit(
+            "AgentNet identity replacement could not be verified exactly"
+        )
+    _remove_laptop_reauthorization_state(state_path)
+    _print_laptop_reauthorization_output(
+        status="current",
+        credential_epoch=updated_actor.credential_epoch,
+    )
+    return 0
+
+
+def command_credential_reauthorize_expired(args: argparse.Namespace) -> int:
+    if type(args.timeout) is not int or not 30 <= args.timeout <= 600:
+        raise SystemExit(
+            "expired credential reauthorization timeout must be between 30 and 600 seconds"
+        )
+    if args.browser not in {"system", "manual"}:
+        raise SystemExit("expired credential reauthorization browser mode is invalid")
+    (
+        identity_path,
+        identity_raw,
+        identity,
+        actor,
+        key_path,
+        key_raw,
+        key,
+    ) = _load_laptop_reauthorization_identity(Path(args.identity))
+    state_path = Path(args.state).resolve()
+    if state_path in {identity_path, key_path}:
+        raise SystemExit(
+            "credential reauthorization state must be separate from identity and key files"
+        )
+    state, state_raw = _laptop_reauthorization_state(
+        path=state_path,
+        identity_path=identity_path,
+        identity_raw=identity_raw,
+        key_raw=key_raw,
+    )
+    identity_digest = hashlib.sha256(identity_raw).hexdigest()
+    if identity_digest != state["identity_profile_sha256"]:
+        if (
+            state["result"] is None
+            or identity_digest != state["successor_identity_sha256"]
+        ):
+            raise SystemExit(
+                "AgentNet identity profile changed during credential reauthorization"
+            )
+        try:
+            transaction = LaptopCredentialReauthorizationRequest.model_validate(
+                state["transaction"]
+            )
+        except Exception as exc:
+            raise SystemExit(
+                "completed credential reauthorization state is invalid"
+            ) from exc
+        result = _laptop_reauthorization_result(
+            state["result"],
+            transaction=transaction,
+        )
+        if (
+            actor.domain_id != transaction.domain_id
+            or actor.principal_id != transaction.principal_id
+            or actor.harness_id != transaction.harness_id
+            or actor.binding_assurance != transaction.expected_binding_assurance
+            or actor.credential_id != result["credential_id"]
+            or actor.credential_epoch != result["credential_epoch"]
+            or key.thumbprint != transaction.expected_key_id
+        ):
+            raise SystemExit(
+                "completed credential reauthorization identity binding changed"
+            )
+        _remove_laptop_reauthorization_state(state_path)
+        _print_laptop_reauthorization_output(
+            status="current",
+            credential_epoch=actor.credential_epoch,
+        )
+        return 0
+
+    now = int(time.time())
+    if state["result"] is not None:
+        transaction = _laptop_reauthorization_transaction(
+            state["transaction"],
+            state=state,
+            actor=actor,
+            key=key,
+            now=now,
+            require_active=False,
+        )
+        result = _laptop_reauthorization_result(
+            state["result"],
+            transaction=transaction,
+        )
+        return _complete_laptop_identity_reauthorization(
+            identity_path=identity_path,
+            identity_raw=identity_raw,
+            identity=identity,
+            actor=actor,
+            key_path=key_path,
+            key_raw=key_raw,
+            state_path=state_path,
+            state=state,
+            state_raw=state_raw,
+            result=result,
+        )
+    transaction: LaptopCredentialReauthorizationRequest | None = None
+    if state["transaction"] is not None:
+        transaction = _laptop_reauthorization_transaction(
+            state["transaction"],
+            state=state,
+            actor=actor,
+            key=key,
+            now=now,
+        )
+    client = AgentNetClient(
+        base_url=_canonical_server_origin(str(identity["server_base_url"])),
+        key=key,
+        domain_id=actor.domain_id,
+        harness_id=actor.harness_id or "",
+        credential_id=actor.credential_id or "",
+        audience=str(identity["audience"]),
+    )
+    deadline = time.monotonic() + float(args.timeout)
+    try:
+        if transaction is None:
+            response = client.prepare_expired_current_credential_reauthorization(
+                request_id=str(state["request_id"]),
+                identity_profile_sha256=str(
+                    state["identity_profile_sha256"]
+                ),
+            )
+            if response.status_code != 200:
+                _print_laptop_reauthorization_output(status="blocked")
+                return 1
+            try:
+                prepared_value = response.json()
+            except Exception as exc:
+                raise SystemExit(
+                    "laptop credential reauthorization prepare response is invalid"
+                ) from exc
+            transaction = _laptop_reauthorization_transaction(
+                prepared_value,
+                state=state,
+                actor=actor,
+                key=key,
+                now=now,
+            )
+            transaction_value = transaction.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            signature = key.sign(
+                LAPTOP_CREDENTIAL_REAUTHORIZATION_POP_PURPOSE,
+                transaction.possession_fields(),
+            )
+            state["transaction"] = transaction_value
+            state["old_key_possession_signature"] = signature
+            state_raw = _replace_laptop_reauthorization_state(
+                state_path,
+                state,
+                expected_raw=state_raw,
+            )
+
+        while True:
+            response = client.progress_expired_current_credential_reauthorization(
+                transaction=transaction.model_dump(
+                    mode="json",
+                    by_alias=True,
+                ),
+                old_key_possession_signature=str(
+                    state["old_key_possession_signature"]
+                ),
+                possession_secret=str(state["possession_secret"]),
+            )
+            if response.status_code == 200:
+                try:
+                    completed_value = response.json()
+                except Exception as exc:
+                    raise SystemExit(
+                        "laptop credential reauthorization completion response is invalid"
+                    ) from exc
+                result = _laptop_reauthorization_result(
+                    completed_value,
+                    transaction=transaction,
+                )
+                break
+            if response.status_code != 202:
+                _print_laptop_reauthorization_output(status="blocked")
+                return 1
+            try:
+                pending = response.json()
+            except Exception as exc:
+                raise SystemExit(
+                    "laptop credential reauthorization pending response is invalid"
+                ) from exc
+            if (
+                not isinstance(pending, dict)
+                or set(pending)
+                != {"schema", "status", "approval_url", "expires_at"}
+                or pending.get("schema")
+                != "agentnet.laptop-credential-reauthorization-pending.v1"
+                or pending.get("status") != "approval_pending"
+                or type(pending.get("expires_at")) is not int
+                or pending["expires_at"] != transaction.expires_at
+            ):
+                raise SystemExit(
+                    "laptop credential reauthorization pending response is invalid"
+                )
+            approval_url = _validate_stable_approval_url(
+                pending["approval_url"]
+            )
+            approval_url_sha256 = hashlib.sha256(
+                approval_url.encode("utf-8")
+            ).hexdigest()
+            if (
+                state["approval_url_sha256"] is not None
+                and state["approval_url_sha256"] != approval_url_sha256
+            ):
+                raise SystemExit(
+                    "laptop credential reauthorization approval entrypoint changed"
+                )
+            if not state["approval_url_opened"]:
+                if args.browser == "manual":
+                    _require_private_terminal_or_exit()
+                state["approval_url_sha256"] = approval_url_sha256
+                state_raw = _replace_laptop_reauthorization_state(
+                    state_path,
+                    state,
+                    expected_raw=state_raw,
+                )
+                _handoff_guided_authorization(
+                    approval_url,
+                    browser=(
+                        "system"
+                        if args.browser == "system"
+                        else "terminal"
+                    ),
+                    purpose="stable owner approval",
+                )
+                state["approval_url_opened"] = True
+                state_raw = _replace_laptop_reauthorization_state(
+                    state_path,
+                    state,
+                    expected_raw=state_raw,
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _print_laptop_reauthorization_output(
+                    status="approval_pending"
+                )
+                return 2
+            time.sleep(min(2.0, remaining))
+    finally:
+        client.close()
+
+    return _complete_laptop_identity_reauthorization(
+        identity_path=identity_path,
+        identity_raw=identity_raw,
+        identity=identity,
+        actor=actor,
+        key_path=key_path,
+        key_raw=key_raw,
+        state_path=state_path,
+        state=state,
+        state_raw=state_raw,
+        result=result,
+    )
+
 
 def command_c0_pilot_responder(args: argparse.Namespace) -> int:
     config_path = Path(args.config)
@@ -6591,6 +7294,33 @@ def build_parser() -> argparse.ArgumentParser:
     credential_renew.add_argument("--identity", default=".agentnet/identity.json")
     credential_renew.add_argument("--state", default=".agentnet/credential-renewal-state.json")
     credential_renew.set_defaults(func=command_credential_renew)
+    credential_reauthorize = credential_commands.add_parser(
+        "reauthorize-expired",
+        help="reauthorize the exact expired laptop credential without replacing its key or identity",
+    )
+    credential_reauthorize.add_argument(
+        "--identity",
+        default=".agentnet/identity.json",
+    )
+    credential_reauthorize.add_argument(
+        "--state",
+        default=".agentnet/credential-reauthorization-state.json",
+    )
+    credential_reauthorize.add_argument(
+        "--browser",
+        choices=("system", "manual"),
+        default="system",
+        help="open the stable Approval entrypoint or disclose it through a private terminal",
+    )
+    credential_reauthorize.add_argument(
+        "--timeout",
+        type=int,
+        choices=range(30, 601),
+        default=300,
+    )
+    credential_reauthorize.set_defaults(
+        func=command_credential_reauthorize_expired
+    )
 
     c0_pilot = commands.add_parser(
         "c0-pilot",

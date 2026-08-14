@@ -1,0 +1,72 @@
+{
+  "run_id": "2026-08-14-v0.1.51",
+  "evaluated_at": "2026-08-14T00:00:00Z",
+  "scope": "v0_1_51_expired_laptop_credential_reauthorization_candidate",
+  "verification_status": "PASS",
+  "release_certified": false,
+  "verification_scope": "PASS for focused recovery, broad hermetic source, reproducible archives, and source plus two recursive packed-package generations; not release certification and excludes fresh installed-host recovery, live owner WebAuthn/Core recovery, same-commit CI, and owner/privileged/external must-not-ship gates.",
+  "source_revision_kind": "release-source-tree-sha256",
+  "release_source_tree_sha256": "a3c1e64482bb7e0751dcbb3fb1a05d831f1b9d425b6063eca0a4c2a92612901d",
+  "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
+  "change_boundary": "Candidate 0.1.51 adds a dedicated package-owned same-binding reauthorization lane for an expired laptop credential whose exact owner-private identity profile and OS- or hardware-bound P-256 key remain intact. It binds fresh old-key possession and owner WebAuthn UV to the unchanged domain, principal, harness, key, assurance, profile, authority, scopes, memberships, and capabilities, then atomically retires the expired credential and inserts epoch +1. It does not re-enroll, replace keys, restore revoked state, grant authority, restart a harness, or promote a release gate.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/identity/test_laptop_credential_reauthorization.py tests/approval/test_transaction_summary.py tests/approval/test_webauthn_service.py tests/cli/test_server_agent_activation.py tests/cli/test_laptop_credential_reauthorization_cli.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py",
+      "result": "PASS: 698 passed, 5 expected dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/integration/test_cli_product_journey.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py tests/test_version.py",
+      "result": "NOT RERUN: covered by the expanded focused lane and broad lane for candidate 0.1.51"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2197 passed, 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
+      "result": "PASS: two independent builds produced byte-identical source distributions and wheels"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
+      "result": "PASS: accepted_fact=accepted_local; approved_revocation_proven=false; bounded_c0_pilot_proven=false; core_process_starts=4; core_restarts=3; credential_refusal_fixture=true; exact_attribution=true; idempotency=true; non_production=true; obligation_state=completed; production_durability_proven=false; recipient_fact=recipient_committed; release_certified=false; separate_process_loopback=true"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "Fresh GitHub ubuntu-24.04 installed-package lane: npm pack, install into unrelated prefix, run scripts/ci/packaged_local_communication_e2e.py from installed bytes",
+      "result": "NOT RUN: exact same-commit GitHub workflow result awaits commit and push; no source-local result is substituted"
+    },
+    {
+      "command": "Two isolated Ubuntu 24.04 machines: one-command server setup; server-origin guided laptop join; complete browser OIDC and independent approval; send first authenticated message; receive and acknowledge it",
+      "result": "NOT RUN: exact v0.1.51 fresh-machine and live expired-credential recovery proof await the committed candidate; historical communication proof is not inherited"
+    },
+    {
+      "command": "Fresh Ubuntu 24.04 installed-host matrix: clean v0.1.51 setup and direct installed v0.1.45/v0.1.46/v0.1.47/v0.1.48/v0.1.49/v0.1.50 to v0.1.51 upgrades",
+      "result": "NOT RUN: exact same-commit GitHub clean v0.1.51 setup and direct v0.1.45 through v0.1.50 upgrade results await commit and push; no historical run is inherited or waived"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: 2224 passed and 21 expected platform/dedicated-PostgreSQL skips for source plus generations 1 and 2; exact-endpoint routing gate, packaged v0.1.45 user journey, and separate-process local communication/obligation roundtrip passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and not rerun or waived"
+    }
+  ],
+  "execution_context": {
+    "source": "Current uncommitted v0.1.51 candidate after focused and broad hermetic validation.",
+    "callback_incident": "No external workflow result is included in this local candidate evidence.",
+    "packed_generations": "Source plus recursively packed and independently installed generations 1 and 2 each passed 2224 tests with 21 expected platform/dedicated-PostgreSQL skips.",
+    "two_vm_source_proof": "Not rerun for exact v0.1.51; retained prior two-machine proof remains historical only",
+    "root_installed_external_host": "Not rerun for exact v0.1.51; fresh installed-host setup, upgrade, and live expired-credential recovery evidence await GitHub/server execution"
+  },
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-14-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
+      "sha256": "965aa329c9d46d2fd41fd3f9e02579bc124f497629ccac3fad02dd21b31c8c21"
+    },
+    {
+      "path": "evidence/local/2026-08-14-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
+      "sha256": "3deeb6972e47b598db89746fe41458ff7e9a00c44e66fd49881fe30008d47b48"
+    }
+  ],
+  "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"
+}

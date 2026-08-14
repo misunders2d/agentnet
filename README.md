@@ -221,6 +221,16 @@ harness. The user restarts it explicitly; connection is recorded only after a
 new measured process proves the expected adapter generation and exact enrolled
 harness binding.
 
+If that laptop credential expires while the exact owner-private identity and
+P-256 key remain intact, use `agentnet credential reauthorize-expired`.
+The package proves the expired binding directly, obtains fresh owner WebAuthn
+UV, and creates one same-key successor at epoch +1 without enrollment,
+authority, scope, membership, capability, or harness restart. The first call
+may report `approval_pending` while opening the stable Approval page; rerun the
+identical command after approval. Owner-only state makes response-loss retries
+converge. Revoked, rotated, active, compromised, cross-binding, drifted, or
+ambiguous credentials fail closed and require their own workflow.
+
 Friendly recipient input is not an address or authority claim. The authenticated,
 non-enumerating resolver returns one `ResolvedEndpoint`: exact harness, safe
 display metadata, and current scope ID. Zero, multiple, stale, revoked, or
@@ -441,7 +451,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.45`. Its publication does not promote any requirement or gate.
+`0.1.50`. Its publication does not promote any requirement or gate.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -542,6 +552,17 @@ requires the separate-process local communication and obligation roundtrip in
 addition to the existing installed journey. These are local and CI evidence,
 not production certification, and no requirement or must-not-ship gate is
 promoted.
+
+Candidate `0.1.51` adds one package-owned recovery lane for an expired laptop
+credential when the exact owner-private identity profile and OS- or
+hardware-bound P-256 key remain intact. Dedicated expired-credential DPoP
+routes bind the unchanged domain, principal, harness, key, assurance, and
+profile to fresh owner WebAuthn UV, then atomically retire the expired epoch and
+issue the exact same-key successor at epoch +1. Resumable owner-only CLI state
+preserves the transaction across approval timeout or response loss. The flow
+does not re-enroll, rotate keys, restore revoked actors, grant authority, change
+communication scopes or memberships, or restart the harness. No requirement,
+production claim, or must-not-ship gate is promoted.
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a

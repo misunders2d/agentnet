@@ -112,6 +112,42 @@ agentnet supervisor-run \
 
 Only after enrollment and explicit approval may an operator run the supervisor without `--check`. Pi binding requires `local_bindings_required=true`, an owner-only capability root, a private Unix socket, and a measured supervisor-launched Pi child.
 
+## Expired laptop credential reauthorization
+
+Use only when the installed package or Core reports that the current laptop
+credential expired while its exact owner-private identity profile and P-256 key
+remain intact:
+
+```bash
+agentnet credential reauthorize-expired
+```
+
+Use the command's owner-only defaults,
+`--identity .agentnet/identity.json`,
+`--state .agentnet/credential-reauthorization-state.json`,
+`--browser system`, and `--timeout 300` (allowed range 30–600 seconds); do not
+copy or edit retained state, replace the key, or add `sudo`. The command proves
+the exact expired binding with expired-credential DPoP, prepares one
+purpose-bound transaction, and opens its stable HTTPS `/approval` page.
+`--browser manual` may disclose that URL only in the owner's private terminal,
+never chat, logs, or copied instructions.
+
+A bounded pending wait exits 2 and prints only the CLI result schema plus
+`status=approval_pending`; it retains owner-only state. After fresh WebAuthn UV,
+rerun the identical command. Response-loss retries reuse the exact request,
+transaction, PoP, and possession state and converge to at most one same-key
+epoch +1 successor.
+
+Success exits 0 and reports only the CLI result schema, `status=current`,
+`credential_epoch`, `identity_saved_locally=true`, `key_preserved=true`, and
+`authority_granted=false`. A denied or invalid request exits 1 with only the
+schema and `status=blocked`. Success preserves principal, harness, key,
+assurance, profile, authority, scope, membership, and capabilities and does not
+restart the harness. Stop on revoked, rotated, active, compromised,
+wrong-domain/principal/harness/key, ambiguous, malformed, expired-approval, or
+drifted state. Do not use `join guided`, generic recovery, `credential renew`,
+key rotation, or `server-agent reauthorize-expired-credential` as a substitute.
+
 ## Always-on server setup
 
 This is a fail-closed product workflow—not a manual integration recipe. The CLI surface is `agentnet server-agent setup`, but invoke it only through the resolved absolute root-owned launcher. Read [ordinary-server-setup.md](ordinary-server-setup.md). Select either the unchanged scanner-backed [request-v1 example](examples/ordinary-server-setup-request.json) or restricted communication-only [request-v2 example](examples/ordinary-server-communication-only-setup-request.json). Sensitive values remain owner-only file references. Then run the no-managed-host-write plan (npm may materialize its caller-owned Python runtime):

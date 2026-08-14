@@ -183,6 +183,44 @@ domain, principal, harness, credential, harness kind, and profile. Until then,
 enrollment and queued mailbox custody remain durable, but tool availability is
 not claimed.
 
+## Expired laptop credential reauthorization
+
+An owner-operated laptop whose exact current credential has expired, but whose
+owner-private identity profile and P-256 key remain intact, uses:
+
+```bash
+agentnet credential reauthorize-expired
+```
+
+Defaults are `--identity .agentnet/identity.json`, `--state
+.agentnet/credential-reauthorization-state.json`, `--browser system`, and
+`--timeout 300`; timeout accepts 30–600 seconds. Both files remain owner-only.
+The command persists request ID, exact prepared transaction, same-key PoP, and
+possession state before each network step. It authenticates with the expired
+credential only for the two dedicated reauthorization routes; no expired
+`VerifiedActor` is created.
+
+The default browser mode opens the exact stable HTTPS `/approval` URL once.
+`--browser manual` may disclose it only in the owner's private terminal, never
+chat, logs, or copied instructions. Fresh WebAuthn UV must approve purpose
+`identity.credential.recover.approve`. A bounded wait that remains pending exits
+2 and prints only
+`{"schema":"agentnet.laptop-credential-reauthorization-cli-result.v1","status":"approval_pending"}`.
+Rerun the identical command after approval or response loss; it resumes the
+owner-only transaction and may use the exact retired predecessor only to recover
+that committed result.
+
+Success exits 0 and prints only the CLI result schema, `status=current`,
+`credential_epoch`, `identity_saved_locally=true`, `key_preserved=true`, and
+`authority_granted=false`. A denied or invalid route exits 1 with only the
+schema and `status=blocked`. The atomic successor retains the same principal,
+harness, key, assurance, profile, scopes, memberships, and capabilities; it
+does not re-enroll, grant authority, replace the key, or restart the harness.
+Active credentials use `agentnet credential renew`; revoked, rotated,
+compromised, mismatched, ambiguous, or edited state requires its applicable
+recovery/rotation path. Managed servers use the separate root-only audited
+supersession workflow.
+
 Friendly send targets resolve only among recipients visible to the authenticated
 sender's current communication/collaboration authority. A successful friendly
 lookup returns one `ResolvedEndpoint` containing the exact harness, safe display

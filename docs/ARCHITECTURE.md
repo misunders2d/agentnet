@@ -100,6 +100,19 @@ expired/revoked/rotated binding cannot renew or satisfy readiness. These labels
 and server capability limits can only narrow process eligibility; protected
 operations still derive and authorize their exact caller independently.
 
+An expired laptop credential is not reconstructed as a `VerifiedActor`. Two
+purpose-limited routes authenticate only expired-old-credential DPoP for the
+same exact laptop binding; a retry may use only its exact retired predecessor.
+The transaction binds domain, principal, harness, credential and epoch, expiry,
+unchanged key and public-PEM digest, assurance/profile digest, and fresh
+WebAuthn-UV Approval. One atomic commit retires the old credential without
+extension and creates exactly one same-key successor at epoch +1. It changes no
+authority, scope, membership, capability, identity, or harness process. Stable
+pending state and the committed result make response-loss retry idempotent.
+This package-owned user-level flow is separate from fresh enrollment, active
+renewal, generic recovery or key replacement, and managed-server
+reauthorization below.
+
 The current candidate narrows recovery for an expired, still-possessed
 managed-server key in the communication-only topology. Before first C0,
 immutable terminal C0 evidence is the provenance root. After C0, every

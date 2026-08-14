@@ -1,9 +1,9 @@
 # Release Manifest
 
-Snapshot: 2026-08-07
-Candidate: `agentnet 0.1.50`
-Latest published package: `agentnet 0.1.45`
-Evidence profile: setup usability around the strict ordinary-server and guided-laptop protocols, bounded phase/deadline/recovery behavior, installed-byte communication, and direct allowlisted 0.1.45→0.1.50 through 0.1.49→0.1.50 package/config/unit transitions
+Snapshot: 2026-08-14
+Candidate: `agentnet 0.1.51`
+Latest published package: `agentnet 0.1.50`
+Evidence profile: package-owned same-binding expired-laptop credential reauthorization with exact identity/key/authority preservation, old-key possession, fresh owner WebAuthn UV, atomic epoch+1 replacement, idempotent response-loss recovery, and direct allowlisted v0.1.45–v0.1.50 setup-marker upgrade compatibility
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -16,7 +16,7 @@ owner, installer, or production-topology gates.
 | Must-not-ship gate status | `BLOCKED` |
 | Production ready | `false` |
 | Ship eligible | `false` |
-| Reason | Every must-not-ship gate remains non-passed; locally implementable accepted blockers are closed, while required P/E/O evidence remains absent. |
+| Reason | Every must-not-ship gate remains non-passed; hermetic recovery and packaging evidence does not substitute for fresh installed-host, live owner WebAuthn/Core recovery, or required P/E/O evidence. |
 
 ## Runtime and dependency lock
 
@@ -24,8 +24,8 @@ owner, installer, or production-topology gates.
 |---|---|
 | Runtime | CPython `3.13.13` |
 | Python range | `>=3.13, <3.15` |
-| `uv.lock` | format `1`, revision `3`, SHA-256 `afffa3558290939ca4f3efae1b04559db3299084f4a62c0d93ccdd4ab66e69c8` |
-| `pyproject.toml` | SHA-256 `95c9effe37951f5ab012aa00743ecc52b44ca0ac0b62ab08eddafa3ab7559e7a` |
+| `uv.lock` | format `1`, revision `3`, SHA-256 `c971fdea8d3782a9d7349b5723f4e036740d314f19f7c3553dc6ba1780c9f84d` |
+| `pyproject.toml` | SHA-256 `6aebcdea17d2715c3136c2b6b3179a424a3eed990f54d65a4cccbf67c715c5da` |
 | Build backend | `hatchling==1.28.0` and editable-build helper `editables==0.5`, both in the `build` dependency group and frozen lock |
 
 The production Docker recipe installs the locked build group, then installs

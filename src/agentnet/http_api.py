@@ -49,7 +49,10 @@ from agentnet.organization.conflicts import TaskExecutionIntent
 from agentnet.protocol.models import Classification, ReleasedArtifactBinding
 from agentnet.product_http import RELATIONSHIP_RESPONSE_HEADERS, create_product_routes
 from agentnet.relay.http import create_relay_routes
-from agentnet.http_auth import authenticate_proof_request
+from agentnet.http_auth import (
+    authenticate_expired_credential_request,
+    authenticate_proof_request,
+)
 from agentnet.supervisor_http import create_supervisor_routes
 
 
@@ -226,6 +229,18 @@ class TaskProposalReauthorizationBody(TaskProposalDecisionBody):
 async def _body_and_actor(request: Request, core: CommunicationCore) -> tuple[bytes, Any]:
     body, context = await authenticate_proof_request(request, core)
     return body, context.actor
+
+
+async def _expired_body_and_context(
+    request: Request,
+    core: CommunicationCore,
+    allow_retired_predecessor: bool,
+) -> tuple[bytes, Any]:
+    return await authenticate_expired_credential_request(
+        request,
+        core,
+        allow_retired_predecessor=allow_retired_predecessor,
+    )
 
 def _mailbox_http_item(value: dict[str, Any]) -> dict[str, Any]:
     """Serialize the exact optional content-free obligation reference."""
@@ -766,7 +781,13 @@ def create_app(core: CommunicationCore) -> Starlette:
             )
         else:
             routes.extend(create_enrollment_routes(core, core.oidc_enrollment))
-    routes.extend(create_product_routes(core, _body_and_actor))
+    routes.extend(
+        create_product_routes(
+            core,
+            _body_and_actor,
+            _expired_body_and_context,
+        )
+    )
     routes.extend(create_internal_invitation_routes(core, _body_and_actor))
     routes.extend(
         create_supervisor_routes(

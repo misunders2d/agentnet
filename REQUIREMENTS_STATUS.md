@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-07. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-14. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -428,6 +428,29 @@ published and historical release evidence:
   `UX-001`, `UX-002`, `SEC-003`, `SEC-005`, `OPS-003`, and `OPS-006`. No
   requirement or must-not-ship gate is promoted.
 
+- Candidate `0.1.51` adds a dedicated, package-owned reauthorization workflow
+  for an expired ordinary laptop credential. It preserves the exact
+  domain/principal/harness binding, OS- or hardware-bound public key, authority,
+  scopes, memberships, capabilities, and credential-supersession history;
+  requires fresh independent WebAuthn user verification; rejects active,
+  revoked, mismatched, non-laptop, stale, replayed, expired-transaction, and
+  conflicting bindings before key use or mutation; and commits exactly one
+  same-key successor epoch with idempotent response-loss recovery. It grants no
+  authority and performs no enrollment, generic renewal, key replacement, or
+  service restart. Current evidence is hermetic only: the focused lane reports
+  **698 passed and 5 expected dedicated-PostgreSQL skips**, the broad
+  releasable-source lane reports **2197 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**, two independent release builds are
+  byte-identical, and source plus two recursive packed generations each report
+  **2224 passed and 21 expected platform/dedicated-PostgreSQL skips**. The
+  packaged exact-endpoint routing gate, packaged `0.1.45` user journey, and
+  separate-process communication/obligation roundtrip pass. Fresh
+  installed-host, live owner WebAuthn/Core recovery, same-commit CI, and
+  production-topology evidence remain pending. Affected IDs are `ID-006`,
+  `ID-007`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-004`, `AUTH-007`,
+  `SEC-003`, `SEC-005`, `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or
+  must-not-ship gate is promoted.
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
@@ -509,7 +532,7 @@ stable requirement's status or remaining external/owner boundary.
 | ID-006 — human and exact harness identities remain distinct | partial-external | `src/agentnet/identity/actors.py`; `src/agentnet/identity/context.py`; `src/agentnet/identity/workload.py`; `src/agentnet/bindings/composition.py` | Actor-union, sibling, workload, current-epoch local binding, and measured IPC child negatives: `tests/identity/test_actor_union.py`; `tests/identity/test_workload_identity.py`; `tests/security/test_ipc_capability.py`; `tests/bindings/test_local_binding_composition.py` | Privileged target-host same-UID/PID-reuse attribution and exact installed-harness evidence remain external. |
 | ID-007 — revoke one harness without revoking siblings | partial-external | `src/agentnet/identity/revocation.py`; `src/agentnet/identity_admin_http.py`; `src/agentnet/identity/context.py` | Revocation, wrong approval, concurrent lifecycle, and admin HTTP: `tests/identity/test_revocation.py`; `tests/integration/test_identity_admin_http.py` | Real device-loss/offboarding drill and full cross-resource revocation matrix are absent. |
 | ID-008 — identity is scoped to an exact trust domain | partial-external | `src/agentnet/identity/domains.py`; `src/agentnet/identity/context.py`; `src/agentnet/federation/service.py` | Cross-domain proof, pairwise guest, bilateral trust, and revocation negatives: `tests/identity/test_context.py`; `tests/federation/test_bilateral_guest.py`; `tests/federation/test_http_composition.py` | Independently administered partner-domain evidence is absent. |
-| ID-009 — issuance, rotation, expiry, recovery, compromise, and offboarding | owner-blocked | `src/agentnet/identity/credentials.py`; `src/agentnet/identity/recovery.py`; `src/agentnet/identity/revocation.py`; `src/agentnet/approval/webauthn_uv.py` | Rotation/recovery/revocation positives, substitutions, replay, races, plus approval credential/request/challenge/receipt expiry and revocation: `tests/identity/test_credential_rotation.py`; `tests/identity/test_recovery.py`; `tests/identity/test_revocation.py`; `tests/approval/test_webauthn_service.py` | Real custody/recovery administrators, approval signer/authenticator rotation drill, and signed PD-005/009 lifecycle choices are absent. |
+| ID-009 — issuance, rotation, expiry, recovery, compromise, and offboarding | owner-blocked | `src/agentnet/identity/credentials.py`; `src/agentnet/identity/recovery.py`; `src/agentnet/identity/revocation.py`; `src/agentnet/identity/context.py`; `src/agentnet/http_auth.py`; `src/agentnet/core/app.py`; `src/agentnet/product_http.py`; `src/agentnet/client.py`; `src/agentnet/cli.py`; `src/agentnet/approval/webauthn_uv.py`; `src/agentnet/approval/transaction_summary.py`; `src/agentnet/security/signatures.py` | Rotation/recovery/revocation positives, substitutions, replay, races, approval credential/request/challenge/receipt expiry and revocation, and same-binding expired laptop reauthorization: `tests/identity/test_credential_rotation.py`; `tests/identity/test_recovery.py`; `tests/identity/test_revocation.py`; `tests/identity/test_laptop_credential_reauthorization.py`; `tests/cli/test_laptop_credential_reauthorization_cli.py`; `tests/approval/test_webauthn_service.py`; `tests/approval/test_transaction_summary.py` | Real custody/recovery administrators, approval signer/authenticator rotation drill, and signed PD-005/009 lifecycle choices are absent. |
 | AUTH-001 — every protected operation resolves a verified caller | partial-external | `src/agentnet/identity/context.py`; `src/agentnet/identity/workload.py`; `src/agentnet/authorization/policy.py` | Human, guest, workload, and forged-workload cases: `tests/identity/test_context.py`; `tests/identity/test_workload_identity.py`; `tests/federation/test_bilateral_guest.py`; `tests/delivery/test_mailbox.py` | Privileged transport identity evidence for deployed workloads is absent. |
 | AUTH-002 — authorization consumes proof-derived identity | local-tested | `src/agentnet/security/dpop.py`; `src/agentnet/identity/context.py`; `src/agentnet/client.py`; `src/agentnet/approval/internal_broker.py`; `src/agentnet/approval/http.py` | Canonical target/body/audience/replay and client-origin negatives plus exact Core→Approval method/path/body/audience/purpose/key proof cases: `tests/security/test_signatures_and_replay.py`; `tests/security/test_signed_client.py`; `tests/identity/test_context.py`; `tests/approval/test_internal_broker.py`; `tests/approval/test_approval_http.py` | Local proof contracts are executable and fail-closed; deployed workload/TLS assurance remains external. |
 | AUTH-003 — positive permissions attach to the human principal | owner-blocked | `src/agentnet/authorization/policy.py`; `src/agentnet/authorization/evidence.py`; `src/agentnet/identity_admin_http.py` | Human-only authority, signed issue/revoke, replay, and stale revision: `tests/authorization/test_policy.py`; `tests/integration/test_identity_admin_http.py`; `tests/authorization/test_authority_bootstrap.py` | Signed PD-001/003 principal and attenuation policy is absent. |

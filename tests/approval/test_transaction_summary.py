@@ -11,6 +11,8 @@ from agentnet.approval.transaction_summary import validate_and_summarize_approva
 from agentnet.authorization.bootstrap_plan import build_bootstrap_plan_transaction
 from agentnet.errors import AuthenticationError
 from agentnet.identity.credentials import (
+    LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+    LaptopCredentialReauthorizationRequest,
     MANAGED_SERVER_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
     ManagedServerCredentialReauthorizationRequest,
     ManagedServerCredentialReauthorizationRequestV2,
@@ -254,3 +256,61 @@ def test_bounded_plan_summary_rejects_wrong_digest_and_unknown_privileged_purpos
             changed_canonical,
             hashlib.sha256(changed_canonical).hexdigest(),
         )
+
+
+def test_laptop_reauthorization_summary_accepts_only_the_exact_safe_transaction() -> None:
+    transaction = LaptopCredentialReauthorizationRequest(
+        request_id="12345678-1234-4234-8234-123456789abc",
+        domain_id="corp.example",
+        principal_id="owner-principal",
+        harness_id="laptop-harness",
+        expired_credential_id="expired-credential",
+        expected_credential_epoch=4,
+        successor_credential_epoch=5,
+        expected_expired_at=1_800_000_000,
+        expected_key_id="laptop-key-thumbprint",
+        expected_public_key_sha256="a" * 64,
+        expected_binding_assurance="hardware_bound",
+        identity_profile_sha256="b" * 64,
+        prepared_at=1_800_000_001,
+        expires_at=1_800_000_301,
+        maximum_new_credential_ttl_seconds=3_600,
+    )
+    canonical = transaction.canonical_transaction
+
+    summary = validate_and_summarize_approval_transaction(
+        LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+        canonical,
+        hashlib.sha256(canonical).hexdigest(),
+    )
+
+    assert summary["title"] == "Reauthorize an expired laptop credential"
+    assert summary["statements"] == [
+        "Laptop identity: the existing person and exact laptop remain unchanged",
+        "Key custody: the existing P-256 key must prove fresh possession",
+        "Old credential: remains expired and is retired, never extended",
+        "New credential: exact next epoch on the same public key",
+        "New credential lifetime: no more than 1 hour",
+        "Capabilities, memberships, communication scopes, and authority: unchanged",
+        "Authority granted: none",
+    ]
+    rendered = json.dumps(summary, sort_keys=True)
+    assert "laptop-harness" not in rendered
+    assert "expired-credential" not in rendered
+
+    for field, bad_value in (
+        ("successor_credential_epoch", 6),
+        ("expected_public_key_sha256", "not-a-digest"),
+        ("old_credential_action", "extend"),
+        ("key_preserved", False),
+        ("authority_granted", True),
+    ):
+        malformed = json.loads(canonical)
+        malformed[field] = bad_value
+        malformed_canonical = _canonical(malformed)
+        with pytest.raises(AuthenticationError, match="approval request denied"):
+            validate_and_summarize_approval_transaction(
+                LAPTOP_CREDENTIAL_REAUTHORIZATION_APPROVAL_PURPOSE,
+                malformed_canonical,
+                hashlib.sha256(malformed_canonical).hexdigest(),
+            )

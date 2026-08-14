@@ -338,6 +338,37 @@ return the persisted result; expired, revoked, rotated, wrong-profile, or stale
 bindings fail closed. `agentnet credential renew` stores the request ID in one
 owner-only file before network and rotates it only after an exact response.
 
+Expired laptop reauthorization is a distinct package-owned surface:
+
+| Route | Exact request/effect |
+|---|---|
+| `POST /v1/credentials/current/reauthorize-expired/prepare` | Expired-old-credential DPoP only; strict `agentnet.laptop-credential-reauthorization-prepare.v1` with UUID `request_id` and `identity_profile_sha256`. Returns exact `agentnet.laptop-credential-reauthorization.v1`. |
+| `POST /v1/credentials/current/reauthorize-expired` | Same expired DPoP; only an exact retired predecessor is additionally accepted for idempotent response-loss retry. Strict `agentnet.laptop-credential-reauthorization-progress.v1` carries the exact transaction, `old_key_possession_signature`, and `possession_secret`. Returns `202` `agentnet.laptop-credential-reauthorization-pending.v1` or `200` `agentnet.laptop-credential-reauthorization-result.v1`. |
+
+The prepare result binds `approval_purpose=identity.credential.recover.approve`,
+request, domain, principal, harness, expired credential, expected and successor
+epochs, exact old expiry, key ID, public-PEM SHA-256, binding assurance,
+identity-profile SHA-256, preparation/transaction expiry, maximum successor
+TTL, `key_binding=same_laptop_key_with_fresh_possession_proof`,
+`old_credential_action=retire_without_extension`, `key_preserved=true`, and
+`authority_granted=false`. The key PoP schema/purpose is
+`agentnet.laptop-credential-reauthorization.pop.v1`.
+
+Pending is exactly `status=approval_pending`, stable HTTPS `/approval`
+`approval_url`, and `expires_at`. Current is exactly `status=current` plus
+request, unchanged domain/principal/harness, previous and successor credential
+IDs, unchanged key ID, successor epoch, `not_before`, finite `expires_at`,
+`idempotent_repeat`, `key_preserved=true`, and `authority_granted=false`. Core
+requires an active human-owned laptop lineage with `os_bound` or
+`hardware_bound` assurance and exact current database epochs, expiry,
+key/thumbprint, public-PEM digest, identity-profile digest, domain, principal,
+and harness. Fresh WebAuthn-UV Approval must name that owner. It never creates
+an expired `VerifiedActor`; guest, active, revoked, rotated, compromised,
+cross-binding, stale, ambiguous, malformed, expired-approval, and drifted state
+fail closed. One atomic commit retires the old row without extension and creates
+at most one same-key epoch +1 successor without authority, scope, membership,
+capability, or identity mutation.
+
 `agentnet server-agent reauthorize-expired-credential` uses strict local
 `agentnet.managed-server-credential-reauthorization.v2` request state. The
 signed owner-approval transaction binds the exact expired credential/epoch,

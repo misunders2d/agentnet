@@ -836,6 +836,33 @@ def test_0150_rejects_direct_upgrade_from_pre_lifecycle_release(
 
     assert exc_info.value.blocker == "setup_marker_conflict"
 
+
+@pytest.mark.parametrize(
+    "source",
+    ["0.1.45", "0.1.46", "0.1.47", "0.1.48", "0.1.49", "0.1.50"],
+)
+def test_0151_accepts_direct_upgrade_from_every_supported_setup_release(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    payload = _marker_payload(
+        schema="agentnet.server-setup.marker.v3",
+        package_version=source,
+        artifact_mode="disabled",
+    )
+
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="1" * 64,
+        artifact_mode="disabled",
+    )
+
+    assert marker is not None
+    assert marker["package_version"] == source
+    assert setup._forward_only_setup_upgrade(source, "0.1.51") is True
+
 @pytest.mark.parametrize(
     ("package_version", "current_version"),
     [

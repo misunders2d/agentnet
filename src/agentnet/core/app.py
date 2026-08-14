@@ -69,7 +69,11 @@ from agentnet.errors import (
 )
 from agentnet.federation.service import FederationService
 from agentnet.identity.actors import ActorKind, TrustedTransportContext, VerifiedActor
-from agentnet.identity.context import VerifiedContextResolver
+from agentnet.identity.context import (
+    ExpiredCredentialContextResolver,
+    ExpiredCredentialTransportContext,
+    VerifiedContextResolver,
+)
 from agentnet.identity.credentials import (
     CredentialRenewalRequest,
     CredentialRenewalResult,
@@ -77,6 +81,13 @@ from agentnet.identity.credentials import (
     CredentialRotationRequest,
     CredentialRotationResult,
     CredentialRotationService,
+    LaptopCredentialReauthorizationCoordinator,
+    LaptopCredentialReauthorizationPendingResult,
+    LaptopCredentialReauthorizationPrepareRequest,
+    LaptopCredentialReauthorizationProgressRequest,
+    LaptopCredentialReauthorizationRequest,
+    LaptopCredentialReauthorizationResult,
+    LaptopCredentialReauthorizationService,
     load_credential_binding,
     public_key_thumbprint,
 )
@@ -423,6 +434,15 @@ class CommunicationCore:
             future_skew=config.allowed_clock_skew_seconds,
             replay_retention=config.replay_retention_seconds,
         )
+        self.expired_credential_contexts = ExpiredCredentialContextResolver(
+            store,
+            service_audience=config.effective_service_audience,
+            service_scheme=config.service_scheme,
+            service_authority=config.service_authority,
+            proof_max_age=config.proof_max_age_seconds,
+            future_skew=config.allowed_clock_skew_seconds,
+            replay_retention=config.replay_retention_seconds,
+        )
         self.credential_rotation = CredentialRotationService(
             store,
             credential_ttl_seconds=config.policies.identity.credential_ttl_seconds,
@@ -471,6 +491,9 @@ class CommunicationCore:
         self.bootstrap_plan_service: BootstrapPlanService | None = None
         self.communication_scope_service: CommunicationScopeService | None = None
         self.c0_pilot_service: C0PilotService | None = None
+        self.laptop_credential_reauthorization: (
+            LaptopCredentialReauthorizationCoordinator | None
+        ) = None
         self.internal_invitation_oidc: InternalInvitationOIDCCoordinator | None = None
         self.internal_invitations: InternalInvitationService | None = None
         if config.oidc_enrollment is not None:
@@ -536,6 +559,23 @@ class CommunicationCore:
                 self.approval_service_client = ApprovalServiceClient(
                     oidc.approval_service,
                     credential,
+                )
+                self.laptop_credential_reauthorization = (
+                    LaptopCredentialReauthorizationCoordinator(
+                        LaptopCredentialReauthorizationService(
+                            store,
+                            self.approval_verifier,
+                            credential_ttl_seconds=(
+                                config.policies.identity.credential_ttl_seconds
+                            ),
+                            outage_gate=self.outage,
+                        ),
+                        self.approval_service_client,
+                        public_approval_url=(
+                            oidc.approval_service.public_origin.rstrip("/")
+                            + "/approval"
+                        ),
+                    )
                 )
                 self.bootstrap_plan_service = BootstrapPlanService(
                     store,
@@ -1562,6 +1602,70 @@ class CommunicationCore:
         elapsed = min(30_000, max(0, (time.perf_counter_ns() - started) // 1_000_000))
         self.telemetry.observe_latency("auth_latency", int(elapsed))
         return context
+    def authenticate_expired_credential(
+        self,
+        proof: RequestProof,
+        *,
+        method: str,
+        scheme: str,
+        authority: str,
+        path: str,
+        query: str,
+        body: bytes,
+        allow_retired_predecessor: bool,
+    ) -> ExpiredCredentialTransportContext:
+        """Verify only the exact expired binding for its recovery routes."""
+
+        if self.config.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+            self._require_enrolled_server_agent_binding()
+        return self.expired_credential_contexts.resolve(
+            proof,
+            expected_method=method,
+            expected_scheme=scheme,
+            expected_authority=authority,
+            expected_path=path,
+            expected_query=query,
+            body=body,
+            allow_retired_predecessor=allow_retired_predecessor,
+        )
+
+    def prepare_expired_credential_reauthorization(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationPrepareRequest,
+    ) -> LaptopCredentialReauthorizationRequest:
+        coordinator = self.laptop_credential_reauthorization
+        if coordinator is None:
+            raise GateBlocked(
+                "laptop_credential_reauthorization",
+                "laptop credential reauthorization is not configured",
+            )
+        return coordinator.prepare(
+            presented_credential_id=presented_credential_id,
+            request=request,
+        )
+
+    def progress_expired_credential_reauthorization(
+        self,
+        *,
+        presented_credential_id: str,
+        request: LaptopCredentialReauthorizationProgressRequest,
+    ) -> (
+        LaptopCredentialReauthorizationPendingResult
+        | LaptopCredentialReauthorizationResult
+    ):
+        coordinator = self.laptop_credential_reauthorization
+        if coordinator is None:
+            raise GateBlocked(
+                "laptop_credential_reauthorization",
+                "laptop credential reauthorization is not configured",
+            )
+        return coordinator.progress(
+            presented_credential_id=presented_credential_id,
+            request=request,
+        )
+
 
     def _require_console_authority(
         self,

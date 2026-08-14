@@ -257,6 +257,10 @@ def test_bundled_pi_operator_skill_and_setup_workflow_are_fail_closed() -> None:
         (ROOT / "skills/agentnet-operator/evals/evals.json").read_text(encoding="utf-8")
     )
     assert {item["id"] for item in evals} == {
+        "expired-laptop-credential-uses-same-binding-reauthorization",
+        "active-laptop-credential-rejects-expired-reauthorization",
+        "revoked-laptop-credential-rejects-expired-reauthorization",
+        "mismatched-laptop-binding-rejects-expired-reauthorization",
         "fresh-laptop-human-copy-paste-bootstrap",
         "fresh-agent-receives-bootstrap-packet",
         "v018-fresh-laptop-receipt-gap",

@@ -293,9 +293,11 @@ const onboardingEvals = JSON.parse(
   readFileSync(path.join(root, "skills/agentnet-operator/evals/evals.json"), "utf8"),
 );
 const expectedOnboardingEvalIds = [
+  "active-laptop-credential-rejects-expired-reauthorization",
   "c0-binding-invalidation-is-terminal",
   "c0-fixed-commands-and-cleanup-only",
   "c0-success-requires-approved-seven-fact-sequence",
+  "expired-laptop-credential-uses-same-binding-reauthorization",
   "fresh-agent-receives-bootstrap-packet",
   "fresh-laptop-approval-result-is-automatic",
   "fresh-laptop-canonical-single-prompt-is-mandatory",
@@ -313,6 +315,7 @@ const expectedOnboardingEvalIds = [
   "headless-server-uses-fixed-browser-only-activation",
   "hub-generates-public-onboarding-packet",
   "identity-only-mode-skips-c0-phase",
+  "mismatched-laptop-binding-rejects-expired-reauthorization",
   "ordinary-server-communication-only-explicit-v2",
   "ordinary-server-communication-only-rejects-legacy-evidence",
   "ordinary-server-configured-not-started-resume",
@@ -335,6 +338,7 @@ const expectedOnboardingEvalIds = [
   "ordinary-server-uses-product-owned-setup",
   "post-c0-expired-credential-preserves-audited-chain",
   "repository-candidate-does-not-unblock-installed-release",
+  "revoked-laptop-credential-rejects-expired-reauthorization",
   "server-reset-is-destructive-manager-only-recovery",
   "v0132-c0-responder-is-package-owned-and-isolated",
   "v018-fresh-laptop-receipt-gap",

@@ -193,6 +193,12 @@ _SUPPORTED_MARKER_UPGRADE_UNIT_PROFILES = {
     ("0.1.47", "0.1.50"): MANAGED_UNITS,
     ("0.1.48", "0.1.50"): MANAGED_UNITS,
     ("0.1.49", "0.1.50"): MANAGED_UNITS,
+    ("0.1.45", "0.1.51"): MANAGED_UNITS,
+    ("0.1.46", "0.1.51"): MANAGED_UNITS,
+    ("0.1.47", "0.1.51"): MANAGED_UNITS,
+    ("0.1.48", "0.1.51"): MANAGED_UNITS,
+    ("0.1.49", "0.1.51"): MANAGED_UNITS,
+    ("0.1.50", "0.1.51"): MANAGED_UNITS,
 }
 _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
     {
@@ -215,6 +221,12 @@ _FORWARD_ONLY_SETUP_UPGRADES = frozenset(
         ("0.1.47", "0.1.50"),
         ("0.1.48", "0.1.50"),
         ("0.1.49", "0.1.50"),
+        ("0.1.45", "0.1.51"),
+        ("0.1.46", "0.1.51"),
+        ("0.1.47", "0.1.51"),
+        ("0.1.48", "0.1.51"),
+        ("0.1.49", "0.1.51"),
+        ("0.1.50", "0.1.51"),
     }
 )
 # The lifecycle release is the sole rollback-capable database upgrade.  Older

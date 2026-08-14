@@ -25,6 +25,7 @@ from agentnet.security.signatures import canonical_json
 _REQUEST_MESSAGE = "AgentNet C0 pilot request: fixed harmless transport check."
 _REPLY_MESSAGE = "AgentNet C0 pilot reply: fixed harmless transport check."
 _MANAGED_SERVER_REAUTHORIZATION_PURPOSE = "identity.credential.recover.approve"
+_LAPTOP_CREDENTIAL_REAUTHORIZATION_PURPOSE = "identity.credential.recover.approve"
 _SAFE_CAPABILITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
 
 
@@ -338,6 +339,87 @@ def _validate_managed_server_credential_reauthorization(
     return {
         "title": "Reauthorize an expired server-agent credential",
         "statements": statements,
+        "advanced_digest": digest,
+    }
+
+
+def _validate_laptop_credential_reauthorization(
+    transaction: dict[str, Any],
+    digest: str,
+) -> dict[str, Any]:
+    _keys(
+        transaction,
+        {
+            "schema",
+            "approval_purpose",
+            "request_id",
+            "domain_id",
+            "principal_id",
+            "harness_id",
+            "expired_credential_id",
+            "expected_credential_epoch",
+            "successor_credential_epoch",
+            "expected_expired_at",
+            "expected_key_id",
+            "expected_public_key_sha256",
+            "expected_binding_assurance",
+            "identity_profile_sha256",
+            "prepared_at",
+            "expires_at",
+            "maximum_new_credential_ttl_seconds",
+            "key_binding",
+            "old_credential_action",
+            "key_preserved",
+            "authority_granted",
+        },
+    )
+    if (
+        transaction["schema"]
+        != "agentnet.laptop-credential-reauthorization.v1"
+        or transaction["approval_purpose"]
+        != _LAPTOP_CREDENTIAL_REAUTHORIZATION_PURPOSE
+        or not _string(transaction["request_id"])
+        or not _string(transaction["domain_id"])
+        or not _string(transaction["principal_id"])
+        or not _string(transaction["harness_id"])
+        or not _string(transaction["expired_credential_id"])
+        or not _positive_int(transaction["expected_credential_epoch"])
+        or transaction["successor_credential_epoch"]
+        != transaction["expected_credential_epoch"] + 1
+        or not _positive_int(transaction["expected_expired_at"])
+        or not _string(transaction["expected_key_id"])
+        or not _sha256(transaction["expected_public_key_sha256"])
+        or transaction["expected_binding_assurance"]
+        not in {"os_bound", "hardware_bound"}
+        or not _sha256(transaction["identity_profile_sha256"])
+        or not _positive_int(transaction["prepared_at"])
+        or not _positive_int(transaction["expires_at"])
+        or transaction["expected_expired_at"] > transaction["prepared_at"]
+        or transaction["expires_at"] <= transaction["prepared_at"]
+        or transaction["expires_at"] - transaction["prepared_at"] > 600
+        or type(transaction["maximum_new_credential_ttl_seconds"]) is not int
+        or not 3_600
+        <= transaction["maximum_new_credential_ttl_seconds"]
+        <= 604_800
+        or transaction["key_binding"]
+        != "same_laptop_key_with_fresh_possession_proof"
+        or transaction["old_credential_action"] != "retire_without_extension"
+        or transaction["key_preserved"] is not True
+        or transaction["authority_granted"] is not False
+    ):
+        raise _denied()
+    hours = transaction["maximum_new_credential_ttl_seconds"] // 3_600
+    return {
+        "title": "Reauthorize an expired laptop credential",
+        "statements": [
+            "Laptop identity: the existing person and exact laptop remain unchanged",
+            "Key custody: the existing P-256 key must prove fresh possession",
+            "Old credential: remains expired and is retired, never extended",
+            "New credential: exact next epoch on the same public key",
+            f"New credential lifetime: no more than {hours} hour{'s' if hours != 1 else ''}",
+            "Capabilities, memberships, communication scopes, and authority: unchanged",
+            "Authority granted: none",
+        ],
         "advanced_digest": digest,
     }
 
@@ -751,6 +833,15 @@ def validate_and_summarize_approval_transaction(
         }
     ):
         return _validate_managed_server_credential_reauthorization(
+            transaction,
+            transaction_digest,
+        )
+    if (
+        purpose == _LAPTOP_CREDENTIAL_REAUTHORIZATION_PURPOSE
+        and transaction.get("schema")
+        == "agentnet.laptop-credential-reauthorization.v1"
+    ):
+        return _validate_laptop_credential_reauthorization(
             transaction,
             transaction_digest,
         )

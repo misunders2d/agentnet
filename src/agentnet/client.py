@@ -172,6 +172,41 @@ class AgentNetClient:
             },
         )
 
+    def prepare_expired_current_credential_reauthorization(
+        self,
+        *,
+        request_id: str,
+        identity_profile_sha256: str,
+    ) -> httpx.Response:
+        return self.request(
+            "POST",
+            "/v1/credentials/current/reauthorize-expired/prepare",
+            json_body={
+                "schema": "agentnet.laptop-credential-reauthorization-prepare.v1",
+                "request_id": request_id,
+                "identity_profile_sha256": identity_profile_sha256,
+            },
+        )
+
+    def progress_expired_current_credential_reauthorization(
+        self,
+        *,
+        transaction: dict[str, Any],
+        old_key_possession_signature: str,
+        possession_secret: str,
+    ) -> httpx.Response:
+        return self.request(
+            "POST",
+            "/v1/credentials/current/reauthorize-expired",
+            json_body={
+                "schema": "agentnet.laptop-credential-reauthorization-progress.v1",
+                "transaction": transaction,
+                "old_key_possession_signature": old_key_possession_signature,
+                "possession_secret": possession_secret,
+            },
+        )
+
+
     def c0_pilot_readiness(self) -> httpx.Response:
         return self.request(
             "POST", "/v1/c0-pilot/readiness",
