@@ -599,6 +599,36 @@ def test_approval_config_rejects_duplicate_json_keys_before_parsing(tmp_path: Pa
         load_approval_service_config(config)
 
 
+def test_approval_config_loads_exact_0150_one_hour_legacy_policy(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    private = _private_dir(tmp_path / "private")
+    config_path = private / "config.json"
+    assert cli.main(
+        [
+            "approval", "provision",
+            "--config", str(config_path),
+            "--data-dir", str(tmp_path / "approval-data"),
+            "--public-origin", "https://approval.corp.example",
+            "--rp-id", "approval.corp.example",
+            "--verifier-id", "approval.corp.example",
+            "--approvers", str(_approver_spec(private / "approvers.json")),
+        ]
+    ) == 0
+    capsys.readouterr()
+    value = json.loads(config_path.read_text(encoding="utf-8"))
+    value["request_ttl_seconds"] = 3_600
+    value.pop("communication_scope_request_ttl_seconds", None)
+    config_path.write_text(json.dumps(value), encoding="utf-8")
+    config_path.chmod(0o600)
+
+    loaded = load_approval_service_config(config_path)
+
+    assert loaded.request_ttl_seconds == 600
+    assert loaded.communication_scope_request_ttl_seconds == 3_600
+
+
 def test_register_begin_outputs_only_stable_public_entrypoint(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
