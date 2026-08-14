@@ -413,6 +413,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     )
     assert reauthorization.func is cli.command_server_agent_reauthorize_expired_credential
     assert reauthorization.replace_terminal_state is False
+
     defaults = parser.parse_args(["server-agent", "reauthorize-expired-credential"])
     assert defaults.config == str(cli.CORE_CONFIG)
     assert defaults.identity == str(cli.SERVER_AGENT_IDENTITY)
@@ -727,6 +728,62 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-2"
     assert all(opened_store.closed for opened_store in stores)
 
+
+
+def test_root_activation_store_connects_to_exact_peer_socket_as_core_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pwd
+
+    state = activation_fixture(tmp_path)
+    peer_url = "postgresql://agentnet@%2Fvar%2Frun%2Fpostgresql/agentnet"
+    ids = {"uid": 0, "gid": 0}
+    transitions: list[tuple[str, int]] = []
+    fake_store = FakeStore()
+    monkeypatch.setattr(
+        cli.LocalEnvelopeCipher,
+        "from_key_file",
+        lambda _path, *, create: object(),
+    )
+    monkeypatch.setattr(cli.os, "geteuid", lambda: ids["uid"])
+    monkeypatch.setattr(cli.os, "getegid", lambda: ids["gid"])
+    monkeypatch.setattr(
+        cli.os,
+        "seteuid",
+        lambda value: transitions.append(("uid", value)) or ids.update(uid=value),
+    )
+    monkeypatch.setattr(
+        cli.os,
+        "setegid",
+        lambda value: transitions.append(("gid", value)) or ids.update(gid=value),
+    )
+    monkeypatch.setattr(
+        pwd,
+        "getpwnam",
+        lambda name: SimpleNamespace(pw_uid=123, pw_gid=456)
+        if name == cli.CORE_USER
+        else pytest.fail("unexpected account"),
+    )
+
+    def fake_postgres(database_url, _cipher, **_kwargs):
+        assert database_url == peer_url
+        assert ids == {"uid": 123, "gid": 456}
+        return fake_store
+
+    monkeypatch.setattr(cli, "PostgreSQLStore", fake_postgres)
+
+    assert cli._open_server_agent_activation_store(
+        state.config,
+        database_url_override=peer_url,
+    ) is fake_store
+    assert ids == {"uid": 0, "gid": 0}
+    assert transitions == [
+        ("gid", 456),
+        ("uid", 123),
+        ("uid", 0),
+        ("gid", 0),
+    ]
 
 
 def test_managed_scope_replacement_is_resumable_and_waits_before_commit(

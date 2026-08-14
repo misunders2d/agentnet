@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -1034,19 +1034,43 @@ def _open_server_agent_activation_store(
         config.data_dir / "secrets" / "records.key",
         create=False,
     )
-    return PostgreSQLStore(
-        database_url_override or config.resolved_database_url(),
-        cipher,
-        instance_id=config.runtime_instance_id,
-        lease_owner_id=f"activation-{uuid4().hex}",
-        connect_timeout=config.postgres_connect_timeout_seconds,
-        statement_timeout_ms=config.postgres_statement_timeout_ms,
-        lock_timeout_ms=config.postgres_lock_timeout_ms,
-        lease_ttl_seconds=config.postgres_lease_ttl_seconds,
-        run_migrations=False,
-        start_lease_keeper=False,
-        require_recovery_topology=config.postgres_recovery_topology,
-    )
+    database_url = database_url_override or config.resolved_database_url()
+
+    def open_store() -> PostgreSQLStore:
+        return PostgreSQLStore(
+            database_url,
+            cipher,
+            instance_id=config.runtime_instance_id,
+            lease_owner_id=f"activation-{uuid4().hex}",
+            connect_timeout=config.postgres_connect_timeout_seconds,
+            statement_timeout_ms=config.postgres_statement_timeout_ms,
+            lock_timeout_ms=config.postgres_lock_timeout_ms,
+            lease_ttl_seconds=config.postgres_lease_ttl_seconds,
+            run_migrations=False,
+            start_lease_keeper=False,
+            require_recovery_topology=config.postgres_recovery_topology,
+        )
+
+    parsed = urlsplit(database_url)
+    if (
+        os.geteuid() == 0
+        and parsed.username == CORE_USER
+        and parsed.password is None
+        and unquote(parsed.hostname or "").startswith("/")
+    ):
+        import pwd as posix_pwd
+
+        account = posix_pwd.getpwnam(CORE_USER)
+        original_uid = os.geteuid()
+        original_gid = os.getegid()
+        try:
+            os.setegid(account.pw_gid)
+            os.seteuid(account.pw_uid)
+            return open_store()
+        finally:
+            os.seteuid(original_uid)
+            os.setegid(original_gid)
+    return open_store()
 
 
 def _require_server_agent_activation_binding(
