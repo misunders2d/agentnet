@@ -1,6 +1,6 @@
 # Requirements Status
 
-Snapshot: 2026-08-07. This is an implementation/evidence ledger, not a release
+Snapshot: 2026-08-09. This is an implementation/evidence ledger, not a release
 certificate. It contains the exact 85 stable requirement IDs from the preserved
 requirements reference. PD-001 through PD-011 are listed separately because
 they are accountable policy decisions, not additional requirements.
@@ -428,6 +428,85 @@ published and historical release evidence:
   `UX-001`, `UX-002`, `SEC-003`, `SEC-005`, `OPS-003`, and `OPS-006`. No
   requirement or must-not-ship gate is promoted.
 
+- Corrective v0.1.51 work replaces the manually demonstrated live recovery
+  with a package-owned, bounded path for the exact ordinary-onboarding
+  placeholder-owner state. Approval owner/passkey custody and current signer
+  authority converge to the enrolled Core principal only when exact domain,
+  OIDC, credential, row-shape, configuration, and journal evidence agrees.
+  Setup journals the corresponding Core policy cutover and resumes exact
+  partial writes; unsupported or ambiguous state fails closed. Communication
+  activation now materializes the complete schema-v7 collaboration projection
+  atomically with scope commitment, while a committed legacy scope is repaired
+  idempotently from its server-held source rows without replacement or generic
+  entitlement minting. The exact v0.1.50→v0.1.51 path preserves the published
+  300-second generic Approval policy without a rewrite and separately journals
+  and atomically normalizes only the retained one-hour generic Approval hotfix
+  to the bounded 600-second ordinary and 3600-second communication-scope TTL
+  split. An unrecorded hotfix is accepted only when deriving the published
+  300-second form reproduces the marker’s exact canonical config digest;
+  retries resume, pre-commit rollback restores the source bytes, and any
+  additional drift fails closed. The same marker gate composes the exact
+  completed canonical-owner repair with the retained TTL hotfix: it validates
+  terminal recovery and signer evidence, reconstructs both marker-era Approval
+  and Core documents, and requires both canonical digests to match before
+  creating an upgrade journal or changing managed state. If that exact
+  terminal live repair lost its recovery journal, setup may reconstruct one
+  only from the retained source marker, the unique historical and current
+  signer keys, current typed Approval/Core configuration, the exact active
+  owner binding, target credential state, and one matching immutable adoption
+  audit. It first writes a strict terminal reconstruction journal without
+  changing authority; missing, extra, or conflicting evidence fails closed.
+  Every initial or resumed attempt revalidates that terminal journal and its
+  marker/current digests. A resumed upgrade journal rechecks the exact
+  two-signer custody and matching current Core/Core-OIDC policy immediately
+  before the Approval TTL compare-and-swap, so intervening drift leaves
+  Approval unchanged. The retained 3600-second source shape is parsed without
+  writing and only its exact allowlisted TTL delta is accepted. Setup then
+  documents, normalizes the TTL policy, and verifies idempotent owner/Core
+  convergence; incomplete, cross-principal, signer-drifted, ambiguous-owner,
+  or independently drifted state remains fail-closed. A lost
+  PostgreSQL lease heartbeat publishes reconnect-required state while protected
+  operations remain excluded. A later operation opens a fresh verified
+  connection and reacquires a strictly higher same-owner fence;
+  different-owner contention or unverifiable recovery remains unavailable.
+  The focused recovery lane reports **261 passed**; the broad
+  releasable-source lane reports **2249 passed and 22 expected
+  platform/dedicated-PostgreSQL skips**; and source plus two recursive packed
+  generations each report **2276 passed and 22 expected skips**. Two independent
+  builds are byte-identical, packaged local message/obligation processing
+  reaches `recipient_committed`, and a fresh installed npm package passes exact
+  endpoint routing with zero sibling reactions or residue. Exact-commit GitHub
+  installed-host and disposable PostgreSQL 18.4 evidence for predecessor
+  commit `4e8ebd72d6b5e39550e438816abb1e2d30a5326a` remains retained but does not
+  bind this corrective source delta. Fresh same-commit CI and server PostgreSQL
+  validation are required before owner-authorized live convergence. Live
+  server/laptop convergence and two-machine reliability evidence remain pending.
+  Affected IDs are `ID-001`, `ID-002`, `ID-005`,
+  `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`, `AUTH-005`,
+  `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `AVL-005`, `SEC-003`, `SEC-005`,
+  `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or must-not-ship gate is
+  promoted.
+
+- The same corrective v0.1.51 candidate adds a bounded recovery for an expired
+  same-principal `member` in an active schema-v7 collaboration scope. A current
+  managed-server harness of the exact scope-owning principal may initiate the
+  ceremony because the expired member cannot authenticate, but the exact human
+  principal remains the source of positive authority through a fresh,
+  single-use Approval receipt bound to the complete scope/member/credential
+  pre-state. One atomic transaction tombstones the old member, activates the
+  exact replacement with the preserved role, advances counters, recomputes
+  digests, and records audit evidence. Current projection membership is the
+  authorization source; schema-v6 provenance remains immutable. All mismatch,
+  stale, replay, partial-projection, and unsupported transfer paths fail closed;
+  crash recovery reuses owner-only pending state. This changes no managed
+  identity/configuration and restarts no service. Affected IDs are `ID-005`,
+  `ID-006`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTH-004`,
+  `AUTH-005`, `COM-001`, `COM-002`, `COM-009`, `AVL-003`, `SEC-003`,
+  `SEC-005`, `SEC-007`, `OPS-003`, and `OPS-006`. `PD-002` and all
+  owner/external release gates remain blocked; no requirement or must-not-ship
+  gate is promoted.
+
+
 
 
 - S5/S6 directly exercise `ID-006`, `AUTH-001`, `AUTH-002`, `AUTH-003`,
@@ -579,7 +658,7 @@ stable requirement's status or remaining external/owner boundary.
 | OPS-004 — privacy-safe health/queue/latency/error/denial/security observability | partial-external | `src/agentnet/operations/telemetry.py`; `src/agentnet/audit/service.py`; `src/agentnet/product_http.py` | Fixed-label counters, bounded latency buckets, gauges, outage denials, scanner/audit/cost/adapter results, and protected content-free operator status: `tests/operations/test_privacy_budgets_attention.py`; `tests/integration/test_product_http_api.py`; `tests/production/test_postgres_runtime.py` | Production dashboard, alert delivery, retention, and load-SLO evidence remain external/owner-governed. |
 | OPS-005 — quotas, rate limits, backpressure, abuse and loop controls | partial-external | `src/agentnet/operations/quotas.py`; `src/agentnet/supervisor/model_egress.py`; `src/agentnet/operations/policy_defaults.py` | Persistent multidimensional fairness, atomic authoritative pressure reservations, circuit-breaker CAS/reclaim, loop fencing, safety reserve, relay/effect composition, and real-PostgreSQL one-winner race: `tests/operations/test_privacy_budgets_attention.py`; `tests/relay/test_server_agent_relay.py`; `tests/effects/test_effect_reservation.py`; `tests/production/test_postgres_runtime.py` | Production flood/soak/capacity tuning remains external and owner-governed. |
 | OPS-006 — portable self-hosted install/config/credentials/deployment | partial-external | `npm/bin/agentnet.mjs`; `src/agentnet/host.py`; `src/agentnet/host_security.py`; `src/agentnet/windows_security.py`; `src/agentnet/_terminal_handoff.py`; `src/agentnet/cli.py`; `src/agentnet/operations/server_setup.py`; `src/agentnet/storage/sqlite.py`; `src/agentnet/security/distribution.py`; `deploy/compose.production.json` | Linux/macOS/Windows package install/launch; fixed Linux setup plan/apply/resume/redaction; canonical state roots; owner-mode/protected-DACL state; reparse/link rejection; portable SQLite reopen/replay; signed HTTP client availability; config rebinding; backup/restore; anti-rollback; POSIX private-TTY behavior; and one ephemeral Ubuntu 24.04/PostgreSQL 18 installed-artifact setup lifecycle with always-run cleanup: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/cli/test_terminal_handoff.py`; `tests/production/test_deployment_config.py`; `tests/operations/test_backup_restore.py`; `tests/security/test_distribution_lifecycle.py`; GitHub run `30155733937` | Current real-host setup proof is one ephemeral Linux/systemd runner, not a privileged hostile-path or persistent-host trial. Windows terminal mode intentionally fails closed; signed native installer/update/uninstall/rollback, privileged hostile-path trials, live Google/WebAuthn, PostgreSQL locked restore, KMS/off-host custody, and independently signed production artifacts remain external. |
-| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `.github/workflows/server-setup-upgrade-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.39`, the setup/recovery lane reports `224 passed`; focused release lane reports `645 passed/7 expected dedicated-PostgreSQL skips`; source-only lane reports `1615 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1642 passed/16 expected skips`; generation 2 additionally passes the installed-byte real-loopback multiprocess local communication gate with `accepted_local`, exact attribution, idempotency, `recipient_committed`, typed obligation completion across four Core starts (three restarts), lab-fixture credential refusal, listener release, empty workspace, and no package-tree residue; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Published `0.1.38` retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. Candidate `0.1.39` changes to explicit GET plus product User-Agent and JSON Accept headers and repairs only the deterministic-lab local policy/recipient/custody seams; production policy still rejects those harnesses. It adds no migration edge and rejects an exact 0.1.38 marker. Its same-commit gate must realize that exact public marker from fresh state, require two identical fail-closed refusals, and prove marker, attempt, managed files, database schema, unit states, identity, and authority remain unchanged. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.39` root-installed Hub verification and fresh clean-state setup, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
+| OPS-007 — conformance/security/recovery/federation/harness tests and reuse bake-off | partial-external | `src/agentnet/components/bakeoff.py`; `src/agentnet/components/registry.py`; `scripts/verify_release.py`; `.github/workflows/cross-platform.yml`; `.github/workflows/server-setup-e2e.yml`; `docs/BAKEOFF_PLAN.md` | Historical cross-platform evidence remains bound to its named immutable releases. For current candidate `0.1.39`, the setup/recovery lane reports `224 passed`; focused release lane reports `645 passed/7 expected dedicated-PostgreSQL skips`; source-only lane reports `1615 passed/16 expected skips`; source and both clean recursive installed npm generations each report `1642 passed/16 expected skips`; generation 2 additionally passes the installed-byte real-loopback multiprocess local communication gate with `accepted_local`, exact attribution, idempotency, `recipient_committed`, typed obligation completion across four Core starts (three restarts), lab-fixture credential refusal, listener release, empty workspace, and no package-tree residue; direct disposable-package verification, release verification, complete package-tree equality, no-residue checks, and deterministic byte-identical archives pass. Those lanes exclude installed-live-inference, subprocess-lifecycle, and bake-off-evidence files; the two installed-harness pin failures remain non-green and unwaived. Published `0.1.38` retains ordinary 30-attempt probes, uses the existing finite 90-attempt startup bound only for public Approval/Core health and Core readiness, and admits only exact forward-only `0.1.37→0.1.38` five-unit recovery. Candidate `0.1.39` changes to explicit GET plus product User-Agent and JSON Accept headers and repairs only the deterministic-lab local policy/recipient/custody seams; production policy still rejects those harnesses. It adds no migration edge and rejects an exact 0.1.38 marker. Its same-commit gate must realize that exact public marker from fresh state, require two identical fail-closed refusals, and prove marker, attempt, managed files, database schema, unit states, identity, and authority remain unchanged. The earlier clean Ubuntu 24.04/PostgreSQL 18 setup/cleanup and cross-platform package results remain bound to named `0.1.26` commit/runs: `tests/platform/test_host_support.py`; `tests/operations/test_server_setup.py`; `tests/conformance/test_npm_package.py`; `tests/conformance/test_release_manifest.py`; `tests/production/test_postgres_runtime.py`; `tests/components/test_bakeoff_evidence.py` | Official A2A remains non-green. Exact public `0.1.39` root-installed Hub verification and fresh clean-state setup, same-commit CI, mutation-authorized PostgreSQL evidence, completed live ceremony, independent component bake-offs, adaptive red-team, privileged host trials, and production chaos remain external. |
 
 ## Accountable policy decisions (separate from the 85 requirements)
 

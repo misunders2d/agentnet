@@ -16,6 +16,7 @@ from agentnet.storage.relationship_governance_schema import (
     RELATIONSHIP_GOVERNANCE_SQLITE_SCHEMA,
 )
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION, MIGRATIONS
+from agentnet.storage.release_v7_schema import materialize_v6_communication_scope
 from agentnet.storage.sqlite import SQLiteStore
 
 
@@ -257,6 +258,121 @@ def _seed_committed_v6_communication_scope(path: Path) -> None:
         connection.commit()
     finally:
         connection.close()
+
+
+def test_single_scope_materializer_is_exact_and_idempotent(tmp_path: Path) -> None:
+    path = tmp_path / "single-scope-v7.sqlite3"
+    store = SQLiteStore(path, LocalEnvelopeCipher(b"p" * 32))
+    try:
+        _insert_identity(store)
+        _seed_committed_v6_communication_scope(path)
+        with store.transaction() as connection:
+            assert (
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id="scope-release-v6",
+                )
+                == "created"
+            )
+        with store.transaction() as connection:
+            assert (
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id="scope-release-v6",
+                )
+                == "already_exact"
+            )
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes WHERE scope_id=?",
+            ("scope-release-v6",),
+        )["n"] == 1
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            ("scope-release-v6",),
+        )["n"] == 2
+    finally:
+        store.close()
+
+
+def test_single_scope_materializer_rejects_partial_existing_projection(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "partial-scope-v7.sqlite3"
+    store = SQLiteStore(path, LocalEnvelopeCipher(b"q" * 32))
+    try:
+        _insert_identity(store)
+        _seed_committed_v6_communication_scope(path)
+        with store.transaction() as connection:
+            materialize_v6_communication_scope(
+                connection,
+                scope_id="scope-release-v6",
+            )
+        with store.transaction() as connection:
+            connection.execute(
+                """DELETE FROM collaboration_scope_members
+                    WHERE scope_id=? AND role='member'""",
+                ("scope-release-v6",),
+            )
+        with pytest.raises(GateBlocked, match="existing collaboration scope projection mismatches"):
+            with store.transaction() as connection:
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id="scope-release-v6",
+                )
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            ("scope-release-v6",),
+        )["n"] == 1
+    finally:
+        store.close()
+
+
+def test_single_scope_materializer_rejects_incomplete_source_without_target_writes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "incomplete-source-v7.sqlite3"
+    store = SQLiteStore(path, LocalEnvelopeCipher(b"s" * 32))
+    try:
+        _insert_identity(store)
+        _seed_committed_v6_communication_scope(path)
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM communication_scope_items WHERE scope_id=? AND item_ordinal=1",
+                ("scope-release-v6",),
+            )
+        with pytest.raises(
+            GateBlocked,
+            match="v6 communication scope authority items are incomplete or not current",
+        ):
+            with store.transaction() as connection:
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id="scope-release-v6",
+                )
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes WHERE scope_id=?",
+            ("scope-release-v6",),
+        )["n"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            ("scope-release-v6",),
+        )["n"] == 0
+    finally:
+        store.close()
+
+
+def test_single_scope_materializer_rejects_unknown_scope(tmp_path: Path) -> None:
+    path = tmp_path / "unknown-scope-v7.sqlite3"
+    store = SQLiteStore(path, LocalEnvelopeCipher(b"t" * 32))
+    try:
+        with pytest.raises(GateBlocked, match="committed communication scope is unavailable"):
+            with store.transaction() as connection:
+                materialize_v6_communication_scope(
+                    connection,
+                    scope_id="missing-scope",
+                )
+    finally:
+        store.close()
 
 
 def test_sqlite_v6_upgrade_preserves_committed_communication_authority(

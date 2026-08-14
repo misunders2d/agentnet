@@ -27,7 +27,7 @@ from webauthn.helpers.structs import (
 
 from agentnet.approval.config import ApprovalServiceConfig, require_owner_only_file
 from agentnet.approval.service import TrustedApprover, create_independent_approval_receipt
-from agentnet.approval.store import ApprovalStore
+from agentnet.approval.store import ApprovalStore, approval_user_handle
 from agentnet.approval.transaction_summary import validate_and_summarize_approval_transaction
 from agentnet.authorization.communication_scope import COMMUNICATION_SCOPE_APPROVAL_PURPOSE
 from agentnet.errors import AuthenticationError, ConflictError, GateBlocked, ValidationError
@@ -123,16 +123,11 @@ def _core_request_digest(
 
 
 def _user_handle(config: ApprovalServiceConfig, principal_id: str, domain_id: str) -> bytes:
-    return hashlib.sha256(
-        canonical_json(
-            {
-                "schema": "agentnet.approval.webauthn-user.v1",
-                "verifier_id": config.verifier_id,
-                "domain_id": domain_id,
-                "approver_principal_id": principal_id,
-            }
-        )
-    ).digest()
+    return approval_user_handle(
+        verifier_id=config.verifier_id,
+        principal_id=principal_id,
+        domain_id=domain_id,
+    )
 
 
 def _active_fingerprint(

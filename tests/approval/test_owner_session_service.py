@@ -131,6 +131,34 @@ class BootstrapApprovalRequests(FakeApprovalRequests):
         }
 
 
+class CredentialRecoveryApprovalRequests(FakeApprovalRequests):
+    def actionable_requests_for_owner(self, **kwargs):
+        self.calls.append(("actionable", kwargs))
+        return [
+            {
+                "request_id": "request-recovery-123",
+                "approval_purpose": "identity.credential.recover.approve",
+                "state": "pending",
+                "created_at": NOW,
+                "expires_at": NOW + 300,
+            }
+        ]
+
+    def request_options_for_owner(self, **kwargs):
+        self.calls.append(("options", kwargs))
+        return {
+            "request_id": kwargs["request_id"],
+            "approval_purpose": "identity.credential.recover.approve",
+            "expires_at": NOW + 300,
+            "challenge_expires_at": NOW + 180,
+            "summary": {
+                "title": "Reauthorize an expired server-agent credential",
+                "statements": ["Authority: one bounded credential recovery"],
+            },
+            "publicKey": {"challenge": "AA", "allowCredentials": []},
+        }
+
+
 class FakeOIDCProvider:
     def __init__(self, identity: VerifiedOIDCIdentity) -> None:
         self.identity = identity
@@ -339,6 +367,27 @@ def test_bound_owner_session_lists_reviews_and_approves_without_browser_capabili
             assert "token" not in call
             if name in {"options", "approve", "regenerate"}:
                 assert call["owner_session_hash"] == expected_session_hash
+    finally:
+        stack.store.close()
+
+
+def test_bound_owner_can_review_credential_recovery_request(tmp_path: Path) -> None:
+    approvals = CredentialRecoveryApprovalRequests()
+    stack = _service(tmp_path, approval_service=approvals)
+    try:
+        _preauth, completed = _login(stack)
+        options = stack.service.begin_approval(
+            session_token=completed.session_token,
+            csrf_token=completed.csrf_token,
+            request_id="request-recovery-123",
+        )
+        assert options["summary"]["title"] == (
+            "Reauthorize an expired server-agent credential"
+        )
+        assert [name for name, _call in approvals.calls[-2:]] == [
+            "actionable",
+            "options",
+        ]
     finally:
         stack.store.close()
 

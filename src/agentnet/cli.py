@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -70,6 +70,11 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeStatusResult,
 )
 from agentnet.authorization.c0_pilot import C0PilotResult
+from agentnet.authorization.scope_harness_replacement import (
+    SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+    ScopeHarnessReplacementRequest,
+    ScopeHarnessReplacementService,
+)
 from agentnet.bindings.remote_manager import (
     resolve_packaged_pi_extension,
     run_manager_gateway,
@@ -1029,19 +1034,43 @@ def _open_server_agent_activation_store(
         config.data_dir / "secrets" / "records.key",
         create=False,
     )
-    return PostgreSQLStore(
-        database_url_override or config.resolved_database_url(),
-        cipher,
-        instance_id=config.runtime_instance_id,
-        lease_owner_id=f"activation-{uuid4().hex}",
-        connect_timeout=config.postgres_connect_timeout_seconds,
-        statement_timeout_ms=config.postgres_statement_timeout_ms,
-        lock_timeout_ms=config.postgres_lock_timeout_ms,
-        lease_ttl_seconds=config.postgres_lease_ttl_seconds,
-        run_migrations=False,
-        start_lease_keeper=False,
-        require_recovery_topology=config.postgres_recovery_topology,
-    )
+    database_url = database_url_override or config.resolved_database_url()
+
+    def open_store() -> PostgreSQLStore:
+        return PostgreSQLStore(
+            database_url,
+            cipher,
+            instance_id=config.runtime_instance_id,
+            lease_owner_id=f"activation-{uuid4().hex}",
+            connect_timeout=config.postgres_connect_timeout_seconds,
+            statement_timeout_ms=config.postgres_statement_timeout_ms,
+            lock_timeout_ms=config.postgres_lock_timeout_ms,
+            lease_ttl_seconds=config.postgres_lease_ttl_seconds,
+            run_migrations=False,
+            start_lease_keeper=False,
+            require_recovery_topology=config.postgres_recovery_topology,
+        )
+
+    parsed = urlsplit(database_url)
+    if (
+        os.geteuid() == 0
+        and parsed.username == CORE_USER
+        and parsed.password is None
+        and unquote(parsed.hostname or "").startswith("/")
+    ):
+        import pwd as posix_pwd
+
+        account = posix_pwd.getpwnam(CORE_USER)
+        original_uid = os.geteuid()
+        original_gid = os.getegid()
+        try:
+            os.setegid(account.pw_gid)
+            os.seteuid(account.pw_uid)
+            return open_store()
+        finally:
+            os.seteuid(original_uid)
+            os.setegid(original_gid)
+    return open_store()
 
 
 def _require_server_agent_activation_binding(
@@ -2632,6 +2661,281 @@ def _command_server_agent_reauthorize_expired_credential_locked(
                 "authority_granted": False,
                 "service_restart": "not_performed",
                 "next": "rerun the exact package-owned server-agent setup --apply --start command",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+def command_server_agent_replace_expired_scope_harness(args: argparse.Namespace) -> int:
+    """Replace one expired scope member after exact owner Approval."""
+
+    if os.geteuid() != 0:
+        raise SystemExit("managed scope harness replacement requires root")
+    with _managed_server_reauthorization_lock():
+        return _command_server_agent_replace_expired_scope_harness_locked(args)
+
+
+def _command_server_agent_replace_expired_scope_harness_locked(
+    args: argparse.Namespace,
+) -> int:
+    config_path = Path(os.path.abspath(args.config))
+    identity_path = Path(os.path.abspath(args.identity))
+    state_path = Path(os.path.abspath(args.state))
+    if (
+        config_path != CORE_CONFIG
+        or identity_path != SERVER_AGENT_IDENTITY
+        or state_path != SETUP_ROOT / "scope-harness-replacement.json"
+    ):
+        raise SystemExit("managed scope replacement requires exact package-owned paths")
+    try:
+        import pwd as posix_pwd
+
+        core_account = posix_pwd.getpwnam(CORE_USER)
+    except (KeyError, OSError) as exc:
+        raise SystemExit("managed Core service custody is unavailable") from exc
+    config_raw, config_metadata = _managed_private_file(
+        config_path,
+        label="managed server configuration",
+        expected_uid=core_account.pw_uid,
+    )
+    identity_raw, identity_metadata = _managed_private_file(
+        identity_path,
+        label="managed server identity",
+        expected_uid=core_account.pw_uid,
+    )
+    if (
+        config_metadata.st_gid != core_account.pw_gid
+        or identity_metadata.st_gid != core_account.pw_gid
+    ):
+        raise SystemExit("managed server file group custody is unsafe")
+    try:
+        config = load_config_json(config_raw.decode())
+        identity = json.loads(identity_raw)
+        actor = VerifiedActor.model_validate(identity["actor"])
+    except (KeyError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit("managed-server config or identity is invalid") from exc
+    if (
+        config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+        or actor.principal_id is None
+        or actor.harness_id is None
+        or actor.credential_id is None
+        or actor.binding_assurance not in {"os_bound", "hardware_bound"}
+        or actor.domain_id != config.domain_id
+        or actor.harness_id != config.enrolled_harness_id
+    ):
+        raise SystemExit("managed-server identity is not eligible for scope replacement")
+    key_path = Path(str(identity.get("private_key_path", "")))
+    key_raw, key_metadata = _managed_private_file(
+        key_path,
+        label="managed server identity key",
+        expected_uid=core_account.pw_uid,
+    )
+    if key_path != SERVER_AGENT_KEY or key_metadata.st_gid != core_account.pw_gid:
+        raise SystemExit("managed server identity key custody is unsafe")
+    key = P256KeyPair.from_private_pem(key_raw)
+    _require_managed_server_reauthorization_topology(config)
+    verifier, approval_config = _managed_server_reauthorization_verifier(config)
+    if approval_config.approver_principal_id != actor.principal_id:
+        raise SystemExit("configured Approval owner does not match the managed-server principal")
+    core_environment = _parse_environment_file(CORE_ENV, label="managed Core environment")
+    if any(name in os.environ for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE")):
+        raise SystemExit("ambient TLS trust overrides are forbidden for managed scope replacement")
+    if config.database_url_env is None or config.database_url_env not in core_environment:
+        raise SystemExit("managed Core database credential is unavailable")
+    broker_name = approval_config.service_credential_env
+    if broker_name not in core_environment:
+        raise SystemExit("managed Approval broker credential is unavailable")
+    database_url = core_environment[config.database_url_env]
+    expected_binding = {
+        "config_sha256": hashlib.sha256(config_raw).hexdigest(),
+        "identity_sha256": hashlib.sha256(identity_raw).hexdigest(),
+        "scope_id": args.scope_id,
+        "old_harness_id": args.old_harness_id,
+        "new_harness_id": args.new_harness_id,
+        "role": args.role,
+    }
+
+    def prepare_request() -> ScopeHarnessReplacementRequest:
+        store = _open_server_agent_activation_store(
+            config,
+            database_url_override=database_url,
+        )
+        try:
+            _require_server_agent_activation_binding(
+                store,
+                config=config,
+                actor=actor,
+                key=key,
+            )
+            now = int(time.time())
+            return ScopeHarnessReplacementService(
+                store,
+                verifier,
+            ).prepare(
+                actor=actor,
+                scope_id=args.scope_id,
+                old_harness_id=args.old_harness_id,
+                new_harness_id=args.new_harness_id,
+                role=args.role,
+                request_id=str(uuid4()),
+                issued_at=now,
+                expires_at=now + 600,
+            )
+        finally:
+            store.close()
+
+    if os.path.lexists(state_path):
+        try:
+            pending = json.loads(
+                _owner_only_file(
+                    state_path,
+                    label="managed scope replacement state",
+                )
+            )
+            if (
+                not isinstance(pending, dict)
+                or pending.get("schema")
+                != "agentnet.managed-scope-harness-replacement-state.v1"
+                or pending.get("binding") != expected_binding
+            ):
+                raise ValueError("state binding mismatch")
+            request = ScopeHarnessReplacementRequest.model_validate(pending["request"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit("managed scope replacement state is invalid") from exc
+    else:
+        if args.replace_terminal_state:
+            raise SystemExit("no terminal scope replacement state exists")
+        request = prepare_request()
+        pending = {
+            "schema": "agentnet.managed-scope-harness-replacement-state.v1",
+            "binding": expected_binding,
+            "request": request.model_dump(mode="json"),
+            "possession_secret": secrets.token_urlsafe(32),
+            "approval_request_id": None,
+        }
+        _write_private_config(state_path, pending)
+
+    client = _managed_server_reauthorization_client(
+        config,
+        broker_credential=core_environment[broker_name],
+    )
+    try:
+        approval_request_id = pending["approval_request_id"]
+        if approval_request_id is None:
+            created = client.create_request(
+                idempotency_key=f"scope-harness-replacement:{request.request_id}",
+                domain_id=request.domain_id,
+                approval_purpose=SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+                canonical_transaction=request.canonical_transaction,
+                transaction_digest=request.digest,
+                possession_hash=hashlib.sha256(
+                    str(pending["possession_secret"]).encode()
+                ).hexdigest(),
+                request_expires_at=request.expires_at,
+            )
+            approval_request_id = created["request_id"]
+            pending["approval_request_id"] = approval_request_id
+            _write_private_config(state_path, pending, force=True)
+        status = client.request_status(
+            request_id=str(approval_request_id),
+            transaction_digest=request.digest,
+        )
+        if status["state"] in {"rejected", "expired"}:
+            if not args.replace_terminal_state:
+                raise SystemExit(
+                    "managed scope replacement is terminal; rerun with --replace-terminal-state"
+                )
+            request = prepare_request()
+            pending = {
+                "schema": "agentnet.managed-scope-harness-replacement-state.v1",
+                "binding": expected_binding,
+                "request": request.model_dump(mode="json"),
+                "possession_secret": secrets.token_urlsafe(32),
+                "approval_request_id": None,
+            }
+            _write_private_config(state_path, pending, force=True)
+            created = client.create_request(
+                idempotency_key=f"scope-harness-replacement:{request.request_id}",
+                domain_id=request.domain_id,
+                approval_purpose=SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+                canonical_transaction=request.canonical_transaction,
+                transaction_digest=request.digest,
+                possession_hash=hashlib.sha256(
+                    str(pending["possession_secret"]).encode()
+                ).hexdigest(),
+                request_expires_at=request.expires_at,
+            )
+            approval_request_id = created["request_id"]
+            pending["approval_request_id"] = approval_request_id
+            _write_private_config(state_path, pending, force=True)
+            status = client.request_status(
+                request_id=str(approval_request_id),
+                transaction_digest=request.digest,
+            )
+        if status["state"] == "pending":
+            print(
+                json.dumps(
+                    {
+                        "schema": "agentnet.managed-scope-harness-replacement-cli.v1",
+                        "status": "waiting_owner_approval",
+                        "owner_action": (
+                            f"Open {approval_config.public_origin}/approval and approve "
+                            "the expired scope-harness replacement, then rerun this exact command."
+                        ),
+                        "membership_changed": False,
+                        "service_restart": "not_performed",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 2
+        if status["state"] != "issued":
+            raise SystemExit("managed scope replacement was not approved")
+        receipt = client.retrieve_receipt(
+            request_id=str(approval_request_id),
+            possession_secret=str(pending["possession_secret"]),
+            domain_id=request.domain_id,
+            approval_purpose=SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+            transaction_digest=request.digest,
+            idempotency_key=f"scope-harness-replacement-retrieve:{request.request_id}",
+        )
+    finally:
+        client.close()
+
+    store = _open_server_agent_activation_store(
+        config,
+        database_url_override=database_url,
+    )
+    try:
+        _require_server_agent_activation_binding(
+            store,
+            config=config,
+            actor=actor,
+            key=key,
+        )
+        result = ScopeHarnessReplacementService(store, verifier).replace(
+            actor=actor,
+            request=request,
+            approval=receipt,
+        )
+    finally:
+        store.close()
+    _remove_private_state(state_path)
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.managed-scope-harness-replacement-cli.v1",
+                "status": "completed",
+                "scope_id": result.scope_id,
+                "old_harness_id": result.old_harness_id,
+                "new_harness_id": result.new_harness_id,
+                "scope_revision": result.scope_revision,
+                "membership_sequence": result.membership_sequence,
+                "idempotent_database_repeat": result.idempotent_repeat,
+                "service_restart": "not_performed",
             },
             indent=2,
             sort_keys=True,
@@ -6415,6 +6719,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     server_agent_reauthorize.set_defaults(
         func=command_server_agent_reauthorize_expired_credential
+    )
+    server_agent_replace_scope_harness = server_agent_commands.add_parser(
+        "replace-expired-scope-harness",
+        help="replace one expired same-principal member in an active collaboration scope",
+    )
+    server_agent_replace_scope_harness.add_argument("--scope-id", required=True)
+    server_agent_replace_scope_harness.add_argument("--old-harness-id", required=True)
+    server_agent_replace_scope_harness.add_argument("--new-harness-id", required=True)
+    server_agent_replace_scope_harness.add_argument(
+        "--role",
+        choices=("member",),
+        default="member",
+    )
+    server_agent_replace_scope_harness.add_argument("--config", default=str(CORE_CONFIG))
+    server_agent_replace_scope_harness.add_argument(
+        "--identity",
+        default=str(SERVER_AGENT_IDENTITY),
+    )
+    server_agent_replace_scope_harness.add_argument(
+        "--state",
+        default="/var/lib/agentnet-setup/scope-harness-replacement.json",
+    )
+    server_agent_replace_scope_harness.add_argument(
+        "--replace-terminal-state",
+        action="store_true",
+        help="replace only a broker-proven rejected or expired pending ceremony",
+    )
+    server_agent_replace_scope_harness.set_defaults(
+        func=command_server_agent_replace_expired_scope_harness
     )
 
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")

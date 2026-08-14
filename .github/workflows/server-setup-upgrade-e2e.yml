@@ -1,4 +1,4 @@
-name: Ordinary server 0.1.45 to 0.1.46 timer upgrade E2E
+name: Ordinary server 0.1.50 to 0.1.51 installed-host upgrade E2E
 
 on:
   workflow_call:
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   released-upgrade-chain:
-    name: Ubuntu 24.04 / PostgreSQL 18 / recurring credential renewal
+    name: Ubuntu 24.04 / PostgreSQL 18 / installed-host state preservation
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -51,11 +51,6 @@ jobs:
         shell: bash
         run: install -m 0755 scripts/ci/ordinary-server-upgrade-e2e.sh "$RUNNER_TEMP/ordinary-server-upgrade-e2e.sh"
 
-      - name: Check out frozen v0.1.46 evidence source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: 9620e24c74e3720ad90790da037b013dd26bfbab
 
       - name: Configure Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -91,7 +86,7 @@ jobs:
           sudo pg_createcluster 18 main --port 5432 --start
           sudo -u postgres psql -Atq --dbname=postgres -c "SHOW server_version" | grep -E '^18\.'
 
-      - name: Prove exact released-to-corrected timer upgrade
+      - name: Prove exact v0.1.50-to-v0.1.51 installed-host upgrade
         shell: bash
         run: "$RUNNER_TEMP/ordinary-server-upgrade-e2e.sh"
 

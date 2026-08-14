@@ -534,6 +534,7 @@ class OwnerSessionService:
             or matches[0].get("approval_purpose")
             not in {
                 "identity.enrollment.approve",
+                "identity.credential.recover.approve",
                 "authorization.bootstrap_plan.approve",
                 "authorization.communication_scope.approve",
             }

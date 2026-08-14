@@ -116,6 +116,18 @@ authority and restarts no service. Inode-checked owner/mode-preserving CAS
 updates config, identity, and journal, and exact retry reconciles crashes or
 response loss without creating another credential.
 
+Canonical-owner setup recovery treats the exact source/target approver pair as
+an unordered trust set. It still verifies both principals, signer keys, public
+keys, authority kinds, purpose sets, sidecar policy, and all non-trust OIDC
+fields. The live source policy must equal the sole frozen target policy except
+for the journal-bound source principal and signer references; setup proves that
+equivalence before any recovery-journal write. A retained marker may bind
+either that source policy or the exact target policy from the frozen setup
+request; acceptance requires one candidate to reproduce the marker digest.
+The observed trust order is retained through the prepared journal and
+compare-and-swap migration so recovery never rewrites unjournaled bytes.
+
+
 ## Canonical state and evidence
 
 - Canonical implementation state: this repository.
@@ -124,6 +136,12 @@ response loss without creating another credential.
 - Production target: one PostgreSQL transaction for identity/policy/event/
   recipient/receipt/audit-intent/outbox authority plus an immutable artifact
   backend. Startup remains blocked until that backend and evidence are wired.
+  The runtime lease heartbeat fails closed: its failure state is published
+  while protected operations remain excluded. A later storage operation
+  replaces the connection and resumes only after the writable primary, exact
+  schema, and a strictly higher same-owner fence are verified. Different-owner
+  contention, standby/future schema, or a non-increasing fence remains
+  unavailable; the superseded connection is closed.
 - Evidence ledger: `REQUIREMENTS_STATUS.md` and `docs/GATE_EVIDENCE.md`.
 - Generated schemas: `schemas/v1/*.json`.
 
@@ -894,5 +912,105 @@ fabricating intermediate migrations. Every source marker and target runtime is
 revalidated before commit. Packed-package verification additionally executes
 the separate-process local message/obligation roundtrip; it remains H/L local
 evidence and does not prove production durability.
+
+The corrective v0.1.51 recovery remains inside this composition root. After an
+exact supported upgrade has established the enrolled Core identity, setup may
+classify only the known placeholder-owner, partial-repair, live-repair, or
+already-converged Approval shapes. A service-private command adopts the
+canonical owner and replacement P-256 receipt signer under Approval's OS
+identity. Setup then replaces the corresponding Core OIDC and approver policy
+through the existing root-owned upgrade journal. Exact journal phases make an
+interruption resumable; mismatched identity, OIDC subject, domain, signer,
+configuration, database shape, revision, or digest blocks startup.
+
+The prepared journal temporarily holds the replacement signer secret under
+root-only file custody before the Approval-owned signer file is created. The
+secret is removed from the journal immediately after the signer file is
+durably installed and before authority mutation; either durable copy can
+resume the prepared phase, while a missing or mismatched copy fails closed.
+
+One exact pre-adoption split state is also resumable when the original recovery
+journal was lost. In that state Approval still names the source owner and
+signer, signer custody contains exactly the source and staged target keys, the
+embedded Core policy contains source-plus-target trust, and the standalone Core
+OIDC sidecar contains only the canonical target. Setup reconstructs a
+`prepared` journal only when the retained v0.1.50 marker, current typed files,
+key bindings, and active source-owner state reproduce that exact transition.
+The reconstruction records marker and realized Approval/Core/Core-OIDC digests
+before any authority mutation. Ordinary journaled adoption then resumes; extra
+keys, reversed or incomplete trust, target-only Approval state, ambiguous
+owner state, or any unrelated drift fails closed.
+
+If the exact terminal live repair completed but its recovery journal was never
+retained, setup does not repeat adoption or infer authority from the current
+principal alone. It reconstructs a terminal journal only when one retained
+v0.1.50 marker, exactly two fixed-custody signer keys, current typed
+Approval/Core policy, one active canonical owner binding, target credential
+state, and one immutable adoption audit jointly reproduce the exact marker-era
+source and current realized digests. Reconstructing the marker-era source
+reverses only the exact evidence-bound Approval and Core owner/signer policy
+fields. Because the historical policy writer serialized a `frozenset`, marker
+matching may search only permutations of the exact mandatory approval-purpose
+set to recover its former byte order. Added, removed, duplicated, or changed
+purposes cannot enter that path. The reconstruction write is the first
+mutation and changes no authority. Its strict evidence is revalidated after
+process loss. A resumed upgrade journal rechecks the exact two-signer custody
+and matching current Core/Core-OIDC policy immediately before the Approval TTL
+compare-and-swap; missing, additional, ambiguous, or drifted evidence leaves
+Approval unchanged and fails closed.
+
+That same v0.1.50→v0.1.51 boundary preserves the exact published v0.1.50
+Approval policy with its 300-second generic request TTL and absent
+communication-scope field. It separately recognizes the retained hotfix that
+raised the generic request TTL to one hour with either an absent or explicit
+3600-second communication-scope field.
+When the setup marker still records
+the published configuration, setup derives that exact 300-second form from the
+realized hotfix and requires its canonical digest to match the marker. Only
+then does it record the realized Approval configuration in upgrade journal v3,
+restore the ordinary request ceiling to 600 seconds, and preserve the distinct
+communication-scope ceiling at 3600 seconds. The write uses compare-and-swap;
+interruption resumes from the journal, pre-commit rollback restores the exact
+source bytes, and any additional configuration drift fails closed.
+
+Marker validation also handles the exact composition of those two corrective
+states. When the live owner/Core policy is already canonical, the Approval
+recovery journal is terminal, the one-hour hotfix remains realized, and the
+marker still records the pre-repair source, setup reconstructs both marker-era
+documents from the current typed documents plus proof-bound source identity and
+signer fields. It reverses only the allowlisted TTL delta for comparison and
+requires both canonical digests to equal the marker before creating the setup
+journal. Every initial or resumed attempt first revalidates the terminal
+recovery journal, exact single active owner, adoption audit, target credential,
+and signer custody. The retained 3600-second source policy is parsed through an
+exact no-write compatibility path; only after that preflight may the normal
+journal capture the realized current files and TTL normalization proceed.
+Owner/Core convergence is then verified idempotently. Unknown, incomplete,
+cross-principal, signer-mismatched, ambiguous-owner, or additionally drifted
+combinations fail before a managed write.
+
+Communication-scope completion and legacy-scope repair share one schema-v7
+single-scope materializer. Completion invokes it inside the transaction that
+commits the scope, entitlements, revoke powers, members, audit record, and
+idempotent result. Repair derives the same projection only from committed
+server-held scope rows. Existing exact rows are a no-op; partial, extra, or
+conflicting rows roll back. Thus no success can expose a terminal active scope
+without its canonical collaboration authority, and recovery never replaces
+the active scope or grants generic access.
+
+Expired schema-v7 member recovery is a separate root-managed Approval
+transaction. A current non-lab managed-server harness may initiate it only when
+it belongs to the exact scope-owning human principal; this permits recovery
+when the former owner/member harness can no longer authenticate without
+transferring authority to a sibling harness. Approval by that exact principal
+binds the scope owner, former and replacement harnesses/current credentials,
+preserved `member` role, scope digest/revision/membership sequence, policy and
+revocation epochs, and finite request lifetime. Core consumes the receipt and
+atomically tombstones the former row, inserts the active same-principal
+replacement, advances counters, recomputes digests, and appends audit evidence.
+Current schema-v7 membership becomes the authorization source; immutable
+schema-v6 rows remain provenance. Managed identity/configuration files and
+service state are outside the transaction and are never changed or restarted.
+
 
 `agentnet server-agent reset` is destructive server-manager-only package recovery. It acquires the same permanent root-only setup lock before inventory, rejects state without pre-existing lock custody, stops/disables and proves all five managed units inactive, removes only allowlisted package deployment units/state, and preserves the lock/root so a concurrent or later setup cannot lock a different inode. It always reloads systemd, including exact response-loss retry, and retains PostgreSQL, runtimes, package installation, proxy/TLS/DNS/firewall inputs, and locked service identities. Reset is not a browser action, onboarding step, or secret-rotation path. Exact AgentNet database/role reinitialization is a separate destructive operator boundary requiring sanitized target inventory, explicit named approval, an explicit backup/rollback decision, and redacted audit evidence; unrelated/shared/valuable targets fail closed.

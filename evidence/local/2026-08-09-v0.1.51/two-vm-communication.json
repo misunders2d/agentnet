@@ -1,0 +1,65 @@
+{
+  "schema": "agentnet.two-vm-communication-observation.v1",
+  "evaluated_at": "2026-08-09T12:08:14.219Z",
+  "trial_result": "PASS",
+  "release_evidence_eligible": false,
+  "release_certified": false,
+  "exclusion_reason": "Live commands and outputs were observed, but the ad-hoc provisioning driver was not retained as a repository script; this record cannot promote a release gate.",
+  "package": {
+    "version": "0.1.51",
+    "wheel_sha256": "8030d8cbd62ef05f6b3134994ccbd884f343356d16203d02484bbefde59af10e"
+  },
+  "hosts": [
+    {
+      "vm": "A",
+      "observed": [
+        "host=agentnet-vm-a",
+        "kernel=6.8.0-136-generic",
+        "os=Ubuntu 24.04.4 LTS",
+        "agentnet=agentnet 0.1.51"
+      ]
+    },
+    {
+      "vm": "B",
+      "observed": [
+        "host=agentnet-vm-b",
+        "kernel=6.8.0-136-generic",
+        "os=Ubuntu 24.04.4 LTS",
+        "agentnet=agentnet 0.1.51"
+      ]
+    }
+  ],
+  "launch_commands": {
+    "vm_a": "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -m 1536 -smp 2 -drive file=/tmp/agentnet-vm-e2e/vm-a.qcow2,format=qcow2,if=virtio -drive file=/tmp/agentnet-vm-e2e/seed-a.iso,format=raw,media=cdrom,readonly=on -netdev user,id=uplink,hostfwd=tcp:127.0.0.1:22221-:22 -device virtio-net-pci,netdev=uplink,mac=52:54:00:12:34:01 -netdev socket,id=agentnet,listen=127.0.0.1:24500 -device virtio-net-pci,netdev=agentnet,mac=52:54:00:12:50:01 -display none -serial file:/tmp/agentnet-vm-e2e/vm-a.serial.log -monitor none",
+    "vm_b": "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -m 1536 -smp 2 -drive file=/tmp/agentnet-vm-e2e/vm-b.qcow2,format=qcow2,if=virtio -drive file=/tmp/agentnet-vm-e2e/seed-b.iso,format=raw,media=cdrom,readonly=on -netdev user,id=uplink,hostfwd=tcp:127.0.0.1:22222-:22 -device virtio-net-pci,netdev=uplink,mac=52:54:00:12:34:02 -netdev socket,id=agentnet,connect=127.0.0.1:24500 -device virtio-net-pci,netdev=agentnet,mac=52:54:00:12:50:02 -display none -serial file:/tmp/agentnet-vm-e2e/vm-b.serial.log -monitor none"
+  },
+  "scope": {
+    "domain_id": "two-vm.example",
+    "collaboration_scope_id": "scope:two-vm-v0151",
+    "conversation_id": "conversation:two-vm-v0151"
+  },
+  "observations": {
+    "a_to_b": {
+      "status": 202,
+      "event_id": "f66de4d4-e993-505f-8fe3-d9969e85f83e",
+      "accepted_fact": "accepted_local",
+      "duplicate": true,
+      "offline_request_failed": true,
+      "recovered_after_restart": true,
+      "sender_harness_id": "synthetic-harness-6676033caa7c48e09cd10df1f8b8fc58",
+      "recipient_fact": "recipient_committed",
+      "acknowledgement_receipt_id": "0c38e37d-a80a-49b6-aebc-c49f1658da05",
+      "acknowledgement_duplicate": true
+    },
+    "b_to_a": {
+      "status": 202,
+      "event_id": "8f5f7fa8-dfb0-587a-9c91-784c716e66fe",
+      "accepted_fact": "accepted_local",
+      "duplicate": true,
+      "sender_harness_id": "synthetic-harness-ee8130787fe14f06921fff47ce01adfb",
+      "recipient_fact": "recipient_committed",
+      "acknowledgement_receipt_id": "24ed7807-ad08-4474-9464-f6b9226c3969"
+    }
+  },
+  "claim_boundary": "Observed exact packaged v0.1.51 bidirectional communication, duplicate safety, A-to-B recovery after Core offline interval, exact sender attribution, and recipient acknowledgement on two live local VMs. Does not prove production durability, multi-node HA, public-network operation, owner policy, privileged-host isolation, or any must-not-ship gate."
+}

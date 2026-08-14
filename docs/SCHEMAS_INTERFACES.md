@@ -152,6 +152,12 @@ purposes must collectively cover all six mandatory approval consumers, and
 every approver must cover enrollment. Signer private keys remain file
 references; load verifies each key's configured thumbprint.
 
+`OIDCEnrollmentConfig.trusted_approvers` serialization order does not grant or
+remove authority. Canonical-owner recovery accepts either ordering only for the
+exact proof-bound source/target pair, verifies every trust record and all other
+OIDC fields, and preserves the observed order until journaled replacement.
+
+
 The approval SQLite catalog is version 4 and is checked on every open against
 both exact `sqlite_master` objects, stored catalog SHA-256, and immutable
 migration names/checksums. The default self-hosted profile may run this service
@@ -352,6 +358,29 @@ hash and all bound inputs. Setup and Core accept a post-C0 current credential
 only when this audited chain reaches it exactly. Exact same-request replay
 reconciles; same ID with drift, stale/missing links, skipped epochs, changed
 actor/key/files, or missing/conflicting audit rows fails closed.
+
+`agentnet server-agent replace-expired-scope-harness` uses strict owner-only
+`agentnet.managed-scope-harness-replacement-state.v1` local state and an
+`agentnet.scope-harness-replacement.v1` canonical transaction. The local state
+binds exact managed config/identity digests, scope ID, former/replacement
+harness IDs, fixed `member` role, receipt-possession secret, and Approval
+request ID. The signed transaction additionally binds the scope owner
+principal/harness, current credential IDs/epochs, scope
+revision/digest/membership sequence, and a ten-minute maximum lifetime.
+
+Only a current non-lab harness of the exact scope-owning principal may initiate
+the ceremony; the former expired harness need not authenticate. The Approval
+receipt uses the existing `identity.credential.recover.approve` purpose but is
+digest-bound to this distinct complete transaction. Commit consumes that
+single-use receipt in the same transaction that changes the old member to
+`removed`, inserts the exact active same-principal replacement as `member`,
+advances membership sequence and scope revision once, recomputes member/scope
+digests, and appends `collaboration_scope.harness_replaced` audit evidence.
+Exact retained-request replay returns the committed result; drift, replay with
+different bytes, unexpired old credential, inactive new credential,
+principal/domain/role mismatch, partial projection, or stale scope state fails
+closed. No schema-v6 provenance, identity/configuration file, or service
+lifecycle is changed.
 
 The signed persistent communication-scope routes are:
 
@@ -685,6 +714,14 @@ migration, table, index, trigger/constraint, noncontiguous history, future
 version, or unsupported older version. The only current N/N-1 Core migration is
 an exact catalog/checksum-verified v6→v7 transition.
 
+`PostgreSQLStore` binds protected transactions to one renewable runtime lease
+and its fence. A heartbeat failure publishes reconnect-required state while the
+storage lock still excludes protected operations, then stops the keeper. The
+next operation opens a fresh connection, revalidates writable primary and exact
+schema, and reacquires only a strictly higher fence before restarting the
+keeper; it closes the superseded connection. Contention by a different owner or
+any unverifiable recovery remains unavailable.
+
 No pre-release or differently named database is accepted as an authority
 source, and no unilateral relationship can be converted into consent. Import
 requires a reviewed non-authority export into a fresh current store followed by
@@ -796,6 +833,103 @@ The no-argument guided server surface reads the same strict request schema from
 five-unit schema-v7 markers from v0.1.45 through v0.1.49 are distinct
 allowlisted forward-only sources to v0.1.50. They use journal v4 and do not
 imply an intermediate package install or database migration.
+
+Corrective v0.1.51 setup recognizes only the bounded canonical-owner recovery
+states. Its internal Approval subprocess receives the expected source and
+target principal, exact OIDC issuer/subject, verified alias, recovery ID, and
+approved timestamp; Approval verifies those values against its active
+store-bound owner record before mutation. The strict recovery result and
+root-owned journal are schema-v1 objects. Current Approval configuration,
+passkey ownership, and receipt signing move to the canonical principal while
+terminal historical evidence remains immutable. Core OIDC and approver policy
+files are replaced through journaled compare-and-swap writes. These interfaces
+are setup-owned recovery mechanics, not generic principal migration APIs.
+
+Only the prepared journal phase may contain the replacement signer private PEM,
+under root-only file custody. Setup removes that field immediately after the
+Approval-owned signer file is durably installed and before owner authority is
+mutated; a retry reconstructs the file from the journal or verifies the exact
+existing signer.
+
+The same journal schema may carry a strict
+`agentnet.canonical-owner-partial-recovery.v1` record only in its `prepared`
+phase. This record binds observation time, retained marker Approval/Core
+digests, realized Approval/Core/Core-OIDC digests, and the fixed
+`active_owner_binding` source classification. It represents only the exact
+pre-adoption split state: source-owned Approval, exactly two source/target
+signers, dual-trust embedded Core OIDC, and target-only standalone Core OIDC.
+The retained Approval marker may encode either the source policy or the exact
+target policy from the frozen request and target signer; one reconstructed
+policy must reproduce the marker digest exactly. Before writing the journal,
+setup requires exactly one frozen target approver and proves that the live
+source policy differs only in the source principal and signer references.
+Setup derives the recovery request from store-bound source authority and the
+enrolled target identity, writes the journal atomically without changing
+authority, and then uses the ordinary recovery command. Unknown fields,
+additional signers or approvers, nonmatching key material, alternate trust
+topology, or digest/state drift are rejected.
+
+A journal-less terminal live repair may create the same schema-v1 terminal
+journal only from exact marker-relative evidence. Its nested strict
+`agentnet.canonical-owner-recovery-reconstruction.v1` record binds the
+observation time, retained marker Approval/Core digests, realized current
+Approval/Core digests, and the fixed `approval_audit_marker_digest` source
+classification. Reconstruction additionally requires exactly two
+fixed-custody signer keys, one active canonical owner binding, target
+credential state, and one matching immutable adoption audit. The journal write
+changes no authority and is atomic; every retry revalidates the journal and its
+marker/current digest bindings before TTL migration. Unknown fields, missing
+or extra signers, ambiguous historical principals, tampered audit/binding
+state, or any digest mismatch fail closed.
+
+Upgrade journal v3 covers the exact v0.1.50→v0.1.51 Approval TTL boundary. It
+extends the standard forward-only journal with one
+`previous_configs.approval_config` payload under the existing root-only
+custody and size bounds. The exact published source with
+`request_ttl_seconds=300` and no
+`communication_scope_request_ttl_seconds` is preserved byte-for-byte. A
+retained-hotfix source with `request_ttl_seconds=3600` and an absent or
+3600-second communication-scope field may differ from its marker only when
+replacing those fields with the published 300-second form reproduces the
+marker’s canonical Approval-config digest. The realized hotfix is then
+journaled and normalized to the target 600/3600 split. Compare-and-swap
+replacement, exact resume, and exact rollback use that retained payload;
+already-shortened, unknown, or any additionally drifted shape fails closed.
+
+The marker gate composes journal-v1 canonical-owner evidence with upgrade
+journal v3 only for one exact already-recovered v0.1.50 shape. It validates the
+terminal recovery record, target signer private/public binding, current target
+Approval and Core schemas, and the exact source/target identity and signer
+fields needed to reconstruct both marker-era documents. The inverse TTL
+comparison may remove only the known communication-scope field and restore the
+published 300-second generic value. The reconstructed Approval and Core
+digests must equal the marker before upgrade journal v3 is created. Historical
+`allowed_purposes` ordering is not authority-bearing: marker matching may
+permute only the exact fixed mandatory set to reproduce either retained
+digest. Set membership, cardinality, all other fields, and the digest remain
+exact; any added, removed, duplicated, or changed purpose fails closed. Every
+initial or resumed attempt repeats the terminal journal,
+exact-single-active-owner, adoption-audit, target-credential, and
+signer-custody checks. An upgrade-journal resume also requires the current Core
+OIDC sidecar to remain identical to Core and rechecks exact two-signer custody
+immediately before the Approval TTL compare-and-swap. The retained
+3600-second source policy has one exact no-write compatibility parse; it
+accepts the absent released field or the explicit 3600-second default
+materialized by canonical-owner configuration replacement, and no other
+invalid current schema. The v3 journal stores the realized current documents,
+not synthetic source bytes; subsequent owner and Core recovery checks are
+idempotent. No incomplete recovery phase, caller-selected identity, ambiguous
+owner state, or independently unexplained Approval/Core drift is accepted.
+
+The schema-v7 communication projection has one canonical single-scope mapping.
+Both normal activation and repair write the exact collaboration scope, two
+active member rows, five entitlements, and five revoke powers from server-held
+communication-scope rows. Normal activation does so in the same transaction as
+terminal scope commitment and its idempotent result. Exact existing rows are
+accepted; missing rows are inserted only by repair; partial, extra, or
+conflicting rows fail closed. Neither interface accepts caller-supplied member
+identity or authority fields.
+
 
 Schema v7 and the lifecycle journal are implementation mechanisms only. Signed
 installer/update evidence, hostile-host qualification, independent approval,

@@ -312,6 +312,16 @@ def load_approval_service_config(path: Path) -> ApprovalServiceConfig:
         )
         if not isinstance(value, dict):
             raise ValueError("not an object")
+        if (
+            value.get("request_ttl_seconds") == 3_600
+            and "communication_scope_request_ttl_seconds" not in value
+            and value.get("challenge_ttl_seconds") == 180
+            and value.get("receipt_ttl_seconds") == 300
+            and value.get("registration_ttl_seconds") == 600
+        ):
+            value = dict(value)
+            value["request_ttl_seconds"] = 600
+            value["communication_scope_request_ttl_seconds"] = 3_600
         config = ApprovalServiceConfig.model_validate(value)
     except Exception as exc:
         raise ValidationError("approval service configuration is invalid") from exc

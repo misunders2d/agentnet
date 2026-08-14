@@ -292,6 +292,16 @@ writes exact units, then commits the request-versioned marker through
 same-request, prior-byte compare-and-swap. Manual marker/config/unit surgery is
 unsupported.
 
+For the proof-bound canonical-owner split-state recovery, the embedded Core
+source/target trust pair may appear in either serialized order. Setup verifies
+the exact two trust records and target-only sidecar. It also requires the
+retained Approval marker to match either the source policy or the exact target
+policy derived from the frozen setup request and target signer. Setup records
+current config digests before mutation and carries the observed trust order
+into rollback and replacement checks. Added, duplicated, altered, or unrelated
+trust remains a fail-closed conflict.
+
+
 Released five-unit correction upgrades are a narrow forward-only exception:
 only an explicitly allowlisted exact predecessor marker is accepted, and the
 target marker is committed before service quiescence and bootstrap so an
@@ -381,6 +391,87 @@ revalidates source marker, units, schema, request/input provenance, and target
 runtime before commit. Unsupported, ambiguous, or downgraded markers fail
 closed. This is package/config/unit provenance replacement, not a database
 migration or rollback promise.
+
+If v0.1.51 setup reports `canonical_owner_recovery`, do not edit Approval or
+Core databases, identity files, approver files, or scopes manually. Keep the
+managed recovery journal and rerun the same approved
+`agentnet server-agent setup --apply --start` request. The package derives the
+canonical owner from the enrolled Core identity, verifies Approval's pinned
+OIDC owner binding, performs the service-private owner/signer adoption, resumes
+the journaled Core policy cutover, and verifies both services before reporting
+success. Unsupported identity, OIDC, signer, row-shape, revision, or file drift
+requires operator investigation; email equality alone is never recovery
+authority.
+
+One interrupted live repair may have no recovery journal even though the
+target signer and Core policy staging completed before Approval owner adoption.
+Do not delete either signer, copy Core OIDC files over one another, or create a
+journal manually. Rerun the same approved setup command. Setup accepts only the
+exact source-owned Approval / dual-trust embedded Core / target-only standalone
+Core OIDC shape with exactly two matching signer keys and one active source
+owner. Its retained marker must match either the source Approval policy or the
+exact target policy from the frozen request and target signer. The live source
+policy must otherwise equal that sole frozen target policy; setup checks this
+before recording a strict prepared recovery journal, then resumes normal
+adoption. Any extra signer or approver, target-owned live Approval,
+incomplete/reversed trust, ambiguous owner, or unrelated policy/digest drift
+remains blocked.
+
+The exact published v0.1.50 Approval configuration has
+`request_ttl_seconds: 300` and no separate communication-scope field; setup
+preserves it without rewriting. A retained live hotfix may instead have
+`request_ttl_seconds: 3600` with the separate communication-scope field absent
+or explicitly set to `3600`; canonical-owner replacement materializes the
+explicit default. The setup marker may still contain the digest of the
+published 300-second form;
+setup accepts that difference only when reconstructing the published form from
+the realized file reproduces the marker digest exactly. Do not edit either file
+manually. For that hotfix only, the exact v0.1.50→v0.1.51 setup path journals
+the realized Approval configuration before loading the service, changes the
+generic deadline to 600 seconds, and writes
+`communication_scope_request_ttl_seconds: 3600`. Rerun the same approved
+command after interruption. Any additional TTL/configuration drift blocks as
+`setup_upgrade_conflict`; a failure before marker commit restores the journaled
+source bytes.
+
+A live host may contain both corrections: canonical-owner recovery is complete,
+Core and Approval contain the canonical target, the one-hour Approval hotfix is
+still realized, and the retained setup marker still names the pre-repair
+source. Do not repair that marker or create a recovery journal manually. If the
+terminal recovery journal is absent, setup reconstructs it only when the
+retained marker, exactly two signer keys, current typed Approval/Core files,
+single active owner binding, target credential state, and matching adoption
+audit identify one exact completed repair. It writes that terminal journal
+without changing authority, then validates the journal, signer custody, and
+marker/current digests before any setup journal or managed-state write. A
+process loss after this write is safe: rerun the same approved command. If an
+upgrade journal was already retained, setup rechecks exact two-signer custody
+and requires the current Core OIDC sidecar to remain identical to Core
+immediately before the Approval TTL compare-and-swap; intervening drift leaves
+Approval unchanged.
+
+Setup reconstructs the exact marker-era Approval and Core documents by
+reversing only the recovery-evidence-bound owner and signer fields, applies the
+bounded inverse TTL comparison, and requires both reconstructed digests to
+equal the marker. The old writer emitted the fixed mandatory
+`allowed_purposes` set in process-dependent order. Setup may therefore try only
+permutations of that exact set when reproducing the retained Approval/Core
+digests. It never accepts different membership, duplicates, or unrelated
+policy drift. Setup parses the retained 3600-second source policy without
+writing and admits only that exact legacy TTL shape. Only then does it journal
+the realized current documents, normalize the TTL policy, and recheck the
+owner command and Core policy as idempotent
+`already_exact`/`already_satisfied` operations. Missing or extra signer
+evidence, incomplete adoption evidence, mixed principals, signer drift,
+ambiguous owner state, Core/Core-OIDC disagreement, or unrelated
+Approval/Core changes fail closed.
+
+The same setup pass repairs an already committed communication scope that lacks
+its schema-v7 collaboration projection. It materializes only the exact
+committed scope and member authority from server-held rows. It does not replace
+the scope, re-enroll either endpoint, or mint a generic entitlement. Repeating
+the recovery is a verified no-op.
+
 
 ### Communication-only request-v2
 
@@ -731,6 +822,33 @@ digest-bound setup apply/start command. Never delete, edit, truncate, or
 reconstruct the request state, terminal, journal, config, or identity to force
 recovery; absent or conflicting provenance requires a separate owner-approved
 recovery path.
+
+If a freshly enrolled laptop harness cannot use an existing collaboration
+scope because the former same-principal member credential is expired, keep Core
+stopped and run:
+
+```bash
+sudo -- <resolved-root-owned-agentnet-path> \
+  server-agent replace-expired-scope-harness \
+  --scope-id <active-scope-id> \
+  --old-harness-id <expired-member-harness-id> \
+  --new-harness-id <active-replacement-harness-id>
+```
+
+The managed server harness may initiate this recovery only as a current,
+non-lab harness of the exact scope-owning principal. The first call persists the
+exact scope/member/credential/revision/digest transaction before asking
+Approval and reports `waiting_owner_approval`. After the exact principal
+approves with WebAuthn UV, rerun the identical command. One PostgreSQL
+transaction consumes the single-use receipt, tombstones the old `member`,
+activates the replacement `member`, advances membership sequence and revision,
+recomputes member/scope digests, and appends audit evidence. A crash before
+commit changes nothing; a crash after commit is reconciled by the retained
+request. Rejected or expired ceremonies require explicit
+`--replace-terminal-state`. The command never edits identity/configuration,
+restarts services, changes roles, transfers principals/domains, or accepts an
+unexpired former credential. Never hand-edit scope rows or the private pending
+state.
 
 Guided command defaults to local system browser without printing authorization
 URL. Explicit server-only `--browser remote` stores authorization URL encrypted
@@ -1220,6 +1338,13 @@ non-constraint-index catalog before v6 migration, after migration, and on every
 v7 open.
 Unknown, missing, altered, prototype, noncontiguous, future, or unsupported
 older state fails closed before use.
+
+Core also requires a current fenced PostgreSQL runtime lease. If its background
+heartbeat fails or expires, failure state is published before another protected
+operation can enter. A later request recovers without a service restart only by
+opening a fresh verified connection and acquiring a strictly higher fence for
+the same runtime owner. A different owner, standby, schema mismatch, or
+non-increasing fence remains blocked.
 
 Do not edit version metadata or infer authority from unilateral/prototype
 records. Transition from exploratory data requires reviewed export of

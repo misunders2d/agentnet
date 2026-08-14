@@ -15,6 +15,7 @@ from typing import Any, Iterator
 
 from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.security.envelope import LocalEnvelopeCipher
+from agentnet.security.signatures import canonical_json
 
 
 APPROVAL_STORE_SCHEMA_VERSION = 4
@@ -400,6 +401,21 @@ def _require_private_database(path: Path) -> os.stat_result:
     ):
         raise GateBlocked("approval_store", "approval database must be owner-only")
     return metadata
+def approval_user_handle(*, verifier_id: str, principal_id: str, domain_id: str) -> bytes:
+    """Derive the stable WebAuthn user handle for one exact approval principal."""
+
+    return hashlib.sha256(
+        canonical_json(
+            {
+                "schema": "agentnet.approval.webauthn-user.v1",
+                "verifier_id": verifier_id,
+                "domain_id": domain_id,
+                "approver_principal_id": principal_id,
+            }
+        )
+    ).digest()
+
+
 
 
 class ApprovalStore:
@@ -734,6 +750,7 @@ __all__ = [
     "APPROVAL_STORE_SCHEMA_V3",
     "APPROVAL_STORE_SCHEMA_V4",
     "APPROVAL_STORE_SCHEMA_VERSION",
+    "approval_user_handle",
     "ApprovalStore",
     "expected_catalog",
     "expected_catalog_digest",

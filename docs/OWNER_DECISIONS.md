@@ -65,6 +65,17 @@ usability and threat-model tradeoff:
   identity-set drift permanently invalidates the guard. This bounded pilot
   instruction is not general elevation, relationship, messaging-administration,
   task, file, room, federation, A2A, server-agent, or wildcard authority.
+- **Updated 2026-08-09:** the owner approved automatic reconciliation only for
+  the exact ordinary-onboarding placeholder Approval owner after Core has
+  enrolled the canonical OIDC issuer-plus-subject principal. Recovery must
+  derive the target from enrolled Core evidence and Approval's pinned OIDC
+  binding, accept only the bounded known source shapes, replace current signer
+  authority without dual trust, preserve immutable historical receipts, and
+  fail closed on ambiguity or drift. This is not a general principal merge,
+  alias migration, appeal, account recovery, cross-domain migration, or
+  production policy decision. The authenticated coding-session record is not
+  independent signed O-tier evidence and does not close PD-001.
+
 
 This decision does not approve production certification, the optional
 independent-administration tier, high-impact/break-glass elevation, company

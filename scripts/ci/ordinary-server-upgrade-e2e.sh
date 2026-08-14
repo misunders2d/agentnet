@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 # Destructive only inside a fresh GitHub-hosted Ubuntu 24.04 runner. The lane
-# installs two independent npm tarballs, realizes the released 0.1.45 service,
-# and proves the supported state-preserving 0.1.45 -> 0.1.46 timer repair.
+# installs two independent npm tarballs, realizes the released 0.1.50 service,
+# and proves the supported state-preserving 0.1.50 -> 0.1.51 upgrade.
 if [[ "${CI:-}" != "true" || "${GITHUB_ACTIONS:-}" != "true" || -z "${RUNNER_TEMP:-}" ]]; then
   echo "ordinary server upgrade E2E requires an ephemeral GitHub Actions runner" >&2
   exit 2
@@ -29,8 +29,8 @@ done
 WORK="$RUNNER_TEMP/agentnet-ordinary-server-upgrade-e2e"
 INPUTS="$WORK/inputs"
 PACK="$WORK/pack"
-PREFIX_0144="/opt/agentnet-upgrade-e2e-0.1.45"
-PREFIX_0145="/opt/agentnet-upgrade-e2e-0.1.46"
+PREFIX_0144="/opt/agentnet-upgrade-e2e-0.1.50"
+PREFIX_0145="/opt/agentnet-upgrade-e2e-0.1.51"
 NO_PROXY_VALUE="127.0.0.1,localhost,.agentnet.test,core.agentnet.test,approval.agentnet.test"
 OPT_UID="$(stat -c '%u' /opt)"
 OPT_GID="$(stat -c '%g' /opt)"
@@ -288,17 +288,17 @@ assert_schema_seven_source() {
 
 
 # Install exact released and candidate packed bytes into independent immutable
-# roots. The candidate must be the packed 0.1.46 tree, never an implicit cwd.
-[[ "$(node -p "require('./package.json').version")" == "0.1.46" ]]
+# roots. The candidate must be the packed 0.1.51 tree, never an implicit cwd.
+[[ "$(node -p "require('./package.json').version")" == "0.1.51" ]]
 sudo chown root:root /opt
 sudo chmod 0755 /opt
-RELEASED_TARBALL="$(npm pack @misunders2d/agentnet@0.1.45 --ignore-scripts --pack-destination "$PACK" --silent)"
+RELEASED_TARBALL="$(npm pack @misunders2d/agentnet@0.1.50 --ignore-scripts --pack-destination "$PACK" --silent)"
 CANDIDATE_TARBALL="$(npm pack --ignore-scripts --pack-destination "$PACK" --silent)"
-[[ "$RELEASED_TARBALL" == "misunders2d-agentnet-0.1.45.tgz" ]]
-[[ "$CANDIDATE_TARBALL" == "misunders2d-agentnet-0.1.46.tgz" ]]
+[[ "$RELEASED_TARBALL" == "misunders2d-agentnet-0.1.50.tgz" ]]
+[[ "$CANDIDATE_TARBALL" == "misunders2d-agentnet-0.1.51.tgz" ]]
 [[ "$(sha256sum "$PACK/$RELEASED_TARBALL" | cut -d' ' -f1)" != "$(sha256sum "$PACK/$CANDIDATE_TARBALL" | cut -d' ' -f1)" ]]
-install_runtime "$PREFIX_0144" "$PACK/$RELEASED_TARBALL" "0.1.45"
-install_runtime "$PREFIX_0145" "$PACK/$CANDIDATE_TARBALL" "0.1.46"
+install_runtime "$PREFIX_0144" "$PACK/$RELEASED_TARBALL" "0.1.50"
+install_runtime "$PREFIX_0145" "$PACK/$CANDIDATE_TARBALL" "0.1.51"
 
 # Operator-owned disposable local TLS routes.
 echo '127.0.0.1 core.agentnet.test approval.agentnet.test # agentnet-upgrade-e2e' | sudo tee -a /etc/hosts >/dev/null
@@ -410,17 +410,17 @@ sudo -u postgres psql -Atq --dbname=postgres -c \
   "SELECT count(*) FROM pg_hba_file_rules WHERE type='local' AND database=ARRAY['agentnet'] AND user_name=ARRAY['agentnet'] AND auth_method='peer' AND error IS NULL" \
   | grep -qx '1'
 
-# Realize exact public 0.1.45 bytes and its schema-v7 five-unit marker.
-PLAN_0144="$WORK/plan-0.1.45.json"
-APPLY_0144="$WORK/apply-0.1.45.json"
-APPLY_BOUND_0144="$WORK/apply-bound-0.1.45.json"
+# Realize exact public 0.1.50 bytes and its schema-v7 five-unit marker.
+PLAN_0144="$WORK/plan-0.1.50.json"
+APPLY_0144="$WORK/apply-0.1.50.json"
+APPLY_BOUND_0144="$WORK/apply-bound-0.1.50.json"
 plan_setup "$PREFIX_0144" "$PLAN_0144"
 jq -e '.status == "planned" and .identity_enrolled == false' "$PLAN_0144" >/dev/null
 DIGEST_0144="$(jq -r '.request_digest' "$PLAN_0144")"
 [[ "$DIGEST_0144" =~ ^[a-f0-9]{64}$ ]]
 apply_setup "$PREFIX_0144" "$DIGEST_0144" "$APPLY_0144"
 jq -e '.status == "waiting_owner_oidc_or_passkey" and .identity_enrolled == false' "$APPLY_0144" >/dev/null
-sudo jq -e '.package_version == "0.1.45" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
+sudo jq -e '.package_version == "0.1.50" and .artifact_mode == "disabled" and (.units | length) == 5' /var/lib/agentnet-setup/setup.json >/dev/null
 assert_schema_seven_source
 sudo test ! -e /var/lib/agentnet-setup/upgrade.json
 
@@ -611,21 +611,16 @@ if [[ "$LEASE_RELEASED" != "true" ]]; then
 fi
 run_as_core_service "$AGENTNET_0144" server-agent activate \
   --config /var/lib/agentnet/agentnet.json \
-  --identity /var/lib/agentnet/server-agent-identity.json >"$WORK/activate-0.1.45.json"
+  --identity /var/lib/agentnet/server-agent-identity.json >"$WORK/activate-0.1.50.json"
 jq -e --arg harness "$HARNESS_ID" --arg credential "$CREDENTIAL_ID" \
   '.activated == true and .harness_id == $harness and .credential_id == $credential and .authority_granted == false' \
-  "$WORK/activate-0.1.45.json" >/dev/null
-# Public 0.1.45 uses Persistent=true. Seed the fresh runner's standard systemd
-# timer stamp so enabling the historical timer does not fabricate a missed
-# activation from before this disposable host existed and race setup's exact
-# postcondition check.
-sudo install -d -o root -g root -m 0755 /var/lib/systemd/timers
-sudo touch /var/lib/systemd/timers/stamp-agentnet-credential-renew.timer
+  "$WORK/activate-0.1.50.json" >/dev/null
+# Public 0.1.50 already uses the recurring post-completion timer contract.
 apply_setup "$PREFIX_0144" "$DIGEST_0144" "$APPLY_BOUND_0144"
 jq -e '.status == "operational" and .identity_enrolled == true and .authority_granted == false' "$APPLY_BOUND_0144" >/dev/null
-sudo grep -Fxq 'OnUnitActiveSec=1h' /etc/systemd/system/agentnet-credential-renew.timer
-sudo grep -Fxq 'Persistent=true' /etc/systemd/system/agentnet-credential-renew.timer
-! sudo grep -Fq 'OnUnitInactiveSec=' /etc/systemd/system/agentnet-credential-renew.timer
+sudo grep -Fxq 'OnActiveSec=5min' /etc/systemd/system/agentnet-credential-renew.timer
+sudo grep -Fxq 'OnUnitInactiveSec=1h' /etc/systemd/system/agentnet-credential-renew.timer
+! sudo grep -Fq 'Persistent=' /etc/systemd/system/agentnet-credential-renew.timer
 
 # Freeze the exact released identity, schema catalog, marker, and private
 # identity material before the candidate changes any package-owned bytes.
@@ -642,8 +637,8 @@ OLD_APPROVAL_PID="$(sudo systemctl show agentnet-approval.service --property=Mai
 [[ "$OLD_CORE_PID" =~ ^[1-9][0-9]*$ ]]
 [[ "$OLD_APPROVAL_PID" =~ ^[1-9][0-9]*$ ]]
 
-PLAN_0145="$WORK/plan-0.1.46.json"
-APPLY_0145="$WORK/apply-0.1.46.json"
+PLAN_0145="$WORK/plan-0.1.51.json"
+APPLY_0145="$WORK/apply-0.1.51.json"
 plan_setup "$PREFIX_0145" "$PLAN_0145"
 DIGEST_0145="$(jq -r '.request_digest' "$PLAN_0145")"
 [[ "$DIGEST_0145" =~ ^[a-f0-9]{64}$ ]]
@@ -656,7 +651,7 @@ jq -e '
   and .endpoint_lifecycle == null
 ' "$APPLY_0145" >/dev/null
 sudo jq -e --arg previous "$MARKER_0144" --argjson revision "$REVISION_0144" '
-  .package_version == "0.1.46"
+  .package_version == "0.1.51"
   and .artifact_mode == "disabled"
   and (.units | length) == 5
   and .revision == ($revision + 1)
@@ -708,4 +703,4 @@ rm -rf "$INPUTS" "$WORK/seed-released-state.py" "$WORK/root-ca.key" "$WORK/tls.k
 [[ ! -e "$INPUTS" && ! -e "$WORK/root-ca.key" && ! -e "$WORK/tls.key" ]]
 unset TOKEN
 
-echo "ordinary server 0.1.45 to 0.1.46 timer upgrade E2E: PASS"
+echo "ordinary server 0.1.50 to 0.1.51 installed-host upgrade E2E: PASS"

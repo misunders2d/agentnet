@@ -119,6 +119,13 @@ Live subscriptions wake connected agents immediately. Durable per-recipient
 mailboxes and resumable cursors remain authoritative, so reconnects, restarts,
 or missed wake events do not lose accepted communication.
 
+The PostgreSQL runtime lease is fenced and renewable. If its background
+heartbeat fails, Core publishes the failure under the storage lock before
+another protected operation can enter. The next operation opens a fresh
+verified connection and may resume only after acquiring a strictly higher fence
+for the same runtime owner; otherwise Core remains unavailable. The superseded
+connection is closed, so a stale process cannot resume writing.
+
 ## Security is the product boundary
 
 AgentNet treats every harness, relay, external agent, file, model output, and
@@ -287,6 +294,17 @@ agree. The command performs no authority grant or restart. Exact retry
 reconciles interruption; missing, stale, edited, or unaudited provenance fails
 closed. After completion, rerun the same digest-bound setup apply/start.
 
+An expired laptop or peer harness that still owns an active collaboration-scope
+membership is replaced only through the root-only
+`server-agent replace-expired-scope-harness` command. An active managed-server
+harness of the same verified principal may open the ceremony because the
+expired member cannot authenticate; the exact scope-owning principal must then
+approve the complete transaction through Approval. The atomic commit
+tombstones the former member, activates the named same-principal replacement as
+`member`, advances the scope revision and membership sequence once, and makes
+current schema-v7 membership authoritative immediately. It changes no managed
+identity/configuration file and restarts no service.
+
 Plan and apply bind exact Node/uv/launcher/`systemctl`/`useradd` paths and
 content hashes plus the canonical full AgentNet package-tree content hash to
 the request-versioned approval digest. Apply
@@ -441,7 +459,7 @@ always-on deployment—see the [implementation guide](docs/implementation-guide.
 ## Project status
 
 AgentNet is an early public implementation; the latest published package is
-`0.1.45`. Its publication does not promote any requirement or gate.
+`0.1.50`. Its publication does not promote any requirement or gate.
 Published `0.1.29` repaired owner/enrollment OIDC callback parsing after real
 Google owner login exposed rejection of valid unique response extensions;
 published `0.1.30` repaired installed-verifier package custody; published
@@ -542,6 +560,46 @@ requires the separate-process local communication and obligation roundtrip in
 addition to the existing installed journey. These are local and CI evidence,
 not production certification, and no requirement or must-not-ship gate is
 promoted.
+
+Candidate `0.1.51` adds the package-owned corrective recovery path for the
+exact ordinary-onboarding state where Approval still names the setup
+placeholder owner after Core enrolled the canonical human. Managed setup
+derives the target only from the enrolled Core identity and Approval's pinned
+OIDC binding, rotates current Approval signing authority to that principal,
+and journals resumable Core policy replacement. It rejects identity, domain,
+OIDC, signer, database, configuration, or journal ambiguity. New communication
+activation writes its complete schema-v7 collaboration projection in the same
+transaction; an already committed scope missing that projection is repaired
+from its immutable scope rows without replacing the scope or minting broader
+authority. Exact five-unit schema-v7 markers from v0.1.45 through published
+v0.1.50 may upgrade directly to v0.1.51.
+
+The v0.1.50→v0.1.51 transition preserves the exact published v0.1.50
+Approval TTL policy (`request_ttl_seconds=300` with no separate
+communication-scope field). It separately recognizes the retained one-hour
+hotfix shape. If that operational hotfix was not written into the setup marker,
+setup reconstructs the exact published 300-second form and requires its
+canonical digest to equal the marker before creating a journal. It then
+journals the realized configuration, restores the ordinary approval deadline
+to 600 seconds, keeps the communication-scope ceremony ceiling at 3600
+seconds, and atomically replaces the file. A crash resumes from the journal;
+any additional drift fails closed, and pre-commit rollback restores the exact
+source bytes.
+
+If the canonical-owner repair already completed while that one-hour hotfix
+remained outside the marker, setup accepts the combined state only after the
+completed recovery evidence reconstructs the marker-era Approval and Core
+documents. It reverses only the evidence-bound owner and signer fields in
+memory, then requires both reconstructed canonical digests to equal the
+marker. Historical marker matching treats only the fixed mandatory
+approval-purpose set as order-insensitive; it may reconstruct that set's
+serialized order to reproduce the retained digest, but any added, removed,
+duplicated, or changed purpose fails closed. The realized current documents
+are journaled, the TTL policy is normalized, and owner/Core convergence is
+rechecked idempotently. Missing Core-OIDC agreement, incomplete evidence, or
+unrelated drift fails before setup creates its upgrade journal or changes
+managed state.
+
 
 Git tag `v0.1.23` reached the staging workflow, but CI stopped before npm
 staging because one hermetic interruption test mocked `/usr/bin/useradd` on a

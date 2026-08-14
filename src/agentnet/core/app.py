@@ -903,7 +903,13 @@ class CommunicationCore:
                     "managed-server supersession cache is incomplete",
                 )
             return dict(self._verified_supersession_evidence)
-        journal_path = self.config.data_dir / "credential-supersessions.json"
+        journal_root = self.config.data_dir
+        if (
+            getattr(self.config, "profile", None) is RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+            and journal_root.name == "core"
+        ):
+            journal_root = journal_root.parent
+        journal_path = journal_root / "credential-supersessions.json"
         journal_exists = os.path.lexists(journal_path)
         terminal_credential = completed_c0_terminal_credential(
             self.store,

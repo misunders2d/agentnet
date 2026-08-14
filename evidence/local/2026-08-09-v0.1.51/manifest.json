@@ -1,0 +1,95 @@
+{
+  "artifacts": [
+    {
+      "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
+      "sha256": "dea7758577c394f43da85daef84a945dcd754ca22a60cdb51db7228ace936fcb"
+    },
+    {
+      "path": "evidence/local/2026-08-09-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
+      "sha256": "597c7f2b7521bd88af0d7cb9d0e3e18e90794f33a1bfff4468fc3c059cae3bad"
+    }
+  ],
+  "change_boundary": "Candidate 0.1.51 recognizes two exact marker-relative canonical-owner recovery states without broadening authority: (1) a pre-adoption split state with source-owned Approval, exactly two source/target signer keys, dual-trust embedded Core OIDC, target-only standalone Core OIDC, and no retained recovery journal; and (2) the already-completed canonical-owner repair with its recovery journal absent or terminal. The partial path reconstructs a strict prepared journal bound to marker and realized Approval/Core/Core-OIDC digests plus active source-owner evidence before authority mutation. The terminal path requires one active canonical owner binding, target credential state, one matching immutable adoption audit, and exact signer custody. Both compose only with the retained v0.1.50 one-hour Approval TTL hotfix when inverse reconstruction reproduces the marker, then normalize to the 600/3600 target under the ordinary upgrade journal. Unknown identity, signer, trust topology, row shape, digest, or additional file drift fails closed. This focused correction treats the two already-bound embedded source/target trust records as an unordered authority set while preserving their observed serialized order through journaled migration; every trust field, sidecar field, marker digest, signer, and non-trust OIDC field remains exact.",
+  "commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/approval/test_approval_cli.py tests/approval/test_webauthn_service.py tests/operations/test_canonical_owner_recovery.py tests/operations/test_server_setup_recovery.py tests/authorization/test_communication_scope_service.py tests/production/test_release_v7_schema.py tests/integration/test_collaboration_scope_messaging.py tests/production/test_postgres_runtime.py::test_keeper_failure_blocks_protected_work_until_recovery_state_is_published tests/production/test_postgres_runtime.py::test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence tests/production/test_postgres_runtime.py::test_expired_keeper_recovery_starts_new_background_keeper",
+      "result": "PASS: 302 passed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_scope_harness_replacement.py tests/authorization/test_communication_scope_service.py tests/integration/test_collaboration_scope_messaging.py tests/cli/test_server_agent_activation.py",
+      "result": "PASS: 62 passed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
+      "result": "PASS: 2290 passed and 22 expected platform/dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline --no-build-isolation twice",
+      "result": "PASS: two independent builds are byte-identical; sdist sha256 dea7758577c394f43da85daef84a945dcd754ca22a60cdb51db7228ace936fcb; wheel sha256 597c7f2b7521bd88af0d7cb9d0e3e18e90794f33a1bfff4468fc3c059cae3bad"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python -B -I scripts/ci/packaged_local_communication_e2e.py run --package-root <installed package> --launcher <installed agentnet.mjs> --workspace <empty unrelated workspace>",
+      "result": "PASS: accepted_fact=accepted_local; approved_revocation_proven=false; bounded_c0_pilot_proven=false; core_process_starts=4; core_restarts=3; credential_refusal_fixture=true; exact_attribution=true; idempotency=true; non_production=true; obligation_state=completed; production_durability_proven=false; recipient_fact=recipient_committed; release_certified=false; separate_process_loopback=true"
+    },
+    {
+      "command": "fresh npm pack; install tarball into unrelated temporary prefix; run installed scripts/ci/exact_endpoint_routing_e2e.py with the installed interpreter and empty workspace",
+      "result": "PASS: target_harness_id=processing_harness_id; sibling_reactions=0; offline_queue_owner=target_harness_id; offline_processing_harness_ids=[]; endpoint_processes_remaining=0; capability_roots_remaining=0; workspace_fallback_used=false"
+    },
+    {
+      "command": "Fresh GitHub ubuntu-24.04 installed-package lane: npm pack, install into unrelated prefix, run scripts/ci/packaged_local_communication_e2e.py from installed bytes",
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior exact-commit result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only"
+    },
+    {
+      "command": "Ad-hoc live trial on two isolated Ubuntu 24.04.4 VMs with separate qcow2 disks and exact v0.1.51 wheel: send authenticated messages bidirectionally; stop and restart VM A Core; inspect recovered delivery, duplicate safety, exact attribution, and recipient acknowledgement",
+      "result": "NOT RERUN FOR CORRECTIVE DELTA: retained JSON observes the preceding v0.1.51 candidate only and is not attributed to this source tree"
+    },
+    {
+      "command": "Fresh Ubuntu 24.04 installed-host upgrade from published v0.1.50 to candidate v0.1.51",
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior exact-commit result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only"
+    },
+    {
+      "command": "AGENTNET_TEST_POSTGRES_URL='<fresh disposable PostgreSQL 18.4 DSN>' AGENTNET_TEST_POSTGRES_ALLOW_MUTATION=1 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/production/test_postgres_runtime.py",
+      "result": "NOT RERUN FOR THIS CORRECTIVE DELTA: prior 93-pass PostgreSQL result binds predecessor 4e8ebd72d6b5e39550e438816abb1e2d30a5326a only; current same-commit server validation is required"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/verify_release.py",
+      "result": "PASS: release manifest verification"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/conformance/test_release_manifest.py",
+      "result": "PASS: 27 passed"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run agentnet verify",
+      "result": "PASS: 2317 passed and 22 expected platform/dedicated-PostgreSQL skips"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS: source plus generations 1 and 2 each reported 2317 passed and 22 expected platform/dedicated-PostgreSQL skips; exact-endpoint routing gate and packaged v0.1.45 user journey passed; excludes installed-live-inference, subprocess-lifecycle, and bake-off-evidence; two installed-harness pin failures remain non-green and were not rerun or waived"
+    }
+  ],
+  "evaluated_at": "2026-08-13T11:06:41Z",
+  "execution_context": {
+    "callback_incident": "Exact-commit GitHub workflow and server PostgreSQL results are included; no callback result is claimed",
+    "local_retry_incident": "The final exact focused lane reported 302 passed and the broad lane reported 2290 passed with 22 expected skips. Release verifier, manifest contract, source agentnet verify, and recursive npm check are recorded only after their final green runs.",
+    "packed_generations": "Local npm check validates the source package and two clean recursively packed and installed generations",
+    "root_installed_external_host": "Prior exact commit 4e8ebd72d6b5e39550e438816abb1e2d30a5326a passed GitHub Ubuntu 24.04 PostgreSQL 18 clean setup and v0.1.50 to v0.1.51 installed-host upgrade; those results do not bind this corrective source delta, whose exact-commit CI and server PostgreSQL validation remain required",
+    "source": "AgentNet v0.1.51 proof-bound partial and terminal canonical-owner recovery candidate on Linux x86_64 with locked CPython 3.13.13 dependencies; exact trust records are order-independent while observed bytes remain journal-bound.",
+    "two_vm_source_proof": "Observed exact packaged v0.1.51 behavior on two live isolated Ubuntu 24.04.4 VMs, but excluded from formal release evidence because the ad-hoc provisioning driver was not retained; production durability and must-not-ship gates remain unproven"
+  },
+  "external_evidence": {
+    "applies_to_current_source_tree": false,
+    "manifest": "evidence/local/2026-08-11-v0.1.51-server-postgres/manifest.json",
+    "pr_comment": "https://github.com/misunders2d/agentnet/pull/3#issuecomment-5250983948",
+    "source_revision": "4e8ebd72d6b5e39550e438816abb1e2d30a5326a"
+  },
+  "release_certified": false,
+  "release_source_tree_sha256": "a3ae6ae3d35dcc6f2252f6aeb1e663ac05cbf5f8f234c4898a4f802d54796b2b",
+  "run_id": "2026-08-09-v0.1.51-local-package-candidate",
+  "scope": "v0_1_51_partial_and_terminal_owner_recovery_candidate",
+  "source_revision": "Working-tree corrective candidate bound by release_source_tree_sha256; exact-commit CI, disposable PostgreSQL evidence, and live convergence must be refreshed after commit",
+  "source_revision_kind": "working_tree_candidate",
+  "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
+  "verification_scope": "PASS applies to the selected local source, focused owner-recovery/communication tests, broad hermetic suite, reproducible package, and recursive installed-byte commands recorded below; it is not release certification and does not include same-commit GitHub installed-host lanes, same-commit disposable PostgreSQL runtime evidence, live convergence proof, installed-harness pin gates, multi-node durability, or any owner/privileged/external must-not-ship gate",
+  "verification_status": "PASS"
+}

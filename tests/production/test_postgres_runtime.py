@@ -8,16 +8,31 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import httpx
+import agentnet.authorization.communication_scope_service as communication_scope_module
 import psycopg
 
+from agentnet.approval import (
+    IndependentApprovalVerifier,
+    TrustedApprover,
+    create_independent_approval_receipt,
+)
+from agentnet.authorization.communication_scope import (
+    COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+)
 from agentnet.authorization.communication_scope_service import (
     COLLABORATION_SCOPE_ISSUE_ACTION,
     CollaborationScopeProposal,
     CollaborationScopeService,
+    CommunicationScopeService,
+)
+from agentnet.authorization.scope_harness_replacement import (
+    SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+    ScopeHarnessReplacementService,
 )
 from agentnet.authorization.evidence import IssuanceAuthority
 from agentnet.authorization.policy import (
@@ -80,6 +95,14 @@ from agentnet.storage.postgres_catalog import (
 )
 from agentnet.storage.recovery import probe_filesystem_artifact_recovery
 from agentnet.storage.sqlite import SQLiteStore
+from tests.authorization.test_communication_scope_service import (
+    FakeApprovalClient,
+    MutableResolver,
+    NOW as COMMUNICATION_NOW,
+    _begin as begin_communication_scope,
+    _complete as complete_communication_scope,
+    _status as communication_scope_status,
+)
 
 
 def server_config(tmp_path: Path, *, instance_id: str = "server-agent-test") -> ExtensionConfig:
@@ -1711,6 +1734,145 @@ def test_singleton_lease_requires_expiry_before_different_owner_takeover() -> No
         second.close()
 
 
+
+class _OneHeartbeatThenStop:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.stopped = False
+
+    def wait(self, _timeout: float) -> bool:
+        self.calls += 1
+        return self.calls > 1
+
+    def set(self) -> None:
+        self.stopped = True
+
+
+
+
+class _StoppedKeeper:
+    def is_alive(self) -> bool:
+        return False
+
+    def join(self, *, timeout: float) -> None:
+        del timeout
+
+
+class _RestartedKeeper:
+    def __init__(self, *, target, name: str, daemon: bool) -> None:
+        self.target = target
+        self.name = name
+        self.daemon = daemon
+        self.started = False
+
+    def is_alive(self) -> bool:
+        return self.started
+
+    def start(self) -> None:
+        self.started = True
+
+    def join(self, *, timeout: float) -> None:
+        del timeout
+
+
+def test_keeper_failure_blocks_protected_work_until_recovery_state_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _LeaseDatabase()
+    store = _lease_store(database, _Clock(100), "server-agent-a")
+    heartbeat_entered = threading.Event()
+    operation_completed = threading.Event()
+    operation_crossed_failure_gap: list[bool] = []
+    store._stop = _OneHeartbeatThenStop()
+
+    def fail_heartbeat(_token) -> None:
+        heartbeat_entered.set()
+        operation_crossed_failure_gap.append(operation_completed.wait(timeout=1))
+        raise GateBlocked("lease_lost", "simulated heartbeat failure")
+
+    def run_operation() -> None:
+        assert heartbeat_entered.wait(timeout=1)
+        with store.transaction():
+            pass
+        operation_completed.set()
+
+    monkeypatch.setattr(store, "heartbeat_lease", fail_heartbeat)
+    keeper = threading.Thread(target=store._keep_lease)
+    operation = threading.Thread(target=run_operation)
+    try:
+        operation.start()
+        keeper.start()
+        keeper.join(timeout=2)
+        operation.join(timeout=2)
+
+        assert keeper.is_alive() is False
+        assert operation.is_alive() is False
+        assert operation_crossed_failure_gap == [False]
+        assert store._reconnect_required is False
+        assert database.connect_count == 2
+    finally:
+        store.close()
+
+
+def test_expired_keeper_lease_recovers_on_next_operation_with_higher_fence() -> None:
+    database = _LeaseDatabase()
+    clock = _Clock(100)
+    store = _lease_store(database, clock, "server-agent-a")
+    initial_fence = store._lease.fence
+    stop = _OneHeartbeatThenStop()
+    store._stop = stop
+    try:
+        clock.value = 131
+        store._keep_lease()
+
+        assert store._reconnect_required is True
+        assert store._keeper_restart_needed is True
+        with store.transaction():
+            pass
+        assert database.connect_count == 2
+        assert store._lease.fence > initial_fence
+        assert store._reconnect_required is False
+        assert int(database.leases[store._lease.lease_name]["expires_at"]) > clock.value
+    finally:
+        store.close()
+    assert stop.stopped is True
+
+
+def test_expired_keeper_recovery_starts_new_background_keeper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _LeaseDatabase()
+    clock = _Clock(100)
+    store = _lease_store(database, clock, "server-agent-a")
+    stop = _OneHeartbeatThenStop()
+    restarted: list[_RestartedKeeper] = []
+
+    def restart_keeper(*, target, name: str, daemon: bool) -> _RestartedKeeper:
+        keeper = _RestartedKeeper(target=target, name=name, daemon=daemon)
+        restarted.append(keeper)
+        return keeper
+
+    store._stop = stop
+    store._start_lease_keeper = True
+    store._keeper = _StoppedKeeper()
+    monkeypatch.setattr("agentnet.storage.postgres.threading.Thread", restart_keeper)
+    try:
+        clock.value = 131
+        store._keep_lease()
+        with store.transaction():
+            pass
+
+        assert len(restarted) == 1
+        assert restarted[0].target == store._keep_lease
+        assert restarted[0].name == "agentnet-lease-server-agent-a"
+        assert restarted[0].daemon is True
+        assert restarted[0].started is True
+        assert store._keeper_restart_needed is False
+    finally:
+        store.close()
+
+
+
 def test_connection_loss_is_not_retried_and_next_operation_reconnects_with_higher_fence() -> None:
     database = _LeaseDatabase()
     store = _lease_store(database, _Clock(100), "server-agent-a")
@@ -2206,6 +2368,312 @@ def test_real_postgres_fresh_schema_installs_current_migration_catalog() -> None
             store.close()
         if reopened is not None:
             reopened.close()
+        administrator.execute(
+            psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(
+                psycopg.sql.Identifier(schema)
+            )
+        )
+        administrator.close()
+
+
+@pytest.mark.skipif(
+    not (
+        os.environ.get("AGENTNET_TEST_POSTGRES_URL")
+        and os.environ.get("AGENTNET_TEST_POSTGRES_ALLOW_MUTATION") == "1"
+    ),
+    reason="requires an explicitly mutation-authorized dedicated PostgreSQL test database",
+)
+def test_real_postgres_scope_activation_and_projection_recovery_are_atomic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = os.environ["AGENTNET_TEST_POSTGRES_URL"]
+    schema = f"agentnet_scope_recovery_{uuid4().hex}"
+    administrator = psycopg.connect(database_url, autocommit=True)
+    administrator.execute(
+        psycopg.sql.SQL("CREATE SCHEMA {}").format(psycopg.sql.Identifier(schema))
+    )
+    separator = "&" if "?" in database_url else "?"
+    isolated_url = (
+        f"{database_url}{separator}options="
+        f"-csearch_path%3D{schema}%20-cclient_encoding%3DUTF8"
+    )
+    store = None
+    try:
+        store = PostgreSQLStore(
+            isolated_url,
+            LocalEnvelopeCipher(b"c" * 32),
+            instance_id=f"scope-recovery-{uuid4().hex}",
+            start_lease_keeper=False,
+        )
+        domain_id = "scope-recovery.example"
+        principal_id = "scope-recovery-owner"
+        actor = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id="scope-recovery-fresh",
+            credential_id="scope-recovery-fresh-credential",
+            credential_epoch=1,
+            binding_assurance="os_bound",
+        )
+        replacement_caller = VerifiedActor(
+            kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+            domain_id=domain_id,
+            principal_id=principal_id,
+            harness_id="owner-harness",
+            credential_id="owner-credential",
+            credential_epoch=1,
+            binding_assurance="os_bound",
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO domains(domain_id,status,created_at) VALUES(?,?,?)",
+                (domain_id, "active", COMMUNICATION_NOW - 200),
+            )
+            connection.execute(
+                """INSERT INTO principals(
+                    principal_id,domain_id,oidc_issuer,oidc_subject,verified_email,
+                    status,created_at
+                ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    principal_id,
+                    domain_id,
+                    "https://idp.example",
+                    "subject",
+                    "owner@example.test",
+                    "active",
+                    COMMUNICATION_NOW - 200,
+                ),
+            )
+            for harness_id, kind, display_name in (
+                ("owner-harness", "pi", "Owner laptop"),
+                (actor.harness_id, "codex", "Fresh laptop"),
+                ("replacement-harness", "claude", "Replacement laptop"),
+            ):
+                connection.execute(
+                    """INSERT INTO harnesses(
+                        harness_id,domain_id,principal_id,guest_id,kind,display_name,
+                        status,binding_assurance,capabilities_json,credential_epoch,
+                        created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        harness_id,
+                        domain_id,
+                        principal_id,
+                        None,
+                        kind,
+                        display_name,
+                        "active",
+                        "os_bound",
+                        "[]",
+                        1,
+                        COMMUNICATION_NOW - 200,
+                    ),
+                )
+            for credential_id, harness_id, key_id in (
+                ("owner-credential", "owner-harness", "owner-key"),
+                (actor.credential_id, actor.harness_id, "fresh-key"),
+                ("replacement-credential", "replacement-harness", "replacement-key"),
+            ):
+                connection.execute(
+                    """INSERT INTO credentials(
+                        credential_id,harness_id,key_id,public_key_pem,status,epoch,
+                        not_before,expires_at
+                    ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        credential_id,
+                        harness_id,
+                        key_id,
+                        "synthetic-public-key",
+                        "active",
+                        1,
+                        COMMUNICATION_NOW - 100,
+                        COMMUNICATION_NOW + 86_400,
+                    ),
+                )
+
+        resolver = MutableResolver(actor)
+        signer = P256KeyPair.generate()
+        approver = TrustedApprover(
+            principal_id=principal_id,
+            domain_id=domain_id,
+            signer_key_id=signer.thumbprint,
+            public_key_pem=signer.public_pem,
+            allowed_purposes=frozenset(
+                {
+                    COMMUNICATION_SCOPE_APPROVAL_PURPOSE,
+                    SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+                }
+            ),
+        )
+        verifier = IndependentApprovalVerifier(
+            {signer.thumbprint: approver},
+            verifier_id="approval.corp.example",
+        )
+        client = FakeApprovalClient(signer, approver, verifier)
+        service = CommunicationScopeService(
+            store,
+            client,
+            verifier,
+            resolver=resolver,
+            public_approval_url="https://approval.corp.example/approval",
+            clock=lambda: COMMUNICATION_NOW,
+        )
+        stack = SimpleNamespace(
+            service=service,
+            client=client,
+            resolver=resolver,
+            store=store,
+            actor=actor,
+        )
+        begin_communication_scope(stack)
+        client.state = "issued"
+        assert communication_scope_status(stack)["status"] == "approval_ready"
+        original_materializer = communication_scope_module.materialize_v6_communication_scope
+
+        def fail_projection(*_args, **_kwargs):
+            raise GateBlocked(
+                "schema_v7_scope_projection",
+                "injected PostgreSQL projection failure",
+            )
+
+        monkeypatch.setattr(
+            communication_scope_module,
+            "materialize_v6_communication_scope",
+            fail_projection,
+        )
+        with pytest.raises(
+            GateBlocked,
+            match="injected PostgreSQL projection failure",
+        ):
+            complete_communication_scope(stack)
+        assert store.fetch_one(
+            "SELECT state FROM communication_scopes"
+        )["state"] == "completion_reserved"
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM entitlements"
+        )["n"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes"
+        )["n"] == 0
+
+        monkeypatch.setattr(
+            communication_scope_module,
+            "materialize_v6_communication_scope",
+            original_materializer,
+        )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        scope_id = str(
+            store.fetch_one("SELECT scope_id FROM communication_scopes")["scope_id"]
+        )
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scopes WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 1
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 2
+
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM collaboration_scope_members WHERE scope_id=?",
+                (scope_id,),
+            )
+            connection.execute(
+                "DELETE FROM collaboration_scopes WHERE scope_id=?",
+                (scope_id,),
+            )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 2
+
+        with store.transaction() as connection:
+            connection.execute(
+                """DELETE FROM collaboration_scope_members
+                   WHERE scope_id=? AND role='member'""",
+                (scope_id,),
+            )
+        with pytest.raises(
+            GateBlocked,
+            match="existing collaboration scope projection mismatches",
+        ):
+            complete_communication_scope(stack)
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM collaboration_scope_members WHERE scope_id=?",
+            (scope_id,),
+        )["n"] == 1
+
+        # Restore the exact source projection, then exercise the package-owned
+        # expired-member replacement through the PostgreSQL adapter.
+        with store.transaction() as connection:
+            connection.execute(
+                "DELETE FROM collaboration_scope_members WHERE scope_id=?",
+                (scope_id,),
+            )
+            connection.execute(
+                "DELETE FROM collaboration_scopes WHERE scope_id=?",
+                (scope_id,),
+            )
+        assert complete_communication_scope(stack)["status"] == "communication_active"
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE credentials SET expires_at=? WHERE credential_id=?",
+                (COMMUNICATION_NOW - 1, actor.credential_id),
+            )
+        replacement_service = ScopeHarnessReplacementService(
+            store,
+            verifier,
+            clock=lambda: COMMUNICATION_NOW,
+        )
+        replacement_request = replacement_service.prepare(
+            actor=replacement_caller,
+            scope_id=scope_id,
+            old_harness_id=actor.harness_id,
+            new_harness_id="replacement-harness",
+            role="member",
+            request_id="postgres-scope-replacement-request-0001",
+            issued_at=COMMUNICATION_NOW,
+            expires_at=COMMUNICATION_NOW + 300,
+        )
+        replacement_approval = create_independent_approval_receipt(
+            signer,
+            approver=approver,
+            verifier_id=verifier.verifier_id,
+            approval_purpose=SCOPE_HARNESS_REPLACEMENT_APPROVAL_PURPOSE,
+            canonical_transaction=replacement_request.canonical_transaction,
+            issued_at=COMMUNICATION_NOW,
+            expires_at=COMMUNICATION_NOW + 300,
+            authenticated_at=COMMUNICATION_NOW,
+        )
+        replaced = replacement_service.replace(
+            actor=replacement_caller,
+            request=replacement_request,
+            approval=replacement_approval,
+        )
+        repeated = replacement_service.replace(
+            actor=replacement_caller,
+            request=replacement_request,
+            approval=replacement_approval,
+        )
+        assert replaced.idempotent_repeat is False
+        assert repeated.idempotent_repeat is True
+        assert repeated.scope_digest == replaced.scope_digest
+        assert store.fetch_one(
+            """SELECT state FROM collaboration_scope_members
+               WHERE scope_id=? AND harness_id=?""",
+            (scope_id, actor.harness_id),
+        )["state"] == "removed"
+        assert store.fetch_one(
+            """SELECT state FROM collaboration_scope_members
+               WHERE scope_id=? AND harness_id=?""",
+            (scope_id, "replacement-harness"),
+        )["state"] == "active"
+    finally:
+        if store is not None:
+            store.close()
         administrator.execute(
             psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(
                 psycopg.sql.Identifier(schema)
@@ -2723,6 +3191,68 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
 
         owner = identity_rows[0][0]
         senders = (identity_rows[1][0], identity_rows[2][0])
+        assert owner.principal_id is not None
+        assert owner.harness_id is not None
+        owner_principal_id = owner.principal_id
+        owner_harness_id = owner.harness_id
+        member_harness_ids: list[str] = []
+        for actor, _key in identity_rows:
+            assert actor.harness_id is not None
+            member_harness_ids.append(actor.harness_id)
+        domain_state = first.fetch_one(
+            "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
+            (domain,),
+        )
+        assert domain_state is not None
+        scope_id = f"scope:postgres-task-conflict:{uuid4().hex}"
+        scope_service = CollaborationScopeService(first, clock=lambda: now_epoch)
+        proposal = CollaborationScopeProposal(
+            scope_id=scope_id,
+            scope_kind="shared",
+            member_harness_ids=tuple(sorted(member_harness_ids)),
+            allowed_actions=("task.accept", "task.propose"),
+            allowed_resource_prefixes=("task:",),
+            allowed_classifications=(Classification.C1_INTERNAL,),
+            policy_revision=int(domain_state["policy_revision"]),
+            domain_revocation_epoch=int(domain_state["revocation_epoch"]),
+            expires_at=now_epoch + 3_600,
+        )
+        issuance_resource = f"scope:{scope_id}"
+        issuance_policy = LocalConformancePolicyEngine(first)
+        issuance_policy.bootstrap_entitlement_for_local_conformance(
+            HumanEntitlement(
+                domain_id=domain,
+                principal_id=owner_principal_id,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource_pattern=issuance_resource,
+                revision=int(domain_state["policy_revision"]),
+                expires_at=datetime.fromtimestamp(now_epoch + 3_600, UTC),
+            ),
+            when=now,
+        )
+        issuance_request = scope_service.issuance_request(
+            actor=owner,
+            proposal=proposal,
+        )
+        issuance_decision = issuance_policy.require(
+            AuthorizationRequest(
+                actor=owner,
+                action=COLLABORATION_SCOPE_ISSUE_ACTION,
+                resource=issuance_resource,
+                policy_revision=int(domain_state["policy_revision"]),
+                context=issuance_request,
+            ),
+            when=now,
+        )
+        scope = scope_service.issue(
+            actor=owner,
+            proposal=proposal,
+            authority=IssuanceAuthority(
+                actor=owner,
+                policy_decision_id=issuance_decision.decision_id,
+            ),
+            when=now,
+        )
         intent = TaskExecutionIntent(
             resources=(
                 TaskResourceIntent(
@@ -2739,10 +3269,13 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
                 actor=sender,
                 event_type=EventType.TASK_ASSIGNMENT,
                 classification=Classification.C1_INTERNAL,
-                payload={"instruction": f"exclusive rewrite {index}"},
+                payload={
+                    "instruction": f"exclusive rewrite {index}",
+                    "authorization_context": scope.authorization_context(),
+                },
                 idempotency_key=f"postgres-task-conflict-{index}-{uuid4()}",
-                recipients=(owner.harness_id,),
-                task_id=str(uuid4()),
+                recipients=(owner_harness_id,),
+                task_id=f"task:postgres-conflict:{uuid4()}",
                 effect_deadline=deadline,
                 policy_revision=1,
             )
@@ -2750,10 +3283,7 @@ def test_postgres_cross_instance_task_conflict_race_and_owner_revision_fence() -
         )
         stores = (first, second)
         mailboxes = (
-            MailboxService(
-                first,
-                collaboration_scopes=CollaborationScopeService(first),
-            ),
+            MailboxService(first, collaboration_scopes=scope_service),
             MailboxService(
                 second,
                 collaboration_scopes=CollaborationScopeService(second),

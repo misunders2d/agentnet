@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import shutil
@@ -1965,6 +1966,34 @@ def test_exact_approval_policy_rejects_extra_approver(tmp_path: Path) -> None:
         approvers=(requested,),
         approval_state=state,
     )
+    placeholder = config.model_copy(
+        update={
+            "approvers": (
+                config.approvers[0].model_copy(
+                    update={"principal_id": "setup-placeholder-owner"}
+                ),
+            )
+        }
+    )
+    with pytest.raises(ServerSetupError, match="existing Approval state conflicts"):
+        setup._require_exact_approval_policy(
+            placeholder,
+            request=request,
+            owner_oidc=owner_oidc,
+            approvers=(requested,),
+            approval_state=state,
+        )
+    assert (
+        setup._require_exact_approval_policy(
+            placeholder,
+            request=request,
+            owner_oidc=owner_oidc,
+            approvers=(requested,),
+            approval_state=state,
+            allow_canonical_owner_adoption=True,
+        )
+        == "setup-placeholder-owner"
+    )
     drifted = config.model_copy(
         update={"approvers": config.approvers + (configured("extra-principal", "extra.pem"),)}
     )
@@ -1976,6 +2005,84 @@ def test_exact_approval_policy_rejects_extra_approver(tmp_path: Path) -> None:
             approvers=(requested,),
             approval_state=state,
         )
+
+def test_canonical_owner_core_policy_cutover_is_exact_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agentnet.operations.server_setup as setup
+
+    source_document = {
+        "issuer": "https://accounts.example",
+        "approval_service": {
+            "approver_principal_id": "setup-placeholder-owner",
+            "signer_key_id": "source-key",
+        },
+    }
+    target_document = {
+        "issuer": "https://accounts.example",
+        "approval_service": {
+            "approver_principal_id": "owner-principal",
+            "signer_key_id": "target-key",
+        },
+    }
+    source_oidc = SimpleNamespace(model_dump=lambda **_kwargs: source_document)
+    target_oidc = SimpleNamespace(model_dump=lambda **_kwargs: target_document)
+    previous_core = (
+        json.dumps(
+            {"oidc_enrollment": source_document, "unrelated": {"preserved": True}},
+            indent=2,
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
+    previous_oidc = json.dumps(source_document, indent=2, sort_keys=True).encode() + b"\n"
+    core_path = tmp_path / "agentnet.json"
+    oidc_path = tmp_path / "oidc.json"
+    current = {core_path: previous_core, oidc_path: previous_oidc}
+    pending: dict[str, object] = {
+        "journal": {
+            "previous_configs": {
+                "core_config": base64.b64encode(previous_core).decode(),
+                "core_oidc_config": base64.b64encode(previous_oidc).decode(),
+            }
+        }
+    }
+
+    def write_config(
+        path: Path,
+        payload: bytes,
+        *,
+        account: object,
+        previous: bytes,
+    ) -> str:
+        del account
+        if current[path] == payload:
+            return "already_satisfied"
+        assert current[path] == previous
+        current[path] = payload
+        return "updated_package_upgrade"
+
+    monkeypatch.setattr(setup, "_write_journaled_core_config", write_config)
+    arguments = {
+        "core_config_path": core_path,
+        "core_oidc_path": oidc_path,
+        "core_account": object(),
+        "source_oidc": source_oidc,
+        "target_oidc": target_oidc,
+        "pending": pending,
+    }
+
+    assert setup._migrate_canonical_owner_core_policy(**arguments) == (
+        "updated_package_upgrade"
+    )
+    replacement_core = json.loads(current[core_path])
+    assert replacement_core == {
+        "oidc_enrollment": target_document,
+        "unrelated": {"preserved": True},
+    }
+    assert json.loads(current[oidc_path]) == target_document
+    assert setup._migrate_canonical_owner_core_policy(**arguments) == "already_satisfied"
 
 
 def test_managed_identity_profile_accepts_only_canonical_strict_actor(
@@ -3510,6 +3617,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         "_postgres_peer_gate",
         lambda _account, _database_url: {"status": "validated_exact_local_peer"},
     )
+    monkeypatch.setattr(
+        setup,
+        "_repair_committed_communication_scope_projection_as",
+        lambda _account, _database_url: {"ready": True, "migrated": 0},
+    )
 
     signer = P256KeyPair.generate()
     trusted = IndependentApproverConfig(
@@ -3530,7 +3642,14 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     drift_trust_during_apply = False
     trust_reads = 0
 
-    def fake_approval_trust(_path: Path, _account: object, _state: Path):
+    def fake_approval_trust(
+        _path: Path,
+        _account: object,
+        _state: Path,
+        *,
+        recovery_source: object | None = None,
+    ):
+        assert recovery_source is None
         nonlocal trust_reads
         trust_reads += 1
         effective = changed_trusted if drift_trust_during_apply and trust_reads % 2 == 0 else trusted
