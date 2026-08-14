@@ -12,6 +12,7 @@ from agentnet.core.app import CommunicationCore
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.storage.sqlite import SQLiteStore
 from agentnet.errors import GateBlocked
+from agentnet.operations.config import RuntimeProfile
 from agentnet.operations.c0_credential_supersession import (
     C0CredentialSupersessionJournal,
     append_supersession,
@@ -522,6 +523,40 @@ def test_core_accepts_current_audited_supersession_journal(tmp_path: Path) -> No
     journal_path.chmod(0o600)
     store = _TerminalAuditStore([_audit_row(journal)])
     core = _core(store, tmp_path)
+
+    core._require_managed_credential_supersession(
+        principal_id=PRINCIPAL_ID,
+        credential_id="credential-2",
+        credential_epoch=2,
+        key_id=KEY_ID,
+    )
+    assert core._verified_supersession_binding == ("credential-2", 2, KEY_ID)
+
+
+def test_core_reads_always_on_journal_from_managed_root(tmp_path: Path) -> None:
+    journal = _append()
+    journal_path = tmp_path / "credential-supersessions.json"
+    journal_path.write_bytes(canonical_supersession_journal(journal))
+    journal_path.chmod(0o600)
+    core = _core(_TerminalAuditStore([_audit_row(journal)]), tmp_path / "core")
+    core.config.profile = RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+
+    core._require_managed_credential_supersession(
+        principal_id=PRINCIPAL_ID,
+        credential_id="credential-2",
+        credential_epoch=2,
+        key_id=KEY_ID,
+    )
+    assert core._verified_supersession_binding == ("credential-2", 2, KEY_ID)
+
+
+def test_core_reads_always_on_journal_from_root_layout(tmp_path: Path) -> None:
+    journal = _append()
+    journal_path = tmp_path / "credential-supersessions.json"
+    journal_path.write_bytes(canonical_supersession_journal(journal))
+    journal_path.chmod(0o600)
+    core = _core(_TerminalAuditStore([_audit_row(journal)]), tmp_path)
+    core.config.profile = RuntimeProfile.ALWAYS_ON_SERVER_AGENT
 
     core._require_managed_credential_supersession(
         principal_id=PRINCIPAL_ID,
