@@ -570,13 +570,23 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     )
     stores: list[FakeStore] = []
 
-    def open_reauthorization_store(_config, *, database_url_override=None):
+    def open_reauthorization_store(
+        _config,
+        *,
+        database_url_override=None,
+        core_account=None,
+    ):
         assert database_url_override == "postgresql://agentnet@postgres/agentnet"
+        assert core_account == account
         opened_store = FakeStore()
         stores.append(opened_store)
         return opened_store
 
-    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_reauthorization_store)
+    monkeypatch.setattr(
+        cli,
+        "_open_server_agent_activation_store_as_core_peer",
+        open_reauthorization_store,
+    )
     monkeypatch.setattr(cli, "load_credential_binding", lambda _store, _credential_id: expired_binding)
     monkeypatch.setattr(
         cli,
@@ -707,6 +717,57 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert len(service_calls) == 3 and len(set(service_calls)) == 1
     assert json.loads(files[identity_path])["actor"]["credential_id"] == "credential-2"
     assert all(opened_store.closed for opened_store in stores)
+
+def test_managed_server_reauthorization_opens_postgres_as_core_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = SimpleNamespace(pw_uid=1234, pw_gid=5678)
+    identity = {"euid": 0, "egid": 0, "groups": [0, 42]}
+    transitions: list[tuple[str, object]] = []
+    expected_store = object()
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: identity["euid"])
+    monkeypatch.setattr(cli.os, "getegid", lambda: identity["egid"])
+    monkeypatch.setattr(cli.os, "getgroups", lambda: list(identity["groups"]))
+
+    def setgroups(groups):
+        transitions.append(("groups", groups))
+        identity["groups"] = list(groups)
+
+    def setegid(gid):
+        transitions.append(("egid", gid))
+        identity["egid"] = gid
+
+    def seteuid(uid):
+        transitions.append(("euid", uid))
+        identity["euid"] = uid
+
+    monkeypatch.setattr(cli.os, "setgroups", setgroups)
+    monkeypatch.setattr(cli.os, "setegid", setegid)
+    monkeypatch.setattr(cli.os, "seteuid", seteuid)
+
+    def open_store(_config, *, database_url_override=None):
+        assert database_url_override == "postgresql:///agentnet"
+        assert identity == {"euid": 1234, "egid": 5678, "groups": [5678]}
+        return expected_store
+
+    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_store)
+
+    assert cli._open_server_agent_activation_store_as_core_peer(
+        ExtensionConfig(data_dir=Path("/tmp/unused")),
+        database_url_override="postgresql:///agentnet",
+        core_account=account,
+    ) is expected_store
+    assert identity == {"euid": 0, "egid": 0, "groups": [0, 42]}
+    assert transitions == [
+        ("groups", [5678]),
+        ("egid", 5678),
+        ("euid", 1234),
+        ("euid", 0),
+        ("egid", 0),
+        ("groups", [0, 42]),
+    ]
+
 
 
 def test_managed_server_reauthorization_lock_rejects_concurrent_setup(

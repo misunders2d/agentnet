@@ -1045,6 +1045,40 @@ def _open_server_agent_activation_store(
         require_recovery_topology=config.postgres_recovery_topology,
     )
 
+def _open_server_agent_activation_store_as_core_peer(
+    config: ExtensionConfig,
+    *,
+    database_url_override: str,
+    core_account: Any,
+) -> PostgreSQLStore:
+    """Open PostgreSQL under the fixed Core peer identity, then restore root."""
+
+    original_euid = os.geteuid()
+    original_egid = os.getegid()
+    original_groups = os.getgroups()
+    groups_changed = False
+    egid_changed = False
+    euid_changed = False
+    try:
+        os.setgroups([core_account.pw_gid])
+        groups_changed = True
+        os.setegid(core_account.pw_gid)
+        egid_changed = True
+        os.seteuid(core_account.pw_uid)
+        euid_changed = True
+        return _open_server_agent_activation_store(
+            config,
+            database_url_override=database_url_override,
+        )
+    finally:
+        if euid_changed:
+            os.seteuid(original_euid)
+        if egid_changed:
+            os.setegid(original_egid)
+        if groups_changed:
+            os.setgroups(original_groups)
+
+
 
 def _require_server_agent_activation_binding(
     store: PostgreSQLStore,
@@ -2245,9 +2279,10 @@ def _command_server_agent_reauthorize_expired_credential_locked(
             )
         except Exception as exc:
             raise SystemExit("managed-server reauthorization request state is invalid") from exc
-        store = _open_server_agent_activation_store(
+        store = _open_server_agent_activation_store_as_core_peer(
             config,
             database_url_override=database_url,
+            core_account=core_account,
         )
         try:
             (
@@ -2299,9 +2334,10 @@ def _command_server_agent_reauthorize_expired_credential_locked(
             raise SystemExit("terminal replacement requires existing reauthorization state")
         if config.enrolled_credential_id != actor.credential_id:
             raise SystemExit("managed-server config and identity credential labels differ")
-        store = _open_server_agent_activation_store(
+        store = _open_server_agent_activation_store_as_core_peer(
             config,
             database_url_override=database_url,
+            core_account=core_account,
         )
         try:
             binding = load_credential_binding(store, actor.credential_id)
@@ -2498,9 +2534,10 @@ def _command_server_agent_reauthorize_expired_credential_locked(
     finally:
         client.close()
 
-    store = _open_server_agent_activation_store(
+    store = _open_server_agent_activation_store_as_core_peer(
         config,
         database_url_override=database_url,
+        core_account=core_account,
     )
     try:
         (
