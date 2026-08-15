@@ -1,4 +1,4 @@
-"""Interactive Pi gateway from one exact local process to signed AgentNet HTTP."""
+"""Interactive Pi/OMP gateway from one exact local process to signed AgentNet HTTP."""
 
 from __future__ import annotations
 
@@ -100,11 +100,12 @@ _SHUTDOWN_GRACE_SECONDS = 5.0
 _SYS_PIDFD_SEND_SIGNAL = 424
 _SYS_PIDFD_OPEN = 434
 _REMOTE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
-_MAX_PI_EXTENSION_BYTES = 1_048_576
-_PI_EXTENSION_DIRECTORY = Path("src/agentnet/bindings")
-_PI_EXTENSION_FILES = ("pi_extension.ts", "pi_response.ts")
-_PI_TOOL_NAMES = tuple(name.replace(".", "_") for name in CANONICAL_TOOL_NAMES)
-_PI_RESERVED_OPTIONS = frozenset(
+_MAX_MANAGER_EXTENSION_BYTES = 1_048_576
+_MANAGER_EXTENSION_DIRECTORY = Path("src/agentnet/bindings")
+_MANAGER_EXTENSION_FILES = ("pi_extension.ts", "pi_response.ts")
+_MANAGER_TOOL_NAMES = tuple(name.replace(".", "_") for name in CANONICAL_TOOL_NAMES)
+_SUPPORTED_MANAGER_EXECUTABLES = frozenset({"pi", "omp"})
+_MANAGER_RESERVED_OPTIONS = frozenset(
     {
         "--exclude-tools",
         "--extension",
@@ -984,79 +985,79 @@ def _validate_command(command: Sequence[str]) -> tuple[str, ...]:
     return result
 
 
-def resolve_packaged_pi_extension(
+def resolve_packaged_manager_extension(
     environment: Mapping[str, str] | None = None,
 ) -> Path:
     source = os.environ if environment is None else environment
     package_root = source.get("AGENTNET_PACKAGE_ROOT")
     directory = (
-        Path(package_root) / _PI_EXTENSION_DIRECTORY
+        Path(package_root) / _MANAGER_EXTENSION_DIRECTORY
         if package_root is not None
         else Path(__file__).parent
     )
     resolved: dict[str, Path] = {}
-    for name in _PI_EXTENSION_FILES:
+    for name in _MANAGER_EXTENSION_FILES:
         candidate = directory / name
         try:
             candidate_metadata = candidate.lstat()
             if stat.S_ISLNK(candidate_metadata.st_mode):
                 raise GateBlocked(
                     "remote_manager",
-                    "packaged Pi Manager extension is invalid",
+                    "packaged Manager extension is invalid",
                 )
             source_file = candidate.resolve(strict=True)
             metadata = source_file.lstat()
         except OSError as exc:
             raise GateBlocked(
                 "remote_manager",
-                "packaged Pi Manager extension is unavailable",
+                "packaged Manager extension is unavailable",
             ) from exc
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_size <= 0
-            or metadata.st_size > _MAX_PI_EXTENSION_BYTES
+            or metadata.st_size > _MAX_MANAGER_EXTENSION_BYTES
         ):
             raise GateBlocked(
                 "remote_manager",
-                "packaged Pi Manager extension is invalid",
+                "packaged Manager extension is invalid",
             )
         resolved[name] = source_file
     return resolved["pi_extension.ts"]
 
 
-def validate_pi_manager_command(command: Sequence[str]) -> tuple[str, ...]:
+def validate_manager_command(command: Sequence[str]) -> tuple[str, ...]:
     validated = _validate_command(command)
-    if Path(validated[0]).name != "pi":
-        raise ValidationError("manager-run requires the Pi executable")
+    if Path(validated[0]).name not in _SUPPORTED_MANAGER_EXECUTABLES:
+        raise ValidationError("manager-run requires the Pi or OMP executable")
     for argument in validated[1:]:
         option = argument.split("=", 1)[0]
-        if option in _PI_RESERVED_OPTIONS:
+        if option in _MANAGER_RESERVED_OPTIONS:
             raise ValidationError(
-                "manager-run owns Pi extension discovery and tool selection"
+                "manager-run owns extension discovery and tool selection"
             )
     return validated
 
 
-def _stage_pi_extension(
+def _stage_manager_extension(
     command: tuple[str, ...],
     *,
     source: Path,
     session_path: Path,
 ) -> tuple[str, ...]:
     staged: dict[str, Path] = {}
-    for name in _PI_EXTENSION_FILES:
+    for name in _MANAGER_EXTENSION_FILES:
         source_file = source.with_name(name)
         try:
             payload = source_file.read_bytes()
         except OSError as exc:
             raise GateBlocked(
                 "remote_manager",
-                "packaged Pi Manager extension is unreadable",
+                "packaged Manager extension is unreadable",
             ) from exc
-        if not payload or len(payload) > _MAX_PI_EXTENSION_BYTES:
+        if not payload or len(payload) > _MAX_MANAGER_EXTENSION_BYTES:
             raise GateBlocked(
                 "remote_manager",
-                "packaged Pi Manager extension is invalid",
+                "packaged Manager extension is invalid",
             )
         target_path = session_path / name
         try:
@@ -1066,7 +1067,7 @@ def _stage_pi_extension(
         except OSError as exc:
             raise GateBlocked(
                 "remote_manager",
-                "packaged Pi Manager extension could not be staged",
+                "packaged Manager extension could not be staged",
             ) from exc
         staged[name] = target_path
     return (
@@ -1076,7 +1077,7 @@ def _stage_pi_extension(
         "--no-extensions",
         "--no-builtin-tools",
         "--tools",
-        ",".join(_PI_TOOL_NAMES),
+        ",".join(_MANAGER_TOOL_NAMES),
     )
 
 
@@ -1088,7 +1089,7 @@ def _sandbox_parent_directories(path: Path) -> tuple[Path, ...]:
 
 
 def _measured_manager_executable(command_name: str, executable: Path) -> Path:
-    if Path(command_name).name != "pi":
+    if Path(command_name).name not in _SUPPORTED_MANAGER_EXECUTABLES:
         return executable
     try:
         with executable.open("rb") as source:
@@ -1096,7 +1097,7 @@ def _measured_manager_executable(command_name: str, executable: Path) -> Path:
     except OSError as exc:
         raise GateBlocked(
             "remote_manager",
-            "interactive Pi launcher could not be inspected",
+            "interactive Manager launcher could not be inspected",
         ) from exc
     if shebang != b"#!/usr/bin/env node\n":
         return executable
@@ -1104,14 +1105,14 @@ def _measured_manager_executable(command_name: str, executable: Path) -> Path:
     if node is None:
         raise GateBlocked(
             "remote_manager",
-            "interactive Pi Node.js runtime is unavailable",
+            "interactive Manager Node.js runtime is unavailable",
         )
     runtime = Path(node).resolve(strict=True)
     metadata = runtime.lstat()
     if not stat.S_ISREG(metadata.st_mode) or not os.access(runtime, os.X_OK):
         raise GateBlocked(
             "remote_manager",
-            "interactive Pi Node.js runtime is invalid",
+            "interactive Manager Node.js runtime is invalid",
         )
     return runtime
 
@@ -1160,6 +1161,8 @@ def _sandboxed_command(
         "--die-with-parent",
         "--dev",
         "/dev",
+        "--proc",
+        "/proc",
         "--tmpfs",
         "/tmp",
     ]
@@ -1444,7 +1447,7 @@ async def _run_manager_gateway(
     state_dir: Path | None,
     environment: Mapping[str, str] | None,
     capability_ttl_seconds: int,
-    pi_extension: Path | None,
+    manager_extension: Path | None,
 ) -> int:
     if host_platform() != "linux":
         raise GateBlocked(
@@ -1461,10 +1464,10 @@ async def _run_manager_gateway(
     temporary_path = session_path / "tmp"
     home_path.mkdir(mode=0o700)
     temporary_path.mkdir(mode=0o700)
-    if pi_extension is not None:
-        command = _stage_pi_extension(
+    if manager_extension is not None:
+        command = _stage_manager_extension(
             command,
-            source=pi_extension,
+            source=manager_extension,
             session_path=session_path,
         )
     socket_path = session_path / "m.sock"
@@ -1582,7 +1585,7 @@ def run_manager_gateway(
     state_dir: Path | None = None,
     environment: Mapping[str, str] | None = None,
     capability_ttl_seconds: int = 3600,
-    pi_extension: Path | None = None,
+    manager_extension: Path | None = None,
 ) -> int:
     """Run an interactive child with only one exact process-bound binding FD.
 
@@ -1614,7 +1617,7 @@ def run_manager_gateway(
             state_dir=state_dir,
             environment=environment,
             capability_ttl_seconds=capability_ttl_seconds,
-            pi_extension=pi_extension,
+            manager_extension=manager_extension,
         )
     )
 
@@ -1622,7 +1625,7 @@ def run_manager_gateway(
 __all__ = [
     "RemoteManagerDispatcher",
     "RemoteManagerRequestError",
-    "resolve_packaged_pi_extension",
+    "resolve_packaged_manager_extension",
     "run_manager_gateway",
-    "validate_pi_manager_command",
+    "validate_manager_command",
 ]

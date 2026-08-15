@@ -3,7 +3,7 @@
 Snapshot: 2026-08-14
 Candidate: `agentnet 0.1.51`
 Latest published package: `agentnet 0.1.50`
-Evidence profile: package-owned same-binding expired-laptop credential reauthorization with exact identity/key/authority preservation, old-key possession, fresh owner WebAuthn UV, atomic epoch+1 replacement, idempotent response-loss recovery, and direct allowlisted v0.1.45–v0.1.50 setup-marker upgrade compatibility
+Evidence profile: package-owned same-binding expired-laptop credential reauthorization plus measured Linux Pi/OMP Manager activation through one packaged extension, canonical tool allowlist, exact-process capability, private PID namespace/procfs, and direct allowlisted v0.1.45–v0.1.50 setup-marker upgrade compatibility
 
 This is not a production release. It is the human projection of
 `RELEASE_MANIFEST.json`; local evidence cannot promote external, privileged,
@@ -16,7 +16,7 @@ owner, installer, or production-topology gates.
 | Must-not-ship gate status | `BLOCKED` |
 | Production ready | `false` |
 | Ship eligible | `false` |
-| Reason | Every must-not-ship gate remains non-passed; hermetic recovery and packaging evidence does not substitute for fresh installed-host, live owner WebAuthn/Core recovery, or required P/E/O evidence. |
+| Reason | Every must-not-ship gate remains non-passed; local recovery, Manager-launcher, and packaging evidence does not substitute for live OMP AgentNet tool use, fresh installed-host recovery, live owner WebAuthn/Core recovery, or required P/E/O evidence. |
 
 ## Runtime and dependency lock
 

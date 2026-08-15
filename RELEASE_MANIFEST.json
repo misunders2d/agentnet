@@ -529,8 +529,8 @@
   "release": {
     "name": "agentnet",
     "production_ready": false,
-    "profile": "expired_laptop_credential_reauthorization_candidate",
-    "reason": "All 19 must-not-ship gates remain non-PASSED; local evidence proves the package-owned same-binding expired-laptop credential reauthorization contract, but fresh installed-host, live owner WebAuthn/Core recovery, and required external, privileged, production-topology, and owner evidence remain absent.",
+    "profile": "expired_credential_reauthorization_and_omp_manager_activation_candidate",
+    "reason": "All 19 must-not-ship gates remain non-PASSED; local evidence proves same-binding expired-laptop credential reauthorization and measured Linux Pi/OMP Manager activation, but live OMP AgentNet tool use, fresh installed-host recovery, live owner WebAuthn/Core recovery, and required external, privileged, production-topology, and owner evidence remain absent.",
     "ship_eligible": false,
     "status": "BLOCKED",
     "version": "0.1.51"
@@ -538,11 +538,11 @@
   "release_inputs": {
     "README.md": {
       "path": "README.md",
-      "sha256": "c98f3fa0cce833f8166fb938281e68f1a44134d2d305e97372b0a00968b1fae9"
+      "sha256": "54aae716059b4149725374c00867f6f8f7a2ef50b09febf17c0c98cc3f1258b0"
     },
     "REQUIREMENTS_STATUS.md": {
       "path": "REQUIREMENTS_STATUS.md",
-      "sha256": "c7a57046e2b352ca4296bc7753fd7b783a0d8dd0f253708d561c1e2c54ce663e"
+      "sha256": "82a1aa1c88fbf8c0f46e902f4cfa8d45bffe304f3b4cf2d609cb6502b2828ac2"
     },
     "deploy/Dockerfile": {
       "path": "deploy/Dockerfile",
@@ -562,11 +562,11 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "51695ac55e5cbd41be39809b568ac78051eb1a91ac5aafe1b380bffc6af3325c"
+      "sha256": "2c2db8a6c34fd008dd0dbeb2db12980d1ee2da539a561311a21e8de6571eb701"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
-      "sha256": "c091bd6ac72357c3d4b923638244913a5b63a1e59c64c9509161b3c4fba4d9dd"
+      "sha256": "de6860173c4d66a51c492922582654dd03b6bee6f11a5be5544230834cbe587a"
     },
     "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json": {
       "path": "evidence/gates/G01/2026-07-13-installed-harnesses/manifest.json",
@@ -602,13 +602,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "fd3a11fbb1473c5a32d970d8bc102028b211c5ac0ace67412dfb8eac8bfa60a4"
+      "sha256": "ac3b15b328f9e3a4465da42e57cb7d659b212fb6c44748cd1faa45f23e875e37"
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "a3c1e64482bb7e0751dcbb3fb1a05d831f1b9d425b6063eca0a4c2a92612901d"
+    "sha256": "0733a06a1ec40180a148348ef8b9fff9b845bfc1a8fc31c9f1f67f17073c1172"
   },
   "runtime": {
     "implementation": "CPython",

@@ -359,10 +359,11 @@ Normal current-credential renewal preserves the scope because authority is
 harness-bound; harness/principal/domain revocation stops it immediately.
 
 `agentnet manager-run` is the laptop-side interactive composition. Before
-identity loading it accepts only a Pi command and rejects caller extension/tool
-selection overrides. It copies the exact packaged AgentNet extension into the
-private session, disables extension discovery, launches one Pi child without
-signing keys, exposes only the canonical AgentNet tool surface through a private
+identity loading it accepts only a Pi or OMP command and rejects caller
+extension/tool selection overrides. It copies the exact packaged AgentNet
+extension into the private session, disables extension discovery, launches one
+Pi or OMP child without signing keys, exposes only the canonical AgentNet tool
+surface through a private
 per-process Unix socket, and derives every remote signed request from the
 Manager's authenticated actor. A short-lived inherited
 capability binds the exact child PID/process measurement, credential epoch,

@@ -83,10 +83,11 @@ locator and close the pin; retryable renewal preserves it. Runtime status and
 its content-free state expose a fixed `last_failure` code, never raw exception
 text. Platforms without that primitive fail the MCP binding closed. Windows uses
 protected named pipes with remote-client rejection and server-derived client
-PID. Pi capability bytes never enter argv or environment. Interactive
-`manager-run` stages the packaged Pi extension inside the private session and
-owns extension discovery/tool-selection flags; caller overrides fail before
-identity loading. Supervisor Pi capability delivery uses sealed memfd on Linux,
+PID. Manager capability bytes never enter argv or environment. Interactive
+`manager-run` stages the packaged Pi-compatible extension for a Pi or OMP child
+inside the private session and owns extension discovery/tool-selection flags;
+caller overrides fail before identity loading. Supervisor Pi capability
+delivery uses sealed memfd on Linux,
 a read-only inherited pipe on macOS, and a one-time exact-process pipe on
 Windows. Interactive `manager-run` is Linux-only until equivalent process-tree
 and filesystem containment exists elsewhere. Missing delivery acknowledgement

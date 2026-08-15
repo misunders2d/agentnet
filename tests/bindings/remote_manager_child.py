@@ -175,6 +175,10 @@ def main() -> int:
     if sys.argv[1] == "--exit":
         _binding()
         return int(sys.argv[2])
+    if sys.argv[1] == "--require-proc":
+        _binding()
+        assert Path("/proc/self/exe").is_symlink()
+        return 0
     if sys.argv[1] == "--signal":
         _binding()
         os.kill(os.getpid(), signal.SIGTERM)

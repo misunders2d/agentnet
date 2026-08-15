@@ -462,7 +462,10 @@ def test_complete_rejects_wrong_http_status_before_printing(
 
 
 
-def test_manager_run_parser_requires_identity_and_child_command() -> None:
+@pytest.mark.parametrize("executable", ["pi", "omp"])
+def test_manager_run_parser_requires_identity_and_child_command(
+    executable: str,
+) -> None:
     parser = cli.build_parser()
     args = parser.parse_args(
         [
@@ -472,7 +475,7 @@ def test_manager_run_parser_requires_identity_and_child_command() -> None:
             "--state-dir",
             ".agentnet/manager",
             "--",
-            "pi",
+            executable,
             "--print",
             "hello",
         ]
@@ -480,7 +483,7 @@ def test_manager_run_parser_requires_identity_and_child_command() -> None:
     assert args.func is cli.command_manager_run
     assert args.identity == "identity.json"
     assert args.state_dir == ".agentnet/manager"
-    assert args.manager_command == ["pi", "--print", "hello"]
+    assert args.manager_command == [executable, "--print", "hello"]
 
     with pytest.raises(SystemExit):
         parser.parse_args(["manager-run", "--identity", "identity.json"])
@@ -488,9 +491,11 @@ def test_manager_run_parser_requires_identity_and_child_command() -> None:
         parser.parse_args(["manager-run", "--", "pi"])
 
 
+@pytest.mark.parametrize("executable", ["pi", "omp"])
 def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    executable: str,
 ) -> None:
     client = _Client([])
     initially_loaded_actor = object()
@@ -513,10 +518,10 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
         command: tuple[str, ...],
         *,
         state_dir: Path | None = None,
-        pi_extension: Path,
+        manager_extension: Path,
     ) -> int:
         calls.append(
-            (loaded_client, signing_context(), command, state_dir, pi_extension)
+            (loaded_client, signing_context(), command, state_dir, manager_extension)
         )
         return 23
 
@@ -528,7 +533,7 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
     args = argparse.Namespace(
         identity="identity.json",
         state_dir=str(state_dir),
-        manager_command=["pi", "--print", "hello"],
+        manager_command=[executable, "--print", "hello"],
     )
 
     assert cli.command_manager_run(args) == 23
@@ -539,9 +544,9 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
         (
             client,
             current_actor,
-            ("pi", "--print", "hello"),
+            (executable, "--print", "hello"),
             state_dir,
-            cli.resolve_packaged_pi_extension(),
+            cli.resolve_packaged_manager_extension(),
         )
     ]
     assert client.closed is True

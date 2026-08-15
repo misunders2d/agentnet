@@ -1,18 +1,18 @@
 {
   "run_id": "2026-08-14-v0.1.51",
-  "evaluated_at": "2026-08-14T00:00:00Z",
-  "scope": "v0_1_51_expired_laptop_credential_reauthorization_candidate",
+  "evaluated_at": "2026-08-15T07:59:56Z",
+  "scope": "v0_1_51_expired_credential_reauthorization_and_omp_manager_activation_candidate",
   "verification_status": "PASS",
   "release_certified": false,
-  "verification_scope": "PASS for focused recovery, broad hermetic source, reproducible archives, and source plus two recursive packed-package generations; not release certification and excludes fresh installed-host recovery, live owner WebAuthn/Core recovery, same-commit CI, and owner/privileged/external must-not-ship gates.",
+  "verification_scope": "PASS for focused recovery and Manager activation, broad hermetic source, reproducible archives, and source plus two recursive packed-package generations; not release certification and excludes live OMP AgentNet tool use, fresh installed-host recovery, live owner WebAuthn/Core recovery, same-commit CI, and owner/privileged/external must-not-ship gates.",
   "source_revision_kind": "release-source-tree-sha256",
-  "release_source_tree_sha256": "a3c1e64482bb7e0751dcbb3fb1a05d831f1b9d425b6063eca0a4c2a92612901d",
+  "release_source_tree_sha256": "0733a06a1ec40180a148348ef8b9fff9b845bfc1a8fc31c9f1f67f17073c1172",
   "supersedes_package_evidence": "evidence/local/2026-08-07-v0.1.50/manifest.json",
-  "change_boundary": "Candidate 0.1.51 adds a dedicated package-owned same-binding reauthorization lane for an expired laptop credential whose exact owner-private identity profile and OS- or hardware-bound P-256 key remain intact. It binds fresh old-key possession and owner WebAuthn UV to the unchanged domain, principal, harness, key, assurance, profile, authority, scopes, memberships, and capabilities, then atomically retires the expired credential and inserts epoch +1. It does not re-enroll, replace keys, restore revoked state, grant authority, restart a harness, or promote a release gate.",
+  "change_boundary": "Candidate 0.1.51 preserves the package-owned same-binding expired laptop credential reauthorization lane and adds OMP to the existing Linux measured Manager launcher. Pi and OMP now use the same packaged extension, canonical AgentNet tool allowlist, short-lived exact-process binding, private session, and Bubblewrap containment; the sandbox mounts a private procfs inside its PID namespace for native OMP runtime compatibility. This does not re-enroll, replace keys, grant authority, restart a harness, publish a package, or promote a release gate.",
   "commands": [
     {
-      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/identity/test_laptop_credential_reauthorization.py tests/approval/test_transaction_summary.py tests/approval/test_webauthn_service.py tests/cli/test_server_agent_activation.py tests/cli/test_laptop_credential_reauthorization_cli.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py",
-      "result": "PASS: 698 passed, 5 expected dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+      "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/authorization/test_bootstrap_plan_resolver.py tests/authorization/test_communication_scope_service.py tests/operations/test_endpoint_lifecycle.py tests/operations/test_client_setup.py tests/bindings/test_endpoint_binding.py tests/bindings/test_local_binding_composition.py tests/adapters/test_supervisor_core_composition.py tests/supervisor/test_host_endpoints.py tests/adapters/test_all_harnesses.py tests/authorization/test_collaboration_scope.py tests/discovery/test_recipient_resolver.py tests/integration/test_collaboration_scope_messaging.py tests/integration/test_obligation_background_wakeup.py tests/production/test_release_v7_schema.py tests/artifacts/test_backend_parity.py tests/artifacts/test_clamav_scanner.py tests/artifacts/test_transfer_service.py tests/artifacts/test_safe_download.py tests/integration/test_file_tools_e2e.py tests/operations/test_server_setup.py tests/identity/test_invitation_links.py tests/identity/test_invitation_redemption.py tests/integration/test_invitation_browser_journey.py tests/operations/test_server_setup_recovery.py tests/test_version.py tests/operations/test_c0_credential_supersession.py tests/identity/test_credential_rotation.py tests/identity/test_laptop_credential_reauthorization.py tests/approval/test_transaction_summary.py tests/approval/test_webauthn_service.py tests/cli/test_server_agent_activation.py tests/cli/test_laptop_credential_reauthorization_cli.py tests/core/test_synthetic_lane.py tests/cli/test_communication_scope_cli.py tests/cli/test_message_cli.py tests/integration/test_cli_product_journey.py tests/security/test_signed_client.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py tests/bindings/test_remote_manager.py",
+      "result": "PASS: 763 passed, 5 expected dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/operations/test_server_setup.py tests/operations/test_server_setup_recovery.py tests/integration/test_cli_product_journey.py tests/integration/test_enrollment_http.py tests/cli/test_bootstrap_plan_cli.py tests/test_version.py",
@@ -20,7 +20,7 @@
     },
     {
       "command": "PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest -q --ignore=tests/adapters/test_installed_live_inference.py --ignore=tests/adapters/test_subprocess_lifecycle.py --ignore=tests/components/test_bakeoff_evidence.py --ignore=tests/conformance/test_release_manifest.py",
-      "result": "PASS: 2197 passed, 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
+      "result": "PASS: 2203 passed, 21 expected platform/dedicated-PostgreSQL skips; one upstream Starlette deprecation warning"
     },
     {
       "command": "SOURCE_DATE_EPOCH=1580601600 PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv build --offline twice",
@@ -52,7 +52,7 @@
     }
   ],
   "execution_context": {
-    "source": "Current uncommitted v0.1.51 candidate after focused and broad hermetic validation.",
+    "source": "Current uncommitted v0.1.51 candidate after focused and broad hermetic validation of OMP Manager activation.",
     "callback_incident": "No external workflow result is included in this local candidate evidence.",
     "packed_generations": "Source plus recursively packed and independently installed generations 1 and 2 each passed 2224 tests with 21 expected platform/dedicated-PostgreSQL skips.",
     "two_vm_source_proof": "Not rerun for exact v0.1.51; retained prior two-machine proof remains historical only",
@@ -61,11 +61,11 @@
   "artifacts": [
     {
       "path": "evidence/local/2026-08-14-v0.1.51/artifacts/agentnet-0.1.51.tar.gz",
-      "sha256": "965aa329c9d46d2fd41fd3f9e02579bc124f497629ccac3fad02dd21b31c8c21"
+      "sha256": "ce66e585db98d244d7a2556bc50cc8f08bc6dd896c42a4c76e8d51a35df176b0"
     },
     {
       "path": "evidence/local/2026-08-14-v0.1.51/artifacts/agentnet-0.1.51-py3-none-any.whl",
-      "sha256": "3deeb6972e47b598db89746fe41458ff7e9a00c44e66fd49881fe30008d47b48"
+      "sha256": "7f8136819a883e9e5071d12d46583783175310d40fdb71c4b0d991fdec5f3260"
     }
   ],
   "source_revision": "working-tree candidate; authoritative binding is release_source_tree_sha256"

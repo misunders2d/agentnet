@@ -1059,6 +1059,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
             "tests/operations/test_client_setup.py",
             "tests/bindings/test_endpoint_binding.py",
             "tests/bindings/test_local_binding_composition.py",
+            "tests/bindings/test_remote_manager.py",
             "tests/adapters/test_supervisor_core_composition.py",
             "tests/supervisor/test_host_endpoints.py",
             "tests/adapters/test_all_harnesses.py",
@@ -1094,7 +1095,7 @@ def _verify_evidence_ledgers(manifest: dict[str, Any], root: Path, failures: lis
                 "uv run pytest -q "
             )
             and all(path in command.split() for path in required_focused_paths)
-            and result.startswith("PASS: 698 passed, 5 expected dedicated-PostgreSQL skips")
+            and result.startswith("PASS: 763 passed, 5 expected dedicated-PostgreSQL skips")
             for command, result in command_results.items()
         ):
             failures.append("0.1.51 focused release-blocker evidence is incomplete")

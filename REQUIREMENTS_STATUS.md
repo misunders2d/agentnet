@@ -429,27 +429,34 @@ published and historical release evidence:
   requirement or must-not-ship gate is promoted.
 
 - Candidate `0.1.51` adds a dedicated, package-owned reauthorization workflow
-  for an expired ordinary laptop credential. It preserves the exact
-  domain/principal/harness binding, OS- or hardware-bound public key, authority,
-  scopes, memberships, capabilities, and credential-supersession history;
-  requires fresh independent WebAuthn user verification; rejects active,
-  revoked, mismatched, non-laptop, stale, replayed, expired-transaction, and
-  conflicting bindings before key use or mutation; and commits exactly one
-  same-key successor epoch with idempotent response-loss recovery. It grants no
-  authority and performs no enrollment, generic renewal, key replacement, or
-  service restart. Current evidence is hermetic only: the focused lane reports
-  **698 passed and 5 expected dedicated-PostgreSQL skips**, the broad
-  releasable-source lane reports **2197 passed and 21 expected
-  platform/dedicated-PostgreSQL skips**, two independent release builds are
-  byte-identical, and source plus two recursive packed generations each report
-  **2224 passed and 21 expected platform/dedicated-PostgreSQL skips**. The
-  packaged exact-endpoint routing gate, packaged `0.1.45` user journey, and
-  separate-process communication/obligation roundtrip pass. Fresh
-  installed-host, live owner WebAuthn/Core recovery, same-commit CI, and
-  production-topology evidence remain pending. Affected IDs are `ID-006`,
-  `ID-007`, `ID-009`, `AUTH-001`, `AUTH-002`, `AUTH-004`, `AUTH-007`,
-  `SEC-003`, `SEC-005`, `SEC-007`, `OPS-003`, and `OPS-006`. No requirement or
-  must-not-ship gate is promoted.
+  for an expired ordinary laptop credential and generalizes the package-owned
+  measured Manager launcher from Pi to Pi/OMP. Reauthorization preserves the
+  exact domain/principal/harness binding, OS- or hardware-bound public key,
+  authority, scopes, memberships, capabilities, and credential-supersession
+  history; requires fresh independent WebAuthn user verification; rejects
+  active, revoked, mismatched, non-laptop, stale, replayed,
+  expired-transaction, and conflicting bindings before key use or mutation;
+  and commits exactly one same-key successor epoch with idempotent
+  response-loss recovery. It grants no authority and performs no enrollment,
+  generic renewal, key replacement, or service restart. The OMP path reuses
+  the existing measured single-child Manager composition, stages the exact
+  packaged Pi-compatible extension, rejects caller-selected extensions/tools,
+  retains exact-process binding and the private PID namespace/procfs sandbox,
+  and exposes only canonical AgentNet tools. Current evidence is local only:
+  the focused lane reports **763 passed and 5 expected dedicated-PostgreSQL
+  skips**, the broad releasable-source lane reports **2203 passed and 21
+  expected platform/dedicated-PostgreSQL skips**, and source plus two recursive
+  packed generations each report **2230 passed and 21 expected
+  platform/dedicated-PostgreSQL skips**. Two independent release builds are
+  byte-identical; the packaged exact-endpoint routing gate, packaged `0.1.45`
+  user journey, separate-process communication/obligation roundtrip, and
+  measured Linux OMP launcher smoke pass. Fresh installed-host, live owner
+  WebAuthn/Core recovery, live OMP AgentNet tool use, same-commit CI, and
+  production-topology evidence remain pending. Affected IDs are `ARC-001`,
+  `ARC-002`, `ARC-004`, `ID-006`, `ID-007`, `ID-009`, `AUTH-001`, `AUTH-002`,
+  `AUTH-004`, `AUTH-007`, `COM-001`, `COM-002`, `COM-003`, `UX-001`, `UX-002`,
+  `SEC-003`, `SEC-005`, `SEC-007`, `OPS-002`, `OPS-003`, `OPS-006`, and
+  `OPS-007`. No requirement or must-not-ship gate is promoted.
 
 
 

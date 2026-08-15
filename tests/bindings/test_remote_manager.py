@@ -16,9 +16,9 @@ import pytest
 from agentnet.bindings.remote_manager import (
     RemoteManagerDispatcher,
     RemoteManagerRequestError,
-    resolve_packaged_pi_extension,
+    resolve_packaged_manager_extension,
     run_manager_gateway,
-    validate_pi_manager_command,
+    validate_manager_command,
 )
 from agentnet.bindings.tools import CANONICAL_TOOL_NAMES
 from agentnet.errors import GateBlocked, ValidationError
@@ -953,34 +953,63 @@ def test_runner_propagates_child_exit_and_signal_status_and_still_cleans_state(
     assert list(state_dir.iterdir()) == []
 
 
-def test_pi_manager_command_rejects_non_pi_and_owned_flags() -> None:
-    assert validate_pi_manager_command(("pi", "--model", "example/model")) == (
-        "pi",
+def test_runner_mounts_proc_for_native_manager_runtime(tmp_path: Path) -> None:
+    state_dir = tmp_path / "s"
+    state_dir.mkdir(mode=0o700)
+    helper = Path(__file__).with_name("remote_manager_child.py")
+
+    status = run_manager_gateway(
+        RecordingClient({"items": []}),
+        lambda: _actor(),
+        (
+            sys.executable,
+            "-c",
+            helper.read_text(encoding="utf-8"),
+            "--require-proc",
+        ),
+        state_dir=state_dir,
+        environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+
+    assert status == 0
+    assert list(state_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("executable", ["pi", "omp"])
+def test_manager_command_accepts_supported_harnesses(executable: str) -> None:
+    assert validate_manager_command((executable, "--model", "example/model")) == (
+        executable,
         "--model",
         "example/model",
     )
-    with pytest.raises(ValidationError, match="Pi executable"):
-        validate_pi_manager_command(("python",))
-    for arguments in (
-        ("pi", "--extension", "other.ts"),
-        ("pi", "--extension=other.ts"),
-        ("pi", "-e", "other.ts"),
-        ("pi", "--tools", "read"),
-        ("pi", "--no-tools"),
-        ("pi", "--no-builtin-tools"),
-        ("pi", "--exclude-tools=agentnet_send"),
-    ):
-        with pytest.raises(ValidationError, match="owns Pi extension"):
-            validate_pi_manager_command(arguments)
 
 
-def test_runner_stages_complete_extension_for_measured_pi_node_launcher(
+def test_manager_command_rejects_unsupported_executable_and_owned_flags() -> None:
+    with pytest.raises(ValidationError, match="Pi or OMP executable"):
+        validate_manager_command(("python",))
+    for executable in ("pi", "omp"):
+        for suffix in (
+            ("--extension", "other.ts"),
+            ("--extension=other.ts",),
+            ("-e", "other.ts"),
+            ("--tools", "read"),
+            ("--no-tools",),
+            ("--no-builtin-tools",),
+            ("--exclude-tools=agentnet_send",),
+        ):
+            with pytest.raises(ValidationError, match="owns extension discovery"):
+                validate_manager_command((executable, *suffix))
+
+
+@pytest.mark.parametrize("executable_name", ["pi", "omp"])
+def test_runner_stages_complete_extension_for_measured_node_manager_launcher(
     tmp_path: Path,
+    executable_name: str,
 ) -> None:
     state_dir = tmp_path / "s"
     state_dir.mkdir(mode=0o700)
-    pi_executable = tmp_path / "pi"
-    pi_executable.write_text(
+    manager_executable = tmp_path / executable_name
+    manager_executable.write_text(
         """#!/usr/bin/env node
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
@@ -1004,8 +1033,8 @@ assert.equal(digest(response), args[1]);
 """,
         encoding="utf-8",
     )
-    pi_executable.chmod(0o700)
-    extension = resolve_packaged_pi_extension({})
+    manager_executable.chmod(0o700)
+    extension = resolve_packaged_manager_extension({})
     digest = hashlib.sha256(extension.read_bytes()).hexdigest()
     response_digest = hashlib.sha256(
         extension.with_name("pi_response.ts").read_bytes()
@@ -1015,10 +1044,10 @@ assert.equal(digest(response), args[1]);
     status = run_manager_gateway(
         RecordingClient({"items": []}),
         lambda: _actor(),
-        (str(pi_executable), digest, response_digest, expected_tools),
+        (str(manager_executable), digest, response_digest, expected_tools),
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-        pi_extension=extension,
+        manager_extension=extension,
     )
 
     assert status == 0

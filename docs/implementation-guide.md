@@ -897,20 +897,26 @@ credential, harness, principal, domain-revocation, and policy state is rechecked
 on every use, so harness revocation, principal revocation, or credential rotation
 denies immediately without deleting the durable scope.
 
-On a supported Linux enrolled owner laptop, start the interactive Manager gateway around the
-agent process instead of copying the laptop private key or bearer material into
-the child:
+On a supported Linux enrolled owner laptop, start the interactive Manager
+gateway around a Pi or OMP agent process instead of copying the laptop private
+key or bearer material into the child:
 
 ```bash
 agentnet manager-run \
   --identity .agentnet/identity.json \
   --state-dir .agentnet/manager \
   -- pi
+
+agentnet manager-run \
+  --identity .agentnet/identity.json \
+  --state-dir .agentnet/manager \
+  -- omp
 ```
 
-`manager-run` accepts only a Pi command, rejects caller-supplied extension or
-tool-selection flags before opening the identity, stages the exact packaged
-AgentNet Pi extension in the private session, and disables extension discovery.
+`manager-run` accepts only a Pi or OMP command, rejects caller-supplied extension
+or tool-selection flags before opening the identity, stages the exact packaged
+Pi-compatible AgentNet extension in the private session, and disables extension
+discovery.
 It creates one owner-only session directory, passes only an inherited local
 binding descriptor, and mints a one-process capability for the canonical
 communication methods. Its lifetime is at most one hour and is re-created on

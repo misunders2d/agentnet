@@ -399,10 +399,11 @@ Artifacts, effects, federation, public A2A, administration, data, tools,
 and secrets remain excluded.
 
 On a supported Linux owner laptop, the enrolled harness launches an interactive
-agent through `agentnet manager-run --identity .agentnet/identity.json -- pi`.
-The launcher stages the exact packaged Pi extension inside the private session,
-disables extension discovery, and rejects caller-supplied extension or tool-
-selection flags before opening the identity. The child gets only a short-lived,
+Pi or OMP agent through the package-owned `agentnet manager-run` command ending
+in `-- pi` or `-- omp`. The launcher stages the exact packaged Manager extension
+inside the private session, disables extension discovery, and rejects
+caller-supplied extension or tool-selection flags before
+opening the identity. The child gets only a short-lived,
 exact-process local binding for canonical communication tools—not the laptop key
 or reusable remote credentials. The parent owns
 authentication, strict request parsing, and cleanup. Full commands and

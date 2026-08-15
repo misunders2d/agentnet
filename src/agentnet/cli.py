@@ -71,9 +71,9 @@ from agentnet.authorization.communication_scope import (
 )
 from agentnet.authorization.c0_pilot import C0PilotResult
 from agentnet.bindings.remote_manager import (
-    resolve_packaged_pi_extension,
+    resolve_packaged_manager_extension,
     run_manager_gateway,
-    validate_pi_manager_command,
+    validate_manager_command,
 )
 from agentnet.client import MAX_ARTIFACT_BYTES, AgentNetClient
 from agentnet.console.http import create_console_app
@@ -6346,8 +6346,8 @@ def command_supervisor_run(args: argparse.Namespace) -> int:
 
 def command_manager_run(args: argparse.Namespace) -> int:
     try:
-        command = validate_pi_manager_command(tuple(args.manager_command))
-        pi_extension = resolve_packaged_pi_extension()
+        command = validate_manager_command(tuple(args.manager_command))
+        manager_extension = resolve_packaged_manager_extension()
     except (GateBlocked, ValidationError) as exc:
         raise SystemExit(str(exc)) from None
     identity_path = Path(args.identity).absolute()
@@ -6364,7 +6364,7 @@ def command_manager_run(args: argparse.Namespace) -> int:
                 current_signing_context,
                 command,
                 state_dir=Path(args.state_dir) if args.state_dir is not None else None,
-                pi_extension=pi_extension,
+                manager_extension=manager_extension,
             )
         )
     finally:
@@ -7693,7 +7693,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     manager_run = commands.add_parser(
         "manager-run",
-        help="run interactive Pi with the packaged local signed Manager extension",
+        help="run interactive Pi or OMP with the packaged local signed Manager extension",
     )
     manager_run.add_argument("--identity", required=True)
     manager_run.add_argument(
@@ -7704,7 +7704,7 @@ def build_parser() -> argparse.ArgumentParser:
         "manager_command",
         nargs="+",
         metavar="COMMAND",
-        help="required Pi command and arguments after --; AgentNet owns extension/tool flags",
+        help="required Pi or OMP command and arguments after --; AgentNet owns extension/tool flags",
     )
     manager_run.set_defaults(func=command_manager_run)
 
