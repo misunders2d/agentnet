@@ -1001,10 +1001,11 @@ def test_manager_command_rejects_unsupported_executable_and_owned_flags() -> Non
                 validate_manager_command((executable, *suffix))
 
 
-@pytest.mark.parametrize("executable_name", ["pi", "omp"])
+@pytest.mark.parametrize(("executable_name", "expected_no_builtin_tools"), [("pi", 1), ("omp", 0)])
 def test_runner_stages_complete_extension_for_measured_node_manager_launcher(
     tmp_path: Path,
     executable_name: str,
+    expected_no_builtin_tools: int,
 ) -> None:
     state_dir = tmp_path / "s"
     state_dir.mkdir(mode=0o700)
@@ -1019,7 +1020,7 @@ assert(fs.readFileSync(Number(process.env.AGENTNET_LOCAL_BINDING_FD)).length > 0
 const args = process.argv.slice(2);
 assert.equal(args.filter((value) => value === "--extension").length, 1);
 assert.equal(args.filter((value) => value === "--no-extensions").length, 1);
-assert.equal(args.filter((value) => value === "--no-builtin-tools").length, 1);
+assert.equal(args.filter((value) => value === "--no-builtin-tools").length, Number(args[3]));
 assert.equal(args.filter((value) => value === "--tools").length, 1);
 assert.equal(args[args.indexOf("--tools") + 1], args[2]);
 const extension = args[args.indexOf("--extension") + 1];
@@ -1044,7 +1045,7 @@ assert.equal(digest(response), args[1]);
     status = run_manager_gateway(
         RecordingClient({"items": []}),
         lambda: _actor(),
-        (str(manager_executable), digest, response_digest, expected_tools),
+        (str(manager_executable), digest, response_digest, expected_tools, str(expected_no_builtin_tools)),
         state_dir=state_dir,
         environment={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
         manager_extension=extension,

@@ -1070,12 +1070,15 @@ def _stage_manager_extension(
                 "packaged Manager extension could not be staged",
             ) from exc
         staged[name] = target_path
+    builtin_tool_flags = (
+        ("--no-builtin-tools",) if Path(command[0]).name == "pi" else ()
+    )
     return (
         *command,
         "--extension",
         str(staged["pi_extension.ts"]),
         "--no-extensions",
-        "--no-builtin-tools",
+        *builtin_tool_flags,
         "--tools",
         ",".join(_MANAGER_TOOL_NAMES),
     )
