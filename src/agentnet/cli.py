@@ -2853,13 +2853,13 @@ def _guided_success_output(
 ) -> dict[str, object]:
     _ = identity_path, actor
     return {
-        "status": "communication_ready",
+        "status": "enrolled_identity_only",
         "idempotent_repeat": idempotent_repeat,
         "identity_saved_locally": True,
         "approval_delivery": "automatic_possession_bound_signed_broker",
-        "authority_granted": True,
-        "first_message_status": "COMPLETED_C0_ROUND_TRIP",
-        "next": None,
+        "authority_granted": False,
+        "first_message_status": "first_message_blocked_explicit_authority_required",
+        "next": "continue only with an explicitly approved bounded authority plan",
     }
 
 
@@ -2915,163 +2915,6 @@ def _poll_guided_authorization(
     if type(interval) is not int or not 2 <= interval <= 10:
         raise SystemExit("guided enrollment poll response is invalid")
     return polled, status, interval
-
-def _guided_signed_result(
-    *,
-    identity_path: Path,
-    method: str,
-    path: str,
-    body: dict[str, object] | None,
-    expected_status: int,
-    models: object,
-) -> object:
-    client, _actor, _key = _load_identity_client(identity_path)
-    try:
-        response = client.request(method, path, json_body=body)
-    finally:
-        client.close()
-    if response.status_code != expected_status:
-        raise SystemExit(
-            f"guided communication activation was rejected with HTTP {response.status_code}"
-        )
-    try:
-        raw = response.json()
-    except Exception as exc:
-        raise SystemExit("guided communication activation response is invalid") from exc
-    candidates = models if isinstance(models, tuple) else (models,)
-    for model in candidates:
-        try:
-            return model.model_validate(raw)
-        except Exception:
-            continue
-    raise SystemExit("guided communication activation response is invalid")
-
-
-def _complete_guided_activation(
-    *,
-    identity_path: Path,
-    state_path: Path,
-    browser: str,
-    deadline: float,
-    started: float | None = None,
-) -> str:
-    if started is not None:
-        _setup_progress("activate", started, "establish exact bounded communication authority")
-    activation_path = state_path.with_name(f"{state_path.name}.activation")
-    activation_exists = os.path.lexists(activation_path)
-    activation = (
-        _load_bootstrap_plan_cli_state(activation_path)
-        if activation_exists
-        else _load_or_create_bootstrap_plan_cli_state(activation_path)
-    )
-    begin_body = {
-        "schema": "agentnet.bootstrap-plan.begin.v1",
-        "begin_idempotency_key": activation["begin_idempotency_key"],
-    }
-    status_body = {
-        "schema": "agentnet.bootstrap-plan.status.v1",
-        "begin_idempotency_key": activation["begin_idempotency_key"],
-    }
-    bootstrap = _guided_signed_result(
-        identity_path=identity_path,
-        method="POST",
-        path="/v1/bootstrap-plan/status" if activation_exists else "/v1/bootstrap-plan/begin",
-        body=status_body if activation_exists else begin_body,
-        expected_status=200 if activation_exists else 201,
-        models=(
-            BootstrapPlanBeginResult,
-            BootstrapPlanStatusResult,
-            BootstrapPlanCompleteResult,
-        ),
-    )
-    approval_disclosed = False
-    while not isinstance(bootstrap, BootstrapPlanCompleteResult):
-        if time.monotonic() >= deadline:
-            raise SystemExit(
-                "guided activation timed out; enrollment and activation state are retained"
-            )
-        if isinstance(bootstrap, BootstrapPlanBeginResult):
-            approval_url = _validate_stable_approval_url(bootstrap.approval_url)
-            _handoff_guided_authorization(
-                approval_url,
-                browser=browser,
-                purpose="bounded communication activation",
-            )
-            approval_disclosed = True
-        elif bootstrap.status == "approval_ready":
-            bootstrap = _guided_signed_result(
-                identity_path=identity_path,
-                method="POST",
-                path="/v1/bootstrap-plan/complete",
-                body={
-                    "schema": "agentnet.bootstrap-plan.complete.v2",
-                    "begin_idempotency_key": activation["begin_idempotency_key"],
-                    "completion_idempotency_key": activation[
-                        "completion_idempotency_key"
-                    ],
-                },
-                expected_status=201,
-                models=BootstrapPlanCompleteResult,
-            )
-            continue
-        elif bootstrap.status != "approval_pending":
-            raise SystemExit(
-                f"guided communication activation stopped in terminal state: {bootstrap.status}"
-            )
-        elif not approval_disclosed and bootstrap.approval_url is not None:
-            _handoff_guided_authorization(
-                _validate_stable_approval_url(bootstrap.approval_url),
-                browser=browser,
-                purpose="bounded communication activation",
-            )
-            approval_disclosed = True
-        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
-        bootstrap = _guided_signed_result(
-            identity_path=identity_path,
-            method="POST",
-            path="/v1/bootstrap-plan/status",
-            body=status_body,
-            expected_status=200,
-            models=(BootstrapPlanStatusResult, BootstrapPlanCompleteResult),
-        )
-
-    if started is not None:
-        _setup_progress("roundtrip", started, "complete exact C0 request and acknowledgement")
-    pilot = _guided_signed_result(
-        identity_path=identity_path,
-        method="POST",
-        path="/v1/c0-pilot/start",
-        body={"schema": "agentnet.c0-pilot.start.v1"},
-        expected_status=201,
-        models=C0PilotResult,
-    )
-    while pilot.status != "COMPLETED_C0_ROUND_TRIP":
-        if time.monotonic() >= deadline:
-            raise SystemExit(
-                "guided roundtrip timed out; enrollment and activation state are retained"
-            )
-        if pilot.status == "waiting_fresh":
-            pilot = _guided_signed_result(
-                identity_path=identity_path,
-                method="POST",
-                path="/v1/c0-pilot/complete",
-                body={"schema": "agentnet.c0-pilot.complete.v1"},
-                expected_status=200,
-                models=C0PilotResult,
-            )
-            continue
-        if pilot.status not in {"prepared_unusable", "waiting_owner"}:
-            raise SystemExit(f"guided roundtrip stopped in terminal state: {pilot.status}")
-        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
-        pilot = _guided_signed_result(
-            identity_path=identity_path,
-            method="POST",
-            path="/v1/c0-pilot/status",
-            body={"schema": "agentnet.c0-pilot.status.v1"},
-            expected_status=200,
-            models=C0PilotResult,
-        )
-    return pilot.status
 
 
 def command_join_guided(args: argparse.Namespace) -> int:
@@ -3140,14 +2983,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
             if _guided_join_state(identity_path) != expected_identity:
                 raise SystemExit("completed guided join identity file does not match state")
             _setup_progress("enroll", started, "validate retained exact identity binding")
-            _complete_guided_activation(
-                identity_path=identity_path,
-                state_path=state_path,
-                browser=args.browser,
-                deadline=deadline,
-                started=started,
-            )
-            _setup_progress("verify", started, "confirm communication-ready terminal state")
+            _setup_progress("verify", started, "confirm identity-only terminal state")
             print(
                 json.dumps(
                     _guided_success_output(
@@ -3397,14 +3233,7 @@ def command_join_guided(args: argparse.Namespace) -> int:
         identity_repeat = True
     else:
         _write_owner_json(identity_path, identity)
-    _complete_guided_activation(
-        identity_path=identity_path,
-        state_path=state_path,
-        browser=args.browser,
-        deadline=deadline,
-        started=started,
-    )
-    _setup_progress("verify", started, "confirm communication-ready terminal state")
+    _setup_progress("verify", started, "confirm identity-only terminal state")
     completed_state = {
         "schema": "agentnet.guided-join-complete.v1",
         "server_base_url": server,

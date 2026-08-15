@@ -562,7 +562,7 @@
     },
     "docs/GATE_EVIDENCE.md": {
       "path": "docs/GATE_EVIDENCE.md",
-      "sha256": "2c2db8a6c34fd008dd0dbeb2db12980d1ee2da539a561311a21e8de6571eb701"
+      "sha256": "7d0282e25159c4ae61b94b9b4d9c53c70fa0d64b0c1a578d37385cc0e97fd206"
     },
     "docs/RELEASE_MANIFEST.md": {
       "path": "docs/RELEASE_MANIFEST.md",
@@ -602,13 +602,13 @@
     },
     "scripts/verify_release.py": {
       "path": "scripts/verify_release.py",
-      "sha256": "ac3b15b328f9e3a4465da42e57cb7d659b212fb6c44748cd1faa45f23e875e37"
+      "sha256": "925d059e60028e8d5e69f9ee6d2587dc19b358cac31171622bf2ffbc4929940e"
     }
   },
   "release_source_tree": {
     "algorithm": "sha256(path NUL bytes NUL)",
     "path": "src",
-    "sha256": "0733a06a1ec40180a148348ef8b9fff9b845bfc1a8fc31c9f1f67f17073c1172"
+    "sha256": "d17f57b20789fab23ec1e72d09c1849bf328604de6595226bb622379222a6013"
   },
   "runtime": {
     "implementation": "CPython",

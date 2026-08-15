@@ -26,15 +26,6 @@ from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
 from agentnet.storage.migrations import CURRENT_SCHEMA_VERSION
 
-@pytest.fixture(autouse=True)
-def _complete_guided_activation_without_network(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "agentnet.cli._complete_guided_activation",
-        lambda **_kwargs: "COMPLETED_C0_ROUND_TRIP",
-    )
-
 
 def _free_loopback_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -516,10 +507,14 @@ def test_guided_join_is_resumable_private_and_identity_only(
     assert args.func(args) == 0
     output = capsys.readouterr()
     result = json.loads(output.out)
-    assert result["status"] == "communication_ready"
-    assert result["authority_granted"] is True
-    assert result["first_message_status"] == "COMPLETED_C0_ROUND_TRIP"
-    assert result["next"] is None
+    assert result["status"] == "enrolled_identity_only"
+    assert result["authority_granted"] is False
+    assert result["first_message_status"] == (
+        "first_message_blocked_explicit_authority_required"
+    )
+    assert result["next"] == (
+        "continue only with an explicitly approved bounded authority plan"
+    )
     assert result["identity_saved_locally"] is True
     assert result["approval_delivery"] == "automatic_possession_bound_signed_broker"
     for phase in ("discover", "prepare", "authenticate", "approve", "enroll", "verify"):
@@ -712,7 +707,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
     assert args.func(args) == 0
     resumed_output = capsys.readouterr()
     result = json.loads(resumed_output.out)
-    assert result["status"] == "communication_ready"
+    assert result["status"] == "enrolled_identity_only"
     assert authorization_url not in resumed_output.out + resumed_output.err
     assert resume_paths == [
         "/v1/enrollment/oidc/poll",
@@ -831,7 +826,7 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
     assert args.func(args) == 0
     output = capsys.readouterr()
     result = json.loads(output.out)
-    assert result["status"] == "communication_ready"
+    assert result["status"] == "enrolled_identity_only"
     assert paths == [
         "/v1/enrollment/oidc/begin",
         "/v1/enrollment/oidc/poll",
@@ -1136,7 +1131,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
     monkeypatch.setattr("agentnet.cli._public_json_request", replacement_request)
     assert replacement_args.func(replacement_args) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "communication_ready"
+    assert result["status"] == "enrolled_identity_only"
     assert calls == [
         "/v1/enrollment/oidc/poll",
         "/v1/enrollment/oidc/begin",
