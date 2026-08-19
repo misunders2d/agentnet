@@ -1923,10 +1923,14 @@ def _cas_managed_private_json(
     return "updated"
 
 
-def _remove_private_state(path: Path) -> None:
+def _remove_private_state(
+    path: Path,
+    *,
+    label: str = "managed-server reauthorization state",
+) -> None:
     if not os.path.lexists(path):
         return
-    _owner_only_file(path, label="managed-server reauthorization state")
+    _owner_only_file(path, label=label)
     path.unlink()
     directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -3899,140 +3903,74 @@ _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA = "agentnet.bootstrap-plan-cli-state.v1"
 _BOOTSTRAP_PLAN_CLI_STATE_KEYS = frozenset(
     {"schema", "begin_idempotency_key", "completion_idempotency_key"}
 )
-
-
-def _validate_bootstrap_plan_cli_state(value: dict[str, object]) -> dict[str, str]:
-    if set(value) != _BOOTSTRAP_PLAN_CLI_STATE_KEYS:
-        raise SystemExit("bootstrap plan state does not match the exact schema")
-    if value.get("schema") != _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA:
-        raise SystemExit("bootstrap plan state does not match the exact schema")
-    for key in ("begin_idempotency_key", "completion_idempotency_key"):
-        item = value.get(key)
-        if not isinstance(item, str) or not 16 <= len(item) <= 256:
-            raise SystemExit("bootstrap plan state does not match the exact schema")
-    return {key: str(value[key]) for key in _BOOTSTRAP_PLAN_CLI_STATE_KEYS}
-
-
-def _load_bootstrap_plan_cli_state(path: Path) -> dict[str, str]:
-    resolved = path.resolve()
-    try:
-        value = json.loads(_owner_only_file(resolved, label="bootstrap plan state"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise SystemExit("bootstrap plan state is not readable JSON") from exc
-    if not isinstance(value, dict):
-        raise SystemExit("bootstrap plan state does not match the exact schema")
-    return _validate_bootstrap_plan_cli_state(value)
-
-
-def _load_or_create_bootstrap_plan_cli_state(path: Path) -> dict[str, str]:
-    resolved = path.resolve()
-    if os.path.lexists(resolved):
-        return _load_bootstrap_plan_cli_state(resolved)
-    value = {
-        "schema": _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
-        "begin_idempotency_key": secrets.token_urlsafe(32),
-        "completion_idempotency_key": secrets.token_urlsafe(32),
-    }
-    _write_owner_json(resolved, value, force=False)
-    return _validate_bootstrap_plan_cli_state(value)
-
-
-def _require_public_approval_url(value: str | None) -> None:
-    if value is None:
-        return
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path != "/approval"
-        or parsed.query
-        or parsed.fragment
-        or value != f"https://{parsed.netloc}/approval"
-    ):
-        raise SystemExit("bootstrap plan response is invalid")
-
-
-def _bootstrap_plan_result(response, *, expected_status: int, model):
-    if response.status_code != expected_status:
-        raise SystemExit(
-            f"bootstrap plan request was rejected with HTTP {response.status_code}"
-        )
-    try:
-        raw = response.json()
-    except Exception as exc:
-        raise SystemExit("bootstrap plan response is invalid") from exc
-    models = model if isinstance(model, tuple) else (model,)
-    result = None
-    for candidate in models:
-        try:
-            result = candidate.model_validate(raw)
-            break
-        except Exception:
-            continue
-    if result is None:
-        raise SystemExit("bootstrap plan response is invalid")
-    if hasattr(result, "approval_url"):
-        _require_public_approval_url(result.approval_url)
-    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
-
-
 _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA = "agentnet.communication-scope-cli-state.v1"
 _COMMUNICATION_SCOPE_CLI_STATE_KEYS = frozenset(
     {"schema", "begin_idempotency_key", "completion_idempotency_key"}
 )
 
 
-def _validate_communication_scope_cli_state(
+def _validate_scoped_cli_state(
     value: dict[str, object],
+    *,
+    label: str,
+    schema: str,
+    keys: frozenset[str],
 ) -> dict[str, str]:
-    if (
-        set(value) != _COMMUNICATION_SCOPE_CLI_STATE_KEYS
-        or value.get("schema") != _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA
-    ):
-        raise SystemExit("communication scope state does not match the exact schema")
+    if set(value) != keys or value.get("schema") != schema:
+        raise SystemExit(f"{label} state does not match the exact schema")
     for key in ("begin_idempotency_key", "completion_idempotency_key"):
         item = value.get(key)
         if not isinstance(item, str) or not 16 <= len(item) <= 256:
-            raise SystemExit("communication scope state does not match the exact schema")
-    return {key: str(value[key]) for key in _COMMUNICATION_SCOPE_CLI_STATE_KEYS}
+            raise SystemExit(f"{label} state does not match the exact schema")
+    return {key: str(value[key]) for key in keys}
 
 
-def _load_communication_scope_cli_state(path: Path) -> dict[str, str]:
+def _load_scoped_cli_state(
+    path: Path,
+    *,
+    label: str,
+    schema: str,
+    keys: frozenset[str],
+) -> dict[str, str]:
     resolved = path.resolve()
     try:
-        value = json.loads(_owner_only_file(resolved, label="communication scope state"))
+        value = json.loads(_owner_only_file(resolved, label=f"{label} state"))
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise SystemExit("communication scope state is not readable JSON") from exc
+        raise SystemExit(f"{label} state is not readable JSON") from exc
     if not isinstance(value, dict):
-        raise SystemExit("communication scope state does not match the exact schema")
-    return _validate_communication_scope_cli_state(value)
+        raise SystemExit(f"{label} state does not match the exact schema")
+    return _validate_scoped_cli_state(value, label=label, schema=schema, keys=keys)
 
 
-def _load_or_create_communication_scope_cli_state(path: Path) -> dict[str, str]:
+def _load_or_create_scoped_cli_state(
+    path: Path,
+    *,
+    label: str,
+    schema: str,
+    keys: frozenset[str],
+) -> dict[str, str]:
     resolved = path.resolve()
     if os.path.lexists(resolved):
-        return _load_communication_scope_cli_state(resolved)
+        return _load_scoped_cli_state(resolved, label=label, schema=schema, keys=keys)
     value = {
-        "schema": _COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+        "schema": schema,
         "begin_idempotency_key": secrets.token_urlsafe(32),
         "completion_idempotency_key": secrets.token_urlsafe(32),
     }
     _write_owner_json(resolved, value, force=False)
-    return _validate_communication_scope_cli_state(value)
+    return _validate_scoped_cli_state(value, label=label, schema=schema, keys=keys)
 
 
-def _require_communication_scope_approval_url(value: object) -> None:
+def _require_scoped_approval_url(value: object, *, label: str) -> None:
     if value is None:
         return
     if not isinstance(value, str):
-        raise SystemExit("communication scope response is invalid")
+        raise SystemExit(f"{label} response is invalid")
     try:
         parsed = urlsplit(value)
         _ = parsed.port
     except ValueError as exc:
-        raise SystemExit("communication scope response is invalid") from exc
+        raise SystemExit(f"{label} response is invalid") from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -4043,18 +3981,26 @@ def _require_communication_scope_approval_url(value: object) -> None:
         or parsed.fragment
         or value != f"https://{parsed.netloc}/approval"
     ):
-        raise SystemExit("communication scope response is invalid")
+        raise SystemExit(f"{label} response is invalid")
 
 
-def _communication_scope_result(response, *, expected_status: int, model):
+def _scoped_request_result(
+    response,
+    *,
+    label: str,
+    expected_status: int,
+    model,
+    exclude_none: bool = False,
+    exclude_unset: bool = False,
+):
     if response.status_code != expected_status:
         raise SystemExit(
-            f"communication scope request was rejected with HTTP {response.status_code}"
+            f"{label} request was rejected with HTTP {response.status_code}"
         )
     try:
         raw = response.json()
     except Exception as exc:
-        raise SystemExit("communication scope response is invalid") from exc
+        raise SystemExit(f"{label} response is invalid") from exc
     models = model if isinstance(model, tuple) else (model,)
     result = None
     for candidate in models:
@@ -4064,10 +4010,17 @@ def _communication_scope_result(response, *, expected_status: int, model):
         except Exception:
             continue
     if result is None:
-        raise SystemExit("communication scope response is invalid")
+        raise SystemExit(f"{label} response is invalid")
     if hasattr(result, "approval_url"):
-        _require_communication_scope_approval_url(result.approval_url)
-    return result.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        _require_scoped_approval_url(result.approval_url, label=label)
+    dump_kwargs = {"mode": "json", "by_alias": True}
+    if exclude_none:
+        dump_kwargs["exclude_none"] = True
+    if exclude_unset:
+        dump_kwargs["exclude_unset"] = True
+    return result.model_dump(**dump_kwargs)
+
+
 
 
 def _c0_pilot_cli_result(response, *, expected_status: int) -> dict[str, str]:
@@ -4529,22 +4482,7 @@ def _print_laptop_reauthorization_output(
 
 
 def _remove_laptop_reauthorization_state(path: Path) -> None:
-    if not os.path.lexists(path):
-        return
-    _owner_only_file(
-        path,
-        label="laptop credential reauthorization state",
-    )
-    path.unlink()
-    directory = os.open(
-        path.parent,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-    )
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-
+    _remove_private_state(path, label="laptop credential reauthorization state")
 
 def _complete_laptop_identity_reauthorization(
     *,
@@ -4898,7 +4836,12 @@ def command_c0_pilot_responder(args: argparse.Namespace) -> int:
 
 
 def command_bootstrap_plan_begin(args: argparse.Namespace) -> int:
-    state = _load_or_create_bootstrap_plan_cli_state(Path(args.state))
+    state = _load_or_create_scoped_cli_state(
+        Path(args.state),
+        label="bootstrap plan",
+        schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
+        keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
+    )
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.request(
@@ -4911,17 +4854,24 @@ def command_bootstrap_plan_begin(args: argparse.Namespace) -> int:
         )
     finally:
         client.close()
-    result = _bootstrap_plan_result(
+    result = _scoped_request_result(
         response,
+        label="bootstrap plan",
         expected_status=201,
         model=BootstrapPlanBeginResult,
+        exclude_none=True,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
-    state = _load_bootstrap_plan_cli_state(Path(args.state))
+    state = _load_scoped_cli_state(
+        Path(args.state),
+        label="bootstrap plan",
+        schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
+        keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
+    )
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.request(
@@ -4934,17 +4884,24 @@ def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
         )
     finally:
         client.close()
-    result = _bootstrap_plan_result(
+    result = _scoped_request_result(
         response,
+        label="bootstrap plan",
         expected_status=200,
         model=(BootstrapPlanStatusResult, BootstrapPlanCompleteResult),
+        exclude_none=True,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
-    state = _load_bootstrap_plan_cli_state(Path(args.state))
+    state = _load_scoped_cli_state(
+        Path(args.state),
+        label="bootstrap plan",
+        schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
+        keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
+    )
     client, _actor, _key = _load_identity_client(Path(args.identity))
     try:
         response = client.request(
@@ -4958,10 +4915,12 @@ def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
         )
     finally:
         client.close()
-    result = _bootstrap_plan_result(
+    result = _scoped_request_result(
         response,
+        label="bootstrap plan",
         expected_status=201,
         model=BootstrapPlanCompleteResult,
+        exclude_none=True,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
@@ -4981,9 +4940,19 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                 state_path,
                 label="communication scope state",
             )
-            state = _load_communication_scope_cli_state(state_path)
+            state = _load_scoped_cli_state(
+                state_path,
+                label="communication scope",
+                schema=_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+                keys=_COMMUNICATION_SCOPE_CLI_STATE_KEYS,
+            )
         else:
-            state = _load_or_create_communication_scope_cli_state(state_path)
+            state = _load_or_create_scoped_cli_state(
+                state_path,
+                label="communication scope",
+                schema=_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+                keys=_COMMUNICATION_SCOPE_CLI_STATE_KEYS,
+            )
 
         body = CommunicationScopeBeginRequest.model_validate(
             {
@@ -5023,7 +4992,12 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                     force=True,
                     expected_content=expected_state_content,
                 )
-                state = _validate_communication_scope_cli_state(replacement)
+                state = _validate_scoped_cli_state(
+                    replacement,
+                    label="communication scope",
+                    schema=_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+                    keys=_COMMUNICATION_SCOPE_CLI_STATE_KEYS,
+                )
                 body = CommunicationScopeBeginRequest.model_validate(
                     {
                         "schema": "agentnet.communication-scope.begin.v1",
@@ -5037,17 +5011,24 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                 )
         finally:
             client.close()
-        result = _communication_scope_result(
+        result = _scoped_request_result(
             response,
+            label="communication scope",
             expected_status=201,
             model=CommunicationScopeBeginResult,
+            exclude_unset=True,
         )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 def command_communication_scope_status(args: argparse.Namespace) -> int:
-    state = _load_communication_scope_cli_state(Path(args.state))
+    state = _load_scoped_cli_state(
+        Path(args.state),
+        label="communication scope",
+        schema=_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+        keys=_COMMUNICATION_SCOPE_CLI_STATE_KEYS,
+    )
     body = CommunicationScopeStatusRequest.model_validate(
         {
             "schema": "agentnet.communication-scope.status.v1",
@@ -5063,17 +5044,24 @@ def command_communication_scope_status(args: argparse.Namespace) -> int:
         )
     finally:
         client.close()
-    result = _communication_scope_result(
+    result = _scoped_request_result(
         response,
+        label="communication scope",
         expected_status=200,
         model=(CommunicationScopeStatusResult, CommunicationScopeCompleteResult),
+        exclude_unset=True,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 def command_communication_scope_complete(args: argparse.Namespace) -> int:
-    state = _load_communication_scope_cli_state(Path(args.state))
+    state = _load_scoped_cli_state(
+        Path(args.state),
+        label="communication scope",
+        schema=_COMMUNICATION_SCOPE_CLI_STATE_SCHEMA,
+        keys=_COMMUNICATION_SCOPE_CLI_STATE_KEYS,
+    )
     body = CommunicationScopeCompleteRequest.model_validate(
         {
             "schema": "agentnet.communication-scope.complete.v1",
@@ -5090,41 +5078,60 @@ def command_communication_scope_complete(args: argparse.Namespace) -> int:
         )
     finally:
         client.close()
-    result = _communication_scope_result(
+    result = _scoped_request_result(
         response,
+        label="communication scope",
         expected_status=201,
         model=CommunicationScopeCompleteResult,
+        exclude_unset=True,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def _identity_client_json_call(
+    identity_path: Path,
+    method: str,
+    path: str,
+    *,
+    label: str,
+    expected_status: int = 200,
+    json_body: dict[str, object] | None = None,
+) -> int:
+    client, _actor, _key = _load_identity_client(identity_path)
+    try:
+        if json_body is None:
+            response = client.request(method, path)
+        else:
+            response = client.request(method, path, json_body=json_body)
+    finally:
+        client.close()
+    if response.status_code != expected_status:
+        raise SystemExit(f"{label} was rejected with HTTP {response.status_code}")
+    print(json.dumps(response.json(), indent=2, sort_keys=True))
     return 0
 
 
 def command_authority_inventory(args: argparse.Namespace) -> int:
     """Show authority derived only from the current signed transport identity."""
 
-    client, _actor, _key = _load_identity_client(Path(args.identity))
-    try:
-        response = client.request("GET", "/v1/authority")
-    finally:
-        client.close()
-    if response.status_code != 200:
-        raise SystemExit(f"authority inventory was rejected with HTTP {response.status_code}")
-    print(json.dumps(response.json(), indent=2, sort_keys=True))
-    return 0
+    return _identity_client_json_call(
+        Path(args.identity),
+        "GET",
+        "/v1/authority",
+        label="authority inventory",
+    )
 
 
 def command_authority_explain(args: argparse.Namespace) -> int:
     """Explain one denial visible to the current signed transport identity."""
 
-    client, _actor, _key = _load_identity_client(Path(args.identity))
-    try:
-        response = client.request("GET", f"/v1/authority/denials/{args.decision_id}")
-    finally:
-        client.close()
-    if response.status_code != 200:
-        raise SystemExit(f"denial explanation was rejected with HTTP {response.status_code}")
-    print(json.dumps(response.json(), indent=2, sort_keys=True))
-    return 0
+    return _identity_client_json_call(
+        Path(args.identity),
+        "GET",
+        f"/v1/authority/denials/{args.decision_id}",
+        label="denial explanation",
+    )
 
 
 def command_relationship_propose(args: argparse.Namespace) -> int:
@@ -5252,23 +5259,37 @@ def command_relationship_accept(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate_http_json_response(
+    response: httpx.Response,
+    *,
+    label: str,
+    statuses: frozenset[int] | None = None,
+) -> dict[str, object]:
+    if statuses is not None:
+        if response.status_code not in statuses:
+            raise SystemExit(f"{label} was rejected with HTTP {response.status_code}")
+    elif response.status_code < 200 or response.status_code >= 300:
+        raise SystemExit(f"{label} was rejected with HTTP {response.status_code}")
+    try:
+        value = response.json()
+    except ValueError as exc:
+        raise SystemExit(f"{label} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} returned a non-object response")
+    return value
+
+
 def _artifact_json_response(
     response: httpx.Response,
     *,
     operation: str,
     statuses: frozenset[int],
 ) -> dict[str, object]:
-    if response.status_code not in statuses:
-        raise SystemExit(
-            f"artifact {operation} was rejected with HTTP {response.status_code}"
-        )
-    try:
-        value = response.json()
-    except ValueError as exc:
-        raise SystemExit(f"artifact {operation} returned invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise SystemExit(f"artifact {operation} returned a non-object response")
-    return value
+    return _validate_http_json_response(
+        response,
+        label=f"artifact {operation}",
+        statuses=statuses,
+    )
 
 
 def command_artifact_upload(args: argparse.Namespace) -> int:
@@ -5460,20 +5481,13 @@ def _obligation_request(
     *,
     json_body: dict[str, object] | None = None,
 ) -> int:
-    client, _actor, _key = _load_identity_client(Path(args.identity))
-    try:
-        if json_body is None:
-            response = client.request(method, path)
-        else:
-            response = client.request(method, path, json_body=json_body)
-    finally:
-        client.close()
-    if response.status_code != 200:
-        raise SystemExit(
-            f"response obligation call was rejected with HTTP {response.status_code}"
-        )
-    print(json.dumps(response.json(), indent=2, sort_keys=True))
-    return 0
+    return _identity_client_json_call(
+        Path(args.identity),
+        method,
+        path,
+        label="response obligation call",
+        json_body=json_body,
+    )
 
 
 def command_obligation_list(args: argparse.Namespace) -> int:
@@ -5886,15 +5900,12 @@ def command_recovery_complete(args: argparse.Namespace) -> int:
 
 
 def command_incident_status(args: argparse.Namespace) -> int:
-    client, _actor, _key = _load_identity_client(Path(args.identity))
-    try:
-        response = client.request("GET", "/v1/operator/incident")
-    finally:
-        client.close()
-    if response.status_code != 200:
-        raise SystemExit(f"incident status was rejected with HTTP {response.status_code}")
-    print(json.dumps(response.json(), indent=2, sort_keys=True))
-    return 0
+    return _identity_client_json_call(
+        Path(args.identity),
+        "GET",
+        "/v1/operator/incident",
+        label="incident status",
+    )
 
 
 def command_incident_set(args: argparse.Namespace) -> int:
@@ -5954,15 +5965,7 @@ def command_serve(args: argparse.Namespace) -> int:
 
 
 def _console_json_response(response: httpx.Response, *, label: str) -> dict[str, object]:
-    if response.status_code < 200 or response.status_code >= 300:
-        raise SystemExit(f"{label} was rejected with HTTP {response.status_code}")
-    try:
-        value = response.json()
-    except ValueError as exc:
-        raise SystemExit(f"{label} returned invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise SystemExit(f"{label} returned a non-object response")
-    return value
+    return _validate_http_json_response(response, label=label)
 
 
 def _canonical_console_origin(value: object) -> str:
