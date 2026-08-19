@@ -70,10 +70,9 @@ def test_console_open_signs_begin_and_complete_without_printing_or_url_disclosin
     actor, key = identity_factory(domain="corp.example", binding_assurance="hardware_bound")
     client = _Client(actor)
     opened: list[tuple[str, str]] = []
-    monkeypatch.setattr(cli, "_load_identity_client", lambda _path: (client, actor, key))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", lambda _path: (client, actor, key))
     monkeypatch.setattr(
-        cli,
-        "_open_console_handoff_page",
+        "agentnet.cli.commands.services._open_console_handoff_page",
         lambda *, console_origin, handoff_token, timeout_seconds: opened.append(
             (console_origin, handoff_token)
         ),
@@ -98,8 +97,7 @@ def test_loopback_handoff_page_posts_token_in_form_but_never_in_browser_url(monk
     served_documents: list[str] = []
 
     monkeypatch.setattr(
-        cli,
-        "_serve_one_shot_loopback_page",
+        "agentnet.cli.commands.services._serve_one_shot_loopback_page",
         lambda *, document, open_browser, timeout_seconds: (
             served_documents.append(document),
             open_browser("http://127.0.0.1:43123/", new=1),

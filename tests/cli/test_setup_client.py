@@ -87,7 +87,7 @@ def test_setup_status_prints_strict_public_result(
             next_action=SetupNextAction.WAIT_FOR_APPROVAL,
         )
     )
-    monkeypatch.setattr(cli, "_build_client_setup_coordinator", lambda _args: coordinator)
+    monkeypatch.setattr("agentnet.cli.commands.services._build_client_setup_coordinator", lambda _args: coordinator)
 
     assert cli.command_client_setup_status(_args()) == 0
 
@@ -101,7 +101,7 @@ def test_setup_continue_never_restarts_or_signals_harness(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     coordinator = _Coordinator(_result())
-    monkeypatch.setattr(cli, "_build_client_setup_coordinator", lambda _args: coordinator)
+    monkeypatch.setattr("agentnet.cli.commands.services._build_client_setup_coordinator", lambda _args: coordinator)
     monkeypatch.setattr(
         os,
         "kill",
@@ -131,7 +131,7 @@ def test_setup_does_not_mutate_shell_profile_or_request_sudo(
     shell_profile.write_text("export USER_SETTING=preserved\n", encoding="utf-8")
     before = shell_profile.read_bytes()
     coordinator = _Coordinator(_result())
-    monkeypatch.setattr(cli, "_build_client_setup_coordinator", lambda _args: coordinator)
+    monkeypatch.setattr("agentnet.cli.commands.services._build_client_setup_coordinator", lambda _args: coordinator)
     monkeypatch.setattr(
         cli.subprocess,
         "run",

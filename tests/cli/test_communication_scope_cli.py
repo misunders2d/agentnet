@@ -527,7 +527,7 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
 
     monkeypatch.setattr(cli.helpers, "_load_identity_client", load_identity)
     monkeypatch.setattr(cli.helpers, "_load_identity_profile", load_current_identity)
-    monkeypatch.setattr(cli, "run_manager_gateway", run_gateway)
+    monkeypatch.setattr("agentnet.cli.commands.services.run_manager_gateway", run_gateway)
     monkeypatch.chdir(tmp_path)
     state_dir = tmp_path / "manager"
     args = argparse.Namespace(
