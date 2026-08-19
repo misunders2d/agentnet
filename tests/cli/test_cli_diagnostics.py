@@ -161,10 +161,12 @@ def test_scoped_harness_probe_is_diagnostic_only(
         observed.update({"root": root, "harnesses": harnesses})
         return {"pi": probe}
 
-    monkeypatch.setattr(cli, "installed_probe_report", fake_report)
     monkeypatch.setattr(
-        cli,
-        "assert_installed_probe_report",
+        "agentnet.cli.commands.diagnostics.installed_probe_report",
+        fake_report,
+    )
+    monkeypatch.setattr(
+        "agentnet.cli.commands.diagnostics.assert_installed_probe_report",
         lambda _report: pytest.fail("scoped diagnostics must not invoke the four-harness gate"),
     )
 
@@ -193,10 +195,12 @@ def test_full_harness_probe_preserves_four_harness_gate(
         for harness in ("claude", "codex", "pi", "antigravity")
     }
     observed: list[dict[str, dict[str, object]]] = []
-    monkeypatch.setattr(cli, "installed_probe_report", lambda root: report)
     monkeypatch.setattr(
-        cli,
-        "assert_installed_probe_report",
+        "agentnet.cli.commands.diagnostics.installed_probe_report",
+        lambda root: report,
+    )
+    monkeypatch.setattr(
+        "agentnet.cli.commands.diagnostics.assert_installed_probe_report",
         lambda value: observed.append(value),
     )
 
