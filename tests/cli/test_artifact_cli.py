@@ -214,7 +214,7 @@ def test_artifact_upload_command_stops_at_quarantine_and_redacts_private_storage
     source.write_bytes(content)
     client = _UploadClient()
     monkeypatch.setattr(
-        "agentnet.cli._load_identity_client",
+        "agentnet.cli.helpers._load_identity_client",
         lambda _path: (client, object(), object()),
     )
     args = Namespace(
@@ -271,7 +271,7 @@ def test_artifact_download_command_rejects_bad_content_type_without_writing(
 
     client = BadContentTypeClient(b"")
     monkeypatch.setattr(
-        "agentnet.cli._load_identity_client",
+        "agentnet.cli.helpers._load_identity_client",
         lambda _path: (client, object(), object()),
     )
     output_path = tmp_path / "download.bin"
@@ -297,7 +297,7 @@ def test_artifact_download_command_writes_private_file_without_capability_output
     content = b"\x00released\xff"
     client = _DownloadClient(content)
     monkeypatch.setattr(
-        "agentnet.cli._load_identity_client",
+        "agentnet.cli.helpers._load_identity_client",
         lambda _path: (client, object(), object()),
     )
     output_path = tmp_path / "download.bin"

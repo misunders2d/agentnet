@@ -587,3 +587,177 @@ def _validate_http_json_response(
         raise SystemExit(f"{label} returned a non-object response")
     return value
 
+
+def _required_artifact_open_flags(*names: str) -> int:
+    flags = 0
+    for name in names:
+        value = getattr(os, name, None)
+        if not isinstance(value, int) or value == 0:
+            raise SystemExit(
+                f"artifact filesystem safety requires operating-system flag {name}"
+            )
+        flags |= value
+    return flags
+
+
+def _read_artifact_file(path: Path) -> tuple[Path, bytes]:
+    """Read one stable caller-owned regular file through a bounded descriptor."""
+
+    normalized = path.absolute()
+    try:
+        descriptor = os.open(
+            normalized,
+            os.O_RDONLY
+            | _required_artifact_open_flags("O_NOFOLLOW", "O_NONBLOCK"),
+        )
+    except OSError as exc:
+        raise SystemExit("artifact input must be a caller-owned regular file") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_size > MAX_ARTIFACT_BYTES
+        ):
+            raise SystemExit(
+                "artifact input must be a caller-owned regular file within the 16 MiB limit"
+            )
+        content = bytearray()
+        while True:
+            chunk = os.read(descriptor, min(1_048_576, MAX_ARTIFACT_BYTES + 1 - len(content)))
+            if not chunk:
+                break
+            content.extend(chunk)
+            if len(content) > MAX_ARTIFACT_BYTES:
+                raise SystemExit("artifact input exceeds the 16 MiB limit")
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) or len(content) != before.st_size:
+            raise SystemExit("artifact input changed while it was read")
+        return normalized, bytes(content)
+    finally:
+        os.close(descriptor)
+
+
+def _prepare_artifact_output(path: Path) -> tuple[Path, str, int]:
+    """Pin a safe output directory and prove the destination is absent."""
+
+    normalized = path.absolute()
+    if normalized.name in {"", ".", ".."}:
+        raise SystemExit("artifact output must name a new regular file")
+    parent = normalized.parent
+    try:
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise SystemExit("artifact output directory is unavailable") from exc
+    if (
+        not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise SystemExit(
+            "artifact output directory must be caller-owned and not group/world writable"
+        )
+    flags = os.O_RDONLY | _required_artifact_open_flags("O_DIRECTORY", "O_NOFOLLOW")
+    try:
+        directory = os.open(parent, flags)
+    except OSError as exc:
+        raise SystemExit("artifact output directory is unsafe") from exc
+    opened = os.fstat(directory)
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_uid != parent_info.st_uid
+        or (opened.st_dev, opened.st_ino) != (parent_info.st_dev, parent_info.st_ino)
+        or opened.st_mode & 0o022
+    ):
+        os.close(directory)
+        raise SystemExit("artifact output directory changed during validation")
+    try:
+        os.stat(normalized.name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return normalized, normalized.name, directory
+    except OSError as exc:
+        os.close(directory)
+        raise SystemExit("artifact output destination is unsafe") from exc
+    os.close(directory)
+    raise SystemExit("refusing to overwrite an existing artifact output")
+
+
+def _write_artifact_output(
+    *,
+    directory: int,
+    name: str,
+    content: bytes,
+) -> None:
+    """Create one exclusive 0600 output and remove only our inode on failure."""
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _required_artifact_open_flags("O_NOFOLLOW")
+    )
+    try:
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory)
+    except OSError as exc:
+        raise SystemExit("artifact output destination appeared or is unsafe") from exc
+    created = os.fstat(descriptor)
+    completed = False
+    try:
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("artifact output write made no progress")
+            remaining = remaining[written:]
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        final = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or final.st_uid != os.geteuid()
+            or final.st_size != len(content)
+            or final.st_mode & 0o077
+        ):
+            raise OSError("artifact output did not retain its exact private file properties")
+        completed = True
+    except OSError as exc:
+        raise SystemExit("artifact output could not be committed") from exc
+    finally:
+        os.close(descriptor)
+        if not completed:
+            try:
+                current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (created.st_dev, created.st_ino):
+                    raise SystemExit(
+                        "artifact output failed and destination ownership changed; inspect it manually"
+                    )
+                os.unlink(name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise SystemExit(
+                    "artifact output failed and partial-file cleanup is uncertain; inspect it manually"
+                ) from exc
+    try:
+        os.fsync(directory)
+    except OSError as exc:
+        raise SystemExit(
+            "artifact output is complete but directory durability is uncertain; file retained"
+        ) from exc
+

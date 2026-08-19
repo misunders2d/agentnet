@@ -67,7 +67,7 @@ def test_message_cli_binds_every_operation_to_exact_collaboration_scope(
     payload = tmp_path / "payload.json"
     payload.write_text('{"text":"hello"}', encoding="utf-8")
     client = _Client()
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
     scope_id = "collaboration-scope-0001"
 
     assert cli.command_message_send(
