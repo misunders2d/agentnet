@@ -110,7 +110,7 @@ def test_communication_scope_requests_use_stable_owner_only_retry_keys(
         _Response(201, _COMPLETE_RESULT),
     ]
     client = _Client(responses)
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
     state_path = tmp_path / "communication-scope.json"
     args = argparse.Namespace(identity="identity.json", state=str(state_path))
 
@@ -181,7 +181,7 @@ def test_begin_replaces_state_only_after_core_proves_terminal(
             _Response(201, _BEGIN_RESULT),
         ]
     )
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_communication_scope_begin(
         argparse.Namespace(
@@ -219,7 +219,7 @@ def test_begin_reuses_nonterminal_state_instead_of_replacing_it(
     }
     cli._write_owner_json(state_path, original)
     client = _Client([_Response(201, _BEGIN_RESULT)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_communication_scope_begin(
         argparse.Namespace(
@@ -263,7 +263,7 @@ def test_begin_refuses_non_core_terminal_response(
             )
         ]
     )
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     with pytest.raises(
         SystemExit,
@@ -390,7 +390,7 @@ def test_status_accepts_exact_committed_result(
         force=False,
     )
     client = _Client([_Response(200, _COMPLETE_RESULT)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_communication_scope_status(
         argparse.Namespace(identity="identity.json", state=str(state_path))
@@ -424,7 +424,7 @@ def test_status_rejects_malformed_or_non_public_response_without_printing_it(
         force=False,
     )
     client = _Client([_Response(200, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     with pytest.raises(SystemExit, match="communication scope response is invalid"):
         cli.command_communication_scope_status(
@@ -449,7 +449,7 @@ def test_complete_rejects_wrong_http_status_before_printing(
         force=False,
     )
     client = _Client([_Response(200, _COMPLETE_RESULT)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     with pytest.raises(
         SystemExit,
@@ -525,8 +525,8 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
         )
         return 23
 
-    monkeypatch.setattr(cli, "_load_identity_client", load_identity)
-    monkeypatch.setattr(cli, "_load_identity_profile", load_current_identity)
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", load_identity)
+    monkeypatch.setattr(cli.helpers, "_load_identity_profile", load_current_identity)
     monkeypatch.setattr(cli, "run_manager_gateway", run_gateway)
     monkeypatch.chdir(tmp_path)
     state_dir = tmp_path / "manager"

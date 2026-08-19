@@ -22,6 +22,7 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeStatusRequest,
     CommunicationScopeStatusResult,
 )
+from agentnet.cli import helpers
 
 _BOOTSTRAP_PLAN_CLI_STATE_SCHEMA = "agentnet.bootstrap-plan-cli-state.v1"
 _BOOTSTRAP_PLAN_CLI_STATE_KEYS = frozenset(
@@ -56,11 +57,9 @@ def _load_scoped_cli_state(
     schema: str,
     keys: frozenset[str],
 ) -> dict[str, str]:
-    from agentnet.cli import _owner_only_file
-
     resolved = path.resolve()
     try:
-        value = json.loads(_owner_only_file(resolved, label=f"{label} state"))
+        value = json.loads(helpers._owner_only_file(resolved, label=f"{label} state"))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"{label} state is not readable JSON") from exc
     if not isinstance(value, dict):
@@ -75,17 +74,15 @@ def _load_or_create_scoped_cli_state(
     schema: str,
     keys: frozenset[str],
 ) -> dict[str, str]:
-    from agentnet.cli import _write_owner_json
-
     resolved = path.resolve()
     if os.path.lexists(resolved):
         return _load_scoped_cli_state(resolved, label=label, schema=schema, keys=keys)
-    value = {
+    value: dict[str, object] = {
         "schema": schema,
         "begin_idempotency_key": secrets.token_urlsafe(32),
         "completion_idempotency_key": secrets.token_urlsafe(32),
     }
-    _write_owner_json(resolved, value, force=False)
+    helpers._write_owner_json(resolved, value, force=False)
     return _validate_scoped_cli_state(value, label=label, schema=schema, keys=keys)
 
 
@@ -150,15 +147,13 @@ def _scoped_request_result(
 
 
 def command_bootstrap_plan_begin(args: argparse.Namespace) -> int:
-    from agentnet.cli import _load_identity_client
-
     state = _load_or_create_scoped_cli_state(
         Path(args.state),
         label="bootstrap plan",
         schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
         keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
     )
-    client, _actor, _key = _load_identity_client(Path(args.identity))
+    client, _actor, _key = helpers._load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
@@ -182,15 +177,13 @@ def command_bootstrap_plan_begin(args: argparse.Namespace) -> int:
 
 
 def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
-    from agentnet.cli import _load_identity_client
-
     state = _load_scoped_cli_state(
         Path(args.state),
         label="bootstrap plan",
         schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
         keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
     )
-    client, _actor, _key = _load_identity_client(Path(args.identity))
+    client, _actor, _key = helpers._load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
@@ -214,15 +207,13 @@ def command_bootstrap_plan_status(args: argparse.Namespace) -> int:
 
 
 def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
-    from agentnet.cli import _load_identity_client
-
     state = _load_scoped_cli_state(
         Path(args.state),
         label="bootstrap plan",
         schema=_BOOTSTRAP_PLAN_CLI_STATE_SCHEMA,
         keys=_BOOTSTRAP_PLAN_CLI_STATE_KEYS,
     )
-    client, _actor, _key = _load_identity_client(Path(args.identity))
+    client, _actor, _key = helpers._load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
@@ -247,23 +238,16 @@ def command_bootstrap_plan_complete(args: argparse.Namespace) -> int:
 
 
 def command_communication_scope_begin(args: argparse.Namespace) -> int:
-    from agentnet.cli import (
-        _load_identity_client,
-        _owner_only_file,
-        _private_state_lock,
-        _write_private_config,
-    )
-
     state_path = Path(args.state).absolute()
     replace_terminal_state = bool(getattr(args, "replace_terminal_state", False))
-    with _private_state_lock(state_path):
+    with helpers._private_state_lock(state_path):
         expected_state_content: bytes | None = None
         if replace_terminal_state:
             if not os.path.lexists(state_path):
                 raise SystemExit(
                     "terminal replacement requires existing communication scope state"
                 )
-            expected_state_content = _owner_only_file(
+            expected_state_content = helpers._owner_only_file(
                 state_path,
                 label="communication scope state",
             )
@@ -287,7 +271,7 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                 "begin_idempotency_key": state["begin_idempotency_key"],
             }
         ).model_dump(mode="json", by_alias=True)
-        client, _actor, _key = _load_identity_client(Path(args.identity))
+        client, _actor, _key = helpers._load_identity_client(Path(args.identity))
         try:
             response = client.request(
                 "POST",
@@ -313,7 +297,7 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
                     "begin_idempotency_key": secrets.token_urlsafe(32),
                     "completion_idempotency_key": secrets.token_urlsafe(32),
                 }
-                _write_private_config(
+                helpers._write_private_config(
                     state_path,
                     replacement,
                     force=True,
@@ -350,8 +334,6 @@ def command_communication_scope_begin(args: argparse.Namespace) -> int:
 
 
 def command_communication_scope_status(args: argparse.Namespace) -> int:
-    from agentnet.cli import _load_identity_client
-
     state = _load_scoped_cli_state(
         Path(args.state),
         label="communication scope",
@@ -364,7 +346,7 @@ def command_communication_scope_status(args: argparse.Namespace) -> int:
             "begin_idempotency_key": state["begin_idempotency_key"],
         }
     ).model_dump(mode="json", by_alias=True)
-    client, _actor, _key = _load_identity_client(Path(args.identity))
+    client, _actor, _key = helpers._load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",
@@ -385,8 +367,6 @@ def command_communication_scope_status(args: argparse.Namespace) -> int:
 
 
 def command_communication_scope_complete(args: argparse.Namespace) -> int:
-    from agentnet.cli import _load_identity_client
-
     state = _load_scoped_cli_state(
         Path(args.state),
         label="communication scope",
@@ -400,7 +380,7 @@ def command_communication_scope_complete(args: argparse.Namespace) -> int:
             "completion_idempotency_key": state["completion_idempotency_key"],
         }
     ).model_dump(mode="json", by_alias=True)
-    client, _actor, _key = _load_identity_client(Path(args.identity))
+    client, _actor, _key = helpers._load_identity_client(Path(args.identity))
     try:
         response = client.request(
             "POST",

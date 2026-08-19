@@ -68,7 +68,7 @@ def test_begin_persists_retry_keys_before_request_and_reuses_them(
         "expires_at": 1_800_000_300,
     }
     client = _Client([_Response(201, body), _Response(201, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
     state_path = tmp_path / "bootstrap-plan-state.json"
     args = argparse.Namespace(identity="identity.json", state=str(state_path))
 
@@ -131,7 +131,7 @@ def test_status_uses_saved_begin_key_and_prints_only_strict_public_result(
         "next_action": "complete_automatically",
     }
     client = _Client([_Response(200, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_bootstrap_plan_status(
         argparse.Namespace(identity="identity.json", state=str(state_path))
@@ -165,7 +165,7 @@ def test_status_accepts_exact_committed_public_result(
         "communication_usable": False,
     }
     client = _Client([_Response(200, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_bootstrap_plan_status(
         argparse.Namespace(identity="identity.json", state=str(state_path))
@@ -205,7 +205,7 @@ def test_complete_uses_exact_private_state_without_tty_or_prompt(
         lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )
     client = _Client([_Response(201, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_bootstrap_plan_complete(
         argparse.Namespace(identity="identity.json", state=str(state_path))
@@ -258,7 +258,7 @@ def test_complete_runs_without_private_terminal(
             )
         ]
     )
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     assert cli.command_bootstrap_plan_complete(
         argparse.Namespace(identity="identity.json", state=str(state_path))
@@ -295,7 +295,7 @@ def test_cli_rejects_non_strict_server_result_without_printing_it(
             )
         ]
     )
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(cli.helpers, "_load_identity_client", _load(client))
 
     with pytest.raises(SystemExit, match="bootstrap plan response is invalid"):
         cli.command_bootstrap_plan_status(
