@@ -6468,7 +6468,7 @@ def _verification_package_root() -> Path:
     package_root = (
         Path(configured).expanduser().resolve()
         if configured
-        else Path(__file__).resolve().parents[2]
+        else Path(__file__).resolve().parents[3]
     )
     tests_root = package_root / "tests"
     if not tests_root.is_dir():
