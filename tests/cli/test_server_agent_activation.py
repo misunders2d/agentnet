@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentnet import cli
+from agentnet.cli.commands import setup
 from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.config import (
@@ -141,9 +142,9 @@ def install_activation_fakes(
 ) -> tuple[list[tuple[Path, dict[str, object], bool]], list[ExtensionConfig]]:
     writes: list[tuple[Path, dict[str, object], bool]] = []
     opened: list[ExtensionConfig] = []
-    monkeypatch.setattr(cli, "_load_config", lambda _path: state.config)
+    monkeypatch.setattr(setup.helpers, "_load_config", lambda _path: state.config)
     monkeypatch.setattr(
-        cli,
+        setup.helpers,
         "_load_identity_profile",
         lambda _path: (state.identity, state.actor, state.key),
     )
@@ -152,10 +153,10 @@ def install_activation_fakes(
         opened.append(config)
         return state.store
 
-    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_store)
-    monkeypatch.setattr(cli, "load_credential_binding", lambda _store, _credential_id: state.binding)
+    monkeypatch.setattr(setup, "_open_server_agent_activation_store", open_store)
+    monkeypatch.setattr(setup, "load_credential_binding", lambda _store, _credential_id: state.binding)
     monkeypatch.setattr(
-        cli,
+        setup.helpers,
         "_write_private_config",
         lambda path, value, *, force=False: writes.append((path, value, force)),
     )
@@ -342,9 +343,9 @@ def test_server_agent_activate_rejects_non_server_profile_before_identity_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = ExtensionConfig(data_dir=tmp_path / "local")
-    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+    monkeypatch.setattr(setup.helpers, "_load_config", lambda _path: config)
     monkeypatch.setattr(
-        cli,
+        setup.helpers,
         "_load_identity_profile",
         lambda _path: pytest.fail("identity must not be read for wrong profile"),
     )
@@ -379,7 +380,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
         )
         return fake_store
 
-    monkeypatch.setattr(cli, "PostgreSQLStore", fake_postgres)
+    monkeypatch.setattr(setup, "PostgreSQLStore", fake_postgres)
 
     assert cli._open_server_agent_activation_store(state.config) is fake_store
     assert captured["key_path"] == state.config.data_dir / "secrets" / "records.key"
@@ -497,14 +498,14 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             sort_keys=True,
         ).encode(),
     }
-    monkeypatch.setattr(cli, "CORE_CONFIG", config_path)
-    monkeypatch.setattr(cli, "SERVER_AGENT_IDENTITY", identity_path)
-    monkeypatch.setattr(cli, "SERVER_AGENT_KEY", key_path)
-    monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
-    monkeypatch.setattr(cli, "C0_RESPONDER_TERMINAL", terminal_path)
-    monkeypatch.setattr(cli, "CREDENTIAL_SUPERSESSION_JOURNAL", journal_path)
-    monkeypatch.setattr(cli, "_managed_server_reauthorization_lock", nullcontext)
-    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(setup, "CORE_CONFIG", config_path)
+    monkeypatch.setattr(setup, "SERVER_AGENT_IDENTITY", identity_path)
+    monkeypatch.setattr(setup, "SERVER_AGENT_KEY", key_path)
+    monkeypatch.setattr(setup, "SETUP_ROOT", setup_root)
+    monkeypatch.setattr(setup, "C0_RESPONDER_TERMINAL", terminal_path)
+    monkeypatch.setattr(setup, "CREDENTIAL_SUPERSESSION_JOURNAL", journal_path)
+    monkeypatch.setattr(setup, "_managed_server_reauthorization_lock", nullcontext)
+    monkeypatch.setattr(setup.os, "geteuid", lambda: 0)
     import pwd
 
     account = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
@@ -534,9 +535,9 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             st_ino=hash(path),
         )
 
-    monkeypatch.setattr(cli, "_managed_private_file", managed_read)
+    monkeypatch.setattr(setup, "_managed_private_file", managed_read)
     monkeypatch.setattr(
-        cli,
+        setup,
         "_parse_environment_file",
         lambda _path, *, label: {
             "AGENTNET_DATABASE_URL": "postgresql://agentnet@postgres/agentnet",
@@ -550,9 +551,9 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             assert path not in files
         files[path] = json.dumps(value, indent=2, sort_keys=True).encode() + b"\n"
 
-    monkeypatch.setattr(cli, "_write_private_config", write_state)
-    monkeypatch.setattr(cli, "_owner_only_file", lambda path, *, label: files[path])
-    monkeypatch.setattr(cli, "_remove_private_state", lambda path: files.pop(path, None))
+    monkeypatch.setattr(setup.helpers, "_write_private_config", write_state)
+    monkeypatch.setattr(setup.helpers, "_owner_only_file", lambda path, *, label: files[path])
+    monkeypatch.setattr(setup.helpers, "_remove_private_state", lambda path: files.pop(path, None))
     expired_binding = SimpleNamespace(
         domain_id=actor.domain_id,
         principal_id=actor.principal_id,
@@ -583,18 +584,18 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
         return opened_store
 
     monkeypatch.setattr(
-        cli,
+        setup,
         "_open_server_agent_activation_store_as_core_peer",
         open_reauthorization_store,
     )
-    monkeypatch.setattr(cli, "load_credential_binding", lambda _store, _credential_id: expired_binding)
+    monkeypatch.setattr(setup, "load_credential_binding", lambda _store, _credential_id: expired_binding)
     monkeypatch.setattr(
-        cli,
+        setup,
         "completed_c0_terminal_credential",
         lambda *_args, **_kwargs: (actor.credential_id, actor.credential_epoch),
     )
     monkeypatch.setattr(
-        cli,
+        setup,
         "load_audited_supersession_journal",
         lambda raw, *_args, **kwargs: load_supersession_journal(
             raw,
@@ -604,7 +605,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             harness_id=kwargs["harness_id"],
         ),
     )
-    monkeypatch.setattr(cli.time, "time", lambda: 1_000)
+    monkeypatch.setattr(setup.time, "time", lambda: 1_000)
 
     class Broker:
         issued = False
@@ -626,7 +627,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             return None
 
     broker = Broker()
-    monkeypatch.setattr(cli, "_managed_server_reauthorization_client", lambda *_args, **_kwargs: broker)
+    monkeypatch.setattr(setup, "_managed_server_reauthorization_client", lambda *_args, **_kwargs: broker)
     service_calls: list[str] = []
 
     class Recovery:
@@ -654,7 +655,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
                 idempotent_repeat=len(service_calls) > 1,
             )
 
-    monkeypatch.setattr(cli, "ManagedServerCredentialReauthorizationService", Recovery)
+    monkeypatch.setattr(setup, "ManagedServerCredentialReauthorizationService", Recovery)
     fail_after_config = {"armed": True}
     fail_after_journal = {"armed": True}
 
@@ -669,7 +670,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             raise RuntimeError("injected crash after config CAS")
         return "updated"
 
-    monkeypatch.setattr(cli, "_cas_managed_private_json", crashable_cas)
+    monkeypatch.setattr(setup, "_cas_managed_private_json", crashable_cas)
 
     def replace_journal(path: Path, *, expected, replacement, uid, gid):
         assert path == journal_path
@@ -685,7 +686,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
             raise RuntimeError("injected crash after supersession journal")
         return "updated"
 
-    monkeypatch.setattr(cli, "_replace_managed_private_bytes", replace_journal)
+    monkeypatch.setattr(setup, "_replace_managed_private_bytes", replace_journal)
     args = argparse.Namespace(
         config=str(config_path),
         identity=str(identity_path),
@@ -726,9 +727,9 @@ def test_managed_server_reauthorization_opens_postgres_as_core_peer(
     transitions: list[tuple[str, object]] = []
     expected_store = object()
 
-    monkeypatch.setattr(cli.os, "geteuid", lambda: identity["euid"])
-    monkeypatch.setattr(cli.os, "getegid", lambda: identity["egid"])
-    monkeypatch.setattr(cli.os, "getgroups", lambda: list(identity["groups"]))
+    monkeypatch.setattr(setup.os, "geteuid", lambda: identity["euid"])
+    monkeypatch.setattr(setup.os, "getegid", lambda: identity["egid"])
+    monkeypatch.setattr(setup.os, "getgroups", lambda: list(identity["groups"]))
 
     def setgroups(groups):
         transitions.append(("groups", groups))
@@ -742,16 +743,16 @@ def test_managed_server_reauthorization_opens_postgres_as_core_peer(
         transitions.append(("euid", uid))
         identity["euid"] = uid
 
-    monkeypatch.setattr(cli.os, "setgroups", setgroups)
-    monkeypatch.setattr(cli.os, "setegid", setegid)
-    monkeypatch.setattr(cli.os, "seteuid", seteuid)
+    monkeypatch.setattr(setup.os, "setgroups", setgroups)
+    monkeypatch.setattr(setup.os, "setegid", setegid)
+    monkeypatch.setattr(setup.os, "seteuid", seteuid)
 
     def open_store(_config, *, database_url_override=None):
         assert database_url_override == "postgresql:///agentnet"
         assert identity == {"euid": 1234, "egid": 5678, "groups": [5678]}
         return expected_store
 
-    monkeypatch.setattr(cli, "_open_server_agent_activation_store", open_store)
+    monkeypatch.setattr(setup, "_open_server_agent_activation_store", open_store)
 
     assert cli._open_server_agent_activation_store_as_core_peer(
         ExtensionConfig(data_dir=Path("/tmp/unused")),
@@ -779,7 +780,7 @@ def test_managed_server_reauthorization_lock_rejects_concurrent_setup(
     lock_path = setup_root / "setup.lock"
     lock_path.write_bytes(b"")
     lock_path.chmod(0o600)
-    monkeypatch.setattr(cli, "SETUP_ROOT", setup_root)
+    monkeypatch.setattr(setup, "SETUP_ROOT", setup_root)
     real_fstat = os.fstat
 
     def root_owned_fstat(descriptor: int):
@@ -791,7 +792,7 @@ def test_managed_server_reauthorization_lock_rejects_concurrent_setup(
             st_gid=0,
         )
 
-    monkeypatch.setattr(cli.os, "fstat", root_owned_fstat)
+    monkeypatch.setattr(setup.os, "fstat", root_owned_fstat)
     with cli._managed_server_reauthorization_lock():
         with pytest.raises(
             SystemExit,
@@ -808,7 +809,7 @@ def test_server_agent_activate_store_unavailable_leaves_config_unchanged(
     state = activation_fixture(tmp_path)
     writes, _opened = install_activation_fakes(monkeypatch, state)
     monkeypatch.setattr(
-        cli,
+        setup,
         "_open_server_agent_activation_store",
         lambda _config: (_ for _ in ()).throw(GateBlocked("lease_contended", "runtime active")),
     )
@@ -832,7 +833,7 @@ def test_server_agent_reset_requires_two_explicit_confirmations_and_returns_evid
 
     calls: list[bool] = []
     monkeypatch.setattr(
-        cli,
+        setup,
         "reset_server_setup",
         lambda *, retain_external_prerequisites: calls.append(
             retain_external_prerequisites
@@ -864,7 +865,7 @@ def test_server_agent_reset_direct_call_without_confirmation_fails_closed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        cli,
+        setup,
         "reset_server_setup",
         lambda **_kwargs: pytest.fail("missing confirmation must not reach reset"),
     )

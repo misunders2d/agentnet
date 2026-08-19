@@ -559,12 +559,12 @@ def test_guided_server_setup_refuses_noninteractive_approval(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import agentnet.cli as cli
+    from agentnet.cli.commands import setup as cli_setup
 
     request = object()
-    monkeypatch.setattr(cli, "load_server_setup_request", lambda _path: request)
+    monkeypatch.setattr(cli_setup, "load_server_setup_request", lambda _path: request)
     monkeypatch.setattr(
-        cli,
+        cli_setup,
         "plan_server_setup",
         lambda candidate: {
             "schema": "agentnet.server-setup.evidence.v1",
@@ -576,7 +576,7 @@ def test_guided_server_setup_refuses_noninteractive_approval(
         if candidate is request
         else pytest.fail("guided setup changed the loaded request"),
     )
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli_setup.sys.stdin, "isatty", lambda: False)
 
     rc = command_server_agent_setup(
         build_parser().parse_args(["server-agent", "setup", "--apply", "--start"])
@@ -595,7 +595,7 @@ def test_guided_server_setup_approves_and_applies_exact_planned_digest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import agentnet.cli as cli
+    from agentnet.cli.commands import setup as cli_setup
 
     request = object()
     applied: list[tuple[object, bool, str]] = []
@@ -607,9 +607,9 @@ def test_guided_server_setup_approves_and_applies_exact_planned_digest(
         def readline(self) -> str:
             return "yes\n"
 
-    monkeypatch.setattr(cli, "load_server_setup_request", lambda _path: request)
+    monkeypatch.setattr(cli_setup, "load_server_setup_request", lambda _path: request)
     monkeypatch.setattr(
-        cli,
+        cli_setup,
         "plan_server_setup",
         lambda candidate: {
             "schema": "agentnet.server-setup.evidence.v1",
@@ -631,8 +631,8 @@ def test_guided_server_setup_approves_and_applies_exact_planned_digest(
             "request_digest": expected_request_digest,
         }
 
-    monkeypatch.setattr(cli, "apply_server_setup", apply)
-    monkeypatch.setattr(cli.sys, "stdin", ApprovingTerminal())
+    monkeypatch.setattr(cli_setup, "apply_server_setup", apply)
+    monkeypatch.setattr(cli_setup.sys, "stdin", ApprovingTerminal())
 
     rc = command_server_agent_setup(
         build_parser().parse_args(["server-agent", "setup", "--apply", "--start"])
@@ -654,9 +654,9 @@ def test_guided_server_setup_reports_missing_standard_prerequisite(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import agentnet.cli as cli
+    from agentnet.cli.commands import setup as cli_setup
 
-    monkeypatch.setattr(cli, "SETUP_ROOT", tmp_path / "missing")
+    monkeypatch.setattr(cli_setup, "SETUP_ROOT", tmp_path / "missing")
 
     rc = command_server_agent_setup(
         build_parser().parse_args(["server-agent", "setup"])
@@ -4328,9 +4328,9 @@ def test_unexpected_setup_error_is_redacted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     request = _request(tmp_path)
-    import agentnet.cli as cli
+    from agentnet.cli.commands import setup as cli_setup
 
-    monkeypatch.setattr(cli, "plan_server_setup", lambda _request: (_ for _ in ()).throw(RuntimeError("private-token")))
+    monkeypatch.setattr(cli_setup, "plan_server_setup", lambda _request: (_ for _ in ()).throw(RuntimeError("private-token")))
     rc = command_server_agent_setup(
         build_parser().parse_args(["server-agent", "setup", "--request", str(request)])
     )
