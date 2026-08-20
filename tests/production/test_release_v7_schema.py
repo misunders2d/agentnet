@@ -9,7 +9,7 @@ from agentnet.authorization.communication_scope import COMMUNICATION_SCOPE_ACTIO
 from agentnet.authorization.communication_scope_service import CollaborationScopeService
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.errors import GateBlocked
-from agentnet.operations import server_setup
+from agentnet.operations.server_setup import database as server_setup
 from agentnet.operations.server_setup import ServerSetupError
 from agentnet.security.envelope import LocalEnvelopeCipher
 from agentnet.storage.relationship_governance_schema import (

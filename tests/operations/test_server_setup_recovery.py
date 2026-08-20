@@ -27,6 +27,16 @@ import pytest
 
 import agentnet.operations.server_reset as reset
 import agentnet.operations.server_setup as setup
+import agentnet.operations.server_setup.apply as setup_apply
+import agentnet.operations.server_setup.activation as activation
+import agentnet.operations.server_setup.database as setup_database
+import agentnet.operations.server_setup.custody as setup_custody
+import agentnet.operations.server_setup.provisioning as provisioning
+import agentnet.operations.server_setup.preflight as setup_preflight
+import agentnet.operations.server_setup.systemd as setup_systemd
+import agentnet.operations.server_setup.upgrade as upgrade
+import agentnet.operations.server_setup.upgrade_recovery as upgrade_recovery
+import agentnet.operations.server_setup.upgrade_state as upgrade_state
 from agentnet.artifacts.clamav import (
     ScannerEndpoint,
     clamav_profile_digest,
@@ -47,6 +57,21 @@ from agentnet.security.signatures import P256KeyPair
 from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
 
 BROKER = "synthetic-shared-test-token-0123456789abcdef0123456789"
+
+
+def _set_setup_version(
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+) -> None:
+    for module in (
+        setup,
+        setup_preflight,
+        setup_custody,
+        activation,
+        upgrade,
+        upgrade_state,
+    ):
+        monkeypatch.setattr(module, "__version__", version)
 
 
 @pytest.fixture(autouse=True)
@@ -217,14 +242,10 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     systemctl_calls: list[list[str]] = []
     operation_events: list[tuple[str, object]] = []
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/uv"))
-    monkeypatch.setattr(
-        setup,
-        "_resolve_executable",
-        lambda *_args, **_kwargs: Path(f"/opt/agentnet-{generation[0]}/npm/bin/agentnet.mjs"),
-    )
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path(f"/opt/agentnet-{generation[0]}/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path(f"/opt/agentnet-{generation[0]}/npm/bin/agentnet.mjs"))
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
     def fake_systemd_show(_executable: Path, unit: str) -> dict[str, str]:
         path = layout.unit(unit)
         if not path.exists() or unit not in loaded_units:
@@ -285,28 +306,28 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
             if arguments[2] not in active_units:
                 raise ServerSetupError("systemd_start", failure_message)
 
-    monkeypatch.setattr(setup, "_systemd_show", fake_systemd_show)
-    monkeypatch.setattr(setup, "_run_systemctl", fake_run_systemctl)
+    monkeypatch.setattr(setup_systemd, "_systemd_show", fake_systemd_show)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", fake_run_systemctl)
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_file", lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest())
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_tree", lambda path: hashlib.sha256(f"tree:{path}:{generation[0]}".encode()).hexdigest())
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, home: (
+        "already_satisfied" if layout.host(home).is_dir() else "create"
+    ))
     monkeypatch.setattr(
-        setup,
-        "_sha256_stable_file",
-        lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest(),
-    )
-    monkeypatch.setattr(
-        setup,
-        "_sha256_stable_tree",
-        lambda path: hashlib.sha256(f"tree:{path}:{generation[0]}".encode()).hexdigest(),
-    )
-    monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_account_fact",
         lambda _name, home: (
             "already_satisfied" if layout.host(home).is_dir() else "create"
         ),
     )
-    monkeypatch.setattr(setup, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
+    monkeypatch.setattr(setup_apply, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
     monkeypatch.setattr(
-        setup,
+        provisioning,
+        "_ensure_account",
+        lambda name, _home, **_kwargs: accounts[name],
+    )
+    monkeypatch.setattr(
+        setup_apply,
         "_postgres_peer_gate",
         lambda _account, _url: {"status": "validated_exact_local_peer"},
     )
@@ -320,11 +341,24 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         allowed_purposes=MANDATORY_APPROVAL_PURPOSES,
     )
     monkeypatch.setattr(
-        setup,
+        provisioning,
         "_approval_trust",
         lambda *_args, **_kwargs: (SimpleNamespace(model_dump=lambda **_k: {"policy": "fixed"}), [trusted]),
     )
-    monkeypatch.setattr(setup, "_require_exact_approval_policy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(provisioning, "_require_exact_approval_policy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        setup_apply,
+        "_approval_trust",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(model_dump=lambda **_k: {"policy": "fixed"}),
+            [trusted],
+        ),
+    )
+    monkeypatch.setattr(
+        setup_apply,
+        "_require_exact_approval_policy",
+        lambda *_args, **_kwargs: None,
+    )
 
     class _Equal:
         def __eq__(self, _other: object) -> bool:
@@ -358,6 +392,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         )
 
     monkeypatch.setattr(setup, "load_config_json", load_synthetic_config)
+    monkeypatch.setattr(provisioning, "load_config_json", load_synthetic_config)
 
     product_calls: list[list[str]] = []
     def fake_bounded_product_process(
@@ -525,12 +560,28 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         raise AssertionError(operation)
 
     monkeypatch.setattr(
-        setup,
+        setup_database,
         "_run_v0145_database_operation_as",
         fake_database_operation,
     )
-    monkeypatch.setattr(setup, "_run_as", fake_run_as)
-    monkeypatch.setattr(setup, "_run_bounded_product_process", fake_bounded_product_process)
+    monkeypatch.setattr(
+        upgrade,
+        "_run_v0145_database_operation_as",
+        fake_database_operation,
+    )
+    monkeypatch.setattr(
+        upgrade_recovery,
+        "_run_v0145_database_operation_as",
+        fake_database_operation,
+    )
+    monkeypatch.setattr(setup_apply, "_run_as", fake_run_as)
+    monkeypatch.setattr(provisioning, "_run_as", fake_run_as)
+    monkeypatch.setattr(upgrade, "_run_as", fake_run_as)
+    monkeypatch.setattr(
+        setup_custody,
+        "_run_bounded_product_process",
+        fake_bounded_product_process,
+    )
     return _Harness(
         request=request,
         layout=layout,
@@ -549,7 +600,7 @@ def _realized_0130_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     """One completed 0.1.30 apply, ready for an upgrade attempt."""
 
     harness = _harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(setup, "__version__", "0.1.30")
+    _set_setup_version(monkeypatch, "0.1.30")
     digest = harness.plan_digest()
     harness.apply(digest)
     assert harness.marker()["package_version"] == "0.1.30"
@@ -564,7 +615,7 @@ def _realized_0132_deployment(
     """One completed 0.1.32 five-unit apply, ready for an upgrade attempt."""
 
     harness = _harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(setup, "__version__", "0.1.32")
+    _set_setup_version(monkeypatch, "0.1.32")
     digest = harness.plan_digest()
     harness.apply(digest)
     assert harness.marker()["package_version"] == "0.1.32"
@@ -595,7 +646,7 @@ def _realized_0144_lifecycle_source(
     """One enrolled schema-v6 v0.1.44 server with preserved communication state."""
 
     harness = _harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(setup, "__version__", "0.1.44")
+    _set_setup_version(monkeypatch, "0.1.44")
     digest = harness.plan_digest()
     harness.apply(digest)
     config_path = harness.layout.host(setup.CORE_CONFIG)
@@ -623,7 +674,7 @@ def _realized_0145_timer_source(
     """One exact v0.1.45 server carrying the released non-recurring timer."""
 
     harness = _harness(tmp_path, monkeypatch)
-    current_render_units = setup.render_units
+    current_render_units = upgrade.render_units
 
     def released_render_units(
         node_executable: Path,
@@ -641,11 +692,11 @@ def _realized_0145_timer_source(
         }
         return units
 
-    monkeypatch.setattr(setup, "__version__", "0.1.45")
-    monkeypatch.setattr(setup, "render_units", released_render_units)
+    _set_setup_version(monkeypatch, "0.1.45")
+    monkeypatch.setattr(upgrade, "render_units", released_render_units)
     digest = harness.plan_digest()
     harness.apply(digest)
-    monkeypatch.setattr(setup, "render_units", current_render_units)
+    monkeypatch.setattr(upgrade, "render_units", current_render_units)
     assert harness.marker()["package_version"] == "0.1.45"
     assert b"OnUnitActiveSec=1h" in harness.layout.unit(setup.CREDENTIAL_RENEW_TIMER).read_bytes()
     return harness
@@ -660,7 +711,7 @@ def _realized_public_0131_communication_deployment(
     """One exact released 0.1.31 two-unit marker and realized unit topology."""
 
     harness = _harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     digest = harness.plan_digest()
     harness.apply(digest)
 
@@ -694,11 +745,9 @@ def _stage_public_0130_owner_policy_shape(
     """Replace synthetic current configs with exact legacy missing-owner shape."""
 
     preflight = setup._server_setup_preflight(harness.request, layout=harness.layout)
-    approval_config, trusted = setup._approval_trust(
-        harness.layout.host(setup.APPROVAL_CONFIG),
-        SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()),
-        harness.layout.host(setup.APPROVAL_STATE),
-    )
+    approval_config, trusted = provisioning._approval_trust(harness.layout.host(setup.APPROVAL_CONFIG),
+    SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()),
+    harness.layout.host(setup.APPROVAL_STATE),)
     assert approval_config is not None
     desired = setup._build_core_oidc_config(
         harness.request,
@@ -724,7 +773,7 @@ def _stage_public_0130_owner_policy_shape(
 
     marker = harness.marker()
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
-    marker["core_config_digest"] = setup._managed_config_digest(
+    marker["core_config_digest"] = setup_custody._managed_config_digest(
         core_path,
         account,
         blocker="core_custody",
@@ -753,6 +802,7 @@ def _stage_public_0130_owner_policy_shape(
         return ConfigView(**values)
 
     monkeypatch.setattr(setup, "load_config_json", load_config_with_real_oidc)
+    monkeypatch.setattr(provisioning, "load_config_json", load_config_with_real_oidc)
     return desired, {
         "core_config": core_path.read_bytes(),
         "core_oidc_config": oidc_path.read_bytes(),
@@ -778,9 +828,9 @@ def test_marker_accepts_only_released_package_caused_digest_drift(
     artifact_mode: str | None,
     source: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     payload = _marker_payload(schema=schema, package_version=source, artifact_mode=artifact_mode)
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -797,14 +847,14 @@ def test_0150_accepts_direct_upgrade_from_every_supported_setup_release(
     monkeypatch: pytest.MonkeyPatch,
     source: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    _set_setup_version(monkeypatch, "0.1.50")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=source,
         artifact_mode="disabled",
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -813,13 +863,13 @@ def test_0150_accepts_direct_upgrade_from_every_supported_setup_release(
 
     assert marker is not None
     assert marker["package_version"] == source
-    assert setup._forward_only_setup_upgrade(source, "0.1.50") is True
+    assert upgrade_state._forward_only_setup_upgrade(source, "0.1.50") is True
 
 
 def test_0150_rejects_direct_upgrade_from_pre_lifecycle_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.50")
+    _set_setup_version(monkeypatch, "0.1.50")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.44",
@@ -827,7 +877,7 @@ def test_0150_rejects_direct_upgrade_from_pre_lifecycle_release(
     )
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -845,14 +895,14 @@ def test_0151_accepts_direct_upgrade_from_every_supported_setup_release(
     monkeypatch: pytest.MonkeyPatch,
     source: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.51")
+    _set_setup_version(monkeypatch, "0.1.51")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=source,
         artifact_mode="disabled",
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -861,7 +911,7 @@ def test_0151_accepts_direct_upgrade_from_every_supported_setup_release(
 
     assert marker is not None
     assert marker["package_version"] == source
-    assert setup._forward_only_setup_upgrade(source, "0.1.51") is True
+    assert upgrade_state._forward_only_setup_upgrade(source, "0.1.51") is True
 
 @pytest.mark.parametrize(
     ("package_version", "current_version"),
@@ -879,14 +929,14 @@ def test_marker_rejects_every_unsupported_request_digest_drift(
     package_version: str,
     current_version: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", current_version)
+    _set_setup_version(monkeypatch, current_version)
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=package_version,
         artifact_mode="disabled",
     )
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -898,7 +948,7 @@ def test_marker_rejects_every_unsupported_request_digest_drift(
 def test_marker_upgrade_still_rejects_malformed_recorded_digest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.30",
@@ -906,7 +956,7 @@ def test_marker_upgrade_still_rejects_malformed_recorded_digest(
         request_digest="not-a-digest",
     )
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -928,7 +978,7 @@ def test_0131_topology_upgrade_accepts_only_the_exact_released_profile(
     artifact_mode: str,
     units: tuple[str, ...],
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     value = json.loads(
         _marker_payload(
             schema="agentnet.server-setup.marker.v3",
@@ -940,7 +990,7 @@ def test_0131_topology_upgrade_accepts_only_the_exact_released_profile(
     value["unit_digests"] = {unit: "4" * 64 for unit in units}
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -952,7 +1002,7 @@ def test_0131_topology_upgrade_accepts_only_the_exact_released_profile(
 def test_0131_topology_upgrade_accepts_exact_two_unit_communication_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     value = json.loads(
         _marker_payload(
             schema="agentnet.server-setup.marker.v3",
@@ -965,7 +1015,7 @@ def test_0131_topology_upgrade_accepts_exact_two_unit_communication_marker(
         unit: "4" * 64 for unit in setup.LEGACY_COMMUNICATION_ONLY_UNITS
     }
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -981,7 +1031,7 @@ def test_setup_marker_rejects_boolean_revision(
     monkeypatch: pytest.MonkeyPatch,
     revision: bool,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     value = json.loads(
         _marker_payload(
             schema="agentnet.server-setup.marker.v3",
@@ -996,7 +1046,7 @@ def test_setup_marker_rejects_boolean_revision(
     }
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -1010,14 +1060,14 @@ def test_0132_upgrade_accepts_exact_released_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.32",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1033,14 +1083,14 @@ def test_0137_upgrade_accepts_exact_released_0133_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.37")
+    _set_setup_version(monkeypatch, "0.1.37")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.33",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1056,14 +1106,14 @@ def test_0138_upgrade_accepts_exact_released_0137_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    _set_setup_version(monkeypatch, "0.1.38")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.37",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1077,7 +1127,7 @@ def test_0138_upgrade_accepts_exact_released_0137_five_unit_profile(
 def test_0139_fresh_setup_rejects_0138_release_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.39")
+    _set_setup_version(monkeypatch, "0.1.39")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.38",
@@ -1085,7 +1135,7 @@ def test_0139_fresh_setup_rejects_0138_release_marker(
     )
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -1099,14 +1149,14 @@ def test_0140_upgrade_accepts_exact_0139_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.40")
+    _set_setup_version(monkeypatch, "0.1.40")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.39",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1122,14 +1172,14 @@ def test_0141_upgrade_accepts_exact_0140_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.41")
+    _set_setup_version(monkeypatch, "0.1.41")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.40",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1145,14 +1195,14 @@ def test_0142_upgrade_accepts_exact_0141_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.42")
+    _set_setup_version(monkeypatch, "0.1.42")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.41",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1168,14 +1218,14 @@ def test_0146_upgrade_accepts_exact_0145_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.46")
+    _set_setup_version(monkeypatch, "0.1.46")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.45",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1189,14 +1239,14 @@ def test_0146_upgrade_accepts_exact_0145_five_unit_profile(
 def test_0147_upgrade_accepts_exact_0146_v2_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.47")
+    _set_setup_version(monkeypatch, "0.1.47")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v2",
         package_version="0.1.46",
         artifact_mode=None,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1212,14 +1262,14 @@ def test_0148_upgrade_accepts_exact_0147_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.48")
+    _set_setup_version(monkeypatch, "0.1.48")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.47",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1235,14 +1285,14 @@ def test_0149_upgrade_accepts_exact_0148_five_unit_profile(
     monkeypatch: pytest.MonkeyPatch,
     artifact_mode: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.49")
+    _set_setup_version(monkeypatch, "0.1.49")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version="0.1.48",
         artifact_mode=artifact_mode,
     )
 
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="9" * 64,
         legacy_request_digest="1" * 64,
@@ -1264,7 +1314,7 @@ def test_0146_replaces_released_timer_without_resetting_server_state(
     upgrade_event_offset = len(harness.operation_events)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.46")
+    _set_setup_version(monkeypatch, "0.1.46")
     upgraded = harness.apply(harness.plan_digest())
 
     assert {
@@ -1306,7 +1356,7 @@ def test_0138_upgrade_rejects_other_release_sources(
     monkeypatch: pytest.MonkeyPatch,
     package_version: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    _set_setup_version(monkeypatch, "0.1.38")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=package_version,
@@ -1314,7 +1364,7 @@ def test_0138_upgrade_rejects_other_release_sources(
     )
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -1328,7 +1378,7 @@ def test_0137_upgrade_rejects_unapproved_corrective_release_source(
     monkeypatch: pytest.MonkeyPatch,
     package_version: str,
 ) -> None:
-    monkeypatch.setattr(setup, "__version__", "0.1.37")
+    _set_setup_version(monkeypatch, "0.1.37")
     payload = _marker_payload(
         schema="agentnet.server-setup.marker.v3",
         package_version=package_version,
@@ -1336,7 +1386,7 @@ def test_0137_upgrade_rejects_unapproved_corrective_release_source(
     )
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="9" * 64,
             legacy_request_digest="1" * 64,
@@ -1391,7 +1441,7 @@ def test_pre_upgrade_gate_requires_the_exact_recorded_realized_state(tmp_path: P
         },
     }
     uid, gid = os.geteuid(), os.getegid()
-    setup._require_marker_realized_state(
+    upgrade_state._require_marker_realized_state(
         marker,
         approval_config_digest="a" * 64,
         core_config_digest="b" * 64,
@@ -1402,7 +1452,7 @@ def test_pre_upgrade_gate_requires_the_exact_recorded_realized_state(tmp_path: P
 
     for drift in ({"approval_config_digest": "c" * 64}, {"core_config_digest": "c" * 64}):
         with pytest.raises(ServerSetupError) as exc_info:
-            setup._require_marker_realized_state(
+            upgrade_state._require_marker_realized_state(
                 marker,
                 approval_config_digest=drift.get("approval_config_digest", "a" * 64),
                 core_config_digest=drift.get("core_config_digest", "b" * 64),
@@ -1414,7 +1464,7 @@ def test_pre_upgrade_gate_requires_the_exact_recorded_realized_state(tmp_path: P
 
     units[setup.CORE_UNIT].write_bytes(b"[Unit]\ntampered\n")
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._require_marker_realized_state(
+        upgrade_state._require_marker_realized_state(
             marker,
             approval_config_digest="a" * 64,
             core_config_digest="b" * 64,
@@ -1426,7 +1476,7 @@ def test_pre_upgrade_gate_requires_the_exact_recorded_realized_state(tmp_path: P
 
     units[setup.CORE_UNIT].unlink()
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._require_marker_realized_state(
+        upgrade_state._require_marker_realized_state(
             marker,
             approval_config_digest="a" * 64,
             core_config_digest="b" * 64,
@@ -1442,7 +1492,7 @@ def test_pre_upgrade_gate_rejects_recorded_units_outside_the_fixed_profile(tmp_p
     unit_path.write_bytes(b"[Unit]\n")
     unit_path.chmod(0o644)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._require_marker_realized_state(
+        upgrade_state._require_marker_realized_state(
             {
                 "approval_config_digest": "a" * 64,
                 "core_config_digest": "b" * 64,
@@ -1471,7 +1521,7 @@ def test_supported_upgrade_is_atomic_and_leaves_no_journal(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     upgrade_digest = harness.plan_digest()
     assert upgrade_digest != first_digest
 
@@ -1513,7 +1563,7 @@ def test_public_0131_two_unit_topology_expands_atomically_to_five_units(
     before_units = harness.unit_payloads()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
     assert upgrade_digest != first_digest
 
@@ -1547,7 +1597,7 @@ def test_public_0132_five_unit_topology_upgrades_in_place(
     }
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
     assert upgrade_digest != first_digest
     upgraded = harness.apply(upgrade_digest)
@@ -1578,16 +1628,12 @@ def test_0132_upgrade_bootstrap_failure_is_forward_only_and_retries(
     harness.active_units.update(setup.MANAGED_UNITS)
     harness.loaded_units.update(setup.MANAGED_UNITS)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_bootstrap = setup._run_bootstrap_idempotently
-    monkeypatch.setattr(
-        setup,
-        "_run_bootstrap_idempotently",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected 0.1.32 bootstrap failure")
-        ),
-    )
+    original_bootstrap = upgrade._run_bootstrap_idempotently
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected 0.1.32 bootstrap failure")
+    ),)
 
     with pytest.raises(ServerSetupError, match="injected 0.1.32 bootstrap failure"):
         harness.apply(upgrade_digest)
@@ -1597,7 +1643,7 @@ def test_0132_upgrade_bootstrap_failure_is_forward_only_and_retries(
     assert harness.journal_path.exists()
     assert not harness.active_units
 
-    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", original_bootstrap)
     recovered = harness.apply(upgrade_digest)
     assert {
         "id": "package_upgrade",
@@ -1614,16 +1660,12 @@ def test_0137_upgrade_bootstrap_failure_is_forward_only_and_retries(
     harness.active_units.update(setup.MANAGED_UNITS)
     harness.loaded_units.update(setup.MANAGED_UNITS)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.38")
+    _set_setup_version(monkeypatch, "0.1.38")
     upgrade_digest = harness.plan_digest()
-    original_bootstrap = setup._run_bootstrap_idempotently
-    monkeypatch.setattr(
-        setup,
-        "_run_bootstrap_idempotently",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected 0.1.37 bootstrap failure")
-        ),
-    )
+    original_bootstrap = upgrade._run_bootstrap_idempotently
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected 0.1.37 bootstrap failure")
+    ),)
 
     with pytest.raises(ServerSetupError, match="injected 0.1.37 bootstrap failure"):
         harness.apply(upgrade_digest)
@@ -1633,7 +1675,7 @@ def test_0137_upgrade_bootstrap_failure_is_forward_only_and_retries(
     assert harness.journal_path.exists()
     assert not harness.active_units
 
-    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", original_bootstrap)
     recovered = harness.apply(upgrade_digest)
     assert {
         "id": "package_upgrade",
@@ -1650,9 +1692,9 @@ def test_0132_upgrade_marker_response_loss_never_rolls_back_target(
     harness.active_units.update(setup.MANAGED_UNITS)
     harness.loaded_units.update(setup.MANAGED_UNITS)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_commit = setup._commit_setup_marker
+    original_commit = upgrade_state._commit_setup_marker
 
     def committed_then_lost(*args: object, **kwargs: object) -> str:
         original_commit(*args, **kwargs)
@@ -1661,7 +1703,7 @@ def test_0132_upgrade_marker_response_loss_never_rolls_back_target(
             "injected marker response loss",
         )
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", committed_then_lost)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", committed_then_lost)
 
     with pytest.raises(ServerSetupError, match="injected marker response loss"):
         harness.apply(upgrade_digest)
@@ -1671,7 +1713,7 @@ def test_0132_upgrade_marker_response_loss_never_rolls_back_target(
     assert harness.journal_path.exists()
     assert harness.active_units == set(setup.MANAGED_UNITS)
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
     recovered = harness.apply(upgrade_digest)
     assert {
         "id": "package_upgrade",
@@ -1697,12 +1739,12 @@ def test_0133_upgrade_orders_marker_then_quiescence_then_bootstrap(
         harness.active_units.update(setup.MANAGED_UNITS)
         harness.loaded_units.update(setup.MANAGED_UNITS)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
     events: list[str] = []
-    original_commit = setup._commit_setup_marker
-    original_sequence = setup._run_systemctl_sequence_or_reconcile
-    original_bootstrap = setup._run_bootstrap_idempotently
+    original_commit = upgrade_state._commit_setup_marker
+    original_sequence = setup_systemd._run_systemctl_sequence_or_reconcile
+    original_bootstrap = upgrade._run_bootstrap_idempotently
 
     def recorded_commit(*args: object, **kwargs: object) -> str:
         events.append("marker")
@@ -1727,13 +1769,13 @@ def test_0133_upgrade_orders_marker_then_quiescence_then_bootstrap(
         events.append("bootstrap")
         return original_bootstrap(*args, **kwargs)
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", recorded_commit)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", recorded_commit)
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_run_systemctl_sequence_or_reconcile",
         recorded_sequence,
     )
-    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", recorded_bootstrap)
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", recorded_bootstrap)
 
     harness.apply(upgrade_digest)
 
@@ -1748,9 +1790,9 @@ def test_0132_upgrade_reconciles_lost_quiescence_response(
     harness.active_units.update(setup.MANAGED_UNITS)
     harness.loaded_units.update(setup.MANAGED_UNITS)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_systemctl = setup._run_systemctl
+    original_systemctl = setup_systemd._run_systemctl
     response_lost = [False]
 
     def lose_one_response(
@@ -1771,7 +1813,7 @@ def test_0132_upgrade_reconciles_lost_quiescence_response(
             response_lost[0] = True
             raise ServerSetupError("systemd_start", "injected lost systemd response")
 
-    monkeypatch.setattr(setup, "_run_systemctl", lose_one_response)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", lose_one_response)
 
     upgraded = harness.apply(upgrade_digest)
 
@@ -1794,16 +1836,12 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
         monkeypatch,
     )
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_bootstrap = setup._run_bootstrap_idempotently
-    monkeypatch.setattr(
-        setup,
-        "_run_bootstrap_idempotently",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected post-marker bootstrap failure")
-        ),
-    )
+    original_bootstrap = upgrade._run_bootstrap_idempotently
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected post-marker bootstrap failure")
+    ),)
 
     with pytest.raises(ServerSetupError, match="injected post-marker bootstrap failure"):
         harness.apply(upgrade_digest)
@@ -1819,8 +1857,8 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     # journal are committed, but Approval retains systemd's failed latch after
     # its otherwise successful SIGTERM quiescence.
     failed_units = {setup.APPROVAL_UNIT}
-    original_systemd_show = setup._systemd_show
-    original_systemctl = setup._run_systemctl
+    original_systemd_show = setup_systemd._systemd_show
+    original_systemctl = setup_systemd._run_systemctl
 
     def show_failed_until_reset(executable: Path, unit: str) -> dict[str, str]:
         properties = original_systemd_show(executable, unit)
@@ -1842,21 +1880,17 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
         if arguments[:1] == ["reset-failed"]:
             failed_units.discard(arguments[1])
 
-    monkeypatch.setattr(setup, "_systemd_show", show_failed_until_reset)
-    monkeypatch.setattr(setup, "_run_systemctl", clear_failed_state)
-    monkeypatch.setattr(setup, "_run_bootstrap_idempotently", original_bootstrap)
+    monkeypatch.setattr(setup_systemd, "_systemd_show", show_failed_until_reset)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", clear_failed_state)
+    monkeypatch.setattr(upgrade, "_run_bootstrap_idempotently", original_bootstrap)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", recovery_target)
+    _set_setup_version(monkeypatch, recovery_target)
     recovery_digest = harness.plan_digest()
     retained_journal = harness.journal_path.read_bytes()
-    original_write_journal = setup._write_upgrade_journal
-    monkeypatch.setattr(
-        setup,
-        "_write_upgrade_journal",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            OSError("injected next-edge journal write failure")
-        ),
-    )
+    original_write_journal = upgrade_state._write_upgrade_journal
+    monkeypatch.setattr(upgrade_state, "_write_upgrade_journal", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        OSError("injected next-edge journal write failure")
+    ))
 
     with pytest.raises(OSError, match="injected next-edge journal write failure"):
         harness.apply(recovery_digest)
@@ -1864,7 +1898,7 @@ def test_0131_topology_upgrade_commits_marker_before_forward_only_bootstrap(
     assert harness.marker()["package_version"] == "0.1.33"
     assert harness.journal_path.read_bytes() == retained_journal
 
-    monkeypatch.setattr(setup, "_write_upgrade_journal", original_write_journal)
+    monkeypatch.setattr(upgrade_state, "_write_upgrade_journal", original_write_journal)
     recovered = harness.apply(recovery_digest)
     assert {
         "id": "package_upgrade",
@@ -1886,11 +1920,11 @@ def test_0131_topology_upgrade_quiescence_failure_remains_forward_only(
         monkeypatch,
     )
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_systemctl = setup._run_systemctl
+    original_systemctl = setup_systemd._run_systemctl
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_run_systemctl",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ServerSetupError("systemd_start", "injected quiescence failure")
@@ -1906,7 +1940,7 @@ def test_0131_topology_upgrade_quiescence_failure_remains_forward_only(
     assert harness.active_units == set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
     assert not harness.layout.host(setup.C0_RESPONDER_DATA).exists()
 
-    monkeypatch.setattr(setup, "_run_systemctl", original_systemctl)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", original_systemctl)
     recovered = harness.apply(upgrade_digest)
     assert {
         "id": "package_upgrade",
@@ -1929,7 +1963,7 @@ def test_0131_topology_upgrade_rejects_target_state_before_journal(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
@@ -1954,7 +1988,7 @@ def test_0131_topology_upgrade_requires_exact_legacy_environment_before_journal(
     harness.layout.host(setup.CORE_ENV).chmod(0o600)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
@@ -1973,7 +2007,7 @@ def test_0131_topology_upgrade_rejects_loaded_target_unit_before_journal(
     )
     before_marker = harness.marker()
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_systemd_show",
         lambda _executable, unit: (
             {
@@ -1997,7 +2031,7 @@ def test_0131_topology_upgrade_rejects_loaded_target_unit_before_journal(
     )
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
@@ -2019,15 +2053,11 @@ def test_failed_0131_topology_upgrade_removes_target_only_units_on_rollback(
     target_only = set(setup.MANAGED_UNITS) - set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
-    original_commit = setup._commit_setup_marker
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected topology marker interruption")
-        ),
-    )
+    _set_setup_version(monkeypatch, "0.1.33")
+    original_commit = upgrade_state._commit_setup_marker
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected topology marker interruption")
+    ))
 
     with pytest.raises(ServerSetupError, match="injected topology marker interruption"):
         harness.apply(harness.plan_digest())
@@ -2038,7 +2068,7 @@ def test_failed_0131_topology_upgrade_removes_target_only_units_on_rollback(
     assert harness.active_units == set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
     assert not harness.journal_path.exists()
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
     recovered = harness.apply(harness.plan_digest())
     assert {
         "id": "package_upgrade",
@@ -2060,18 +2090,14 @@ def test_interrupted_0131_topology_upgrade_resumes_from_absence_aware_journal(
     target_only = set(setup.MANAGED_UNITS) - set(setup.LEGACY_COMMUNICATION_ONLY_UNITS)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_commit = setup._commit_setup_marker
-    original_rollback = setup._rollback_pending_upgrade
-    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected topology power loss")
-        ),
-    )
+    original_commit = upgrade_state._commit_setup_marker
+    original_rollback = upgrade_recovery._rollback_pending_upgrade
+    monkeypatch.setattr(upgrade_recovery, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected topology power loss")
+    ))
 
     with pytest.raises(ServerSetupError, match="injected topology power loss"):
         harness.apply(upgrade_digest)
@@ -2084,8 +2110,8 @@ def test_interrupted_0131_topology_upgrade_resumes_from_absence_aware_journal(
     assert all(harness.layout.unit(unit).is_file() for unit in setup.MANAGED_UNITS)
     assert harness.marker() == before_marker
 
-    monkeypatch.setattr(setup, "_rollback_pending_upgrade", original_rollback)
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_recovery, "_rollback_pending_upgrade", original_rollback)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
     resumed = harness.apply(upgrade_digest)
 
     assert {
@@ -2107,18 +2133,14 @@ def test_interrupted_0131_topology_upgrade_refuses_tampered_created_unit(
     )
     before_marker = harness.marker()
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     upgrade_digest = harness.plan_digest()
-    original_commit = setup._commit_setup_marker
-    original_rollback = setup._rollback_pending_upgrade
-    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected topology power loss")
-        ),
-    )
+    original_commit = upgrade_state._commit_setup_marker
+    original_rollback = upgrade_recovery._rollback_pending_upgrade
+    monkeypatch.setattr(upgrade_recovery, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected topology power loss")
+    ))
     with pytest.raises(ServerSetupError, match="injected topology power loss"):
         harness.apply(upgrade_digest)
 
@@ -2126,8 +2148,8 @@ def test_interrupted_0131_topology_upgrade_refuses_tampered_created_unit(
     tampered_path.write_bytes(tampered_path.read_bytes() + b"# tampered after interruption\n")
     tampered_path.chmod(0o644)
     tampered = tampered_path.read_bytes()
-    monkeypatch.setattr(setup, "_rollback_pending_upgrade", original_rollback)
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_recovery, "_rollback_pending_upgrade", original_rollback)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
 
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(upgrade_digest)
@@ -2152,7 +2174,7 @@ def test_0131_topology_upgrade_rejects_preexisting_target_only_unit(
     unexpected.chmod(0o644)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
@@ -2175,7 +2197,7 @@ def test_0131_topology_upgrade_validates_source_before_creating_c0_state(
     core_unit.chmod(0o644)
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.33")
+    _set_setup_version(monkeypatch, "0.1.33")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
 
@@ -2193,7 +2215,7 @@ def test_public_0130_owner_policy_is_migrated_under_the_upgrade_journal(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     upgraded = harness.apply(harness.plan_digest())
 
     assert {
@@ -2220,8 +2242,8 @@ def test_failed_owner_policy_migration_restores_both_exact_legacy_configs(
     _desired, legacy_payloads = _stage_public_0130_owner_policy_shape(harness, monkeypatch)
     before_marker = harness.marker()
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
-    original_write = setup._write_journaled_core_config
+    _set_setup_version(monkeypatch, "0.1.31")
+    original_write = upgrade_state._write_journaled_core_config
     writes = 0
 
     def fail_second_config(*args: object, **kwargs: object) -> str:
@@ -2231,7 +2253,11 @@ def test_failed_owner_policy_migration_restores_both_exact_legacy_configs(
             raise ServerSetupError("injected_failure", "injected config migration failure")
         return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(setup, "_write_journaled_core_config", fail_second_config)
+    monkeypatch.setattr(
+        upgrade_state,
+        "_write_journaled_core_config",
+        fail_second_config,
+    )
     with pytest.raises(ServerSetupError, match="injected config migration failure"):
         harness.apply(harness.plan_digest())
 
@@ -2252,17 +2278,13 @@ def test_failed_upgrade_rolls_back_units_and_retains_the_recorded_marker(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     upgrade_digest = harness.plan_digest()
 
-    original_commit = setup._commit_setup_marker
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected marker interruption")
-        ),
-    )
+    original_commit = upgrade_state._commit_setup_marker
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected marker interruption")
+    ))
     with pytest.raises(ServerSetupError, match="injected marker interruption"):
         harness.apply(upgrade_digest)
 
@@ -2270,7 +2292,7 @@ def test_failed_upgrade_rolls_back_units_and_retains_the_recorded_marker(
     assert harness.marker() == before_marker
     assert not harness.journal_path.exists()
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
     recovered = harness.apply(upgrade_digest)
     assert {"id": "package_upgrade", "status": "validated_pre_upgrade_realized_state"} in recovered["steps"]
     assert harness.marker()["package_version"] == "0.1.31"
@@ -2285,19 +2307,15 @@ def test_upgrade_interrupted_without_rollback_resumes_from_the_journal(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     upgrade_digest = harness.plan_digest()
 
-    original_commit = setup._commit_setup_marker
+    original_commit = upgrade_state._commit_setup_marker
     # A hard kill leaves the journal and the new units behind: no rollback runs.
-    monkeypatch.setattr(setup, "_rollback_pending_upgrade", lambda _pending: None)
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected power loss")
-        ),
-    )
+    monkeypatch.setattr(upgrade_recovery, "_rollback_pending_upgrade", lambda _pending: None)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected power loss")
+    ))
     with pytest.raises(ServerSetupError, match="injected power loss"):
         harness.apply(upgrade_digest)
     assert harness.journal_path.exists()
@@ -2308,7 +2326,7 @@ def test_upgrade_interrupted_without_rollback_resumes_from_the_journal(
     assert journal["to_request_digest"] == upgrade_digest
     assert stat.S_IMODE(harness.journal_path.stat().st_mode) == 0o600
 
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit)
     resumed = harness.apply(upgrade_digest)
     assert {"id": "package_upgrade", "status": "resumed_journaled_upgrade"} in resumed["steps"]
     assert harness.marker()["package_version"] == "0.1.31"
@@ -2324,14 +2342,14 @@ def test_upgrade_committed_before_journal_clear_recovers_exactly(
     before_marker = harness.marker()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     upgrade_digest = harness.plan_digest()
-    original_clear = setup._clear_upgrade_journal
+    original_clear = upgrade_state._clear_upgrade_journal
 
     def simulate_power_loss_after_marker_commit(_path: Path) -> None:
         raise SystemExit("injected power loss after marker commit")
 
-    monkeypatch.setattr(setup, "_clear_upgrade_journal", simulate_power_loss_after_marker_commit)
+    monkeypatch.setattr(upgrade_state, "_clear_upgrade_journal", simulate_power_loss_after_marker_commit)
     with pytest.raises(SystemExit, match="after marker commit"):
         harness.apply(upgrade_digest)
 
@@ -2341,7 +2359,7 @@ def test_upgrade_committed_before_journal_clear_recovers_exactly(
     assert committed_marker["revision"] == before_marker["revision"] + 1
     assert harness.journal_path.exists()
 
-    monkeypatch.setattr(setup, "_clear_upgrade_journal", original_clear)
+    monkeypatch.setattr(upgrade_state, "_clear_upgrade_journal", original_clear)
     recovered = harness.apply(upgrade_digest)
     assert {"id": "package_upgrade", "status": "cleared_committed_upgrade"} in recovered[
         "steps"
@@ -2356,7 +2374,7 @@ def test_unrelated_journal_fails_closed_before_any_managed_write(
 ) -> None:
     harness, first_digest = _realized_0130_deployment(tmp_path, monkeypatch)
     before_units = harness.unit_payloads()
-    setup._write_upgrade_journal(
+    upgrade_state._write_upgrade_journal(
         harness.journal_path,
         {
             "schema": "agentnet.server-setup.upgrade-journal.v1",
@@ -2374,7 +2392,7 @@ def test_unrelated_journal_fails_closed_before_any_managed_write(
         gid=os.getegid(),
     )
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
     assert exc_info.value.blocker == "setup_upgrade_conflict"
@@ -2488,7 +2506,7 @@ def test_request_semantic_drift_is_rejected_before_any_managed_write(
     _private_json(request_path, request_document)
     harness.request = load_server_setup_request(request_path)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     digest = harness.plan_digest()
 
     with pytest.raises(ServerSetupError):
@@ -2509,7 +2527,7 @@ def test_upgrade_refuses_a_realized_state_changed_outside_setup(
     tampered = core_unit.read_bytes()
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
     assert exc_info.value.blocker == "setup_upgrade_conflict"
@@ -2537,7 +2555,7 @@ def test_v0145_upgrade_preserves_enrollment_and_creates_restart_postcondition(
     before = _lifecycle_source_bytes(harness)
     product_calls = list(harness.product_calls)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    _set_setup_version(monkeypatch, "0.1.45")
 
     result = harness.apply(harness.plan_digest())
 
@@ -2592,10 +2610,10 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
     harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
     before = _lifecycle_source_bytes(harness)
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    _set_setup_version(monkeypatch, "0.1.45")
     if start:
         monkeypatch.setattr(
-            setup,
+            activation,
             "_validated_managed_identity_profile",
             lambda *_args, **_kwargs: {
                 "actor": {
@@ -2605,7 +2623,7 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
             },
         )
     if checkpoint == "after_units":
-        original_write_unit = setup._write_managed_unit
+        original_write_unit = upgrade._write_managed_unit
         written = 0
 
         def fail_after_units(*args: object, **kwargs: object) -> str:
@@ -2616,9 +2634,9 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
                 raise ServerSetupError("injected_failure", "after units")
             return status
 
-        monkeypatch.setattr(setup, "_write_managed_unit", fail_after_units)
+        monkeypatch.setattr(upgrade, "_write_managed_unit", fail_after_units)
     elif checkpoint == "after_migration":
-        original_database_operation = setup._run_v0145_database_operation_as
+        original_database_operation = upgrade._run_v0145_database_operation_as
 
         def fail_after_migration(*args: object, **kwargs: object) -> dict[str, object]:
             evidence = original_database_operation(*args, **kwargs)
@@ -2627,12 +2645,12 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
             return evidence
 
         monkeypatch.setattr(
-            setup,
+            upgrade,
             "_run_v0145_database_operation_as",
             fail_after_migration,
         )
     else:
-        original_systemctl = setup._run_systemctl
+        original_systemctl = setup_systemd._run_systemctl
 
         def fail_after_core_restart(
             executable: Path,
@@ -2648,7 +2666,7 @@ def test_v0145_upgrade_injected_failures_restore_exact_journaled_state(
             if arguments == ["restart", setup.CORE_UNIT]:
                 raise RuntimeError("injected after Core restart")
 
-        monkeypatch.setattr(setup, "_run_systemctl", fail_after_core_restart)
+        monkeypatch.setattr(setup_systemd, "_run_systemctl", fail_after_core_restart)
 
     expected_error = RuntimeError if checkpoint == "after_core_restart" else ServerSetupError
     with pytest.raises(expected_error) as exc_info:
@@ -2679,9 +2697,9 @@ def test_v0145_upgrade_denies_rollback_after_concurrent_database_change(
     harness = _realized_0144_lifecycle_source(tmp_path, monkeypatch)
     before_marker = harness.marker_path.read_bytes()
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    _set_setup_version(monkeypatch, "0.1.45")
 
-    original_database_operation = setup._run_v0145_database_operation_as
+    original_database_operation = upgrade._run_v0145_database_operation_as
 
     def mutate_then_fail(*args: object, **kwargs: object) -> dict[str, object]:
         evidence = original_database_operation(*args, **kwargs)
@@ -2694,7 +2712,7 @@ def test_v0145_upgrade_denies_rollback_after_concurrent_database_change(
         return evidence
 
     monkeypatch.setattr(
-        setup,
+        upgrade,
         "_run_v0145_database_operation_as",
         mutate_then_fail,
     )
@@ -2728,7 +2746,7 @@ def test_v0145_upgrade_rejects_wrong_exact_version_window(
         json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     )
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", target_version)
+    _set_setup_version(monkeypatch, target_version)
 
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
@@ -2746,7 +2764,7 @@ def test_v0145_upgrade_rejects_non_v6_source_schema(
     assert isinstance(source, dict)
     source["schema_version"] = 5
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.45")
+    _set_setup_version(monkeypatch, "0.1.45")
 
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
@@ -2762,12 +2780,12 @@ def test_unsupported_source_version_still_blocks_the_upgrade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness = _harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(setup, "__version__", "0.1.29")
+    _set_setup_version(monkeypatch, "0.1.29")
     harness.apply(harness.plan_digest())
     assert harness.marker()["package_version"] == "0.1.29"
 
     harness.install_new_package_runtime()
-    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    _set_setup_version(monkeypatch, "0.1.31")
     with pytest.raises(ServerSetupError) as exc_info:
         harness.apply(harness.plan_digest())
     assert exc_info.value.blocker == "setup_marker_conflict"
@@ -2791,8 +2809,8 @@ def test_bootstrap_reconciles_one_lost_response_and_requires_fresh_evidence(
             raise ServerSetupError("invalid_product_evidence", "structured evidence stream was lost")
         return evidence
 
-    monkeypatch.setattr(setup, "_run_as", response_lost)
-    result, status = setup._run_bootstrap_idempotently(
+    monkeypatch.setattr(upgrade, "_run_as", response_lost)
+    result, status = upgrade._run_bootstrap_idempotently(
         SimpleNamespace(),
         ["/opt/agentnet/bin/node", "/opt/agentnet/npm/bin/agentnet.mjs", "bootstrap-server-agent"],
         environment={},
@@ -2812,9 +2830,9 @@ def test_bootstrap_retries_at_most_once_and_never_retries_a_refusal(
         calls.append(1)
         raise ServerSetupError("product_command_failed", "core_bootstrap timed out")
 
-    monkeypatch.setattr(setup, "_run_as", always_lost)
+    monkeypatch.setattr(upgrade, "_run_as", always_lost)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._run_bootstrap_idempotently(
+        upgrade._run_bootstrap_idempotently(
             SimpleNamespace(),
             ["/opt/node", "/opt/agentnet.mjs", "bootstrap-server-agent"],
             environment={},
@@ -2829,9 +2847,9 @@ def test_bootstrap_retries_at_most_once_and_never_retries_a_refusal(
         refusals.append(1)
         raise ServerSetupError("core_conflict", "core state conflicts with fixed request")
 
-    monkeypatch.setattr(setup, "_run_as", refused)
+    monkeypatch.setattr(upgrade, "_run_as", refused)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._run_bootstrap_idempotently(
+        upgrade._run_bootstrap_idempotently(
             SimpleNamespace(),
             ["/opt/node", "/opt/agentnet.mjs", "bootstrap-server-agent"],
             environment={},
@@ -2858,7 +2876,7 @@ def test_bootstrap_evidence_must_prove_exact_healthy_durable_state(
     evidence = _bootstrap_evidence("corp.example")
     evidence.update(mutation)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._require_core_bootstrap_evidence(evidence, expected_domain_id="corp.example")
+        upgrade._require_core_bootstrap_evidence(evidence, expected_domain_id="corp.example")
     assert exc_info.value.blocker == "core_bootstrap_evidence"
 
 
@@ -2870,7 +2888,7 @@ def test_bootstrap_response_loss_is_reconciled_inside_apply(
     digest = harness.plan_digest()
     harness.apply(digest)
 
-    original_run_as = setup._run_as
+    original_run_as = upgrade._run_as
     attempts: list[list[str]] = []
 
     def lose_bootstrap_response(account, argv, **kwargs):
@@ -2880,7 +2898,7 @@ def test_bootstrap_response_loss_is_reconciled_inside_apply(
                 raise ServerSetupError("invalid_product_evidence", "core_bootstrap returned invalid evidence")
         return original_run_as(account, argv, **kwargs)
 
-    monkeypatch.setattr(setup, "_run_as", lose_bootstrap_response)
+    monkeypatch.setattr(upgrade, "_run_as", lose_bootstrap_response)
     reconciled = harness.apply(digest)
     assert {"id": "core_bootstrap", "status": "reconciled_after_response_loss"} in reconciled["steps"]
     assert len(attempts) == 2
@@ -2932,13 +2950,13 @@ def _validate_live(
         "--port",
         str(setup.CORE_PORT),
     )
-    monkeypatch.setattr(setup, "_systemd_show", lambda *_args, **_kwargs: properties)
+    monkeypatch.setattr(setup_systemd, "_systemd_show", lambda *_args, **_kwargs: properties)
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_read_live_process_identity",
         lambda _pid: (live_executable, expected_argv if live_argv is None else live_argv),
     )
-    setup._validate_systemd_service_runtime(
+    setup_systemd._validate_systemd_service_runtime(
         Path("/usr/bin/systemctl"),
         unit=setup.CORE_UNIT,
         user=setup.CORE_USER,
@@ -3044,9 +3062,9 @@ def test_lost_systemctl_response_succeeds_only_on_verified_live_evidence(
         if arguments[0] == "enable":
             raise ServerSetupError("systemd_start", failure_message)
 
-    monkeypatch.setattr(setup, "_run_systemctl", failing_enable)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", failing_enable)
     reconciled: list[int] = []
-    assert setup._run_systemctl_sequence_or_reconcile(
+    assert setup_systemd._run_systemctl_sequence_or_reconcile(
         Path("/usr/bin/systemctl"),
         (["daemon-reload"], ["enable", "--now", setup.APPROVAL_UNIT], ["restart", setup.CORE_UNIT]),
         reconcile=lambda: reconciled.append(1),
@@ -3073,9 +3091,9 @@ def test_failed_enable_with_running_but_disabled_unit_cannot_reconcile(
     ) -> None:
         raise ServerSetupError("systemd_start", failure_message)
 
-    monkeypatch.setattr(setup, "_run_systemctl", failing_enable)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", failing_enable)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._run_systemctl_sequence_or_reconcile(
+        setup_systemd._run_systemctl_sequence_or_reconcile(
             Path("/usr/bin/systemctl"),
             (["enable", "--now", setup.CORE_UNIT],),
             reconcile=lambda: _validate_live(
@@ -3100,9 +3118,9 @@ def test_lost_systemctl_response_fails_closed_when_live_state_is_unhealthy(
     def unhealthy() -> None:
         raise ServerSetupError("service_runtime", "unit is not running the approved runtime")
 
-    monkeypatch.setattr(setup, "_run_systemctl", failing)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", failing)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._run_systemctl_sequence_or_reconcile(
+        setup_systemd._run_systemctl_sequence_or_reconcile(
             Path("/usr/bin/systemctl"),
             (["daemon-reload"],),
             reconcile=unhealthy,
@@ -3114,12 +3132,12 @@ def test_lost_systemctl_response_fails_closed_when_live_state_is_unhealthy(
 def test_healthy_sequence_reports_completed_without_reconciliation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(setup, "_run_systemctl", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(setup_systemd, "_run_systemctl", lambda *_args, **_kwargs: None)
 
     def unexpected() -> None:
         raise AssertionError("a healthy sequence must not reconcile")
 
-    assert setup._run_systemctl_sequence_or_reconcile(
+    assert setup_systemd._run_systemctl_sequence_or_reconcile(
         Path("/usr/bin/systemctl"),
         (["daemon-reload"], ["restart", setup.CORE_UNIT]),
         reconcile=unexpected,
@@ -3136,31 +3154,31 @@ def test_systemd_show_parses_only_requested_properties(monkeypatch: pytest.Monke
             stdout=b"LoadState=loaded\nUnrequested=leaked\nMainPID=17\nmalformed-line\n",
         )
 
-    monkeypatch.setattr(setup.subprocess, "run", fake_run)
-    assert setup._systemd_show(Path("/usr/bin/systemctl"), setup.CORE_UNIT) == {
+    monkeypatch.setattr(setup_systemd.subprocess, "run", fake_run)
+    assert setup_systemd._systemd_show(Path("/usr/bin/systemctl"), setup.CORE_UNIT) == {
         "LoadState": "loaded",
         "MainPID": "17",
     }
     assert observed[0][:3] == ["/usr/bin/systemctl", "show", setup.CORE_UNIT]
 
     monkeypatch.setattr(
-        setup.subprocess,
+        setup_systemd.subprocess,
         "run",
         lambda argv, **_kwargs: SimpleNamespace(returncode=1, stdout=b""),
     )
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._systemd_show(Path("/usr/bin/systemctl"), setup.CORE_UNIT)
+        setup_systemd._systemd_show(Path("/usr/bin/systemctl"), setup.CORE_UNIT)
     assert exc_info.value.blocker == "service_runtime"
 
 
 def test_live_process_identity_is_read_from_the_real_running_process() -> None:
-    executable, argv = setup._read_live_process_identity(os.getpid())
+    executable, argv = setup_systemd._read_live_process_identity(os.getpid())
     assert executable.is_absolute()
     assert argv and all(isinstance(item, str) for item in argv)
     assert "" not in argv
 
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._read_live_process_identity(-1)
+        setup_systemd._read_live_process_identity(-1)
     assert exc_info.value.blocker == "service_runtime"
 
 
@@ -3197,7 +3215,9 @@ def test_launcher_and_python_agree_on_the_managed_sandbox_hidden_roots() -> None
     )
     assert completed.returncode == 0, completed.stderr
     evidence = json.loads(completed.stdout)
-    assert evidence["roots"] == [str(path) for path in setup._PROTECTED_SERVICE_PATHS]
+    assert evidence["roots"] == [
+        str(path) for path in setup_preflight._PROTECTED_SERVICE_PATHS
+    ]
     assert evidence["hidden"] == [False] * len(evidence["roots"])
     assert evidence["visible"] is True
     assert evidence["prefixSafe"] is True

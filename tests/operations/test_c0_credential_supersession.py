@@ -257,7 +257,7 @@ def test_server_setup_postgres_audit_evidence_validates_chain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import psycopg
-    from agentnet.operations import server_setup
+    from agentnet.operations.server_setup import database as server_setup
 
     provisional = _append(audit_record_hash="0" * 64)
     record_json = _audit_row(provisional)["record_json"]

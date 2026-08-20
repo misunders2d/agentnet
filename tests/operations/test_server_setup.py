@@ -16,6 +16,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import agentnet.operations.server_setup.apply as setup_apply
+import agentnet.operations.server_setup.activation as activation
+import agentnet.operations.server_setup.database as setup_database
+import agentnet.operations.server_setup.upgrade as upgrade
+import agentnet.operations.server_setup.upgrade_state as upgrade_state
+import agentnet.operations.server_setup.provisioning as provisioning
 
 from agentnet.artifacts.clamav import (
     ScannerEndpoint,
@@ -37,6 +43,9 @@ from agentnet.cli import (
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 from agentnet.storage.postgres import ORDINARY_SERVER_POSTGRES_DSN
+import agentnet.operations.server_setup.custody as setup_custody
+import agentnet.operations.server_setup.systemd as setup_systemd
+import agentnet.operations.server_setup.preflight as setup_preflight
 from agentnet.operations.server_setup import (
     APPROVAL_UNIT,
     CORE_UNIT,
@@ -63,52 +72,34 @@ def _stable_synthetic_runtime_hashes(
 
     for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(
-        setup,
-        "_sha256_stable_file",
-        lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest(),
-    )
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_file", lambda path, **_kwargs: hashlib.sha256(str(path).encode()).hexdigest())
     if request.node.name != "test_host_tool_resolution_uses_fixed_system_path":
-        monkeypatch.setattr(
-            setup,
-            "_resolve_host_tool",
-            lambda name: Path(f"/usr/bin/{name}"),
-        )
+        monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
     if request.node.name not in {
         "test_launcher_preflight_digest_matches_python_plan",
         "test_package_tree_digest_rejects_symlinks_and_changes_with_content",
     }:
-        monkeypatch.setattr(
-            setup,
-            "_sha256_stable_tree",
-            lambda path: hashlib.sha256(f"tree:{path}".encode()).hexdigest(),
-        )
+        monkeypatch.setattr(setup_preflight, "_sha256_stable_tree", lambda path: hashlib.sha256(f"tree:{path}".encode()).hexdigest())
     if request.node.name.startswith("test_scanner_setup_"):
-        monkeypatch.setattr(
-            setup,
-            "_resolve_node_executable",
-            lambda: Path("/opt/agentnet-test/bin/node"),
-        )
-        monkeypatch.setattr(
-            setup,
-            "_resolve_uv_executable",
-            lambda: Path("/opt/agentnet-test/bin/uv"),
-        )
-        monkeypatch.setattr(
-            setup,
-            "_resolve_executable",
-            lambda *_args, **_kwargs: Path(
-                "/opt/agentnet-test/npm/bin/agentnet.mjs"
-            ),
-        )
+        monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/opt/agentnet-test/bin/node"))
+        monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/opt/agentnet-test/bin/uv"))
+        monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path(
+            "/opt/agentnet-test/npm/bin/agentnet.mjs"
+        ))
     else:
+        ready_scanner = lambda spec: {
+            "scanner_id": spec.scanner_id,
+            "status": "ready",
+        }
         monkeypatch.setattr(
-            setup,
+            setup_preflight,
             "_require_scanner_readiness",
-            lambda spec: {
-                "scanner_id": spec.scanner_id,
-                "status": "ready",
-            },
+            ready_scanner,
+        )
+        monkeypatch.setattr(
+            provisioning,
+            "_require_scanner_readiness",
+            ready_scanner,
         )
 
 
@@ -405,15 +396,11 @@ def test_scanner_setup_requires_live_signed_readiness(
                 signed_fields=lambda: {},
             )
 
-    monkeypatch.setattr(setup, "verify_signature", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(setup, "ClamAVScanner", ReadyScanner)
+    monkeypatch.setattr(setup_preflight, "verify_signature", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(setup_preflight, "ClamAVScanner", ReadyScanner)
     assert setup._require_scanner_readiness(spec)["status"] == "ready"
 
-    monkeypatch.setattr(
-        setup,
-        "ClamAVScanner",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("down")),
-    )
+    monkeypatch.setattr(setup_preflight, "ClamAVScanner", lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("down")))
     with pytest.raises(ServerSetupError) as exc_info:
         setup._require_scanner_readiness(spec)
     assert exc_info.value.blocker == "scanner_unready"
@@ -715,20 +702,12 @@ def test_launcher_preflight_digest_matches_python_plan(
     (package_root / "src/agentnet").mkdir(parents=True)
     (package_root / "src/agentnet/runtime.py").write_text("RUNTIME = 'fixed'\n", encoding="utf-8")
     executable = executable.resolve()
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(
-        setup,
-        "_resolve_host_tool",
-        lambda name: {"systemctl": systemctl, "useradd": useradd}[name],
-    )
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: node)
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: uv)
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: executable)
-    monkeypatch.setattr(
-        setup,
-        "_sha256_stable_file",
-        lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
-    )
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: {"systemctl": systemctl, "useradd": useradd}[name])
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: node)
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: uv)
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: executable)
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_file", lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest())
     module = (Path(__file__).parents[2] / "npm/lib/server-setup-preflight.mjs").as_uri()
     # The hermetic fixture tree lives under the test temporary root, so this
     # exercises the digest contract with the sandbox-root rule relaxed; the
@@ -899,8 +878,8 @@ def test_private_input_detects_same_size_in_place_change(
             path.chmod(0o600)
         return payload
 
-    monkeypatch.setattr(setup.os, "fstat", lambda _descriptor: stable_metadata)
-    monkeypatch.setattr(setup.os, "read", mutate_after_read)
+    monkeypatch.setattr(setup_preflight.os, "fstat", lambda _descriptor: stable_metadata)
+    monkeypatch.setattr(setup_preflight.os, "read", mutate_after_read)
     with pytest.raises(ServerSetupError, match="changed while being read"):
         setup._read_private_input(path, label="test input")
 
@@ -985,7 +964,7 @@ def test_account_creation_rejects_preexisting_same_named_group(
     )
 
     with pytest.raises(ServerSetupError, match="group conflicts") as exc_info:
-        setup._account_fact("agentnet-c0", tmp_path)
+        setup_custody._account_fact("agentnet-c0", tmp_path)
     assert exc_info.value.blocker == "identity_conflict"
 
 
@@ -993,10 +972,10 @@ def test_identity_drop_clears_supplementary_groups(monkeypatch: pytest.MonkeyPat
     import agentnet.operations.server_setup as setup
 
     calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(setup.os, "setgroups", lambda value: calls.append(("groups", value)))
-    monkeypatch.setattr(setup.os, "setgid", lambda value: calls.append(("gid", value)))
-    monkeypatch.setattr(setup.os, "setuid", lambda value: calls.append(("uid", value)))
-    setup._drop_identity(SimpleNamespace(pw_uid=1234, pw_gid=5678))()
+    monkeypatch.setattr(setup_custody.os, "setgroups", lambda value: calls.append(("groups", value)))
+    monkeypatch.setattr(setup_custody.os, "setgid", lambda value: calls.append(("gid", value)))
+    monkeypatch.setattr(setup_custody.os, "setuid", lambda value: calls.append(("uid", value)))
+    setup_custody._drop_identity(SimpleNamespace(pw_uid=1234, pw_gid=5678))()
     assert calls == [("groups", []), ("gid", 5678), ("uid", 1234)]
 
 
@@ -1006,12 +985,12 @@ def test_atomic_write_rejects_fifo_and_oversized_conflicts(tmp_path: Path) -> No
     fifo = tmp_path / "managed"
     os.mkfifo(fifo, mode=0o600)
     with pytest.raises(ServerSetupError, match="managed AgentNet path conflicts"):
-        setup._atomic_write(fifo, b"fixed", mode=0o600, uid=os.geteuid(), gid=os.getegid())
+        setup_custody._atomic_write(fifo, b"fixed", mode=0o600, uid=os.geteuid(), gid=os.getegid())
     fifo.unlink()
     fifo.write_bytes(b"x" * 1_048_576)
     fifo.chmod(0o600)
     with pytest.raises(ServerSetupError, match="managed AgentNet path conflicts"):
-        setup._atomic_write(fifo, b"fixed", mode=0o600, uid=os.geteuid(), gid=os.getegid())
+        setup_custody._atomic_write(fifo, b"fixed", mode=0o600, uid=os.geteuid(), gid=os.getegid())
 
 
 def test_private_managed_file_custody_rejects_mode_and_symlink(tmp_path: Path) -> None:
@@ -1021,17 +1000,17 @@ def test_private_managed_file_custody_rejects_mode_and_symlink(tmp_path: Path) -
     target = tmp_path / "managed.json"
     target.write_text("{}", encoding="utf-8")
     target.chmod(0o600)
-    setup._require_private_file(target, account, blocker="test_custody")
+    setup_custody._require_private_file(target, account, blocker="test_custody")
 
     target.chmod(0o644)
     with pytest.raises(ServerSetupError, match="custody conflicts"):
-        setup._require_private_file(target, account, blocker="test_custody")
+        setup_custody._require_private_file(target, account, blocker="test_custody")
 
     target.chmod(0o600)
     linked = tmp_path / "linked.json"
     linked.symlink_to(target)
     with pytest.raises(ServerSetupError, match="custody conflicts"):
-        setup._require_private_file(linked, account, blocker="test_custody")
+        setup_custody._require_private_file(linked, account, blocker="test_custody")
 
 
 def test_terminal_replacement_requires_and_reports_exact_supersession_journal(
@@ -1101,7 +1080,7 @@ def test_terminal_replacement_requires_and_reports_exact_supersession_journal(
             "credential_epoch": 2,
         }
 
-    monkeypatch.setattr(setup, "_run_supersession_audit_as", verify_audit)
+    monkeypatch.setattr(setup_database, "_run_supersession_audit_as", verify_audit)
 
     marker, evidence = setup._validated_c0_terminal_marker(
         terminal_path,
@@ -1140,7 +1119,7 @@ def test_terminal_replacement_requires_and_reports_exact_supersession_journal(
             "credential supersession audit could not be proven exact",
         )
 
-    monkeypatch.setattr(setup, "_run_supersession_audit_as", reject_audit)
+    monkeypatch.setattr(setup_database, "_run_supersession_audit_as", reject_audit)
     with pytest.raises(ServerSetupError, match="audit could not be proven exact"):
         setup._validated_c0_terminal_marker(
             terminal_path,
@@ -1201,18 +1180,18 @@ def test_private_tree_custody_rejects_symlinks_and_nonregular_entries(tmp_path: 
     private_file = nested / "fixed.json"
     private_file.write_text("{}", encoding="utf-8")
     private_file.chmod(0o600)
-    setup._require_private_tree(root, account, blocker="test_custody")
+    setup_custody._require_private_tree(root, account, blocker="test_custody")
 
     linked = nested / "linked"
     linked.symlink_to(private_file)
     with pytest.raises(ServerSetupError, match="unsupported entry"):
-        setup._require_private_tree(root, account, blocker="test_custody")
+        setup_custody._require_private_tree(root, account, blocker="test_custody")
     linked.unlink()
 
     fifo = nested / "fifo"
     os.mkfifo(fifo, mode=0o600)
     with pytest.raises(ServerSetupError, match="unsupported entry"):
-        setup._require_private_tree(root, account, blocker="test_custody")
+        setup_custody._require_private_tree(root, account, blocker="test_custody")
 
 
 def test_private_managed_read_detects_same_size_change(
@@ -1254,10 +1233,10 @@ def test_private_managed_read_detects_same_size_change(
             path.chmod(0o600)
         return payload
 
-    monkeypatch.setattr(setup.os, "fstat", lambda _descriptor: stable_metadata)
-    monkeypatch.setattr(setup.os, "read", mutate_after_read)
+    monkeypatch.setattr(setup_custody.os, "fstat", lambda _descriptor: stable_metadata)
+    monkeypatch.setattr(setup_custody.os, "read", mutate_after_read)
     with pytest.raises(ServerSetupError, match="changed while being read"):
-        setup._read_private_managed_file(
+        setup_custody._read_private_managed_file(
             path,
             account,
             blocker="test_custody",
@@ -1346,7 +1325,7 @@ def test_non_root_owned_launcher_is_rejected_deterministically(
             st_mode=(stat.S_IFREG | 0o755) if self == launcher else (stat.S_IFDIR | 0o755),
         ),
     )
-    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
+    monkeypatch.setattr(setup_preflight.os, "access", lambda *_args: True)
     with pytest.raises(ServerSetupError, match="ownership is unsafe") as exc_info:
         setup._require_root_owned_executable(launcher, label="agentnet")
     assert exc_info.value.blocker == "unsafe_executable"
@@ -1382,8 +1361,8 @@ def test_runtime_selection_is_package_owned_and_never_uses_ambient_path(
     def unexpected_which(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("hermetic runtime selection must not search PATH")
 
-    monkeypatch.setattr(setup.shutil, "which", unexpected_which)
-    monkeypatch.setattr(setup, "_require_root_owned_executable", lambda value, **_kwargs: value)
+    monkeypatch.setattr(setup_preflight.shutil, "which", unexpected_which)
+    monkeypatch.setattr(setup_preflight, "_require_root_owned_executable", lambda value, **_kwargs: value)
     monkeypatch.delenv(variable, raising=False)
     with pytest.raises(ServerSetupError) as missing:
         getattr(setup, resolver)()
@@ -1398,11 +1377,7 @@ def test_runtime_selection_is_package_owned_and_never_uses_ambient_path(
     monkeypatch.setenv(variable, "/opt/agentnet-runtime/bin/runtime")
     assert getattr(setup, resolver)() == Path("/opt/agentnet-runtime/bin/runtime")
 
-    monkeypatch.setattr(
-        setup,
-        "_require_root_owned_executable",
-        lambda value, **_kwargs: Path("/opt/other/runtime"),
-    )
+    monkeypatch.setattr(setup_preflight, "_require_root_owned_executable", lambda value, **_kwargs: Path("/opt/other/runtime"))
     with pytest.raises(ServerSetupError) as linked:
         getattr(setup, resolver)()
     assert linked.value.blocker == "unsafe_executable"
@@ -1425,7 +1400,7 @@ def test_root_owned_nontraversable_launcher_is_rejected_deterministically(
             st_mode=(stat.S_IFREG | 0o755) if self == target else (stat.S_IFDIR | 0o700),
         ),
     )
-    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
+    monkeypatch.setattr(setup_preflight.os, "access", lambda *_args: True)
 
     with pytest.raises(ServerSetupError, match="dedicated service identities") as exc_info:
         setup._require_root_owned_executable(target, label="agentnet")
@@ -1449,7 +1424,7 @@ def test_executable_lineage_accepts_traversable_nonwritable_directories(
             st_mode=(stat.S_IFREG | 0o755) if self == target else (stat.S_IFDIR | 0o711),
         ),
     )
-    monkeypatch.setattr(setup.os, "access", lambda *_args: True)
+    monkeypatch.setattr(setup_preflight.os, "access", lambda *_args: True)
 
     assert setup._require_root_owned_executable(target, label="Node.js") == target
 
@@ -1576,7 +1551,7 @@ def test_unit_overrides_are_rejected(tmp_path: Path) -> None:
     override = layout.host(Path(f"/run/systemd/system.control/{CORE_UNIT}.d"))
     override.mkdir(parents=True)
     with pytest.raises(ServerSetupError, match="unsupported overrides"):
-        setup._require_no_unit_overrides(layout, CORE_UNIT)
+        setup_systemd._require_no_unit_overrides(layout, CORE_UNIT)
 
 
 def test_rendered_units_are_fixed_loopback_hardened_and_secret_free(tmp_path: Path) -> None:
@@ -1651,7 +1626,7 @@ def test_plan_rejects_tls_environment_before_runtime_resolution(
     def unexpected_runtime() -> setup.SetupRuntime:
         raise AssertionError("runtime resolution must not precede TLS environment rejection")
 
-    monkeypatch.setattr(setup, "_resolve_setup_runtime", unexpected_runtime)
+    monkeypatch.setattr(setup_preflight, "_resolve_setup_runtime", unexpected_runtime)
     with pytest.raises(ServerSetupError, match="TLS environment is unsupported") as exc_info:
         plan_server_setup(request)
     assert exc_info.value.blocker == "approval_broker_auth"
@@ -1667,10 +1642,10 @@ def test_plan_is_read_only_and_emits_redacted_fixed_steps(
     request = load_server_setup_request(_request(tmp_path))
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_account_fact", lambda name, home: "create")
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda name, home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     report = plan_server_setup(request)
     assert report["schema"] == "agentnet.server-setup.evidence.v1"
     assert report["status"] == "planned"
@@ -1729,10 +1704,10 @@ def test_request_digest_binds_absolute_references_and_input_content(
         (second_root / name).chmod(0o600)
     first = load_server_setup_request(first_path)
     second = load_server_setup_request(second_path)
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     first_digest = plan_server_setup(first)["request_digest"]
     second_digest = plan_server_setup(second)["request_digest"]
     assert first_digest != second_digest
@@ -1761,11 +1736,11 @@ def test_request_digest_binds_runtime_content_and_locked_apply_rechecks_it(
     request = load_server_setup_request(_request(tmp_path))
     layout = SetupLayout(tmp_path / "host")
     layout.root.mkdir()
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
     tree_calls = 0
 
     def changing_tree_hash(path: Path) -> str:
@@ -1774,7 +1749,7 @@ def test_request_digest_binds_runtime_content_and_locked_apply_rechecks_it(
         generation = "approved" if tree_calls <= 2 else "changed"
         return hashlib.sha256(f"{path}:{generation}".encode()).hexdigest()
 
-    monkeypatch.setattr(setup, "_sha256_stable_tree", changing_tree_hash)
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_tree", changing_tree_hash)
     approved = str(plan_server_setup(request, layout=layout)["request_digest"])
     monkeypatch.setattr(
         setup,
@@ -1813,15 +1788,11 @@ def test_request_digest_binds_privileged_host_tool_content(
     }
     for name, path in tools.items():
         path.write_bytes(f"{name}-v1".encode("ascii"))
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: tools["node"])
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: tools["uv"])
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: tools["agentnet"])
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: tools[name])
-    monkeypatch.setattr(
-        setup,
-        "_sha256_stable_file",
-        lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest(),
-    )
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: tools["node"])
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: tools["uv"])
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: tools["agentnet"])
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: tools[name])
+    monkeypatch.setattr(setup_preflight, "_sha256_stable_file", lambda path, **_kwargs: hashlib.sha256(path.read_bytes()).hexdigest())
 
     approved = plan_server_setup(request)["request_digest"]
     tools["systemctl"].write_bytes(b"systemctl-v2")
@@ -1862,9 +1833,9 @@ def test_plan_rejects_noncanonical_core_oidc_before_mutation(
     _private_json(oidc_path, oidc)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="OIDC setup input is invalid"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -1881,9 +1852,9 @@ def test_plan_rejects_interpreter_control_as_oidc_secret_reference(
     _private_json(oidc_path, oidc)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="secret environment reference is unsafe"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -1911,9 +1882,9 @@ def test_plan_rejects_credential_reference_reuse(
     _private_json(owner_path, owner)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="require distinct environment references"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2135,7 +2106,7 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
             self.payload = payload
 
         def open(self, request: object, *, timeout: int):
-            assert isinstance(request, setup.urllib.request.Request)
+            assert isinstance(request, activation.urllib.request.Request)
             assert request.get_method() == "GET"
             headers = {name.lower(): value for name, value in request.header_items()}
             assert headers["user-agent"] == f"AgentNet/{setup.__version__}"
@@ -2143,13 +2114,13 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
             assert timeout == 2
             return Response(self.payload)
 
-    monkeypatch.setattr(setup.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(setup.urllib.request, "build_opener", lambda *_args: Opener({"status": "ok"}))
+    monkeypatch.setattr(activation.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(activation.urllib.request, "build_opener", lambda *_args: Opener({"status": "ok"}))
     with pytest.raises(ServerSetupError, match="exact healthy identity evidence"):
         setup._health("https://core.corp.example/healthz", expected={"service": "agentnet-core"}, attempts=1)
 
     monkeypatch.setattr(
-        setup.urllib.request,
+        activation.urllib.request,
         "build_opener",
         lambda *_args: Opener({"service": "agentnet-core", "status": "alive"}),
     )
@@ -2160,7 +2131,7 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
     )
 
     monkeypatch.setattr(
-        setup.urllib.request,
+        activation.urllib.request,
         "build_opener",
         lambda *_args: Opener(
             {
@@ -2197,11 +2168,11 @@ def test_health_requires_exact_agentnet_json_identity(monkeypatch: pytest.Monkey
             assert timeout == 2
             transient_attempts += 1
             if transient_attempts < 50:
-                raise setup.urllib.error.URLError("public route still converging")
+                raise activation.urllib.error.URLError("public route still converging")
             return Response({"service": "agentnet-core", "status": "alive"})
 
-    monkeypatch.setattr(setup.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(setup.urllib.request, "build_opener", lambda *_args: TransientOpener())
+    monkeypatch.setattr(activation.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(activation.urllib.request, "build_opener", lambda *_args: TransientOpener())
     setup._health(
         "https://core.corp.example/healthz",
         expected={"service": "agentnet-core", "status": "alive"},
@@ -2226,9 +2197,9 @@ def test_plan_rejects_database_reference_drift(
     core_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="database reference does not match"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2465,15 +2436,15 @@ def test_apply_blocks_after_identity_before_agentnet_writes_when_postgres_not_re
         pw_uid=os.geteuid(),
         pw_gid=os.getegid(),
     )
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
-    monkeypatch.setattr(setup, "_ensure_account", lambda *_args, **_kwargs: account)
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_apply, "_ensure_account", lambda *_args, **_kwargs: account)
     approved = str(plan_server_setup(request, layout=layout)["request_digest"])
     monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_postgres_peer_gate",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ServerSetupError(
@@ -2483,7 +2454,7 @@ def test_apply_blocks_after_identity_before_agentnet_writes_when_postgres_not_re
         ),
     )
     monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_run_as",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("product mutation reached")),
     )
@@ -2506,9 +2477,7 @@ def test_apply_blocks_after_identity_before_agentnet_writes_when_postgres_not_re
 def test_postgres_probe_runs_under_bounded_child_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import agentnet.operations.server_setup as setup
-
-    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    monkeypatch.setattr(setup_database, "_drop_identity", lambda _account: lambda: None)
     monkeypatch.setenv("PGSERVICE", "untrusted-service")
     monkeypatch.setenv("PGPASSFILE", "/private/credential-path")
     monkeypatch.setenv("UNRELATED_SECRET", "private-value")
@@ -2517,7 +2486,7 @@ def test_postgres_probe_runs_under_bounded_child_evidence(
         pw_gid=os.getegid(),
         pw_dir="/var/lib/agentnet",
     )
-    evidence = setup._run_postgres_probe_as(
+    evidence = setup_database._run_postgres_probe_as(
         account,
         lambda: {
             "ready": True,
@@ -2536,7 +2505,7 @@ def test_postgres_probe_runs_under_bounded_child_evidence(
         "home": "/var/lib/agentnet",
     }
     with pytest.raises(ServerSetupError, match=r"postgres_test failed \(SyntheticFailure\)") as exc_info:
-        setup._run_postgres_probe_as(
+        setup_database._run_postgres_probe_as(
             account,
             lambda: {"ready": False, "reason": "SyntheticFailure"},
             stage="postgres_test",
@@ -2571,20 +2540,20 @@ def test_apply_rejects_managed_child_conflicts_before_product_writes(
         pw_uid=os.geteuid(),
         pw_gid=os.getegid(),
     )
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
-    monkeypatch.setattr(setup, "_ensure_account", lambda *_args, **_kwargs: account)
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_apply, "_ensure_account", lambda *_args, **_kwargs: account)
     monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_postgres_peer_gate",
         lambda *_args, **_kwargs: {"status": "validated_exact_local_peer"},
     )
     product_calls: list[list[str]] = []
     monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_run_as",
         lambda _account, argv, **_kwargs: product_calls.append(argv),
     )
@@ -2628,11 +2597,10 @@ def test_apply_rejects_managed_child_conflicts_before_product_writes(
 def test_postgres_peer_gate_requires_exact_service_and_rule_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import agentnet.operations.server_setup as setup
 
     core_account = SimpleNamespace(pw_name="agentnet", pw_uid=1234, pw_gid=1234)
     postgres_account = SimpleNamespace(pw_name="postgres", pw_uid=1235, pw_gid=1235)
-    monkeypatch.setattr(setup.pwd, "getpwnam", lambda name: postgres_account if name == "postgres" else None)
+    monkeypatch.setattr(setup_database.pwd, "getpwnam", lambda name: postgres_account if name == "postgres" else None)
     stages: list[str] = []
 
     def exact_probe(_account: object, _probe: object, *, stage: str) -> dict[str, object]:
@@ -2651,8 +2619,8 @@ def test_postgres_peer_gate_requires_exact_service_and_rule_evidence(
             "ident_map": "none_exact_name_match",
         }
 
-    monkeypatch.setattr(setup, "_run_postgres_probe_as", exact_probe)
-    evidence = setup._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
+    monkeypatch.setattr(setup_database, "_run_postgres_probe_as", exact_probe)
+    evidence = setup_database._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
     assert evidence["status"] == "validated_exact_local_peer"
     assert stages == ["postgres_service_identity_canary", "postgres_auth_rule_inspection"]
 
@@ -2662,9 +2630,9 @@ def test_postgres_peer_gate_requires_exact_service_and_rule_evidence(
             result["auth_method"] = "trust"
         return result
 
-    monkeypatch.setattr(setup, "_run_postgres_probe_as", wrong_auth)
+    monkeypatch.setattr(setup_database, "_run_postgres_probe_as", wrong_auth)
     with pytest.raises(ServerSetupError, match="does not match the fixed profile"):
-        setup._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
+        setup_database._postgres_peer_gate(core_account, ORDINARY_SERVER_POSTGRES_DSN)
 
 
 def test_plan_rejects_shell_syntax_in_runtime_environment(
@@ -2683,9 +2651,9 @@ def test_plan_rejects_shell_syntax_in_runtime_environment(
     core_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="Core environment input line 2 is invalid"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2701,9 +2669,9 @@ def test_plan_rejects_setup_owned_environment_override(
     core_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="setup-owned variable"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2722,9 +2690,9 @@ def test_plan_rejects_unexpected_interpreter_environment(
     core_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="do not match fixed request references"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2744,9 +2712,9 @@ def test_plan_rejects_mismatched_broker_credentials(
     approval_env.chmod(0o600)
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
     with pytest.raises(ServerSetupError, match="Core and Approval broker credentials do not match"):
         plan_server_setup(load_server_setup_request(request_path))
 
@@ -2774,10 +2742,10 @@ def test_plan_rejects_invalid_broker_credential_before_managed_writes(
         )
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
     managed_root = tmp_path / "managed-host"
     with pytest.raises(ServerSetupError) as exc_info:
         plan_server_setup(
@@ -2801,12 +2769,8 @@ def test_host_tool_resolution_uses_fixed_system_path(
         return f"/usr/bin/{name}"
 
     monkeypatch.setenv("PATH", "/tmp/untrusted")
-    monkeypatch.setattr(setup.shutil, "which", which)
-    monkeypatch.setattr(
-        setup,
-        "_require_root_owned_executable",
-        lambda value, **_kwargs: validated.append(value) or value,
-    )
+    monkeypatch.setattr(setup_preflight.shutil, "which", which)
+    monkeypatch.setattr(setup_preflight, "_require_root_owned_executable", lambda value, **_kwargs: validated.append(value) or value)
     assert setup._resolve_host_tool("systemctl") == Path("/usr/bin/systemctl")
     assert observed == {"systemctl": setup._SYSTEM_PATH}
     assert validated == [Path("/usr/bin/systemctl")]
@@ -2819,11 +2783,7 @@ def test_uv_resolution_uses_exact_configured_path_and_rejects_protected_home(
 
     selected: list[Path] = []
     monkeypatch.setenv("AGENTNET_UV", "/usr/local/lib/agentnet-runtime/uv")
-    monkeypatch.setattr(
-        setup,
-        "_require_root_owned_executable",
-        lambda value, **_kwargs: selected.append(value) or value,
-    )
+    monkeypatch.setattr(setup_preflight, "_require_root_owned_executable", lambda value, **_kwargs: selected.append(value) or value)
     assert setup._resolve_uv_executable() == Path("/usr/local/lib/agentnet-runtime/uv")
     assert selected == [Path("/usr/local/lib/agentnet-runtime/uv")]
     with pytest.raises(ServerSetupError) as exc_info:
@@ -2836,15 +2796,11 @@ def test_run_as_reports_nonzero_stage_without_leaking_stderr(
 ) -> None:
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(
-        setup,
-        "_run_bounded_product_process",
-        lambda *_args, **_kwargs: setup._BoundedCommandResult(
-            returncode=1,
-            stdout=b"",
-            stderr_present=True,
-        ),
-    )
+    monkeypatch.setattr(setup_custody, "_run_bounded_product_process", lambda *_args, **_kwargs: setup._BoundedCommandResult(
+        returncode=1,
+        stdout=b"",
+        stderr_present=True,
+    ))
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
     with pytest.raises(ServerSetupError) as exc_info:
         setup._run_as(
@@ -2872,15 +2828,11 @@ def test_run_as_accepts_only_network_create_not_ready_exit_with_structured_evide
             "deployment_binding": {"ready": False},
         },
     }
-    monkeypatch.setattr(
-        setup,
-        "_run_bounded_product_process",
-        lambda *_args, **_kwargs: setup._BoundedCommandResult(
-            returncode=1,
-            stdout=json.dumps(evidence).encode("utf-8"),
-            stderr_present=False,
-        ),
-    )
+    monkeypatch.setattr(setup_custody, "_run_bounded_product_process", lambda *_args, **_kwargs: setup._BoundedCommandResult(
+        returncode=1,
+        stdout=json.dumps(evidence).encode("utf-8"),
+        stderr_present=False,
+    ))
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
 
     assert setup._run_as(
@@ -2891,15 +2843,11 @@ def test_run_as_accepts_only_network_create_not_ready_exit_with_structured_evide
         accepted_returncodes=frozenset({1}),
     ) == evidence
 
-    monkeypatch.setattr(
-        setup,
-        "_run_bounded_product_process",
-        lambda *_args, **_kwargs: setup._BoundedCommandResult(
-            returncode=0,
-            stdout=json.dumps(evidence).encode("utf-8"),
-            stderr_present=False,
-        ),
-    )
+    monkeypatch.setattr(setup_custody, "_run_bounded_product_process", lambda *_args, **_kwargs: setup._BoundedCommandResult(
+        returncode=0,
+        stdout=json.dumps(evidence).encode("utf-8"),
+        stderr_present=False,
+    ))
     with pytest.raises(ServerSetupError) as exc_info:
         setup._run_as(
             account,
@@ -2923,9 +2871,9 @@ def test_systemctl_commands_are_bounded_and_redacted(
         observed.update(kwargs)
         raise subprocess.TimeoutExpired(cmd="private-systemctl-detail", timeout=30)
 
-    monkeypatch.setattr(setup.subprocess, "run", timeout)
+    monkeypatch.setattr(setup_systemd.subprocess, "run", timeout)
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._run_systemctl(
+        setup_systemd._run_systemctl(
             Path("/usr/bin/systemctl"),
             ["restart", setup.CORE_UNIT],
             failure_message="failed to start AgentNet managed units",
@@ -2935,7 +2883,7 @@ def test_systemctl_commands_are_bounded_and_redacted(
     assert "private-systemctl-detail" not in str(exc_info.value)
     assert observed["timeout"] == 30
     assert observed["env"] == {
-        "PATH": setup._SYSTEM_PATH,
+        "PATH": setup_systemd._SYSTEM_PATH,
         "HOME": "/root",
         "LANG": "C.UTF-8",
     }
@@ -2944,7 +2892,7 @@ def test_systemctl_commands_are_bounded_and_redacted(
 def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> None:
     import agentnet.operations.server_setup as setup
 
-    setup._validate_inactive_auxiliary_unit_state(
+    setup_systemd._validate_inactive_auxiliary_unit_state(
         unit=setup.CREDENTIAL_RENEW_TIMER,
         expected_unit_file_state="disabled",
         properties={
@@ -2955,7 +2903,7 @@ def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> No
     )
 
     with pytest.raises(ServerSetupError, match="fixed state"):
-        setup._validate_inactive_auxiliary_unit_state(
+        setup_systemd._validate_inactive_auxiliary_unit_state(
             unit=setup.CREDENTIAL_RENEW_TIMER,
             expected_unit_file_state="disabled",
             properties={
@@ -2966,7 +2914,7 @@ def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> No
         )
 
     with pytest.raises(ServerSetupError, match="fixed state"):
-        setup._validate_inactive_auxiliary_unit_state(
+        setup_systemd._validate_inactive_auxiliary_unit_state(
             unit=setup.CREDENTIAL_RENEW_UNIT,
             expected_unit_file_state="static",
             properties={
@@ -2979,13 +2927,13 @@ def test_inactive_auxiliary_timer_does_not_require_service_only_main_pid() -> No
 def test_credential_renewal_activation_stops_failed_oneshot_before_timer() -> None:
     import agentnet.operations.server_setup as setup
 
-    assert setup._credential_renewal_activation_commands(c0_responder_required=True) == (
+    assert setup_systemd._credential_renewal_activation_commands(c0_responder_required=True) == (
         ["stop", setup.CREDENTIAL_RENEW_UNIT],
         ["reset-failed", setup.CREDENTIAL_RENEW_UNIT],
         ["enable", "--now", setup.C0_RESPONDER_UNIT],
         ["enable", "--now", setup.CREDENTIAL_RENEW_TIMER],
     )
-    assert setup._credential_renewal_activation_commands(c0_responder_required=False) == (
+    assert setup_systemd._credential_renewal_activation_commands(c0_responder_required=False) == (
         ["stop", setup.CREDENTIAL_RENEW_UNIT],
         ["reset-failed", setup.CREDENTIAL_RENEW_UNIT],
         ["disable", "--now", setup.C0_RESPONDER_UNIT],
@@ -3005,7 +2953,7 @@ def test_credential_renewal_timer_requires_finite_future_schedule(
         "ActiveState": "active",
     }
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validate_active_renewal_timer_state(
+        setup_systemd._validate_active_renewal_timer_state(
             properties,
             next_run_usec=next_run_usec,
             now_usec=1_785_868_800_000_000,
@@ -3021,7 +2969,7 @@ def test_credential_renewal_timer_accepts_only_future_microsecond_epoch() -> Non
         "UnitFileState": "enabled",
         "ActiveState": "active",
     }
-    setup._validate_active_renewal_timer_state(
+    setup_systemd._validate_active_renewal_timer_state(
         properties,
         next_run_usec=1_785_869_100_000_000,
         now_usec=1_785_868_800_000_000,
@@ -3111,11 +3059,7 @@ def test_run_as_reports_bounded_launch_failures(
 ) -> None:
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(
-        setup,
-        "_run_bounded_product_process",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
-    )
+    monkeypatch.setattr(setup_custody, "_run_bounded_product_process", lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
     with pytest.raises(ServerSetupError) as exc_info:
         setup._run_as(
@@ -3163,15 +3107,11 @@ def test_run_as_rejects_invalid_success_evidence(
     import agentnet.operations.server_setup as setup
 
     outputs = iter(("", "[]"))
-    monkeypatch.setattr(
-        setup,
-        "_run_bounded_product_process",
-        lambda *_args, **_kwargs: setup._BoundedCommandResult(
-            returncode=0,
-            stdout=next(outputs).encode("utf-8"),
-            stderr_present=False,
-        ),
-    )
+    monkeypatch.setattr(setup_custody, "_run_bounded_product_process", lambda *_args, **_kwargs: setup._BoundedCommandResult(
+        returncode=0,
+        stdout=next(outputs).encode("utf-8"),
+        stderr_present=False,
+    ))
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
     for expected in ("invalid structured evidence", "invalid structured evidence"):
         with pytest.raises(ServerSetupError, match=expected) as exc_info:
@@ -3199,7 +3139,7 @@ def test_run_as_kills_real_product_process_on_evidence_overflow(
 ) -> None:
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    monkeypatch.setattr(setup_custody, "_drop_identity", lambda _account: lambda: None)
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
     script = (
         "import sys; target=getattr(sys," + repr(stream) + ").buffer; "
@@ -3221,7 +3161,7 @@ def test_bounded_product_process_rejects_inherited_pipe_eof_stall(
 ) -> None:
     import agentnet.operations.server_setup as setup
 
-    monkeypatch.setattr(setup, "_drop_identity", lambda _account: lambda: None)
+    monkeypatch.setattr(setup_custody, "_drop_identity", lambda _account: lambda: None)
     account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
     script = (
         "import subprocess,sys; "
@@ -3287,7 +3227,7 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
     legacy_payload = json.dumps(legacy, sort_keys=True).encode() + b"\n"
     marker_path.write_bytes(legacy_payload)
     marker_path.chmod(0o600)
-    existing = setup._validated_setup_marker(
+    existing = upgrade_state._validated_setup_marker(
         legacy_payload,
         request_digest="4" * 64,
         legacy_request_digest="1" * 64,
@@ -3296,7 +3236,7 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
         unit: f"{unit}\n".encode()
         for unit in setup.MANAGED_UNITS
     }
-    status = setup._commit_setup_marker(
+    status = upgrade_state._commit_setup_marker(
         marker_path,
         existing_payload=legacy_payload,
         existing_marker=existing,
@@ -3309,7 +3249,7 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
     )
     assert status == "updated_same_request"
     v2_payload = marker_path.read_bytes()
-    v2 = setup._validated_setup_marker(
+    v2 = upgrade_state._validated_setup_marker(
         v2_payload,
         request_digest="4" * 64,
         legacy_request_digest="1" * 64,
@@ -3318,7 +3258,7 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
     assert v2["schema"] == "agentnet.server-setup.marker.v2"
     assert v2["revision"] == 1
     assert v2["previous_marker_digest"] == hashlib.sha256(legacy_payload).hexdigest()
-    assert setup._commit_setup_marker(
+    assert upgrade_state._commit_setup_marker(
         marker_path,
         existing_payload=v2_payload,
         existing_marker=v2,
@@ -3330,12 +3270,12 @@ def test_setup_marker_migrates_and_revisions_same_request_state(
         gid=os.getegid(),
     ) == "already_satisfied"
     latest_payload = marker_path.read_bytes()
-    latest = setup._validated_setup_marker(
+    latest = upgrade_state._validated_setup_marker(
         latest_payload,
         request_digest="4" * 64,
         legacy_request_digest="1" * 64,
     )
-    assert setup._commit_setup_marker(
+    assert upgrade_state._commit_setup_marker(
         marker_path,
         existing_payload=latest_payload,
         existing_marker=latest,
@@ -3380,7 +3320,7 @@ def test_setup_marker_rejects_unknown_or_tampered_provenance(
     marker.update(mutation)
     payload = json.dumps(marker, sort_keys=True).encode() + b"\n"
     with pytest.raises(ServerSetupError) as exc_info:
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="4" * 64,
             legacy_request_digest="1" * 64,
@@ -3400,7 +3340,7 @@ def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
         unit: f"{unit}\n".encode()
         for unit in setup.MANAGED_UNITS
     }
-    assert setup._commit_setup_marker(
+    assert upgrade_state._commit_setup_marker(
         marker_path,
         existing_payload=None,
         existing_marker=None,
@@ -3413,7 +3353,7 @@ def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
         gid=os.getegid(),
     ) == "completed"
     payload = marker_path.read_bytes()
-    marker = setup._validated_setup_marker(
+    marker = upgrade_state._validated_setup_marker(
         payload,
         request_digest="4" * 64,
         legacy_request_digest="",
@@ -3424,7 +3364,7 @@ def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
     assert marker["artifact_mode"] == artifact_mode
 
     with pytest.raises(ServerSetupError, match="version or provenance"):
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             payload,
             request_digest="4" * 64,
             legacy_request_digest="",
@@ -3435,7 +3375,7 @@ def test_setup_marker_v3_binds_explicit_artifact_mode_and_rejects_legacy_marker(
     legacy.pop("artifact_mode")
     legacy["schema"] = "agentnet.server-setup.marker.v2"
     with pytest.raises(ServerSetupError, match="version or provenance"):
-        setup._validated_setup_marker(
+        upgrade_state._validated_setup_marker(
             json.dumps(legacy, sort_keys=True).encode() + b"\n",
             request_digest="4" * 64,
             legacy_request_digest="",
@@ -3463,7 +3403,7 @@ def test_setup_marker_compare_and_swap_detects_external_change(
             return b'{"marker":"changed"}\n'
         return original_read(target, uid=uid, gid=gid)
 
-    monkeypatch.setattr(setup, "_read_setup_marker", changed_on_second_read)
+    monkeypatch.setattr(setup_custody, "_read_setup_marker", changed_on_second_read)
     with pytest.raises(ServerSetupError, match="changed before compare-and-swap"):
         setup._atomic_replace_exact(
             path,
@@ -3491,6 +3431,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     layout = SetupLayout(tmp_path / "host")
     layout.root.mkdir()
     import agentnet.operations.server_setup as setup
+    import agentnet.operations.server_setup.provisioning as provisioning
 
     uid = os.geteuid()
     gid = os.getegid()
@@ -3499,14 +3440,14 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         setup.APPROVAL_USER: SimpleNamespace(pw_name=setup.APPROVAL_USER, pw_uid=uid, pw_gid=gid),
         setup.C0_RESPONDER_USER: SimpleNamespace(pw_name=setup.C0_RESPONDER_USER, pw_uid=uid, pw_gid=gid),
     }
-    monkeypatch.setattr(setup, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
-    monkeypatch.setattr(setup, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
-    monkeypatch.setattr(setup, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
-    monkeypatch.setattr(setup, "_account_fact", lambda _name, _home: "create")
-    monkeypatch.setattr(setup, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
-    monkeypatch.setattr(setup, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
+    monkeypatch.setattr(setup_preflight, "_resolve_node_executable", lambda: Path("/usr/bin/node"))
+    monkeypatch.setattr(setup_preflight, "_resolve_uv_executable", lambda: Path("/usr/local/bin/uv"))
+    monkeypatch.setattr(setup_preflight, "_resolve_executable", lambda *_args, **_kwargs: Path("/usr/local/bin/agentnet"))
+    monkeypatch.setattr(setup_custody, "_account_fact", lambda _name, _home: "create")
+    monkeypatch.setattr(setup_apply, "_ensure_account", lambda name, _home, **_kwargs: accounts[name])
+    monkeypatch.setattr(setup_preflight, "_resolve_host_tool", lambda name: Path(f"/usr/bin/{name}"))
     monkeypatch.setattr(
-        setup,
+        setup_apply,
         "_postgres_peer_gate",
         lambda _account, _database_url: {"status": "validated_exact_local_peer"},
     )
@@ -3536,8 +3477,14 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         effective = changed_trusted if drift_trust_during_apply and trust_reads % 2 == 0 else trusted
         return SimpleNamespace(model_dump=lambda **_kwargs: {"policy": "fixed"}), [effective]
 
-    monkeypatch.setattr(setup, "_approval_trust", fake_approval_trust)
-    monkeypatch.setattr(setup, "_require_exact_approval_policy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(provisioning, "_approval_trust", fake_approval_trust)
+    monkeypatch.setattr(provisioning, "_require_exact_approval_policy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(setup_apply, "_approval_trust", fake_approval_trust)
+    monkeypatch.setattr(
+        setup_apply,
+        "_require_exact_approval_policy",
+        lambda *_args, **_kwargs: None,
+    )
 
     class _Equal:
         def __eq__(self, _other: object) -> bool:
@@ -3585,6 +3532,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         )
 
     monkeypatch.setattr(setup, "load_config_json", fake_load_config)
+    monkeypatch.setattr(provisioning, "load_config_json", fake_load_config)
 
     fail_network = True
     product_calls: list[list[str]] = []
@@ -3658,7 +3606,9 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             return _bootstrap_evidence(request.domain_id)
         raise AssertionError(argv)
 
-    monkeypatch.setattr(setup, "_run_as", fake_run_as)
+    monkeypatch.setattr(setup_apply, "_run_as", fake_run_as)
+    monkeypatch.setattr(provisioning, "_run_as", fake_run_as)
+    monkeypatch.setattr(upgrade, "_run_as", fake_run_as)
     approved_digest = str(plan_server_setup(request, layout=layout)["request_digest"])
     with pytest.raises(ServerSetupError, match="frozen human-approved digest"):
         apply_server_setup(
@@ -3824,7 +3774,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert sum(argv[2] == "bootstrap-server-agent" for argv in product_calls) == bootstrap_calls
     config_drift = False
 
-    original_atomic_write = setup._atomic_write
+    original_atomic_write = setup_custody._atomic_write
     fail_core_unit_once = True
 
     def interrupted_unit_write(path: Path, payload: bytes, **kwargs: object) -> str:
@@ -3835,7 +3785,13 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         return original_atomic_write(path, payload, **kwargs)
 
     mutate_bootstrap_once = True
-    monkeypatch.setattr(setup, "_atomic_write", interrupted_unit_write)
+    monkeypatch.setattr(setup_apply, "_atomic_write", interrupted_unit_write)
+    monkeypatch.setattr(provisioning, "_atomic_write", interrupted_unit_write)
+    monkeypatch.setattr(
+        setup_custody,
+        "_atomic_write",
+        interrupted_unit_write,
+    )
     with pytest.raises(ServerSetupError, match="injected unit interruption"):
         apply_server_setup(
             request,
@@ -3845,7 +3801,13 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 2
-    monkeypatch.setattr(setup, "_atomic_write", original_atomic_write)
+    monkeypatch.setattr(setup_apply, "_atomic_write", original_atomic_write)
+    monkeypatch.setattr(provisioning, "_atomic_write", original_atomic_write)
+    monkeypatch.setattr(
+        setup_custody,
+        "_atomic_write",
+        original_atomic_write,
+    )
     recovered_unit = apply_server_setup(
         request,
         start=False,
@@ -3859,15 +3821,11 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     )
     assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 3
 
-    original_commit_marker = setup._commit_setup_marker
+    original_commit_marker = upgrade_state._commit_setup_marker
     mutate_bootstrap_once = True
-    monkeypatch.setattr(
-        setup,
-        "_commit_setup_marker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ServerSetupError("injected_failure", "injected marker interruption")
-        ),
-    )
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ServerSetupError("injected_failure", "injected marker interruption")
+    ))
     with pytest.raises(ServerSetupError, match="injected marker interruption"):
         apply_server_setup(
             request,
@@ -3877,7 +3835,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
             _allow_test_layout=True,
         )
     assert json.loads(marker.read_text(encoding="utf-8"))["revision"] == 3
-    monkeypatch.setattr(setup, "_commit_setup_marker", original_commit_marker)
+    monkeypatch.setattr(upgrade_state, "_commit_setup_marker", original_commit_marker)
     recovered_marker = apply_server_setup(
         request,
         start=False,
@@ -3893,7 +3851,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     enrolled = True
     monkeypatch.setattr(
-        setup,
+        activation,
         "_validated_managed_identity_profile",
         lambda *_args, **_kwargs: {
             "actor": {
@@ -3913,7 +3871,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         def close(self):
             pass
 
-    monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
+    monkeypatch.setattr(activation, "ApprovalServiceClient", ReadyBrokerClient)
     systemctl_calls: list[list[str]] = []
     health_requests: list[tuple[str, dict[str, object]]] = []
     health_attempts: list[tuple[str, object]] = []
@@ -3966,9 +3924,9 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
                 live_pids[unit] = 4323
         return SimpleNamespace(returncode=0, stdout=b"")
 
-    monkeypatch.setattr(setup.subprocess, "run", fake_systemctl_run)
+    monkeypatch.setattr(setup_systemd.subprocess, "run", fake_systemctl_run)
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_systemd_show",
         lambda _executable, unit: {
             "LoadState": "loaded",
@@ -4021,7 +3979,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         },
     )
     monkeypatch.setattr(
-        setup,
+        setup_systemd,
         "_read_live_process_identity",
         lambda pid: (
             Path("/usr/bin/node"),
@@ -4038,7 +3996,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         health_requests.append((url, dict(_kwargs["expected"])))
         health_attempts.append((url, _kwargs.get("attempts")))
 
-    monkeypatch.setattr(setup, "_health", health_with_interruption)
+    monkeypatch.setattr(activation, "_health", health_with_interruption)
     with pytest.raises(ServerSetupError, match="injected health interruption") as exc_info:
         apply_server_setup(
             request,
@@ -4072,7 +4030,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
 
     systemctl_calls.clear()
     health_requests.clear()
-    monkeypatch.setattr(setup, "_health", fail_operational_readiness)
+    monkeypatch.setattr(activation, "_health", fail_operational_readiness)
     with pytest.raises(ServerSetupError, match="expired deployment binding") as exc_info:
         apply_server_setup(
             request,
@@ -4099,7 +4057,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     systemctl_calls.clear()
     health_requests.clear()
     health_attempts.clear()
-    monkeypatch.setattr(setup, "_health", health_with_interruption)
+    monkeypatch.setattr(activation, "_health", health_with_interruption)
     started = apply_server_setup(
         request,
         start=True,
@@ -4119,7 +4077,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
         def readiness(self):
             raise setup.GateBlocked("approval_broker_auth", "private broker detail")
 
-    monkeypatch.setattr(setup, "ApprovalServiceClient", BlockedBrokerClient)
+    monkeypatch.setattr(activation, "ApprovalServiceClient", BlockedBrokerClient)
     with pytest.raises(ServerSetupError, match="Approval broker readiness failed") as exc_info:
         apply_server_setup(
             request,
@@ -4140,7 +4098,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
                 "private TLS context detail",
             )
 
-    monkeypatch.setattr(setup, "ApprovalServiceClient", UnavailableBrokerClient)
+    monkeypatch.setattr(activation, "ApprovalServiceClient", UnavailableBrokerClient)
     with pytest.raises(ServerSetupError, match="Approval broker readiness failed") as exc_info:
         apply_server_setup(
             request,
@@ -4155,7 +4113,7 @@ def test_apply_resumes_after_interruption_and_restarts_only_managed_core(
     assert exc_info.value.__cause__ is None
     assert exc_info.value.identity_enrolled is True
 
-    monkeypatch.setattr(setup, "ApprovalServiceClient", ReadyBrokerClient)
+    monkeypatch.setattr(activation, "ApprovalServiceClient", ReadyBrokerClient)
     recovered_after_broker_failure = apply_server_setup(
         request,
         start=True,
@@ -4292,7 +4250,7 @@ def test_clean_state_gate_rejects_unowned_preexisting_state_and_resumes_exact_at
 
     attempt = tmp_path / "attempt.json"
     with pytest.raises(ServerSetupError, match="no current-package setup custody"):
-        setup._prepare_setup_attempt(
+        upgrade_state._prepare_setup_attempt(
             attempt,
             existing_marker=None,
             preexisting_state=True,
@@ -4312,7 +4270,7 @@ def test_clean_state_gate_rejects_unowned_preexisting_state_and_resumes_exact_at
         encoding="utf-8",
     )
     attempt.chmod(0o600)
-    assert setup._prepare_setup_attempt(
+    assert upgrade_state._prepare_setup_attempt(
         attempt,
         existing_marker=None,
         preexisting_state=True,
