@@ -95,11 +95,11 @@ from agentnet.cli.commands.scope import (
 )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentnet", description="AgentNet")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    commands = parser.add_subparsers(dest="command", required=True)
+def _add_approval_commands(commands: argparse._SubParsersAction) -> None:
     configure_approval_parser(commands)
+
+
+def _add_setup_commands(commands: argparse._SubParsersAction) -> None:
     setup = commands.add_parser(
         "setup",
         help="begin or resume package-owned user-level AgentNet setup",
@@ -229,6 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_server_agent_reauthorize_expired_credential
     )
 
+
+def _add_enrollment_commands(commands: argparse._SubParsersAction) -> None:
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")
     join_commands = join.add_subparsers(dest="join_command", required=True)
     join_guided = join_commands.add_parser(
@@ -346,6 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     invitation_revoke.add_argument("--reason", required=True)
     invitation_revoke.set_defaults(func=command_invitation_revoke)
 
+
+def _add_authority_commands(commands: argparse._SubParsersAction) -> None:
     bootstrap_plan = commands.add_parser(
         "bootstrap-plan",
         help="prepare the bounded same-principal two-harness C0 plan",
@@ -487,6 +491,8 @@ def build_parser() -> argparse.ArgumentParser:
     relationship_accept.add_argument("--approval", required=True)
     relationship_accept.set_defaults(func=command_relationship_accept)
 
+
+def _add_messaging_commands(commands: argparse._SubParsersAction) -> None:
     artifact = commands.add_parser(
         "artifact",
         help="upload quarantined artifacts and download released bytes",
@@ -610,6 +616,8 @@ def build_parser() -> argparse.ArgumentParser:
     obligation_reconcile.add_argument("--limit", type=int, default=100)
     obligation_reconcile.set_defaults(func=command_obligation_reconcile)
 
+
+def _add_administration_commands(commands: argparse._SubParsersAction) -> None:
     admin = commands.add_parser("admin", help="perform signed, revision-fenced human administration")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)
     entitlement = admin_commands.add_parser("entitlement", help="issue or revoke human authority")
@@ -695,6 +703,8 @@ def build_parser() -> argparse.ArgumentParser:
     incident_set.add_argument("--reason", required=True)
     incident_set.set_defaults(func=command_incident_set)
 
+
+def _add_recovery_commands(commands: argparse._SubParsersAction) -> None:
     backup = commands.add_parser(
         "backup",
         help="create a sealed offline backup without making HA or PITR claims",
@@ -759,6 +769,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--force", action="store_true")
     init.set_defaults(func=command_init)
 
+
+def _add_service_commands(commands: argparse._SubParsersAction) -> None:
     serve = commands.add_parser("serve", help="run the self-hosted HTTP service")
     serve.add_argument("--config", default="agentnet.json")
     serve.add_argument("--host", default="127.0.0.1")
@@ -817,6 +829,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     manager_run.set_defaults(func=command_manager_run)
 
+
+def _add_diagnostic_commands(commands: argparse._SubParsersAction) -> None:
     status = commands.add_parser("status", help="show operational readiness without acquiring a runtime lease")
     status.add_argument("--config", default="agentnet.json")
     status.add_argument(
@@ -878,5 +892,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     a2a_demo = commands.add_parser("a2a-demo", help="exercise the strict official-SDK A2A proposal route")
     a2a_demo.set_defaults(func=command_a2a_demo)
-    return parser
 
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentnet", description="AgentNet")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    commands = parser.add_subparsers(dest="command", required=True)
+    _add_approval_commands(commands)
+    _add_setup_commands(commands)
+    _add_enrollment_commands(commands)
+    _add_authority_commands(commands)
+    _add_messaging_commands(commands)
+    _add_administration_commands(commands)
+    _add_recovery_commands(commands)
+    _add_service_commands(commands)
+    _add_diagnostic_commands(commands)
+    return parser
