@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentnet import cli
-from agentnet.cli.commands import setup
+from agentnet.cli.commands import server_agent as setup
 from agentnet.errors import AuthenticationError, GateBlocked
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.operations.config import (

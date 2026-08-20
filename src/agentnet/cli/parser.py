@@ -52,13 +52,14 @@ from agentnet.cli.commands.services import (
     command_serve,
     command_supervisor_run,
 )
-from agentnet.cli.commands.setup import (
-    command_bootstrap_server_agent,
+from agentnet.cli.commands.backup import (
     command_backup_sqlite,
     command_compromise_rebuild_plan,
-    command_init,
-    command_network_create,
     command_restore_sqlite,
+)
+from agentnet.cli.commands.local import command_init, command_network_create
+from agentnet.cli.commands.server_agent import (
+    command_bootstrap_server_agent,
     command_server_agent_activate,
     command_server_agent_reauthorize_expired_credential,
     command_server_agent_reset,

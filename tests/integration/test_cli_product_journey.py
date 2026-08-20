@@ -21,7 +21,7 @@ from agentnet.cli import (
     build_parser,
     command_bootstrap_server_agent,
 )
-from agentnet.cli.commands import auth, setup
+from agentnet.cli.commands import auth, local, server_agent
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
@@ -47,7 +47,7 @@ def test_network_create_rejects_incoherent_artifact_inputs_before_mutation(
         mutated = True
         raise AssertionError("mutation must not start")
 
-    monkeypatch.setattr(setup.helpers, "_owner_only_directory", mutation_probe)
+    monkeypatch.setattr(local.helpers, "_owner_only_directory", mutation_probe)
     parser = build_parser()
     missing_scanner = parser.parse_args(
         [
@@ -91,6 +91,81 @@ def test_network_create_rejects_incoherent_artifact_inputs_before_mutation(
     assert mutated is False
     assert not (tmp_path / "data").exists()
 
+def test_network_create_reaches_key_provisioning_on_valid_communication_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_path = tmp_path / "oidc.json"
+    oidc_path.write_text("{}", encoding="utf-8")
+    data_dir = tmp_path / "data"
+    seal_key = P256KeyPair.generate()
+    provisioned: list[Path] = []
+    written: list[tuple[Path, dict[str, object], bool]] = []
+    config = SimpleNamespace(
+        public_base_url="https://agents.example",
+        domain_id="corp.example",
+        redacted_export=lambda: {"domain_id": "corp.example"},
+    )
+    core = SimpleNamespace(
+        bootstrap_domain=lambda: {"domain_id": "corp.example"},
+        readiness=lambda: {"ready": True},
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        local.OIDCEnrollmentConfig,
+        "model_validate_json",
+        lambda _value: object(),
+    )
+    monkeypatch.setattr(
+        local,
+        "_provision_owner_only_signing_key",
+        lambda _path: seal_key,
+    )
+    monkeypatch.setattr(
+        local,
+        "_provision_owner_only_key",
+        lambda path: provisioned.append(path),
+    )
+    monkeypatch.setattr(local, "ExtensionConfig", lambda **_kwargs: config)
+    monkeypatch.setattr(local.helpers, "_owner_only_directory", lambda _path: None)
+    monkeypatch.setattr(
+        local.helpers,
+        "_write_private_config",
+        lambda path, value, *, force=False: written.append((path, value, force)),
+    )
+    monkeypatch.setattr(
+        local.CommunicationCore,
+        "open",
+        lambda _config, **_kwargs: core,
+    )
+
+    assert local.command_network_create(
+        SimpleNamespace(
+            config=str(tmp_path / "agentnet.json"),
+            artifact_mode="disabled",
+            scanner_trust_config=None,
+            oidc_config=str(oidc_path),
+            domain="corp.example",
+            data_dir=str(data_dir),
+            database_url="postgresql:///agentnet",
+            database_url_from_env=False,
+            database_url_env="AGENTNET_DATABASE_URL",
+            public_base_url="https://agents.example",
+            runtime_instance_id="agentnet-core",
+            postgres_recovery_topology=None,
+            force=False,
+        )
+    ) == 0
+    assert provisioned == [data_dir / "secrets" / "records.key"]
+    assert written == [
+        (
+            tmp_path / "agentnet.json",
+            {"domain_id": "corp.example"},
+            False,
+        )
+    ]
+
+
 
 def test_communication_only_bootstrap_never_provisions_artifact_key(
     tmp_path: Path,
@@ -107,9 +182,9 @@ def test_communication_only_bootstrap_never_provisions_artifact_key(
         data_dir=data_dir,
     )
     provisioned: list[Path] = []
-    monkeypatch.setattr(setup.helpers, "_load_config", lambda _path: config)
+    monkeypatch.setattr(server_agent.helpers, "_load_config", lambda _path: config)
     monkeypatch.setattr(
-        setup,
+        server_agent,
         "_provision_owner_only_key",
         lambda path: provisioned.append(path),
     )
@@ -122,7 +197,7 @@ def test_communication_only_bootstrap_never_provisions_artifact_key(
         close=lambda: None,
     )
     monkeypatch.setattr(
-        setup.CommunicationCore,
+        server_agent.CommunicationCore,
         "open",
         lambda _config, **_kwargs: core,
     )

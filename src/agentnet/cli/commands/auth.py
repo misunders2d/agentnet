@@ -216,7 +216,7 @@ from agentnet.cli.helpers import (
     _write_owner_only,
     _write_private_config,
 )
-from agentnet.cli.commands.setup import _setup_progress
+from agentnet.cli.commands.server_agent import _setup_progress
 
 
 def _detect_guided_harness() -> str:

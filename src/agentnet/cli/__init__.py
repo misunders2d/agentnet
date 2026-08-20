@@ -72,13 +72,14 @@ from .commands.services import (
     command_client_setup_status,
     command_client_setup_continue,
 )
-from .commands.setup import (
-    command_bootstrap_server_agent,
+from .commands.backup import (
     command_backup_sqlite,
     command_restore_sqlite,
     command_compromise_rebuild_plan,
-    command_init,
-    command_network_create,
+)
+from .commands.local import command_init, command_network_create
+from .commands.server_agent import (
+    command_bootstrap_server_agent,
     command_server_agent_setup,
     command_server_agent_reset,
     command_server_agent_reauthorize_expired_credential,
@@ -93,13 +94,13 @@ from .commands.services import (
     _require_safe_serve_binding,
     _serve_one_shot_loopback_page,
 )
-from .commands.setup import (
+from .commands.backup import _provision_owner_only_signing_key
+from .commands.server_agent import (
     _cas_managed_private_json,
     _managed_server_reauthorization_lock,
     _open_server_agent_activation_store,
     _open_server_agent_activation_store_as_core_peer,
     _provision_owner_only_key,
-    _provision_owner_only_signing_key,
     _require_managed_server_reauthorization_topology,
     _server_setup_deadline,
 )

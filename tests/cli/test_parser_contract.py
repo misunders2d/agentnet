@@ -73,4 +73,4 @@ def _parser_contract(parser: argparse.ArgumentParser) -> dict[str, Any]:
 def test_complete_parser_contract_is_unchanged() -> None:
     contract = _parser_contract(build_parser())
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "796667ade052867660277ed46df82069923379e051b352969aa4aa1391b180de", contract
+    assert hashlib.sha256(encoded).hexdigest() == "b9232d2916463514e02592a8964e1418835ad4efdd3bb1e1cd05700ec492a442", contract

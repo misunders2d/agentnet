@@ -559,7 +559,7 @@ def test_guided_server_setup_refuses_noninteractive_approval(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from agentnet.cli.commands import setup as cli_setup
+    from agentnet.cli.commands import server_agent as cli_setup
 
     request = object()
     monkeypatch.setattr(cli_setup, "load_server_setup_request", lambda _path: request)
@@ -595,7 +595,7 @@ def test_guided_server_setup_approves_and_applies_exact_planned_digest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from agentnet.cli.commands import setup as cli_setup
+    from agentnet.cli.commands import server_agent as cli_setup
 
     request = object()
     applied: list[tuple[object, bool, str]] = []
@@ -654,7 +654,7 @@ def test_guided_server_setup_reports_missing_standard_prerequisite(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from agentnet.cli.commands import setup as cli_setup
+    from agentnet.cli.commands import server_agent as cli_setup
 
     monkeypatch.setattr(cli_setup, "SETUP_ROOT", tmp_path / "missing")
 
@@ -4328,7 +4328,7 @@ def test_unexpected_setup_error_is_redacted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     request = _request(tmp_path)
-    from agentnet.cli.commands import setup as cli_setup
+    from agentnet.cli.commands import server_agent as cli_setup
 
     monkeypatch.setattr(cli_setup, "plan_server_setup", lambda _request: (_ for _ in ()).throw(RuntimeError("private-token")))
     rc = command_server_agent_setup(
