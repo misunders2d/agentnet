@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import secrets
+import ssl
 import stat
 from contextlib import contextmanager
 from pathlib import Path
@@ -479,9 +480,10 @@ def _public_json_request(
             headers={"Content-Type": "application/json"},
             timeout=timeout,
             follow_redirects=False,
+            verify=ssl.create_default_context(),
         )
     except httpx.HTTPError as exc:
-        raise SystemExit(f"AgentNet server request failed: {type(exc).__name__}") from exc
+        raise SystemExit(f"AgentNet server request failed: {type(exc).__name__}: {exc}") from exc
     if response.status_code < 200 or response.status_code >= 300:
         raise SystemExit(f"AgentNet server rejected the request with HTTP {response.status_code}")
     try:

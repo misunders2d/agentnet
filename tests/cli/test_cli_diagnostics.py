@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import ssl
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from agentnet import __version__
 from agentnet import cli
 from agentnet.cli.commands import diagnostics
+from agentnet.cli import helpers
 
 
 def test_top_level_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
@@ -19,6 +21,30 @@ def test_top_level_version_is_available(capsys: pytest.CaptureFixture[str]) -> N
 
     assert stopped.value.code == 0
     assert capsys.readouterr().out == f"agentnet {__version__}\n"
+
+def test_public_cli_requests_use_system_tls_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def request(method: str, url: str, **kwargs: object) -> SimpleNamespace:
+        observed.update({"method": method, "url": url, **kwargs})
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "alive"})
+
+    monkeypatch.setattr(helpers.httpx, "request", request)
+
+    result = helpers._public_json_request(
+        server="https://core.example",
+        method="GET",
+        path="/healthz",
+        body={},
+    )
+
+    context = observed["verify"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert result == {"status": "alive"}
 
 def test_verify_finds_source_root_after_module_moves(
     monkeypatch: pytest.MonkeyPatch,

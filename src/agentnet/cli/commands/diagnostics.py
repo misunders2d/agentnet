@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import ssl
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -330,6 +331,7 @@ def command_status(args: argparse.Namespace) -> int:
                 base_url=config.public_base_url,
                 timeout=args.timeout,
                 follow_redirects=False,
+                verify=ssl.create_default_context(),
             ) as client:
                 health = client.get("/healthz")
                 readiness = client.get("/readyz")
