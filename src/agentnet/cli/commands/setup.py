@@ -154,6 +154,41 @@ def _provision_owner_only_signing_key(path: Path) -> P256KeyPair:
     helpers._write_owner_only(path, key.private_pem)
     return key
 
+def command_bootstrap_server_agent(args: argparse.Namespace) -> int:
+    """Provision shared software keys, migrate PostgreSQL, and verify recovery."""
+
+    config = helpers._load_config(Path(args.config))
+    if config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
+        raise SystemExit("bootstrap-server-agent requires always_on_server_agent profile")
+    secrets_dir = config.data_dir / "secrets"
+    _provision_owner_only_key(secrets_dir / "records.key")
+    if config.artifact_mode == "enabled":
+        _provision_owner_only_key(secrets_dir / "artifact.key")
+    core = CommunicationCore.open(config, validate_deployment_identity=False)
+    try:
+        domain = core.bootstrap_domain()
+        recovery = core.recovery_status(record_observation=True)
+        storage = core.store.readiness()
+        audit = core.audit.verify()
+        print(
+            json.dumps(
+                {
+                    "domain": domain,
+                    "recovery": recovery,
+                    "storage": storage,
+                    "audit": audit,
+                    "deployment_binding": core.server_agent_binding_status(),
+                    "warning": "software-key/single-PostgreSQL bootstrap; no HA, mTLS, KMS, or restore claim",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if recovery["ready"] and storage["ready"] and audit["valid"] else 1
+    finally:
+        core.close()
+
+
 
 def _local_sqlite_path(config: ExtensionConfig) -> Path:
     if config.profile is not RuntimeProfile.LOCAL_CONFORMANCE:
@@ -1933,3 +1968,15 @@ def command_server_agent_activate(args: argparse.Namespace) -> int:
     )
     return 0
 
+__all__ = (
+    "command_bootstrap_server_agent",
+    "command_backup_sqlite",
+    "command_restore_sqlite",
+    "command_compromise_rebuild_plan",
+    "command_init",
+    "command_network_create",
+    "command_server_agent_setup",
+    "command_server_agent_reset",
+    "command_server_agent_reauthorize_expired_credential",
+    "command_server_agent_activate",
+)

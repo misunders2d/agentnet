@@ -347,7 +347,7 @@ def test_responder_check_reports_sanitized_blocked_envelope(
             GateBlocked("c0_pilot_responder", "private detail")
         ),
     )
-    monkeypatch.setattr("agentnet.cli.check_c0_responder", c0_responder.check_c0_responder)
+    monkeypatch.setattr("agentnet.cli.commands.auth.check_c0_responder", c0_responder.check_c0_responder)
 
     assert command_c0_pilot_responder(
         Namespace(config=str(config_path), credential=str(credential_path), check=True, run=False)

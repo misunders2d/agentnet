@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentnet import cli
+from agentnet.cli.commands import auth
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 
@@ -68,7 +69,7 @@ def test_entitlement_issue_by_principal_id_never_loads_beneficiary_private_state
             pytest.fail("principal-id issuance must not load beneficiary identity or private key")
         return client, actor, key
 
-    monkeypatch.setattr(cli, "_load_identity_client", load_identity)
+    monkeypatch.setattr(auth, "_load_identity_client", load_identity)
     args = argparse.Namespace(
         identity="admin-identity.json",
         beneficiary_identity=None,
@@ -109,7 +110,7 @@ def test_entitlement_issue_rejects_non_exact_principal_id_before_request(
     client = _Client()
     actor, key = _issuer()
     monkeypatch.setattr(
-        cli,
+        auth,
         "_load_identity_client",
         lambda path: (client, actor, key)
         if path == Path("admin-identity.json")

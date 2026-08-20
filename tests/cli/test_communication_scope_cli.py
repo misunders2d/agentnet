@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from agentnet import cli
+from agentnet.host import host_platform
+from agentnet.cli.commands import services
 
 
 class _Response:
@@ -354,7 +356,7 @@ with _private_state_lock(state):
 
 
 @pytest.mark.skipif(
-    cli.host_platform() == "windows",
+    host_platform() == "windows",
     reason="POSIX peer-unlink boundary",
 )
 def test_private_state_lock_rejects_peer_writable_parent(tmp_path: Path) -> None:
@@ -546,7 +548,7 @@ def test_manager_run_invokes_exact_gateway_runner_and_closes_client(
             current_actor,
             (executable, "--print", "hello"),
             state_dir,
-            cli.resolve_packaged_manager_extension(),
+            services.resolve_packaged_manager_extension(),
         )
     ]
     assert client.closed is True

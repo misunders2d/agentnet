@@ -398,3 +398,12 @@ def command_communication_scope_complete(args: argparse.Namespace) -> int:
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
+
+__all__ = (
+    "command_bootstrap_plan_begin",
+    "command_bootstrap_plan_status",
+    "command_bootstrap_plan_complete",
+    "command_communication_scope_begin",
+    "command_communication_scope_status",
+    "command_communication_scope_complete",
+)

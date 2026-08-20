@@ -365,7 +365,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     captured: dict[str, object] = {}
     fake_store = FakeStore()
     monkeypatch.setattr(
-        cli.LocalEnvelopeCipher,
+        setup.LocalEnvelopeCipher,
         "from_key_file",
         lambda path, *, create: captured.update({"key_path": path, "create": create}) or cipher,
     )
@@ -382,7 +382,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
 
     monkeypatch.setattr(setup, "PostgreSQLStore", fake_postgres)
 
-    assert cli._open_server_agent_activation_store(state.config) is fake_store
+    assert setup._open_server_agent_activation_store(state.config) is fake_store
     assert captured["key_path"] == state.config.data_dir / "secrets" / "records.key"
     assert captured["create"] is False
     assert captured["database_url"] == state.config.database_url
@@ -394,7 +394,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert captured["start_lease_keeper"] is False
 
     captured.clear()
-    assert cli._open_server_agent_activation_store(
+    assert setup._open_server_agent_activation_store(
         state.config,
         database_url_override="postgresql://runtime-secret@postgres/agentnet",
     ) is fake_store
@@ -415,11 +415,11 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
     assert reauthorization.func is cli.command_server_agent_reauthorize_expired_credential
     assert reauthorization.replace_terminal_state is False
     defaults = parser.parse_args(["server-agent", "reauthorize-expired-credential"])
-    assert defaults.config == str(cli.CORE_CONFIG)
-    assert defaults.identity == str(cli.SERVER_AGENT_IDENTITY)
-    assert defaults.state == str(cli.SETUP_ROOT / "credential-reauthorization.json")
-    monkeypatch.setattr(cli.os.path, "lexists", lambda _path: True)
-    cli._require_managed_server_reauthorization_topology(state.config)
+    assert defaults.config == str(setup.CORE_CONFIG)
+    assert defaults.identity == str(setup.SERVER_AGENT_IDENTITY)
+    assert defaults.state == str(setup.SETUP_ROOT / "credential-reauthorization.json")
+    monkeypatch.setattr(setup.os.path, "lexists", lambda _path: True)
+    setup._require_managed_server_reauthorization_topology(state.config)
 
     managed = tmp_path / "managed.json"
     managed.write_text('{"old":true}\n', encoding="utf-8")
@@ -521,7 +521,7 @@ def test_server_agent_activation_store_fences_exact_runtime_without_migrations(
 
     monkeypatch.setattr(Path, "lstat", managed_lstat)
     monkeypatch.setattr(
-        cli.os.path,
+        setup.os.path,
         "lexists",
         lambda path: Path(path) in files,
     )
@@ -754,7 +754,7 @@ def test_managed_server_reauthorization_opens_postgres_as_core_peer(
 
     monkeypatch.setattr(setup, "_open_server_agent_activation_store", open_store)
 
-    assert cli._open_server_agent_activation_store_as_core_peer(
+    assert setup._open_server_agent_activation_store_as_core_peer(
         ExtensionConfig(data_dir=Path("/tmp/unused")),
         database_url_override="postgresql:///agentnet",
         core_account=account,
@@ -793,12 +793,12 @@ def test_managed_server_reauthorization_lock_rejects_concurrent_setup(
         )
 
     monkeypatch.setattr(setup.os, "fstat", root_owned_fstat)
-    with cli._managed_server_reauthorization_lock():
+    with setup._managed_server_reauthorization_lock():
         with pytest.raises(
             SystemExit,
             match="another AgentNet setup or recovery operation is active",
         ):
-            with cli._managed_server_reauthorization_lock():
+            with setup._managed_server_reauthorization_lock():
                 raise AssertionError("concurrent setup lock unexpectedly acquired")
 
 

@@ -10,6 +10,7 @@ import pytest
 
 from agentnet import __version__
 from agentnet import cli
+from agentnet.cli.commands import diagnostics
 
 
 def test_top_level_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
@@ -18,6 +19,13 @@ def test_top_level_version_is_available(capsys: pytest.CaptureFixture[str]) -> N
 
     assert stopped.value.code == 0
     assert capsys.readouterr().out == f"agentnet {__version__}\n"
+
+def test_verify_finds_source_root_after_module_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTNET_PACKAGE_ROOT", raising=False)
+    assert diagnostics._verification_package_root() == Path(__file__).resolve().parents[2]
+
 
 
 def test_verify_targets_packaged_tests_with_package_cwd(
@@ -56,7 +64,7 @@ def test_verify_targets_packaged_tests_with_package_cwd(
     assert Path(str(observed["agentnet_package_root"])) == verification_root
     assert Path(str(observed["agentnet_verification_install_root"])) == tmp_path
     assert observed["arguments"] == [
-        cli.sys.executable,
+        diagnostics.sys.executable,
         "-m",
         "pytest",
         "-q",

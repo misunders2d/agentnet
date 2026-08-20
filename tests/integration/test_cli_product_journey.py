@@ -21,6 +21,7 @@ from agentnet.cli import (
     build_parser,
     command_bootstrap_server_agent,
 )
+from agentnet.cli.commands import auth, setup
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import public_key_thumbprint
 from agentnet.security.signatures import P256KeyPair, verify_signature
@@ -46,7 +47,7 @@ def test_network_create_rejects_incoherent_artifact_inputs_before_mutation(
         mutated = True
         raise AssertionError("mutation must not start")
 
-    monkeypatch.setattr(cli, "_owner_only_directory", mutation_probe)
+    monkeypatch.setattr(setup.helpers, "_owner_only_directory", mutation_probe)
     parser = build_parser()
     missing_scanner = parser.parse_args(
         [
@@ -106,9 +107,9 @@ def test_communication_only_bootstrap_never_provisions_artifact_key(
         data_dir=data_dir,
     )
     provisioned: list[Path] = []
-    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+    monkeypatch.setattr(setup.helpers, "_load_config", lambda _path: config)
     monkeypatch.setattr(
-        cli,
+        setup,
         "_provision_owner_only_key",
         lambda path: provisioned.append(path),
     )
@@ -121,7 +122,7 @@ def test_communication_only_bootstrap_never_provisions_artifact_key(
         close=lambda: None,
     )
     monkeypatch.setattr(
-        cli.CommunicationCore,
+        setup.CommunicationCore,
         "open",
         lambda _config, **_kwargs: core,
     )
@@ -476,20 +477,20 @@ def test_guided_join_is_resumable_private_and_identity_only(
             "actor": actor.model_dump(mode="json"),
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", fake_request)
-    monkeypatch.setattr("agentnet.cli._detect_guided_harness", lambda: "codex")
-    monkeypatch.setattr("agentnet.cli.socket.gethostname", lambda: "fresh-laptop")
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", fake_request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._detect_guided_harness", lambda: "codex")
+    monkeypatch.setattr("agentnet.cli.commands.auth.socket.gethostname", lambda: "fresh-laptop")
     opened: list[str] = []
     monkeypatch.setattr(
-        "agentnet.cli.webbrowser.open",
+        "agentnet.cli.commands.auth.webbrowser.open",
         lambda url, **_kwargs: opened.append(url) or True,
     )
     monkeypatch.setattr(
-        "agentnet.cli.require_private_terminal",
+        "agentnet.cli.commands.auth.require_private_terminal",
         lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
     monkeypatch.setattr(
-        "agentnet.cli.getpass.getpass",
+        "agentnet.cli.commands.auth.getpass.getpass",
         lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )
     args = build_parser().parse_args(
@@ -553,7 +554,7 @@ def test_guided_join_is_resumable_private_and_identity_only(
     assert calls[0][1]["harness_name"] == "fresh-laptop"
 
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("completed guided retry must not use network"),
     )
     assert args.func(args) == 0
@@ -615,24 +616,24 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
             "expires_at": int(time.time()) + 300,
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", first_request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", first_request)
     monkeypatch.setattr(
-        "agentnet.cli.require_private_terminal",
+        "agentnet.cli.commands.auth.require_private_terminal",
         lambda: terminal_checks.append(True),
     )
     monkeypatch.setattr(
-        "agentnet.cli.handoff_private_url",
+        "agentnet.cli.commands.auth.handoff_private_url",
         lambda url, *, purpose, require_ack: handoffs.append(
             (url, purpose, require_ack)
         ),
     )
     monkeypatch.setattr(
-        "agentnet.cli.webbrowser.open",
+        "agentnet.cli.commands.auth.webbrowser.open",
         lambda *_args, **_kwargs: pytest.fail("terminal mode must not open system browser"),
     )
-    monkeypatch.setattr("agentnet.cli.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("agentnet.cli.commands.auth.time.sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        "agentnet.cli.getpass.getpass",
+        "agentnet.cli.commands.auth.getpass.getpass",
         lambda _prompt: (_ for _ in ()).throw(AssertionError("claim prompt must not run")),
     )
     args = build_parser().parse_args(
@@ -703,7 +704,7 @@ def test_guided_join_terminal_mode_is_private_and_resumes_without_second_begin(
             "actor": actor.model_dump(mode="json"),
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", resume_request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", resume_request)
     assert args.func(args) == 0
     resumed_output = capsys.readouterr()
     result = json.loads(resumed_output.out)
@@ -788,12 +789,12 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
             "actor": actor.model_dump(mode="json"),
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", request)
     for target in (
-        "agentnet.cli.require_private_terminal",
-        "agentnet.cli.handoff_private_url",
-        "agentnet.cli.webbrowser.open",
-        "agentnet.cli.getpass.getpass",
+        "agentnet.cli.commands.auth.require_private_terminal",
+        "agentnet.cli.commands.auth.handoff_private_url",
+        "agentnet.cli.commands.auth.webbrowser.open",
+        "agentnet.cli.commands.auth.getpass.getpass",
     ):
         monkeypatch.setattr(
             target,
@@ -801,7 +802,7 @@ def test_guided_join_remote_mode_stages_fixed_browser_activation_without_disclos
                 "remote mode must not use browser, private TTY, handoff, or claim prompt"
             ),
         )
-    monkeypatch.setattr("agentnet.cli.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("agentnet.cli.commands.auth.time.sleep", lambda _seconds: None)
     args = build_parser().parse_args(
         [
             "join",
@@ -870,7 +871,7 @@ def test_guided_join_begin_response_loss_reuses_precommitted_idempotency_key(
         begin_keys.append(str(body["idempotency_key"]))
         raise RuntimeError("simulated begin response loss")
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", lost_response)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", lost_response)
     with pytest.raises(RuntimeError, match="response loss"):
         args.func(args)
 
@@ -897,7 +898,7 @@ def test_guided_join_begin_response_loss_reuses_precommitted_idempotency_key(
             "expires_at": int(time.time()) + 300,
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", retry)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", retry)
     with pytest.raises(SystemExit, match="terminal state: failed"):
         args.func(args)
     assert begin_keys == [begin_keys[0], begin_keys[0]]
@@ -930,11 +931,11 @@ def test_guided_join_state_write_failure_prevents_begin_request(
         ]
     )
     monkeypatch.setattr(
-        "agentnet.cli._write_owner_json",
+        "agentnet.cli.commands.auth._write_owner_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("local state write failed")),
     )
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("begin request must not run before durable local state"),
     )
 
@@ -978,12 +979,12 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
             "expires_at": int(time.time()) + 300,
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", first_request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", first_request)
     for target in (
-        "agentnet.cli.require_private_terminal",
-        "agentnet.cli.handoff_private_url",
-        "agentnet.cli.webbrowser.open",
-        "agentnet.cli.getpass.getpass",
+        "agentnet.cli.commands.auth.require_private_terminal",
+        "agentnet.cli.commands.auth.handoff_private_url",
+        "agentnet.cli.commands.auth.webbrowser.open",
+        "agentnet.cli.commands.auth.getpass.getpass",
     ):
         monkeypatch.setattr(
             target,
@@ -1036,7 +1037,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
         ]
     )
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("argument drift must fail before Core polling"),
     )
     with pytest.raises(SystemExit, match="resume arguments do not match"):
@@ -1065,7 +1066,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
         ]
     )
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: {
             "status": "authorization_pending",
             "interval_seconds": 2,
@@ -1128,7 +1129,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
             "actor": actor.model_dump(mode="json"),
         }
 
-    monkeypatch.setattr("agentnet.cli._public_json_request", replacement_request)
+    monkeypatch.setattr("agentnet.cli.commands.auth._public_json_request", replacement_request)
     assert replacement_args.func(replacement_args) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "enrolled_identity_only"
@@ -1142,7 +1143,7 @@ def test_guided_join_replaces_only_core_confirmed_terminal_state_with_same_key(
 
     completed_state = state.read_bytes()
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("completed state must fail before Core polling"),
     )
     with pytest.raises(SystemExit, match="completed guided join state cannot be replaced"):
@@ -1157,7 +1158,7 @@ def test_guided_join_terminal_replacement_requires_existing_state(
     state = tmp_path / "private" / "guided.json"
     identity = tmp_path / "private" / "identity.json"
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("absent state must fail before Core polling"),
     )
     args = build_parser().parse_args(
@@ -1196,13 +1197,13 @@ def test_guided_join_terminal_mode_requires_tty_before_begin(
     state = tmp_path / "guided.json"
     identity = tmp_path / "identity.json"
     monkeypatch.setattr(
-        "agentnet.cli.require_private_terminal",
+        "agentnet.cli.commands.auth.require_private_terminal",
         lambda: (_ for _ in ()).throw(
             TerminalHandoffError("private controlling terminal is unavailable")
         ),
     )
     monkeypatch.setattr(
-        "agentnet.cli._public_json_request",
+        "agentnet.cli.commands.auth._public_json_request",
         lambda **_kwargs: pytest.fail("no TTY must fail before enrollment begin"),
     )
     args = build_parser().parse_args(

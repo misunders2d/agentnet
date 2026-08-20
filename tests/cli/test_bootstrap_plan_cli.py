@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import stat
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agentnet import cli
+from agentnet import _terminal_handoff
 
 
 class _Response:
@@ -195,12 +197,12 @@ def test_complete_uses_exact_private_state_without_tty_or_prompt(
         "communication_usable": False,
     }
     monkeypatch.setattr(
-        cli,
-        "_require_private_terminal_or_exit",
+        _terminal_handoff,
+        "require_private_terminal",
         lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
     monkeypatch.setattr(
-        cli.getpass,
+        getpass,
         "getpass",
         lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )
@@ -236,12 +238,12 @@ def test_complete_runs_without_private_terminal(
         force=False,
     )
     monkeypatch.setattr(
-        cli,
-        "_require_private_terminal_or_exit",
+        _terminal_handoff,
+        "require_private_terminal",
         lambda: (_ for _ in ()).throw(AssertionError("TTY must not be required")),
     )
     monkeypatch.setattr(
-        cli.getpass,
+        getpass,
         "getpass",
         lambda _prompt: (_ for _ in ()).throw(AssertionError("prompt must not run")),
     )

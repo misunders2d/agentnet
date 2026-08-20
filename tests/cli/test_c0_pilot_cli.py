@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentnet import cli
+from agentnet.cli.commands import auth
 
 
 class _Response:
@@ -75,7 +76,7 @@ def test_c0_command_calls_exact_client_method_and_prints_only_stage(
 ) -> None:
     body = {"schema": "agentnet.c0-pilot.result.v1", "status": stage}
     client = _Client([_Response(status_code, body)])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(auth, "_load_identity_client", _load(client))
 
     assert cli.command_c0_pilot(
         argparse.Namespace(identity="identity.json", c0_pilot_command=operation)
@@ -102,7 +103,7 @@ def test_c0_command_rejects_non_strict_response_without_printing_private_data(
             )
         ]
     )
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(auth, "_load_identity_client", _load(client))
 
     with pytest.raises(SystemExit, match="C0 pilot response is invalid"):
         cli.command_c0_pilot(
@@ -117,7 +118,7 @@ def test_c0_command_rejects_wrong_http_status_without_printing_body(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     client = _Client([_Response(403, {"private": "must-not-print"})])
-    monkeypatch.setattr(cli, "_load_identity_client", _load(client))
+    monkeypatch.setattr(auth, "_load_identity_client", _load(client))
 
     with pytest.raises(SystemExit, match="rejected with HTTP 403"):
         cli.command_c0_pilot(

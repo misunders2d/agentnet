@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import agentnet.cli as cli
+from agentnet.cli.commands import auth
 
 
 class Response:
@@ -53,7 +54,7 @@ def test_renewal_cli_rotates_request_only_after_exact_response(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     client = Client(status="renewed")
-    monkeypatch.setattr(cli, "_load_identity_client", lambda _path: (client, object(), object()))
+    monkeypatch.setattr(auth, "_load_identity_client", lambda _path: (client, object(), object()))
     args = _args(tmp_path)
 
     assert cli.command_credential_renew(args) == 0
@@ -73,7 +74,7 @@ def test_renewal_cli_reuses_durable_request_after_response_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     failing = Client(fail=True)
-    monkeypatch.setattr(cli, "_load_identity_client", lambda _path: (failing, object(), object()))
+    monkeypatch.setattr(auth, "_load_identity_client", lambda _path: (failing, object(), object()))
     args = _args(tmp_path)
 
     with pytest.raises(RuntimeError, match="response lost"):
@@ -81,7 +82,7 @@ def test_renewal_cli_reuses_durable_request_after_response_loss(
     first_id = failing.request_ids[0]
 
     retry = Client()
-    monkeypatch.setattr(cli, "_load_identity_client", lambda _path: (retry, object(), object()))
+    monkeypatch.setattr(auth, "_load_identity_client", lambda _path: (retry, object(), object()))
     assert cli.command_credential_renew(args) == 0
     assert retry.request_ids == [first_id]
 
@@ -99,7 +100,7 @@ def test_renewal_cli_blocked_output_contains_no_server_body(
 
     client = Client()
     client.renew_current_credential = lambda **_kwargs: BlockedResponse()  # type: ignore[method-assign]
-    monkeypatch.setattr(cli, "_load_identity_client", lambda _path: (client, object(), object()))
+    monkeypatch.setattr(auth, "_load_identity_client", lambda _path: (client, object(), object()))
 
     assert cli.command_credential_renew(_args(tmp_path)) == 1
     assert json.loads(capsys.readouterr().out) == {

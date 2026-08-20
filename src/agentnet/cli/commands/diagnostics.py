@@ -60,13 +60,19 @@ from agentnet.cli import helpers
 
 def _verification_package_root() -> Path:
     configured = os.environ.get("AGENTNET_PACKAGE_ROOT")
-    package_root = (
-        Path(configured).expanduser().resolve()
-        if configured
-        else Path(__file__).resolve().parents[3]
-    )
-    tests_root = package_root / "tests"
-    if not tests_root.is_dir():
+    if configured:
+        package_root = Path(configured).expanduser().resolve()
+    else:
+        package_root = next(
+            (
+                candidate
+                for candidate in Path(__file__).resolve().parents
+                if (candidate / "tests").is_dir()
+                and (candidate / "pyproject.toml").is_file()
+            ),
+            None,
+        )
+    if package_root is None or not (package_root / "tests").is_dir():
         raise SystemExit(
             "AgentNet packaged tests are unavailable; reinstall the complete npm package "
             "or run verification from a source checkout"
@@ -359,85 +365,6 @@ def command_status(args: argparse.Namespace) -> int:
     )
     return 0 if ready else 1
 
-def _provision_owner_only_key(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.parent.is_symlink() or path.parent.stat().st_mode & 0o077:
-        raise SystemExit(f"key directory must be an owner-only real directory: {path.parent}")
-    if os.path.lexists(path):
-        if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077 or path.stat().st_size != 32:
-            raise SystemExit(f"existing key is not an owner-only 32-byte file: {path}")
-        return
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        remaining = memoryview(os.urandom(32))
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("key provisioning write made no progress")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-
-
-def _provision_owner_only_signing_key(path: Path) -> P256KeyPair:
-    """Create or reload one exact owner-only P-256 software key."""
-
-    path = path.absolute()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if (
-        path.parent.is_symlink()
-        or path.parent.stat().st_uid != os.geteuid()
-        or path.parent.stat().st_mode & 0o077
-    ):
-        raise SystemExit(f"signing-key directory must be an owner-only real directory: {path.parent}")
-    if os.path.lexists(path):
-        return P256KeyPair.from_private_pem(
-            helpers._owner_only_file(path, label="existing backup seal private key")
-        )
-    key = P256KeyPair.generate()
-    helpers._write_owner_only(path, key.private_pem)
-    return key
-
-
-def command_bootstrap_server_agent(args: argparse.Namespace) -> int:
-    """Provision shared software keys, migrate PostgreSQL, and verify recovery."""
-
-    config = helpers._load_config(Path(args.config))
-    if config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT:
-        raise SystemExit("bootstrap-server-agent requires always_on_server_agent profile")
-    secrets_dir = config.data_dir / "secrets"
-    _provision_owner_only_key(secrets_dir / "records.key")
-    if config.artifact_mode == "enabled":
-        _provision_owner_only_key(secrets_dir / "artifact.key")
-    core = CommunicationCore.open(config, validate_deployment_identity=False)
-    try:
-        domain = core.bootstrap_domain()
-        recovery = core.recovery_status(record_observation=True)
-        storage = core.store.readiness()
-        audit = core.audit.verify()
-        print(
-            json.dumps(
-                {
-                    "domain": domain,
-                    "recovery": recovery,
-                    "storage": storage,
-                    "audit": audit,
-                    "deployment_binding": core.server_agent_binding_status(),
-                    "warning": "software-key/single-PostgreSQL bootstrap; no HA, mTLS, KMS, or restore claim",
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return 0 if recovery["ready"] and storage["ready"] and audit["valid"] else 1
-    finally:
-        core.close()
 
 
 def command_demo(args: argparse.Namespace) -> int:
@@ -488,7 +415,7 @@ def command_incident_status(args: argparse.Namespace) -> int:
 
 
 def command_incident_set(args: argparse.Namespace) -> int:
-    from agentnet.cli import _authority_command
+    from agentnet.cli.commands.auth import _authority_command
 
     client, actor, key = helpers._load_identity_client(Path(args.identity))
     change = IncidentModeChange(
@@ -523,3 +450,15 @@ def command_incident_set(args: argparse.Namespace) -> int:
         raise SystemExit(f"incident transition was rejected with HTTP {response.status_code}")
     print(json.dumps(response.json(), indent=2, sort_keys=True))
     return 0
+
+__all__ = (
+    "command_verify",
+    "command_harness_probe",
+    "command_harness_demo",
+    "command_harness_live_gate",
+    "command_a2a_demo",
+    "command_status",
+    "command_demo",
+    "command_incident_status",
+    "command_incident_set",
+)

@@ -529,3 +529,14 @@ def _configure_client_setup_arguments(
             os.environ.get("AGENTNET_PROFILE_KEY", "default") if defaults else suppressed
         ),
     )
+
+__all__ = (
+    "command_serve",
+    "command_console_open",
+    "command_console_serve",
+    "command_supervisor_run",
+    "command_manager_run",
+    "command_client_setup",
+    "command_client_setup_status",
+    "command_client_setup_continue",
+)

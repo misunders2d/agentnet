@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from agentnet import cli
+from agentnet.cli.commands import auth
 from agentnet.identity.invitations import InternalInvitationRecord, InternalInvitationTransaction
 from agentnet.security.signatures import P256KeyPair
 
@@ -85,13 +86,13 @@ def test_sponsored_join_atomically_replaces_only_validated_state_and_writes_invi
     state_path, _original = _sponsored_state(tmp_path, key)
     invitation_path = (tmp_path / "private" / "invitation.json").resolve()
     monkeypatch.setattr(
-        cli,
+        auth,
         "_public_json_request",
         lambda **_request: {"state": "invitation_issued", "invitation": record.model_dump(mode="json")},
     )
     resumed: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        cli,
+        auth,
         "command_invitation_oidc_begin",
         lambda args: resumed.append((args.state, args.invitation)) or 0,
     )
@@ -135,7 +136,7 @@ def test_sponsored_join_force_flag_cannot_overwrite_invitation_output(
     invitation_path = (tmp_path / "private" / "invitation.json").resolve()
     cli._write_owner_json(invitation_path, {"do_not_replace": True})
     monkeypatch.setattr(
-        cli,
+        auth,
         "_public_json_request",
         lambda **_request: pytest.fail("existing output must fail before invitation release"),
     )
@@ -154,7 +155,7 @@ def test_sponsored_join_rejects_non_owner_only_or_symlinked_state(
     state_path, _original = _sponsored_state(tmp_path, key)
     state_path.chmod(0o644)
     monkeypatch.setattr(
-        cli,
+        auth,
         "_public_json_request",
         lambda **_request: pytest.fail("unsafe state must fail before polling"),
     )

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 
 import agentnet.cli as cli
+from agentnet.cli.commands import auth
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.security.signatures import P256KeyPair
 
@@ -173,14 +174,14 @@ def _args(identity_path: Path, state_path: Path) -> argparse.Namespace:
 
 
 def _install_client(monkeypatch: pytest.MonkeyPatch, client: Client) -> None:
-    monkeypatch.setattr(cli, "AgentNetClient", lambda **_kwargs: client)
+    monkeypatch.setattr(auth, "AgentNetClient", lambda **_kwargs: client)
     monkeypatch.setattr(
-        cli,
+        auth,
         "uuid4",
         lambda: UUID(str(client.transaction["request_id"])),
     )
-    monkeypatch.setattr(cli.time, "time", lambda: NOW)
-    monkeypatch.setattr(cli.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(auth.time, "time", lambda: NOW)
+    monkeypatch.setattr(auth.time, "monotonic", lambda: 10.0)
 
 
 def test_parser_exposes_exact_expired_laptop_credential_command() -> None:
@@ -281,8 +282,8 @@ def test_pending_opens_stable_approval_once_then_completes(
     )
     opened: list[tuple[str, int]] = []
     _install_client(monkeypatch, client)
-    monkeypatch.setattr(cli.webbrowser, "open", lambda url, new=0: opened.append((url, new)) or True)
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(auth.webbrowser, "open", lambda url, new=0: opened.append((url, new)) or True)
+    monkeypatch.setattr(auth.time, "sleep", lambda _seconds: None)
 
     assert cli.command_credential_reauthorize_expired(_args(identity_path, state_path)) == 0
     assert opened == [("https://approval.example/approval", 1)]
@@ -319,11 +320,11 @@ def test_failed_approval_handoff_remains_retryable(
     browser_results = iter((False, True))
     _install_client(monkeypatch, client)
     monkeypatch.setattr(
-        cli.webbrowser,
+        auth.webbrowser,
         "open",
         lambda url, new=0: opened.append(url) or next(browser_results),
     )
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(auth.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(SystemExit, match="system browser could not be opened"):
         cli.command_credential_reauthorize_expired(_args(identity_path, state_path))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -108,9 +109,11 @@ def test_setup_continue_never_restarts_or_signals_harness(
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not signal a harness")),
     )
     monkeypatch.setattr(
-        cli.subprocess,
+        subprocess,
         "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not launch process control")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not launch process control")
+        ),
     )
 
     assert cli.command_client_setup_continue(_args()) == 0
@@ -133,7 +136,7 @@ def test_setup_does_not_mutate_shell_profile_or_request_sudo(
     coordinator = _Coordinator(_result())
     monkeypatch.setattr("agentnet.cli.commands.services._build_client_setup_coordinator", lambda _args: coordinator)
     monkeypatch.setattr(
-        cli.subprocess,
+        subprocess,
         "run",
         lambda command, *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError(f"unexpected command: {command!r}")

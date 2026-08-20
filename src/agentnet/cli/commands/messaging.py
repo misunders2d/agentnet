@@ -469,3 +469,23 @@ def command_message_acknowledge(args: argparse.Namespace) -> int:
         )
     print(json.dumps(response.json(), indent=2, sort_keys=True))
     return 0
+
+__all__ = (
+    "command_authority_inventory",
+    "command_authority_explain",
+    "command_relationship_propose",
+    "command_relationship_accept",
+    "command_artifact_upload",
+    "command_artifact_abort",
+    "command_artifact_lifecycle",
+    "command_artifact_download",
+    "command_message_send",
+    "command_obligation_list",
+    "command_obligation_show",
+    "command_obligation_inbox",
+    "command_obligation_transition",
+    "command_obligation_cancel",
+    "command_obligation_reconcile",
+    "command_message_inbox",
+    "command_message_acknowledge",
+)
