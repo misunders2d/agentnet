@@ -2979,6 +2979,189 @@ def _validate_inactive_auxiliary_unit_state(
             "inactive AgentNet auxiliary unit does not match fixed state",
         )
 
+
+def _verify_upgrade_quiescence(systemctl_executable: Path) -> None:
+    """Require every managed service to match the fixed inactive upgrade state."""
+
+    expected_states = {
+        APPROVAL_UNIT: "disabled",
+        CORE_UNIT: "disabled",
+        C0_RESPONDER_UNIT: "disabled",
+        CREDENTIAL_RENEW_UNIT: "static",
+        CREDENTIAL_RENEW_TIMER: "disabled",
+    }
+    for unit, expected_state in expected_states.items():
+        _validate_inactive_auxiliary_unit_state(
+            unit=unit,
+            expected_unit_file_state=expected_state,
+            properties=_systemd_show(systemctl_executable, unit),
+        )
+
+
+def _verify_live_service_state(
+    *,
+    systemctl_executable: Path,
+    layout: SetupLayout,
+    node_executable: Path,
+    agentnet_executable: Path,
+    uv_executable: Path,
+    identity_enrolled: bool,
+    c0_responder_required: bool,
+    auxiliary_ready: bool,
+) -> None:
+    """Verify exact systemd bindings for the current activation phase."""
+
+    active_units = [APPROVAL_UNIT, CORE_UNIT]
+    if auxiliary_ready and identity_enrolled:
+        active_units.append(CREDENTIAL_RENEW_TIMER)
+    if auxiliary_ready and c0_responder_required:
+        active_units.append(C0_RESPONDER_UNIT)
+    for unit in active_units:
+        _run_systemctl(
+            systemctl_executable,
+            ["is-active", "--quiet", unit],
+            failure_message="AgentNet managed unit is not active",
+        )
+    _validate_systemd_service_runtime(
+        systemctl_executable,
+        unit=APPROVAL_UNIT,
+        user=APPROVAL_USER,
+        data_root=layout.host(APPROVAL_DATA),
+        node_executable=node_executable,
+        agentnet_executable=agentnet_executable,
+        uv_executable=uv_executable,
+        expected_argv=(
+            str(node_executable),
+            str(agentnet_executable),
+            "approval",
+            "serve",
+            "--config",
+            str(layout.host(APPROVAL_CONFIG)),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(APPROVAL_PORT),
+        ),
+        layout=layout,
+    )
+    _validate_systemd_service_runtime(
+        systemctl_executable,
+        unit=CORE_UNIT,
+        user=CORE_USER,
+        data_root=layout.host(CORE_DATA),
+        node_executable=node_executable,
+        agentnet_executable=agentnet_executable,
+        uv_executable=uv_executable,
+        expected_argv=(
+            str(node_executable),
+            str(agentnet_executable),
+            "serve",
+            "--config",
+            str(layout.host(CORE_CONFIG)),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(CORE_PORT),
+        ),
+        layout=layout,
+    )
+    if auxiliary_ready and c0_responder_required:
+        _validate_systemd_service_runtime(
+            systemctl_executable,
+            unit=C0_RESPONDER_UNIT,
+            user=C0_RESPONDER_USER,
+            data_root=layout.host(C0_RESPONDER_DATA),
+            node_executable=node_executable,
+            agentnet_executable=agentnet_executable,
+            uv_executable=uv_executable,
+            expected_argv=(
+                str(node_executable),
+                str(agentnet_executable),
+                "c0-pilot",
+                "responder",
+                "--run",
+                "--config",
+                str(layout.host(C0_RESPONDER_CONFIG)),
+                "--credential",
+                "/run/credentials/agentnet-c0-responder.service/signing-key.pem",
+            ),
+            layout=layout,
+        )
+    expected_states = {CREDENTIAL_RENEW_UNIT: "static"}
+    if not auxiliary_ready or not c0_responder_required:
+        expected_states[C0_RESPONDER_UNIT] = "disabled"
+    if not auxiliary_ready or not identity_enrolled:
+        expected_states[CREDENTIAL_RENEW_TIMER] = "disabled"
+    for unit, expected_state in expected_states.items():
+        _validate_inactive_auxiliary_unit_state(
+            unit=unit,
+            expected_unit_file_state=expected_state,
+            properties=_systemd_show(systemctl_executable, unit),
+        )
+    if auxiliary_ready and identity_enrolled:
+        _validate_active_renewal_timer_state(
+            _systemd_show(systemctl_executable, CREDENTIAL_RENEW_TIMER),
+            next_run_usec=_systemd_timer_next_run(
+                systemctl_executable,
+                CREDENTIAL_RENEW_TIMER,
+            ),
+            now_usec=time.time_ns() // 1_000,
+        )
+
+
+def _prepare_forward_only_transition(
+    *,
+    rollback_capable_upgrade: bool,
+    pending_upgrade: dict[str, Any],
+    systemctl_executable: Path,
+    runtime_accounts: list[tuple[pwd.struct_passwd, Path, str]],
+    node_executable: Path,
+    agentnet_executable: Path,
+    uv_executable: Path,
+    steps: list[dict[str, Any]],
+) -> None:
+    """Quiesce managed units and prepare exact package runtimes for upgrade."""
+
+    if rollback_capable_upgrade:
+        pending_upgrade["service_state_changed"] = True
+    quiesce_status = _run_systemctl_sequence_or_reconcile(
+        systemctl_executable,
+        (
+            ["daemon-reload"],
+            ["disable", "--now", C0_RESPONDER_UNIT],
+            ["reset-failed", C0_RESPONDER_UNIT],
+            ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+            ["reset-failed", CREDENTIAL_RENEW_TIMER],
+            ["stop", CREDENTIAL_RENEW_UNIT],
+            ["reset-failed", CREDENTIAL_RENEW_UNIT],
+            ["disable", "--now", CORE_UNIT],
+            ["reset-failed", CORE_UNIT],
+            ["disable", "--now", APPROVAL_UNIT],
+            ["reset-failed", APPROVAL_UNIT],
+        ),
+        reconcile=lambda: _verify_upgrade_quiescence(systemctl_executable),
+    )
+    if quiesce_status == "completed":
+        _verify_upgrade_quiescence(systemctl_executable)
+    steps.append(
+        {
+            "id": "package_upgrade_service_quiescence",
+            "status": quiesce_status,
+        }
+    )
+
+    for account, data_root, runtime_stage in runtime_accounts:
+        _prepare_managed_service_runtime(
+            account,
+            data_root=data_root,
+            node_executable=node_executable,
+            agentnet_executable=agentnet_executable,
+            uv_executable=uv_executable,
+            stage=runtime_stage,
+        )
+        steps.append({"id": runtime_stage, "status": "completed"})
+    return None
+
 def _systemd_timer_next_run(executable: Path, unit: str) -> int | None:
     """Return the exact next realtime activation in microseconds, if scheduled."""
 
@@ -4927,7 +5110,7 @@ def _build_core_oidc_config(
 
 
 def _require_core_config_matches(
-    config: Any,
+    config: ExtensionConfig,
     *,
     request: ServerSetupRequest,
     core_data: Path,
@@ -4971,7 +5154,7 @@ def _load_validated_core_config(
     core_data: Path,
     oidc: OIDCEnrollmentConfig,
     scanner_trust: ScannerTrustConfig | None,
-):
+) -> ExtensionConfig:
     config = load_config_json(
         _read_private_managed_file(
             core_config_path,
@@ -5020,7 +5203,7 @@ def _load_upgrade_compatible_core_config(
     core_data: Path,
     oidc: OIDCEnrollmentConfig,
     scanner_trust: ScannerTrustConfig | None,
-) -> tuple[Any, bool]:
+) -> tuple[ExtensionConfig, bool]:
     """Validate exact current semantics, allowing only missing 0.1.30 owner pins."""
 
     legacy_oidc = _legacy_remote_activation_oidc(oidc)
@@ -5142,27 +5325,177 @@ def _migrate_legacy_remote_activation_policy(
     )
 
 
-def _prepare_supported_upgrade(
+def _resume_supported_upgrade(
     *,
+    request: ServerSetupRequest,
+    preflight: ServerSetupPreflight,
+    layout: SetupLayout,
     existing_marker: dict[str, Any] | None,
     existing_marker_payload: bytes | None,
     approved_digest: str,
-    approval_config_path: Path,
     approval_account: pwd.struct_passwd,
     approval_preexisting: bool,
-    core_config_path: Path,
-    core_oidc_path: Path,
     core_account: pwd.struct_passwd,
     core_preexisting: bool,
-    database_url: str,
-    domain_id: str,
-    enrolled_harness_id: str | None,
-    enrolled_credential_id: str | None,
-    profile_key: str,
-    systemctl_executable: Path,
-    unit_paths: Mapping[str, Path],
-    marker_path: Path,
-    journal_path: Path,
+    uid: int,
+    gid: int,
+    pending: dict[str, Any],
+) -> str | None:
+    """Resume or reconcile one exact journaled setup upgrade."""
+
+    journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
+    journal = _read_upgrade_journal(journal_path, uid=uid, gid=gid)
+    if journal is None:
+        return None
+    approval_config_path = layout.host(APPROVAL_CONFIG)
+    core_config_path = layout.host(CORE_CONFIG)
+    unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
+    superseded_committed_target = (
+        existing_marker is not None
+        and existing_marker_payload is not None
+        and existing_marker.get("request_digest") == journal["to_request_digest"]
+        and existing_marker.get("package_version") == journal["to_package_version"]
+        and existing_marker.get("previous_marker_digest")
+        == journal["from_marker_sha256"]
+        and journal["to_package_version"] != __version__
+        and _forward_only_setup_upgrade(
+            journal["from_package_version"],
+            journal["to_package_version"],
+        )
+        and _supported_marker_upgrade(existing_marker)
+    )
+    if superseded_committed_target:
+        assert existing_marker is not None
+        if not approval_preexisting or not core_preexisting:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "committed setup marker has no realized Core and Approval state",
+            )
+        _require_marker_realized_state(
+            existing_marker,
+            approval_config_digest=_managed_config_digest(
+                approval_config_path,
+                approval_account,
+                blocker="approval_config",
+            ),
+            core_config_digest=_managed_config_digest(
+                core_config_path,
+                core_account,
+                blocker="core_custody",
+                exclude_top_level=frozenset(
+                    {"enrolled_harness_id", "enrolled_credential_id"}
+                ),
+            ),
+            unit_paths=unit_paths,
+            uid=uid,
+            gid=gid,
+        )
+        # The prior target marker is already the no-rollback boundary. Keep its
+        # journal until the next-edge journal atomically replaces it.
+        return None
+    committed_target = (
+        existing_marker is not None
+        and existing_marker_payload is not None
+        and existing_marker.get("request_digest") == journal["to_request_digest"]
+        and existing_marker.get("package_version") == journal["to_package_version"]
+        and existing_marker.get("previous_marker_digest")
+        == journal["from_marker_sha256"]
+        and journal["to_request_digest"] == approved_digest
+        and journal["to_package_version"] == __version__
+    )
+    if committed_target:
+        assert existing_marker is not None
+        if not approval_preexisting or not core_preexisting:
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "committed setup marker has no realized Core and Approval state",
+            )
+        _require_marker_realized_state(
+            existing_marker,
+            approval_config_digest=_managed_config_digest(
+                approval_config_path,
+                approval_account,
+                blocker="approval_config",
+            ),
+            core_config_digest=_managed_config_digest(
+                core_config_path,
+                core_account,
+                blocker="core_custody",
+                exclude_top_level=frozenset(
+                    {"enrolled_harness_id", "enrolled_credential_id"}
+                ),
+            ),
+            unit_paths=unit_paths,
+            uid=uid,
+            gid=gid,
+        )
+        if journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA:
+            _clear_upgrade_journal(journal_path)
+            return "cleared_committed_lifecycle_upgrade"
+        if _forward_only_setup_upgrade(
+            journal["from_package_version"],
+            journal["to_package_version"],
+        ):
+            pending.update(
+                forward_only_upgrade=True,
+                journal_path=journal_path,
+            )
+            return "resumed_committed_forward_only_upgrade"
+        _clear_upgrade_journal(journal_path)
+        return "cleared_committed_upgrade"
+    if (
+        existing_marker_payload is None
+        or existing_marker is None
+        or journal["from_marker_sha256"]
+        != hashlib.sha256(existing_marker_payload).hexdigest()
+        or journal["from_package_version"] != existing_marker.get("package_version")
+        or journal["from_request_digest"] != existing_marker.get("request_digest")
+        or journal["to_request_digest"] != approved_digest
+        or journal["to_package_version"] != __version__
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "an unrelated interrupted AgentNet setup upgrade is journaled on this host",
+        )
+    lifecycle_upgrade = (
+        journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
+    )
+    pending.update(
+        journal=journal,
+        journal_path=journal_path,
+        marker_path=layout.host(SETUP_MARKER),
+        unit_paths=unit_paths,
+        config_paths={
+            "core_config": core_config_path,
+            "core_oidc_config": layout.host(CORE_OIDC_CONFIG),
+        },
+        core_account=core_account,
+        database_url=request.database_url,
+        systemctl_executable=preflight.runtime.systemctl_executable,
+        rollback_capable_upgrade=lifecycle_upgrade,
+        uid=uid,
+        gid=gid,
+    )
+    return (
+        "resumed_journaled_lifecycle_upgrade"
+        if lifecycle_upgrade
+        else "resumed_journaled_upgrade"
+    )
+
+
+def _prepare_supported_upgrade(
+    *,
+    request: ServerSetupRequest,
+    preflight: ServerSetupPreflight,
+    layout: SetupLayout,
+    existing_marker: dict[str, Any] | None,
+    existing_marker_payload: bytes | None,
+    approved_digest: str,
+    approval_account: pwd.struct_passwd,
+    approval_preexisting: bool,
+    core_account: pwd.struct_passwd,
+    core_preexisting: bool,
+    prevalidated_config: ExtensionConfig | None,
     uid: int,
     gid: int,
     pending: dict[str, Any],
@@ -5176,137 +5509,48 @@ def _prepare_supported_upgrade(
     deployment that matches neither marker.
     """
 
-    journal = _read_upgrade_journal(journal_path, uid=uid, gid=gid)
-    upgrading = existing_marker is not None and existing_marker.get("request_digest") != approved_digest
-    if journal is not None:
-        superseded_committed_target = (
-            existing_marker is not None
-            and existing_marker_payload is not None
-            and existing_marker.get("request_digest") == journal["to_request_digest"]
-            and existing_marker.get("package_version") == journal["to_package_version"]
-            and existing_marker.get("previous_marker_digest")
-            == journal["from_marker_sha256"]
-            and journal["to_package_version"] != __version__
-            and _forward_only_setup_upgrade(
-                journal["from_package_version"],
-                journal["to_package_version"],
-            )
-            and _supported_marker_upgrade(existing_marker)
-        )
-        if superseded_committed_target:
-            if not approval_preexisting or not core_preexisting:
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "committed setup marker has no realized Core and Approval state",
-                )
-            _require_marker_realized_state(
-                existing_marker,
-                approval_config_digest=_managed_config_digest(
-                    approval_config_path,
-                    approval_account,
-                    blocker="approval_config",
-                ),
-                core_config_digest=_managed_config_digest(
-                    core_config_path,
-                    core_account,
-                    blocker="core_custody",
-                    exclude_top_level=frozenset(
-                        {"enrolled_harness_id", "enrolled_credential_id"}
-                    ),
-                ),
-                unit_paths=unit_paths,
-                uid=uid,
-                gid=gid,
-            )
-            # The prior target marker is already the no-rollback boundary.
-            # Keep its journal until the separately approved next-edge journal
-            # atomically replaces it.  Clearing it here creates a crash window
-            # where a failed write loses both recovery records.
-            journal = None
-    if journal is not None:
-        committed_target = (
-            existing_marker is not None
-            and existing_marker_payload is not None
-            and existing_marker.get("request_digest") == journal["to_request_digest"]
-            and existing_marker.get("package_version") == journal["to_package_version"]
-            and existing_marker.get("previous_marker_digest")
-            == journal["from_marker_sha256"]
-            and journal["to_request_digest"] == approved_digest
-            and journal["to_package_version"] == __version__
-        )
-        if committed_target:
-            if not approval_preexisting or not core_preexisting:
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "committed setup marker has no realized Core and Approval state",
-                )
-            _require_marker_realized_state(
-                existing_marker,
-                approval_config_digest=_managed_config_digest(
-                    approval_config_path,
-                    approval_account,
-                    blocker="approval_config",
-                ),
-                core_config_digest=_managed_config_digest(
-                    core_config_path,
-                    core_account,
-                    blocker="core_custody",
-                    exclude_top_level=frozenset(
-                        {"enrolled_harness_id", "enrolled_credential_id"}
-                    ),
-                ),
-                unit_paths=unit_paths,
-                uid=uid,
-                gid=gid,
-            )
-            if journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA:
-                _clear_upgrade_journal(journal_path)
-                return "cleared_committed_lifecycle_upgrade"
-            if _forward_only_setup_upgrade(
-                journal["from_package_version"],
-                journal["to_package_version"],
-            ):
-                pending.update(
-                    forward_only_upgrade=True,
-                    journal_path=journal_path,
-                )
-                return "resumed_committed_forward_only_upgrade"
-            _clear_upgrade_journal(journal_path)
-            return "cleared_committed_upgrade"
-        if (
-            existing_marker_payload is None
-            or journal["from_marker_sha256"] != hashlib.sha256(existing_marker_payload).hexdigest()
-            or journal["from_package_version"] != existing_marker.get("package_version")
-            or journal["from_request_digest"] != existing_marker.get("request_digest")
-            or journal["to_request_digest"] != approved_digest
-            or journal["to_package_version"] != __version__
-        ):
-            raise ServerSetupError(
-                "setup_upgrade_conflict",
-                "an unrelated interrupted AgentNet setup upgrade is journaled on this host",
-            )
-        lifecycle_upgrade = journal.get("schema") == _LIFECYCLE_UPGRADE_JOURNAL_SCHEMA
-        pending.update(
-            journal=journal,
-            journal_path=journal_path,
-            marker_path=marker_path,
-            unit_paths=dict(unit_paths),
-            config_paths={
-                "core_config": core_config_path,
-                "core_oidc_config": core_oidc_path,
-            },
-            core_account=core_account,
-            database_url=database_url,
-            systemctl_executable=systemctl_executable,
-            rollback_capable_upgrade=lifecycle_upgrade,
-            uid=uid,
-            gid=gid,
-        )
-        return (
-            "resumed_journaled_lifecycle_upgrade"
-            if lifecycle_upgrade
-            else "resumed_journaled_upgrade"
-        )
+    approval_config_path = layout.host(APPROVAL_CONFIG)
+    core_config_path = layout.host(CORE_CONFIG)
+    core_oidc_path = layout.host(CORE_OIDC_CONFIG)
+    database_url = request.database_url
+    domain_id = request.domain_id
+    enrolled_harness_id = (
+        prevalidated_config.enrolled_harness_id
+        if prevalidated_config is not None
+        else None
+    )
+    enrolled_credential_id = (
+        prevalidated_config.enrolled_credential_id
+        if prevalidated_config is not None
+        else None
+    )
+    profile_key = request.runtime_instance_id
+    systemctl_executable = preflight.runtime.systemctl_executable
+    unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
+    marker_path = layout.host(SETUP_MARKER)
+    journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
+
+    resumed = _resume_supported_upgrade(
+        request=request,
+        preflight=preflight,
+        layout=layout,
+        existing_marker=existing_marker,
+        existing_marker_payload=existing_marker_payload,
+        approved_digest=approved_digest,
+        approval_account=approval_account,
+        approval_preexisting=approval_preexisting,
+        core_account=core_account,
+        core_preexisting=core_preexisting,
+        uid=uid,
+        gid=gid,
+        pending=pending,
+    )
+    if resumed is not None:
+        return resumed
+    upgrading = (
+        existing_marker is not None
+        and existing_marker.get("request_digest") != approved_digest
+    )
     if not upgrading:
         return "not_required"
     assert existing_marker is not None and existing_marker_payload is not None
@@ -5442,6 +5686,1004 @@ def _prepare_supported_upgrade(
         gid=gid,
     )
     return "validated_pre_upgrade_realized_state"
+
+
+def _migrate_rollback_capable_upgrade(
+    *,
+    pending_upgrade: Mapping[str, Any],
+    core_account: pwd.struct_passwd,
+    request: ServerSetupRequest,
+    steps: list[dict[str, Any]],
+) -> dict[str, object]:
+    """Migrate the retained v0.1.45 database snapshot and prove endpoint state."""
+
+    journal = pending_upgrade.get("journal")
+    if not isinstance(journal, Mapping):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 migration requires its exact upgrade journal",
+        )
+    source = _validated_v0145_database_snapshot(journal.get("previous_database"))
+    identity = source["identity"]
+    migration_evidence = _run_v0145_database_operation_as(
+        core_account,
+        request.database_url,
+        operation="migrate",
+        source=source,
+        domain_id=str(identity["domain_id"]),
+        harness_id=str(identity["harness_id"]),
+        credential_id=str(identity["credential_id"]),
+        profile_key=str(identity["profile_key"]),
+    )
+    endpoint_row = migration_evidence.get("endpoint_lifecycle")
+    if (
+        not isinstance(endpoint_row, dict)
+        or endpoint_row.get("harness_id") != identity["harness_id"]
+        or endpoint_row.get("state") != "restart_required"
+    ):
+        raise ServerSetupError(
+            "setup_upgrade_conflict",
+            "v0.1.45 migration did not prove the exact endpoint lifecycle",
+        )
+    steps.append(
+        {
+            "id": "schema_v7_endpoint_lifecycle",
+            "status": "restart_required",
+        }
+    )
+    return {
+        "endpoint_id": str(identity["harness_id"]),
+        "state": "restart_required",
+        "public_url": request.core_public_origin,
+        "identity_created": False,
+    }
+
+
+def _ensure_c0_responder_runtime(
+    *,
+    account: pwd.struct_passwd | None,
+    forward_only_transition: bool,
+    runtime_prepared: bool,
+    layout: SetupLayout,
+    useradd_executable: Path,
+    node_executable: Path,
+    agentnet_executable: Path,
+    uv_executable: Path,
+    steps: list[dict[str, Any]],
+) -> pwd.struct_passwd:
+    """Create and prepare the fixed C0 responder service identity when needed."""
+
+    data_root = layout.host(C0_RESPONDER_DATA)
+    if account is None:
+        account = _ensure_account(
+            C0_RESPONDER_USER,
+            C0_RESPONDER_DATA,
+            useradd_executable=useradd_executable,
+        )
+        steps.append({"id": "c0_responder_identity", "status": "completed"})
+        steps.append(
+            {
+                "id": "c0_responder_private_root",
+                "status": _ensure_private_root(data_root, account),
+            }
+        )
+    if forward_only_transition and not runtime_prepared:
+        _prepare_managed_service_runtime(
+            account,
+            data_root=data_root,
+            node_executable=node_executable,
+            agentnet_executable=agentnet_executable,
+            uv_executable=uv_executable,
+            stage="c0_responder_runtime_prepare",
+        )
+        steps.append(
+            {"id": "c0_responder_runtime_prepare", "status": "completed"}
+        )
+    return account
+
+
+def _prepare_c0_responder_activation(
+    *,
+    config: ExtensionConfig,
+    request: ServerSetupRequest,
+    start: bool,
+    layout: SetupLayout,
+    c0_responder_account: pwd.struct_passwd,
+    core_account: pwd.struct_passwd,
+    verified: dict[str, bool],
+) -> tuple[bool, bool, bytes | None, dict[str, object], str | None]:
+    """Validate activated identity and prepare bounded responder state."""
+
+    identity_enrolled = bool(
+        config.enrolled_harness_id and config.enrolled_credential_id
+    )
+    c0_responder_required = False
+    responder_payload: bytes | None = None
+    supersession_evidence: dict[str, object] = {"status": "not_applicable"}
+    responder_config_status: str | None = None
+    config_path = layout.host(C0_RESPONDER_CONFIG)
+    terminal_path = layout.host(C0_RESPONDER_TERMINAL)
+    if identity_enrolled and start:
+        identity_profile = _validated_managed_identity_profile(
+            layout.host(SERVER_AGENT_IDENTITY),
+            layout.host(SERVER_AGENT_KEY),
+            core_account,
+            config=config,
+            request=request,
+        )
+        verified["identity_enrolled"] = True
+        identity_actor = identity_profile["actor"]
+        if not isinstance(identity_actor, dict):
+            raise ServerSetupError(
+                "server_agent_identity",
+                "managed server-agent identity actor is invalid",
+            )
+        terminal, supersession_evidence = _validated_c0_terminal_marker(
+            terminal_path,
+            c0_responder_account,
+            config=config,
+            principal_id=str(identity_actor["principal_id"]),
+            credential_epoch=int(identity_actor["credential_epoch"]),
+            supersession_path=layout.host(CREDENTIAL_SUPERSESSION_JOURNAL),
+            core_account=core_account,
+            database_url=request.database_url,
+        )
+        if terminal is not None:
+            if config_path.exists() or config_path.is_symlink():
+                _require_private_file(
+                    config_path,
+                    c0_responder_account,
+                    blocker="c0_responder_terminal",
+                )
+                try:
+                    config_path.unlink()
+                    directory = os.open(
+                        config_path.parent,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                    )
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except OSError as exc:
+                    raise ServerSetupError(
+                        "c0_responder_terminal",
+                        "C0 responder terminal cleanup could not be reconciled",
+                    ) from exc
+                responder_config_status = "terminal_cleanup_reconciled"
+            else:
+                responder_config_status = "terminal_not_recreated"
+        else:
+            c0_responder_required = True
+            responder_payload = json.dumps(
+                {
+                    "schema": "agentnet.c0-pilot-responder.config.v1",
+                    "core_base_url": request.core_public_origin,
+                    "audience": request.service_audience,
+                    "domain_id": request.domain_id,
+                    "harness_id": config.enrolled_harness_id,
+                    "credential_id": config.enrolled_credential_id,
+                    "poll_seconds": 2,
+                    "max_consecutive_errors": 5,
+                },
+                indent=2,
+                sort_keys=True,
+            ).encode() + b"\n"
+    elif not identity_enrolled and any(
+        path.exists() or path.is_symlink()
+        for path in (config_path, terminal_path)
+    ):
+        raise ServerSetupError(
+            "c0_responder_conflict",
+            "C0 responder state exists before exact activated identity",
+        )
+    return (
+        identity_enrolled,
+        c0_responder_required,
+        responder_payload,
+        supersession_evidence,
+        responder_config_status,
+    )
+
+
+def _start_managed_server_services(
+    *,
+    request: ServerSetupRequest,
+    layout: SetupLayout,
+    preflight: ServerSetupPreflight,
+    oidc: OIDCEnrollmentConfig,
+    identity_enrolled: bool,
+    c0_responder_required: bool,
+    responder_payload: bytes | None,
+    c0_responder_account: pwd.struct_passwd,
+    supersession_evidence: dict[str, object],
+    steps: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Start, authenticate, and prove the fixed managed-service topology."""
+
+    node_executable = preflight.runtime.node_executable
+    agentnet_executable = preflight.runtime.agentnet_executable
+    uv_executable = preflight.runtime.uv_executable
+    systemctl_executable = preflight.runtime.systemctl_executable
+    approval_health = {
+        "schema": "agentnet.approval.health.v1",
+        "service": "agentnet-approval",
+        "version": __version__,
+        "status": "alive",
+        "public_origin": request.approval_public_origin,
+        "verifier_id": request.approval_verifier_id,
+    }
+    core_health = {
+        "schema": "agentnet.core.health.v1",
+        "service": "agentnet-core",
+        "version": __version__,
+        "status": "alive",
+        "profile": request.profile,
+        "artifact_mode": request.effective_artifact_mode,
+        "server_agent_capabilities": sorted(
+            capability.value
+            for capability in (
+                {
+                    ServerAgentCapability.OFFLINE_CUSTODY,
+                    ServerAgentCapability.ARTIFACT_STORAGE,
+                }
+                if request.effective_artifact_mode == "enabled"
+                else {ServerAgentCapability.OFFLINE_CUSTODY}
+            )
+        ),
+        "domain_id": request.domain_id,
+        "public_origin": request.core_public_origin,
+        "service_audience": request.service_audience,
+        "runtime_instance_id": request.runtime_instance_id,
+    }
+
+    def verify_live_service_state(*, auxiliary_ready: bool) -> None:
+        _verify_live_service_state(
+            systemctl_executable=systemctl_executable,
+            layout=layout,
+            node_executable=node_executable,
+            agentnet_executable=agentnet_executable,
+            uv_executable=uv_executable,
+            identity_enrolled=identity_enrolled,
+            c0_responder_required=c0_responder_required,
+            auxiliary_ready=auxiliary_ready,
+        )
+
+    base_systemctl_commands: tuple[list[str], ...] = (
+        ["daemon-reload"],
+        ["disable", "--now", CREDENTIAL_RENEW_TIMER],
+        ["disable", "--now", C0_RESPONDER_UNIT],
+        ["stop", CREDENTIAL_RENEW_UNIT],
+        ["enable", "--now", APPROVAL_UNIT],
+        ["enable", CORE_UNIT],
+        ["restart", CORE_UNIT],
+    )
+    base_start_status = _run_systemctl_sequence_or_reconcile(
+        systemctl_executable,
+        base_systemctl_commands,
+        reconcile=lambda: verify_live_service_state(auxiliary_ready=False),
+    )
+    if base_start_status == "completed":
+        verify_live_service_state(auxiliary_ready=False)
+    _health(
+        f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
+        expected=approval_health,
+        attempts=_START_HEALTH_ATTEMPTS,
+    )
+    _health(
+        f"http://127.0.0.1:{CORE_PORT}/healthz",
+        expected=core_health,
+        attempts=_START_HEALTH_ATTEMPTS,
+    )
+    _health(
+        f"{request.approval_public_origin}/healthz",
+        expected=approval_health,
+        attempts=_START_HEALTH_ATTEMPTS,
+    )
+    _health(
+        f"{request.core_public_origin}/healthz",
+        expected=core_health,
+        attempts=_START_HEALTH_ATTEMPTS,
+    )
+    if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
+        raise ServerSetupError(
+            "approval_broker_auth",
+            "Approval broker configuration is unavailable",
+        )
+    broker_client: ApprovalServiceClient | None = None
+    try:
+        broker_client = ApprovalServiceClient(
+            oidc.approval_service,
+            preflight.core_values[_BROKER_CREDENTIAL_NAME],
+        )
+        broker_client.readiness()
+    except GateBlocked as exc:
+        blocker = (
+            exc.gate
+            if exc.gate in {"approval_broker_auth", "approval_broker_unavailable"}
+            else "approval_broker_auth"
+        )
+        raise ServerSetupError(
+            blocker,
+            "Approval broker readiness failed",
+        ) from None
+    finally:
+        if broker_client is not None:
+            broker_client.close()
+    steps.append({"id": "approval_broker_readiness", "status": "completed"})
+    start_status = base_start_status
+    if identity_enrolled:
+        readiness = {
+            "schema": "agentnet.core.readiness.v1",
+            "service": "agentnet-core",
+            "version": __version__,
+            "ready": True,
+            "profile": request.profile,
+            "artifact_mode": request.effective_artifact_mode,
+            "server_agent_capabilities": sorted(
+                capability.value
+                for capability in (
+                    {
+                        ServerAgentCapability.OFFLINE_CUSTODY,
+                        ServerAgentCapability.ARTIFACT_STORAGE,
+                    }
+                    if request.effective_artifact_mode == "enabled"
+                    else {ServerAgentCapability.OFFLINE_CUSTODY}
+                )
+            ),
+            "domain_id": request.domain_id,
+            "public_origin": request.core_public_origin,
+            "service_audience": request.service_audience,
+            "runtime_instance_id": request.runtime_instance_id,
+            "deployment_binding": {
+                "ready": True,
+                "required": True,
+                "credential_state": ("current", "renewal_needed"),
+                "credential_supersession": supersession_evidence,
+            },
+            "approval_broker": {"ready": True, "required": True},
+        }
+        _health(f"http://127.0.0.1:{CORE_PORT}/readyz", expected=readiness)
+        try:
+            _health(
+                f"{request.core_public_origin}/readyz",
+                expected=readiness,
+                attempts=_START_HEALTH_ATTEMPTS,
+            )
+        except ServerSetupError as exc:
+            raise ServerSetupError(
+                exc.blocker,
+                str(exc),
+                identity_enrolled=True,
+            ) from exc
+        if c0_responder_required:
+            if responder_payload is None:  # pragma: no cover - fixed branch invariant
+                raise ServerSetupError(
+                    "c0_responder_conflict",
+                    "C0 responder configuration is unavailable",
+                )
+            steps.append(
+                {
+                    "id": "c0_responder_config",
+                    "status": _atomic_write(
+                        layout.host(C0_RESPONDER_CONFIG),
+                        responder_payload,
+                        mode=0o600,
+                        uid=c0_responder_account.pw_uid,
+                        gid=c0_responder_account.pw_gid,
+                    ),
+                }
+            )
+        auxiliary_commands = _credential_renewal_activation_commands(
+            c0_responder_required=c0_responder_required,
+        )
+        auxiliary_status = _run_systemctl_sequence_or_reconcile(
+            systemctl_executable,
+            auxiliary_commands,
+            reconcile=lambda: verify_live_service_state(auxiliary_ready=True),
+        )
+        if auxiliary_status == "completed":
+            verify_live_service_state(auxiliary_ready=True)
+        if auxiliary_status != "completed":
+            start_status = auxiliary_status
+        steps.append({"id": "operational_readiness", "status": "completed"})
+        status = "operational"
+        next_action = (
+            "enroll additional ordinary laptops with agentnet join guided"
+        )
+    else:
+        status = "waiting_owner_oidc_or_passkey"
+        next_action = (
+            "complete owner passkey registration and guided identity-only enrollment"
+        )
+    steps.append({"id": "service_start", "status": start_status})
+    steps.append(
+        {
+            "id": "managed_unit_runtime",
+            "status": "validated_hermetic_live_binding",
+        }
+    )
+    steps.append({"id": "public_https_routes", "status": "completed"})
+    return status, next_action
+
+
+def _classify_setup_transition(
+    *,
+    request: ServerSetupRequest,
+    preflight: ServerSetupPreflight,
+    layout: SetupLayout,
+    approved_digest: str,
+    root_uid: int,
+    root_gid: int,
+) -> tuple[
+    bytes | None,
+    dict[str, Any] | None,
+    bool,
+    bool,
+    bool,
+]:
+    """Validate existing marker/topology state and classify this apply edge."""
+
+    marker_path = layout.host(SETUP_MARKER)
+    journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
+    existing_payload = _read_setup_marker(
+        marker_path,
+        uid=root_uid,
+        gid=root_gid,
+    )
+    existing_marker = _validated_setup_marker(
+        existing_payload,
+        request_digest=approved_digest,
+        legacy_request_digest=preflight.legacy_request_digest,
+        artifact_mode=(
+            request.effective_artifact_mode
+            if request.schema_version == "agentnet.server-setup.request.v2"
+            else None
+        ),
+    )
+    upgrade_profile = (
+        _marker_upgrade_unit_profile(existing_marker)
+        if existing_marker is not None
+        else None
+    )
+    topology_expansion = upgrade_profile == LEGACY_COMMUNICATION_ONLY_UNITS
+    forward_only_upgrade = (
+        existing_marker is not None
+        and _forward_only_setup_upgrade(
+            existing_marker.get("package_version"),
+            __version__,
+        )
+    )
+    journal_present = journal_path.exists() or journal_path.is_symlink()
+    journal_preview = (
+        _read_upgrade_journal(journal_path, uid=root_uid, gid=root_gid)
+        if journal_present
+        else None
+    )
+    journaled_topology = (
+        journal_preview is not None
+        and any(
+            payload is None
+            for payload in _journaled_unit_payloads(journal_preview).values()
+        )
+    )
+    topology_transition = topology_expansion or journaled_topology
+    journaled_forward_only_upgrade = (
+        journal_preview is not None
+        and _forward_only_setup_upgrade(
+            journal_preview.get("from_package_version"),
+            journal_preview.get("to_package_version"),
+        )
+    )
+    forward_only_transition = (
+        forward_only_upgrade or journaled_forward_only_upgrade
+    )
+    if topology_transition:
+        c0_data = layout.host(C0_RESPONDER_DATA)
+        renewal_state = layout.host(CREDENTIAL_RENEW_STATE)
+        if (
+            c0_data.exists()
+            or c0_data.is_symlink()
+            or renewal_state.exists()
+            or renewal_state.is_symlink()
+            or _account_fact(C0_RESPONDER_USER, C0_RESPONDER_DATA) != "create"
+        ):
+            raise ServerSetupError(
+                "setup_upgrade_conflict",
+                "legacy communication-only state has unexpected target-only state",
+            )
+        for unit in set(MANAGED_UNITS) - set(
+            LEGACY_COMMUNICATION_ONLY_UNITS
+        ):
+            _require_absent_topology_upgrade_unit(
+                layout,
+                preflight.runtime.systemctl_executable,
+                unit,
+                journaled=journal_present,
+            )
+    for unit in MANAGED_UNITS:
+        _require_no_unit_overrides(layout, unit)
+    return (
+        existing_payload,
+        existing_marker,
+        topology_transition,
+        forward_only_upgrade,
+        forward_only_transition,
+    )
+
+
+def _provision_approval_service(
+    *,
+    request: ServerSetupRequest,
+    layout: SetupLayout,
+    preflight: ServerSetupPreflight,
+    approval_account: pwd.struct_passwd,
+    approval_preexisting: bool,
+    forward_only_transition: bool,
+    steps: list[dict[str, Any]],
+) -> tuple[
+    dict[str, str],
+    ApprovalServiceConfig,
+    list[IndependentApproverConfig],
+    bool,
+]:
+    """Provision or revalidate Approval and return its exact trust state."""
+
+    config_path = layout.host(APPROVAL_CONFIG)
+    approval_state = layout.host(APPROVAL_STATE)
+    environment = preflight.approval_environment
+    if not approval_preexisting:
+        staging_root = layout.host(Path("/run"))
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix="agentnet-approval-setup-", dir=staging_root)
+        )
+        os.chown(staging, approval_account.pw_uid, approval_account.pw_gid)
+        os.chmod(staging, 0o700)
+        try:
+            approvers_copy = staging / "approvers.json"
+            owner_oidc_copy = staging / "owner-oidc.json"
+            _atomic_write(
+                approvers_copy,
+                preflight.input_bundle["approval_approvers_file"],
+                mode=0o600,
+                uid=approval_account.pw_uid,
+                gid=approval_account.pw_gid,
+            )
+            _atomic_write(
+                owner_oidc_copy,
+                preflight.input_bundle["approval_owner_oidc_file"],
+                mode=0o600,
+                uid=approval_account.pw_uid,
+                gid=approval_account.pw_gid,
+            )
+            result = _run_as(
+                approval_account,
+                [
+                    str(preflight.runtime.node_executable),
+                    str(preflight.runtime.agentnet_executable),
+                    "approval",
+                    "provision",
+                    "--config",
+                    str(config_path),
+                    "--data-dir",
+                    str(approval_state),
+                    "--public-origin",
+                    request.approval_public_origin,
+                    "--rp-id",
+                    str(urlsplit(request.approval_public_origin).hostname),
+                    "--verifier-id",
+                    request.approval_verifier_id,
+                    "--approvers",
+                    str(approvers_copy),
+                    "--owner-oidc-config",
+                    str(owner_oidc_copy),
+                    "--internal-core-credential-env",
+                    "AGENTNET_APPROVAL_CORE_TOKEN",
+                ],
+                environment=environment,
+                stage="approval_provision",
+            )
+            if result.get("schema") != "agentnet.approval.provision-result.v1":
+                raise ServerSetupError(
+                    "approval_evidence",
+                    "Approval provision evidence schema is invalid",
+                )
+            _require_private_tree(
+                approval_state,
+                approval_account,
+                blocker="approval_custody",
+            )
+            steps.append({"id": "approval_provision", "status": "completed"})
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    else:
+        _require_private_file(
+            config_path,
+            approval_account,
+            blocker="approval_config",
+        )
+    approval_config, trusted = _approval_trust(
+        config_path,
+        approval_account,
+        approval_state,
+    )
+    _require_exact_approval_policy(
+        approval_config,
+        request=request,
+        owner_oidc=preflight.owner_oidc,
+        approvers=preflight.approvers,
+        approval_state=approval_state,
+    )
+    deferred_status = approval_preexisting and forward_only_transition
+    if approval_preexisting:
+        if not deferred_status:
+            _run_as(
+                approval_account,
+                [
+                    str(preflight.runtime.node_executable),
+                    str(preflight.runtime.agentnet_executable),
+                    "approval",
+                    "status",
+                    "--config",
+                    str(config_path),
+                ],
+                environment=environment,
+                stage="approval_status",
+            )
+        steps.append(
+            {"id": "approval_provision", "status": "already_satisfied"}
+        )
+    return environment, approval_config, trusted, deferred_status
+
+
+def _provision_core_service(
+    *,
+    request: ServerSetupRequest,
+    layout: SetupLayout,
+    preflight: ServerSetupPreflight,
+    core_account: pwd.struct_passwd,
+    core_preexisting: bool,
+    prevalidated_oidc: OIDCEnrollmentConfig | None,
+    trusted: list[IndependentApproverConfig],
+    steps: list[dict[str, Any]],
+) -> tuple[OIDCEnrollmentConfig, ExtensionConfig, str, dict[str, str]]:
+    """Provision or revalidate Core against the exact Approval trust state."""
+
+    core_data = layout.host(CORE_DATA)
+    core_runtime = core_data / "core"
+    config_path = layout.host(CORE_CONFIG)
+    oidc = _build_core_oidc_config(
+        request,
+        preflight.oidc_provider,
+        trusted=trusted,
+        approvers=preflight.approvers,
+    )
+    if prevalidated_oidc is not None and oidc != prevalidated_oidc:
+        raise ServerSetupError(
+            "approval_conflict",
+            "Approval trust changed during setup",
+        )
+    oidc_path = layout.host(CORE_OIDC_CONFIG)
+    oidc_payload = (
+        json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode()
+        + b"\n"
+    )
+    steps.append(
+        {
+            "id": "core_oidc_config",
+            "status": _atomic_write(
+                oidc_path,
+                oidc_payload,
+                mode=0o600,
+                uid=core_account.pw_uid,
+                gid=core_account.pw_gid,
+            ),
+        }
+    )
+    scanner_path = core_data / "scanner-trust.json"
+    scanner_trust = preflight.scanner_trust
+    if scanner_trust is not None:
+        scanner_payload = (
+            json.dumps(
+                scanner_trust.model_dump(mode="json"),
+                indent=2,
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        steps.append(
+            {
+                "id": "scanner_trust",
+                "status": _atomic_write(
+                    scanner_path,
+                    scanner_payload,
+                    mode=0o600,
+                    uid=core_account.pw_uid,
+                    gid=core_account.pw_gid,
+                ),
+            }
+        )
+    else:
+        if scanner_path.exists() or scanner_path.is_symlink():
+            raise ServerSetupError(
+                "core_conflict",
+                "communication-only Core state contains forbidden scanner trust",
+            )
+        _require_communication_only_artifact_absence(core_runtime)
+        steps.append(
+            {"id": "scanner_trust", "status": "disabled_not_created"}
+        )
+    environment = preflight.core_environment
+    if not core_preexisting:
+        result = _run_as(
+            core_account,
+            _core_create_arguments(
+                request,
+                node_executable=preflight.runtime.node_executable,
+                executable=preflight.runtime.agentnet_executable,
+                core_config_path=config_path,
+                core_data=core_data,
+                oidc_path=oidc_path,
+                scanner_path=scanner_path,
+                scanner_trust=scanner_trust,
+            ),
+            environment=environment,
+            stage="core_create",
+            accepted_returncodes=frozenset({1}),
+        )
+        _require_private_file(
+            config_path,
+            core_account,
+            blocker="core_custody",
+        )
+        _require_core_create_evidence(
+            result,
+            config_path,
+            artifact_mode=request.effective_artifact_mode,
+        )
+        bootstrap_status = "completed"
+    else:
+        _require_private_file(
+            config_path,
+            core_account,
+            blocker="core_custody",
+        )
+        bootstrap_status = "revalidated"
+    _require_private_tree(core_runtime, core_account, blocker="core_custody")
+    config = _load_validated_core_config(
+        config_path,
+        core_account,
+        request=request,
+        core_data=core_data,
+        oidc=oidc,
+        scanner_trust=scanner_trust,
+    )
+    return oidc, config, bootstrap_status, environment
+
+
+def _configure_scanner_worker(
+    *,
+    scanner_setup: ScannerSetupSpec | None,
+    layout: SetupLayout,
+    core_account: pwd.struct_passwd,
+    steps: list[dict[str, Any]],
+) -> None:
+    """Write and verify scanner-worker state, or record disabled capability."""
+
+    if scanner_setup is None:
+        steps.append(
+            {
+                "id": "scanner_readiness",
+                "status": "not_configured_file_capability_disabled",
+            }
+        )
+        return
+    config_payload = (
+        json.dumps(
+            {
+                "endpoint": scanner_setup.endpoint.uri,
+                "engine_version": scanner_setup.engine_version,
+                "key_file": str(SCANNER_SIGNING_KEY),
+                "profile_digest": scanner_setup.profile_digest,
+                "rules_digest": scanner_setup.rules_digest,
+                "scanner_id": scanner_setup.scanner_id,
+                "scanner_key_epoch": scanner_setup.scanner_key_epoch,
+                "schema": "agentnet.scanner-worker.config.v1",
+                "signature_max_age_seconds": (
+                    scanner_setup.signature_max_age_seconds
+                ),
+                "signature_updated_at": scanner_setup.signature_updated_at,
+                "signature_version": scanner_setup.signature_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    for step_id, path, payload in (
+        (
+            "scanner_signing_key_custody",
+            layout.host(SCANNER_SIGNING_KEY),
+            scanner_setup.key_input,
+        ),
+        (
+            "scanner_worker_config",
+            layout.host(SCANNER_WORKER_CONFIG),
+            config_payload,
+        ),
+    ):
+        steps.append(
+            {
+                "id": step_id,
+                "status": _atomic_write(
+                    path,
+                    payload,
+                    mode=0o600,
+                    uid=core_account.pw_uid,
+                    gid=core_account.pw_gid,
+                ),
+            }
+        )
+    steps.append(
+        {
+            "id": "scanner_readiness",
+            "status": _require_scanner_readiness(scanner_setup)["status"],
+        }
+    )
+
+
+def _write_setup_units(
+    *,
+    preflight: ServerSetupPreflight,
+    layout: SetupLayout,
+    pending_upgrade: dict[str, Any],
+    steps: list[dict[str, Any]],
+    root_uid: int,
+    root_gid: int,
+) -> dict[str, bytes]:
+    """Write exact managed units while retaining rollback source bytes."""
+
+    unit_payloads = render_units(
+        preflight.runtime.node_executable,
+        preflight.runtime.agentnet_executable,
+        preflight.runtime.uv_executable,
+    )
+    journal = pending_upgrade.get("journal")
+    journaled_units = (
+        _journaled_unit_payloads(journal) if journal is not None else {}
+    )
+    if journal is not None:
+        pending_upgrade["replacement_units"] = dict(unit_payloads)
+    unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
+    for unit, payload in unit_payloads.items():
+        steps.append(
+            {
+                "id": f"unit:{unit}",
+                "status": _write_managed_unit(
+                    unit_paths[unit],
+                    payload,
+                    uid=root_uid,
+                    gid=root_gid,
+                    previous=journaled_units.get(unit),
+                ),
+            }
+        )
+    return unit_payloads
+
+
+def _commit_setup_profile(
+    *,
+    preflight: ServerSetupPreflight,
+    layout: SetupLayout,
+    request: ServerSetupRequest,
+    pending_upgrade: dict[str, Any],
+    steps: list[dict[str, Any]],
+    root_uid: int,
+    root_gid: int,
+    approval_account: pwd.struct_passwd,
+    core_account: pwd.struct_passwd,
+    existing_marker_payload: bytes | None,
+    existing_marker: dict[str, Any] | None,
+    approved_digest: str,
+    forward_only_upgrade: bool,
+    attempt_active: bool,
+    unit_payloads: dict[str, bytes] | None = None,
+) -> dict[str, bytes]:
+    """Commit managed units and marker, then cross the no-rollback boundary."""
+
+    unit_paths = {unit: layout.unit(unit) for unit in MANAGED_UNITS}
+    if unit_payloads is None:
+        unit_payloads = _write_setup_units(
+            preflight=preflight,
+            layout=layout,
+            pending_upgrade=pending_upgrade,
+            steps=steps,
+            root_uid=root_uid,
+            root_gid=root_gid,
+        )
+    approval_config_digest = _managed_config_digest(
+        layout.host(APPROVAL_CONFIG),
+        approval_account,
+        blocker="approval_config",
+    )
+    core_config_digest = _managed_config_digest(
+        layout.host(CORE_CONFIG),
+        core_account,
+        blocker="core_custody",
+        exclude_top_level=frozenset(
+            {"enrolled_harness_id", "enrolled_credential_id"}
+        ),
+    )
+    artifact_mode = (
+        request.effective_artifact_mode
+        if request.schema_version == "agentnet.server-setup.request.v2"
+        else None
+    )
+    setup_marker = layout.host(SETUP_MARKER)
+    try:
+        marker_status = _commit_setup_marker(
+            setup_marker,
+            existing_payload=existing_marker_payload,
+            existing_marker=existing_marker,
+            request_digest=approved_digest,
+            approval_config_digest=approval_config_digest,
+            core_config_digest=core_config_digest,
+            unit_payloads=unit_payloads,
+            artifact_mode=artifact_mode,
+            uid=root_uid,
+            gid=root_gid,
+        )
+    except BaseException:
+        # A directory-fsync or response failure may occur after the
+        # compare-and-swap became observable. Never restore source files over
+        # an exact target marker: retain the journal and recover forward.
+        if forward_only_upgrade and existing_marker_payload is not None:
+            try:
+                observed_payload = _read_setup_marker(
+                    setup_marker,
+                    uid=root_uid,
+                    gid=root_gid,
+                )
+                observed_marker = _validated_setup_marker(
+                    observed_payload,
+                    request_digest=approved_digest,
+                    legacy_request_digest=preflight.legacy_request_digest,
+                    artifact_mode=artifact_mode,
+                )
+                if (
+                    existing_marker is None
+                    or observed_marker is None
+                    or observed_marker.get("package_version") != __version__
+                    or observed_marker.get("revision")
+                    != int(existing_marker.get("revision", 0)) + 1
+                    or observed_marker.get("previous_marker_digest")
+                    != hashlib.sha256(existing_marker_payload).hexdigest()
+                ):
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "setup marker commit outcome is not the exact upgrade target",
+                    )
+                _require_marker_realized_state(
+                    observed_marker,
+                    approval_config_digest=approval_config_digest,
+                    core_config_digest=core_config_digest,
+                    unit_paths=unit_paths,
+                    uid=root_uid,
+                    gid=root_gid,
+                )
+            except Exception:
+                pass
+            else:
+                pending_upgrade.clear()
+        raise
+    pending_upgrade.clear()
+    steps.append({"id": "setup_marker", "status": marker_status})
+    if not forward_only_upgrade:
+        _clear_upgrade_journal(layout.host(SETUP_UPGRADE_JOURNAL))
+    if attempt_active:
+        _clear_upgrade_journal(layout.host(SETUP_ATTEMPT))
+    return unit_payloads
 
 
 def _restore_upgrade_systemd_state(pending: Mapping[str, Any]) -> None:
@@ -5761,13 +7003,10 @@ def _apply_server_setup(
         c0_responder_data = layout.host(C0_RESPONDER_DATA)
         c0_responder_config_path = layout.host(C0_RESPONDER_CONFIG)
         c0_responder_terminal_path = layout.host(C0_RESPONDER_TERMINAL)
-        credential_supersession_path = layout.host(CREDENTIAL_SUPERSESSION_JOURNAL)
         core_config_path = layout.host(CORE_CONFIG)
         approval_config_path = layout.host(APPROVAL_CONFIG)
         approval_state = layout.host(APPROVAL_STATE)
         setup_marker = layout.host(SETUP_MARKER)
-        scanner_signing_key_path = layout.host(SCANNER_SIGNING_KEY)
-        scanner_worker_config_path = layout.host(SCANNER_WORKER_CONFIG)
         setup_attempt = layout.host(SETUP_ATTEMPT)
         journal_path = layout.host(SETUP_UPGRADE_JOURNAL)
         core_env_path = layout.host(CORE_ENV)
@@ -5789,79 +7028,22 @@ def _apply_server_setup(
         owner_oidc = preflight.owner_oidc
         approvers = preflight.approvers
         scanner_trust = preflight.scanner_trust
-        existing_marker_payload = _read_setup_marker(setup_marker, uid=root_uid, gid=root_gid)
-        existing_marker = _validated_setup_marker(
+        (
             existing_marker_payload,
-            request_digest=approved_digest,
-            legacy_request_digest=preflight.legacy_request_digest,
-            artifact_mode=(
-                request.effective_artifact_mode
-                if request.schema_version == "agentnet.server-setup.request.v2"
-                else None
-            ),
+            existing_marker,
+            topology_transition,
+            forward_only_upgrade,
+            forward_only_transition,
+        ) = _classify_setup_transition(
+            request=request,
+            preflight=preflight,
+            layout=layout,
+            approved_digest=approved_digest,
+            root_uid=root_uid,
+            root_gid=root_gid,
         )
-        upgrade_profile = (
-            _marker_upgrade_unit_profile(existing_marker)
-            if existing_marker is not None
-            else None
-        )
-        topology_expansion = upgrade_profile == LEGACY_COMMUNICATION_ONLY_UNITS
-        forward_only_upgrade = (
-            existing_marker is not None
-            and _forward_only_setup_upgrade(
-                existing_marker.get("package_version"),
-                __version__,
-            )
-        )
-        journal_present = journal_path.exists() or journal_path.is_symlink()
-        journal_preview = (
-            _read_upgrade_journal(journal_path, uid=root_uid, gid=root_gid)
-            if journal_present
-            else None
-        )
-        journaled_topology = (
-            journal_preview is not None
-            and any(
-                payload is None
-                for payload in _journaled_unit_payloads(journal_preview).values()
-            )
-        )
-        topology_transition = topology_expansion or journaled_topology
-        journaled_forward_only_upgrade = (
-            journal_preview is not None
-            and _forward_only_setup_upgrade(
-                journal_preview.get("from_package_version"),
-                journal_preview.get("to_package_version"),
-            )
-        )
-        forward_only_transition = (
-            forward_only_upgrade or journaled_forward_only_upgrade
-        )
-        if topology_transition:
-            if (
-                c0_responder_data.exists()
-                or c0_responder_data.is_symlink()
-                or layout.host(CREDENTIAL_RENEW_STATE).exists()
-                or layout.host(CREDENTIAL_RENEW_STATE).is_symlink()
-                or _account_fact(C0_RESPONDER_USER, C0_RESPONDER_DATA) != "create"
-            ):
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "legacy communication-only state has unexpected target-only state",
-                )
-            for unit in set(MANAGED_UNITS) - set(LEGACY_COMMUNICATION_ONLY_UNITS):
-                _require_absent_topology_upgrade_unit(
-                    layout,
-                    systemctl_executable,
-                    unit,
-                    journaled=journal_present,
-                )
-        for unit in MANAGED_UNITS:
-            _require_no_unit_overrides(layout, unit)
         core_input = input_bundle["core_environment_file"]
         approval_input = input_bundle["approval_environment_file"]
-        core_values = preflight.core_values
-        approval_values = preflight.approval_values
         if topology_transition:
             if (
                 _account_fact(CORE_USER, CORE_DATA) != "already_satisfied"
@@ -6023,7 +7205,7 @@ def _apply_server_setup(
         if core_runtime_preexisting:
             _require_private_tree(core_runtime, core_account, blocker="core_custody")
         prevalidated_oidc: OIDCEnrollmentConfig | None = None
-        prevalidated_config: Any | None = None
+        prevalidated_config: ExtensionConfig | None = None
         legacy_owner_policy = False
         if approval_preexisting and core_preexisting:
             approval_config_before, trusted_before = _approval_trust(
@@ -6054,33 +7236,17 @@ def _apply_server_setup(
                 scanner_trust=scanner_trust,
             )
         upgrade_status = _prepare_supported_upgrade(
+            request=request,
+            preflight=preflight,
+            layout=layout,
             existing_marker=existing_marker,
             existing_marker_payload=existing_marker_payload,
             approved_digest=approved_digest,
-            approval_config_path=approval_config_path,
             approval_account=approval_account,
             approval_preexisting=approval_preexisting,
-            core_config_path=core_config_path,
-            core_oidc_path=core_oidc_path,
             core_account=core_account,
             core_preexisting=core_preexisting,
-            database_url=request.database_url,
-            domain_id=request.domain_id,
-            enrolled_harness_id=(
-                prevalidated_config.enrolled_harness_id
-                if prevalidated_config is not None
-                else None
-            ),
-            enrolled_credential_id=(
-                prevalidated_config.enrolled_credential_id
-                if prevalidated_config is not None
-                else None
-            ),
-            profile_key=request.runtime_instance_id,
-            systemctl_executable=systemctl_executable,
-            unit_paths=unit_paths,
-            marker_path=setup_marker,
-            journal_path=journal_path,
+            prevalidated_config=prevalidated_config,
             uid=root_uid,
             gid=root_gid,
             pending=_pending_upgrade,
@@ -6095,186 +7261,43 @@ def _apply_server_setup(
             gid=root_gid,
         )
         steps.append({"id": "setup_attempt", "status": attempt_status})
-        if scanner_setup is not None:
-            scanner_config_payload = (
-                json.dumps(
-                    {
-                        "endpoint": scanner_setup.endpoint.uri,
-                        "engine_version": scanner_setup.engine_version,
-                        "key_file": str(SCANNER_SIGNING_KEY),
-                        "profile_digest": scanner_setup.profile_digest,
-                        "rules_digest": scanner_setup.rules_digest,
-                        "scanner_id": scanner_setup.scanner_id,
-                        "scanner_key_epoch": scanner_setup.scanner_key_epoch,
-                        "schema": "agentnet.scanner-worker.config.v1",
-                        "signature_max_age_seconds": (
-                            scanner_setup.signature_max_age_seconds
-                        ),
-                        "signature_updated_at": scanner_setup.signature_updated_at,
-                        "signature_version": scanner_setup.signature_version,
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode()
-                + b"\n"
-            )
-            steps.append(
-                {
-                    "id": "scanner_signing_key_custody",
-                    "status": _atomic_write(
-                        scanner_signing_key_path,
-                        scanner_setup.key_input,
-                        mode=0o600,
-                        uid=core_account.pw_uid,
-                        gid=core_account.pw_gid,
-                    ),
-                }
-            )
-            steps.append(
-                {
-                    "id": "scanner_worker_config",
-                    "status": _atomic_write(
-                        scanner_worker_config_path,
-                        scanner_config_payload,
-                        mode=0o600,
-                        uid=core_account.pw_uid,
-                        gid=core_account.pw_gid,
-                    ),
-                }
-            )
-            steps.append(
-                {
-                    "id": "scanner_readiness",
-                    "status": _require_scanner_readiness(scanner_setup)["status"],
-                }
-            )
-        else:
-            steps.append(
-                {
-                    "id": "scanner_readiness",
-                    "status": "not_configured_file_capability_disabled",
-                }
-            )
-        journaled_units = (
-            _journaled_unit_payloads(_pending_upgrade["journal"])
-            if _pending_upgrade.get("journal") is not None
-            else {}
+        _configure_scanner_worker(
+            scanner_setup=scanner_setup,
+            layout=layout,
+            core_account=core_account,
+            steps=steps,
         )
-
         def write_setup_units() -> dict[str, bytes]:
-            unit_payloads = render_units(
-                node_executable,
-                executable,
-                uv_executable,
+            return _write_setup_units(
+                preflight=preflight,
+                layout=layout,
+                pending_upgrade=_pending_upgrade,
+                steps=steps,
+                root_uid=root_uid,
+                root_gid=root_gid,
             )
-            if _pending_upgrade.get("journal") is not None:
-                _pending_upgrade["replacement_units"] = dict(unit_payloads)
-            for unit, payload in unit_payloads.items():
-                steps.append(
-                    {
-                        "id": f"unit:{unit}",
-                        "status": _write_managed_unit(
-                            unit_paths[unit],
-                            payload,
-                            uid=root_uid,
-                            gid=root_gid,
-                            previous=journaled_units.get(unit),
-                        ),
-                    }
-                )
-            return unit_payloads
 
         def commit_setup_profile(
             unit_payloads: dict[str, bytes] | None = None,
         ) -> dict[str, bytes]:
-            """Commit exact managed files and marker, then cross the boundary."""
+            return _commit_setup_profile(
+                preflight=preflight,
+                layout=layout,
+                request=request,
+                pending_upgrade=_pending_upgrade,
+                steps=steps,
+                root_uid=root_uid,
+                root_gid=root_gid,
+                approval_account=approval_account,
+                core_account=core_account,
+                existing_marker_payload=existing_marker_payload,
+                existing_marker=existing_marker,
+                approved_digest=approved_digest,
+                forward_only_upgrade=forward_only_upgrade,
+                attempt_active=attempt_active,
+                unit_payloads=unit_payloads,
+            )
 
-            if unit_payloads is None:
-                unit_payloads = write_setup_units()
-            approval_config_digest = _managed_config_digest(
-                approval_config_path,
-                approval_account,
-                blocker="approval_config",
-            )
-            core_config_digest = _managed_config_digest(
-                core_config_path,
-                core_account,
-                blocker="core_custody",
-                exclude_top_level=frozenset(
-                    {"enrolled_harness_id", "enrolled_credential_id"}
-                ),
-            )
-            artifact_mode = (
-                request.effective_artifact_mode
-                if request.schema_version == "agentnet.server-setup.request.v2"
-                else None
-            )
-            try:
-                marker_status = _commit_setup_marker(
-                    setup_marker,
-                    existing_payload=existing_marker_payload,
-                    existing_marker=existing_marker,
-                    request_digest=approved_digest,
-                    approval_config_digest=approval_config_digest,
-                    core_config_digest=core_config_digest,
-                    unit_payloads=unit_payloads,
-                    artifact_mode=artifact_mode,
-                    uid=root_uid,
-                    gid=root_gid,
-                )
-            except BaseException:
-                # A directory-fsync or response failure may occur after the
-                # compare-and-swap became observable.  Never restore source
-                # files over an exact target marker: retain the journal and
-                # force the next invocation through committed-marker recovery.
-                if forward_only_upgrade and existing_marker_payload is not None:
-                    try:
-                        observed_payload = _read_setup_marker(
-                            setup_marker,
-                            uid=root_uid,
-                            gid=root_gid,
-                        )
-                        observed_marker = _validated_setup_marker(
-                            observed_payload,
-                            request_digest=approved_digest,
-                            legacy_request_digest=preflight.legacy_request_digest,
-                            artifact_mode=artifact_mode,
-                        )
-                        if (
-                            observed_marker is None
-                            or observed_marker.get("package_version") != __version__
-                            or observed_marker.get("revision")
-                            != int(existing_marker.get("revision", 0)) + 1
-                            or observed_marker.get("previous_marker_digest")
-                            != hashlib.sha256(existing_marker_payload).hexdigest()
-                        ):
-                            raise ServerSetupError(
-                                "setup_upgrade_conflict",
-                                "setup marker commit outcome is not the exact upgrade target",
-                            )
-                        _require_marker_realized_state(
-                            observed_marker,
-                            approval_config_digest=approval_config_digest,
-                            core_config_digest=core_config_digest,
-                            unit_paths=unit_paths,
-                            uid=root_uid,
-                            gid=root_gid,
-                        )
-                    except Exception:
-                        pass
-                    else:
-                        _pending_upgrade.clear()
-                raise
-            # The marker records only managed config/unit provenance.  Crossing
-            # it disarms byte rollback; database/bootstrap, target identity, and
-            # service reconciliation after this point resume forward on retry.
-            _pending_upgrade.clear()
-            steps.append({"id": "setup_marker", "status": marker_status})
-            if not forward_only_upgrade:
-                _clear_upgrade_journal(journal_path)
-            if attempt_active:
-                _clear_upgrade_journal(setup_attempt)
-            return unit_payloads
 
         if legacy_owner_policy:
             if prevalidated_oidc is None:  # pragma: no cover - guarded above
@@ -6309,157 +7332,35 @@ def _apply_server_setup(
         steps.append({"id": "core_environment", "status": _atomic_write(core_env_path, core_input, mode=0o600, uid=root_uid, gid=root_gid)})
         steps.append({"id": "approval_environment", "status": _atomic_write(approval_env_path, approval_input, mode=0o600, uid=root_uid, gid=root_gid)})
 
-        approval_environment = preflight.approval_environment
-        if not approval_preexisting:
-            staging_root = layout.host(Path("/run"))
-            staging_root.mkdir(parents=True, exist_ok=True)
-            staging = Path(tempfile.mkdtemp(prefix="agentnet-approval-setup-", dir=staging_root))
-            os.chown(staging, approval_account.pw_uid, approval_account.pw_gid)
-            os.chmod(staging, 0o700)
-            try:
-                approvers_copy = staging / "approvers.json"
-                owner_oidc_copy = staging / "owner-oidc.json"
-                _atomic_write(
-                    approvers_copy,
-                    input_bundle["approval_approvers_file"],
-                    mode=0o600,
-                    uid=approval_account.pw_uid,
-                    gid=approval_account.pw_gid,
-                )
-                _atomic_write(
-                    owner_oidc_copy,
-                    input_bundle["approval_owner_oidc_file"],
-                    mode=0o600,
-                    uid=approval_account.pw_uid,
-                    gid=approval_account.pw_gid,
-                )
-                result = _run_as(
-                    approval_account,
-                    [
-                        str(node_executable), str(executable), "approval", "provision",
-                        "--config", str(approval_config_path),
-                        "--data-dir", str(approval_state),
-                        "--public-origin", request.approval_public_origin,
-                        "--rp-id", str(urlsplit(request.approval_public_origin).hostname),
-                        "--verifier-id", request.approval_verifier_id,
-                        "--approvers", str(approvers_copy),
-                        "--owner-oidc-config", str(owner_oidc_copy),
-                        "--internal-core-credential-env", "AGENTNET_APPROVAL_CORE_TOKEN",
-                    ],
-                    environment=approval_environment,
-                    stage="approval_provision",
-                )
-                if result.get("schema") != "agentnet.approval.provision-result.v1":
-                    raise ServerSetupError("approval_evidence", "Approval provision evidence schema is invalid")
-                _require_private_tree(approval_state, approval_account, blocker="approval_custody")
-                steps.append({"id": "approval_provision", "status": "completed"})
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
-        else:
-            _require_private_file(approval_config_path, approval_account, blocker="approval_config")
-
-        approval_config, trusted = _approval_trust(
-            approval_config_path,
-            approval_account,
-            approval_state,
-        )
-        _require_exact_approval_policy(
+        (
+            approval_environment,
             approval_config,
+            trusted,
+            deferred_approval_status,
+        ) = _provision_approval_service(
             request=request,
-            owner_oidc=owner_oidc,
-            approvers=approvers,
-            approval_state=approval_state,
+            layout=layout,
+            preflight=preflight,
+            approval_account=approval_account,
+            approval_preexisting=approval_preexisting,
+            forward_only_transition=forward_only_transition,
+            steps=steps,
         )
-        deferred_approval_status = approval_preexisting and forward_only_transition
-        if approval_preexisting:
-            if not deferred_approval_status:
-                _run_as(
-                    approval_account,
-                    [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
-                    environment=approval_environment,
-                    stage="approval_status",
-                )
-            steps.append({"id": "approval_provision", "status": "already_satisfied"})
-        oidc = _build_core_oidc_config(
-            request,
-            oidc_provider,
+        (
+            oidc,
+            config,
+            bootstrap_status,
+            core_environment,
+        ) = _provision_core_service(
+            request=request,
+            layout=layout,
+            preflight=preflight,
+            core_account=core_account,
+            core_preexisting=core_preexisting,
+            prevalidated_oidc=prevalidated_oidc,
             trusted=trusted,
-            approvers=approvers,
+            steps=steps,
         )
-        if prevalidated_oidc is not None and oidc != prevalidated_oidc:
-            raise ServerSetupError(
-                "approval_conflict",
-                "Approval trust changed during setup",
-            )
-        oidc_path = core_oidc_path
-        oidc_payload = json.dumps(oidc.model_dump(mode="json"), indent=2, sort_keys=True).encode() + b"\n"
-        steps.append({"id": "core_oidc_config", "status": _atomic_write(oidc_path, oidc_payload, mode=0o600, uid=core_account.pw_uid, gid=core_account.pw_gid)})
-        scanner_path = core_data / "scanner-trust.json"
-        if scanner_trust is not None:
-            scanner_payload = json.dumps(
-                scanner_trust.model_dump(mode="json"), indent=2, sort_keys=True
-            ).encode() + b"\n"
-            steps.append(
-                {
-                    "id": "scanner_trust",
-                    "status": _atomic_write(
-                        scanner_path,
-                        scanner_payload,
-                        mode=0o600,
-                        uid=core_account.pw_uid,
-                        gid=core_account.pw_gid,
-                    ),
-                }
-            )
-        else:
-            if scanner_path.exists() or scanner_path.is_symlink():
-                raise ServerSetupError(
-                    "core_conflict",
-                    "communication-only Core state contains forbidden scanner trust",
-                )
-            _require_communication_only_artifact_absence(core_runtime)
-            steps.append({"id": "scanner_trust", "status": "disabled_not_created"})
-
-        core_environment = preflight.core_environment
-        if not core_preexisting:
-            core_create_arguments = _core_create_arguments(
-                request,
-                node_executable=node_executable,
-                executable=executable,
-                core_config_path=core_config_path,
-                core_data=core_data,
-                oidc_path=oidc_path,
-                scanner_path=scanner_path,
-                scanner_trust=scanner_trust,
-            )
-            result = _run_as(
-                core_account,
-                core_create_arguments,
-                environment=core_environment,
-                stage="core_create",
-                accepted_returncodes=frozenset({1}),
-            )
-            _require_private_file(core_config_path, core_account, blocker="core_custody")
-            _require_core_create_evidence(
-                result,
-                core_config_path,
-                artifact_mode=request.effective_artifact_mode,
-            )
-            bootstrap_status = "completed"
-        else:
-            _require_private_file(core_config_path, core_account, blocker="core_custody")
-            bootstrap_status = "revalidated"
-
-        _require_private_tree(core_runtime, core_account, blocker="core_custody")
-        config = _load_validated_core_config(
-            core_config_path,
-            core_account,
-            request=request,
-            core_data=core_data,
-            oidc=oidc,
-            scanner_trust=scanner_trust,
-        )
-        profile_committed_early = False
         rollback_capable_upgrade = (
             _pending_upgrade.get("rollback_capable_upgrade") is True
         )
@@ -6469,54 +7370,9 @@ def _apply_server_setup(
             unit_payloads = write_setup_units()
         elif forward_only_upgrade:
             unit_payloads = commit_setup_profile()
-            profile_committed_early = True
         c0_runtime_prepared = False
         if forward_only_transition:
-            def verify_upgrade_quiescence() -> None:
-                expected_states = {
-                    APPROVAL_UNIT: "disabled",
-                    CORE_UNIT: "disabled",
-                    C0_RESPONDER_UNIT: "disabled",
-                    CREDENTIAL_RENEW_UNIT: "static",
-                    CREDENTIAL_RENEW_TIMER: "disabled",
-                }
-                for unit, expected_state in expected_states.items():
-                    _validate_inactive_auxiliary_unit_state(
-                        unit=unit,
-                        expected_unit_file_state=expected_state,
-                        properties=_systemd_show(systemctl_executable, unit),
-                    )
-
-            if rollback_capable_upgrade:
-                _pending_upgrade["service_state_changed"] = True
-            quiesce_status = _run_systemctl_sequence_or_reconcile(
-                systemctl_executable,
-                [
-                    ["daemon-reload"],
-                    ["disable", "--now", C0_RESPONDER_UNIT],
-                    ["reset-failed", C0_RESPONDER_UNIT],
-                    ["disable", "--now", CREDENTIAL_RENEW_TIMER],
-                    ["reset-failed", CREDENTIAL_RENEW_TIMER],
-                    ["stop", CREDENTIAL_RENEW_UNIT],
-                    ["reset-failed", CREDENTIAL_RENEW_UNIT],
-                    ["disable", "--now", CORE_UNIT],
-                    ["reset-failed", CORE_UNIT],
-                    ["disable", "--now", APPROVAL_UNIT],
-                    ["reset-failed", APPROVAL_UNIT],
-                ],
-                reconcile=verify_upgrade_quiescence,
-            )
-            if quiesce_status == "completed":
-                verify_upgrade_quiescence()
-            steps.append(
-                {
-                    "id": "package_upgrade_service_quiescence",
-                    "status": quiesce_status,
-                }
-            )
-            runtime_accounts: list[
-                tuple[pwd.struct_passwd, Path, str]
-            ] = [
+            runtime_accounts = [
                 (approval_account, approval_data, "approval_runtime_prepare"),
                 (core_account, core_data, "core_runtime_prepare"),
             ]
@@ -6529,65 +7385,36 @@ def _apply_server_setup(
                     )
                 )
                 c0_runtime_prepared = True
-            for account, data_root, runtime_stage in runtime_accounts:
-                _prepare_managed_service_runtime(
-                    account,
-                    data_root=data_root,
-                    node_executable=node_executable,
-                    agentnet_executable=executable,
-                    uv_executable=uv_executable,
-                    stage=runtime_stage,
-                )
-                steps.append({"id": runtime_stage, "status": "completed"})
+            _prepare_forward_only_transition(
+                rollback_capable_upgrade=rollback_capable_upgrade,
+                pending_upgrade=_pending_upgrade,
+                systemctl_executable=systemctl_executable,
+                runtime_accounts=runtime_accounts,
+                node_executable=node_executable,
+                agentnet_executable=executable,
+                uv_executable=uv_executable,
+                steps=steps,
+            )
             if deferred_approval_status:
                 _run_as(
                     approval_account,
-                    [str(node_executable), str(executable), "approval", "status", "--config", str(approval_config_path)],
+                    [
+                        str(node_executable),
+                        str(executable),
+                        "approval",
+                        "status",
+                        "--config",
+                        str(approval_config_path),
+                    ],
                     environment=approval_environment,
                     stage="approval_status",
                 )
         if rollback_capable_upgrade:
-            journal = _pending_upgrade.get("journal")
-            if not isinstance(journal, Mapping):
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "v0.1.45 migration requires its exact upgrade journal",
-                )
-            source = _validated_v0145_database_snapshot(
-                journal.get("previous_database")
-            )
-            identity = source["identity"]
-            migration_evidence = _run_v0145_database_operation_as(
-                core_account,
-                request.database_url,
-                operation="migrate",
-                source=source,
-                domain_id=str(identity["domain_id"]),
-                harness_id=str(identity["harness_id"]),
-                credential_id=str(identity["credential_id"]),
-                profile_key=str(identity["profile_key"]),
-            )
-            endpoint_row = migration_evidence.get("endpoint_lifecycle")
-            if (
-                not isinstance(endpoint_row, dict)
-                or endpoint_row.get("harness_id") != identity["harness_id"]
-                or endpoint_row.get("state") != "restart_required"
-            ):
-                raise ServerSetupError(
-                    "setup_upgrade_conflict",
-                    "v0.1.45 migration did not prove the exact endpoint lifecycle",
-                )
-            endpoint_lifecycle_result = {
-                "endpoint_id": str(identity["harness_id"]),
-                "state": "restart_required",
-                "public_url": request.core_public_origin,
-                "identity_created": False,
-            }
-            steps.append(
-                {
-                    "id": "schema_v7_endpoint_lifecycle",
-                    "status": "restart_required",
-                }
+            endpoint_lifecycle_result = _migrate_rollback_capable_upgrade(
+                pending_upgrade=_pending_upgrade,
+                core_account=core_account,
+                request=request,
+                steps=steps,
             )
         if core_preexisting and not rollback_capable_upgrade:
             _, bootstrap_status = _run_bootstrap_idempotently(
@@ -6611,115 +7438,39 @@ def _apply_server_setup(
             bootstrap_status = "schema_v7_migrated_preserved_identity"
         if forward_only_transition and not rollback_capable_upgrade:
             _clear_upgrade_journal(journal_path)
-        if c0_responder_account is None:
-            c0_responder_account = _ensure_account(
-                C0_RESPONDER_USER,
-                C0_RESPONDER_DATA,
-                useradd_executable=useradd_executable,
-            )
-            steps.append({"id": "c0_responder_identity", "status": "completed"})
+        c0_responder_account = _ensure_c0_responder_runtime(
+            account=c0_responder_account,
+            forward_only_transition=forward_only_transition,
+            runtime_prepared=c0_runtime_prepared,
+            layout=layout,
+            useradd_executable=useradd_executable,
+            node_executable=node_executable,
+            agentnet_executable=executable,
+            uv_executable=uv_executable,
+            steps=steps,
+        )
+        steps.append({"id": "core_bootstrap", "status": bootstrap_status})
+        (
+            identity_enrolled,
+            c0_responder_required,
+            responder_payload,
+            supersession_evidence,
+            responder_config_status,
+        ) = _prepare_c0_responder_activation(
+            config=config,
+            request=request,
+            start=start,
+            layout=layout,
+            c0_responder_account=c0_responder_account,
+            core_account=core_account,
+            verified=_verified,
+        )
+        if responder_config_status is not None:
             steps.append(
                 {
-                    "id": "c0_responder_private_root",
-                    "status": _ensure_private_root(
-                        c0_responder_data,
-                        c0_responder_account,
-                    ),
+                    "id": "c0_responder_config",
+                    "status": responder_config_status,
                 }
-            )
-        if forward_only_transition and not c0_runtime_prepared:
-            _prepare_managed_service_runtime(
-                c0_responder_account,
-                data_root=c0_responder_data,
-                node_executable=node_executable,
-                agentnet_executable=executable,
-                uv_executable=uv_executable,
-                stage="c0_responder_runtime_prepare",
-            )
-            steps.append(
-                {"id": "c0_responder_runtime_prepare", "status": "completed"}
-            )
-        identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
-        c0_responder_required = False
-        responder_payload: bytes | None = None
-        supersession_evidence: dict[str, object] = {"status": "not_applicable"}
-        steps.append({"id": "core_bootstrap", "status": bootstrap_status})
-        if identity_enrolled and start:
-            identity_path = layout.host(SERVER_AGENT_IDENTITY)
-            signing_key_path = layout.host(SERVER_AGENT_KEY)
-            identity_profile = _validated_managed_identity_profile(
-                identity_path,
-                signing_key_path,
-                core_account,
-                config=config,
-                request=request,
-            )
-            _verified["identity_enrolled"] = True
-            identity_actor = identity_profile["actor"]
-            if not isinstance(identity_actor, dict):
-                raise ServerSetupError(
-                    "server_agent_identity",
-                    "managed server-agent identity actor is invalid",
-                )
-            terminal, supersession_evidence = _validated_c0_terminal_marker(
-                c0_responder_terminal_path,
-                c0_responder_account,
-                config=config,
-                principal_id=str(identity_actor["principal_id"]),
-                credential_epoch=int(identity_actor["credential_epoch"]),
-                supersession_path=credential_supersession_path,
-                core_account=core_account,
-                database_url=request.database_url,
-            )
-            if terminal is not None:
-                if c0_responder_config_path.exists() or c0_responder_config_path.is_symlink():
-                    _require_private_file(
-                        c0_responder_config_path,
-                        c0_responder_account,
-                        blocker="c0_responder_terminal",
-                    )
-                    try:
-                        c0_responder_config_path.unlink()
-                        directory = os.open(
-                            c0_responder_config_path.parent,
-                            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-                        )
-                        try:
-                            os.fsync(directory)
-                        finally:
-                            os.close(directory)
-                    except OSError as exc:
-                        raise ServerSetupError(
-                            "c0_responder_terminal",
-                            "C0 responder terminal cleanup could not be reconciled",
-                        ) from exc
-                    responder_config_status = "terminal_cleanup_reconciled"
-                else:
-                    responder_config_status = "terminal_not_recreated"
-                steps.append({"id": "c0_responder_config", "status": responder_config_status})
-            else:
-                c0_responder_required = True
-                responder_payload = json.dumps(
-                    {
-                        "schema": "agentnet.c0-pilot-responder.config.v1",
-                        "core_base_url": request.core_public_origin,
-                        "audience": request.service_audience,
-                        "domain_id": request.domain_id,
-                        "harness_id": config.enrolled_harness_id,
-                        "credential_id": config.enrolled_credential_id,
-                        "poll_seconds": 2,
-                        "max_consecutive_errors": 5,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                ).encode() + b"\n"
-        elif not identity_enrolled and any(
-            path.exists() or path.is_symlink()
-            for path in (c0_responder_config_path, c0_responder_terminal_path)
-        ):
-            raise ServerSetupError(
-                "c0_responder_conflict",
-                "C0 responder state exists before exact activated identity",
             )
 
         approval_config, trusted_after = _approval_trust(
@@ -6741,261 +7492,27 @@ def _apply_server_setup(
             unit_payloads = commit_setup_profile()
         assert unit_payloads is not None
         if start:
-            approval_health = {
-                "schema": "agentnet.approval.health.v1",
-                "service": "agentnet-approval",
-                "version": __version__,
-                "status": "alive",
-                "public_origin": request.approval_public_origin,
-                "verifier_id": request.approval_verifier_id,
-            }
-            core_health = {
-                "schema": "agentnet.core.health.v1",
-                "service": "agentnet-core",
-                "version": __version__,
-                "status": "alive",
-                "profile": request.profile,
-                "artifact_mode": request.effective_artifact_mode,
-                "server_agent_capabilities": sorted(
-                    capability.value
-                    for capability in (
-                        {ServerAgentCapability.OFFLINE_CUSTODY, ServerAgentCapability.ARTIFACT_STORAGE}
-                        if request.effective_artifact_mode == "enabled"
-                        else {ServerAgentCapability.OFFLINE_CUSTODY}
-                    )
-                ),
-                "domain_id": request.domain_id,
-                "public_origin": request.core_public_origin,
-                "service_audience": request.service_audience,
-                "runtime_instance_id": request.runtime_instance_id,
-            }
-
-            def verify_live_service_state(*, auxiliary_ready: bool) -> None:
-                active_units = [APPROVAL_UNIT, CORE_UNIT]
-                if auxiliary_ready and identity_enrolled:
-                    active_units.append(CREDENTIAL_RENEW_TIMER)
-                if auxiliary_ready and c0_responder_required:
-                    active_units.append(C0_RESPONDER_UNIT)
-                for unit in active_units:
-                    _run_systemctl(
-                        systemctl_executable,
-                        ["is-active", "--quiet", unit],
-                        failure_message="AgentNet managed unit is not active",
-                    )
-                _validate_systemd_service_runtime(
-                    systemctl_executable,
-                    unit=APPROVAL_UNIT,
-                    user=APPROVAL_USER,
-                    data_root=approval_data,
-                    node_executable=node_executable,
-                    agentnet_executable=executable,
-                    uv_executable=uv_executable,
-                    expected_argv=(
-                        str(node_executable), str(executable), "approval", "serve",
-                        "--config", str(approval_config_path),
-                        "--host", "127.0.0.1", "--port", str(APPROVAL_PORT),
-                    ),
-                    layout=layout,
-                )
-                _validate_systemd_service_runtime(
-                    systemctl_executable,
-                    unit=CORE_UNIT,
-                    user=CORE_USER,
-                    data_root=core_data,
-                    node_executable=node_executable,
-                    agentnet_executable=executable,
-                    uv_executable=uv_executable,
-                    expected_argv=(
-                        str(node_executable), str(executable), "serve",
-                        "--config", str(core_config_path),
-                        "--host", "127.0.0.1", "--port", str(CORE_PORT),
-                    ),
-                    layout=layout,
-                )
-                if auxiliary_ready and c0_responder_required:
-                    _validate_systemd_service_runtime(
-                        systemctl_executable,
-                        unit=C0_RESPONDER_UNIT,
-                        user=C0_RESPONDER_USER,
-                        data_root=c0_responder_data,
-                        node_executable=node_executable,
-                        agentnet_executable=executable,
-                        uv_executable=uv_executable,
-                        expected_argv=(
-                            str(node_executable), str(executable), "c0-pilot", "responder",
-                            "--run", "--config", str(c0_responder_config_path),
-                            "--credential", "/run/credentials/agentnet-c0-responder.service/signing-key.pem",
-                        ),
-                        layout=layout,
-                    )
-                expected_states = {CREDENTIAL_RENEW_UNIT: "static"}
-                if not auxiliary_ready or not c0_responder_required:
-                    expected_states[C0_RESPONDER_UNIT] = "disabled"
-                if not auxiliary_ready or not identity_enrolled:
-                    expected_states[CREDENTIAL_RENEW_TIMER] = "disabled"
-                for unit, expected_state in expected_states.items():
-                    _validate_inactive_auxiliary_unit_state(
-                        unit=unit,
-                        expected_unit_file_state=expected_state,
-                        properties=_systemd_show(systemctl_executable, unit),
-                    )
-                if auxiliary_ready and identity_enrolled:
-                    _validate_active_renewal_timer_state(
-                        _systemd_show(systemctl_executable, CREDENTIAL_RENEW_TIMER),
-                        next_run_usec=_systemd_timer_next_run(
-                            systemctl_executable,
-                            CREDENTIAL_RENEW_TIMER,
-                        ),
-                        now_usec=time.time_ns() // 1_000,
-                    )
-            base_systemctl_commands: list[list[str]] = [
-                ["daemon-reload"],
-                ["disable", "--now", CREDENTIAL_RENEW_TIMER],
-                ["disable", "--now", C0_RESPONDER_UNIT],
-                ["stop", CREDENTIAL_RENEW_UNIT],
-                ["enable", "--now", APPROVAL_UNIT],
-                ["enable", CORE_UNIT],
-                ["restart", CORE_UNIT],
-            ]
-            base_start_status = _run_systemctl_sequence_or_reconcile(
-                systemctl_executable,
-                base_systemctl_commands,
-                reconcile=lambda: verify_live_service_state(auxiliary_ready=False),
+            status, next_action = _start_managed_server_services(
+                request=request,
+                layout=layout,
+                preflight=preflight,
+                oidc=oidc,
+                identity_enrolled=identity_enrolled,
+                c0_responder_required=c0_responder_required,
+                responder_payload=responder_payload,
+                c0_responder_account=c0_responder_account,
+                supersession_evidence=supersession_evidence,
+                steps=steps,
             )
-            if base_start_status == "completed":
-                verify_live_service_state(auxiliary_ready=False)
-            _health(
-                f"http://127.0.0.1:{APPROVAL_PORT}/healthz",
-                expected=approval_health,
-                attempts=_START_HEALTH_ATTEMPTS,
-            )
-            _health(
-                f"http://127.0.0.1:{CORE_PORT}/healthz",
-                expected=core_health,
-                attempts=_START_HEALTH_ATTEMPTS,
-            )
-            _health(
-                f"{request.approval_public_origin}/healthz",
-                expected=approval_health,
-                attempts=_START_HEALTH_ATTEMPTS,
-            )
-            _health(
-                f"{request.core_public_origin}/healthz",
-                expected=core_health,
-                attempts=_START_HEALTH_ATTEMPTS,
-            )
-            if oidc.approval_service is None:  # pragma: no cover - fixed profile invariant
-                raise ServerSetupError("approval_broker_auth", "Approval broker configuration is unavailable")
-            broker_client: ApprovalServiceClient | None = None
-            try:
-                broker_client = ApprovalServiceClient(
-                    oidc.approval_service,
-                    core_values[_BROKER_CREDENTIAL_NAME],
-                )
-                broker_client.readiness()
-            except GateBlocked as exc:
-                blocker = (
-                    exc.gate
-                    if exc.gate in {"approval_broker_auth", "approval_broker_unavailable"}
-                    else "approval_broker_auth"
-                )
-                raise ServerSetupError(blocker, "Approval broker readiness failed") from None
-            finally:
-                if broker_client is not None:
-                    broker_client.close()
-            steps.append({"id": "approval_broker_readiness", "status": "completed"})
-            start_status = base_start_status
-            if identity_enrolled:
-                readiness = {
-                    "schema": "agentnet.core.readiness.v1",
-                    "service": "agentnet-core",
-                    "version": __version__,
-                    "ready": True,
-                    "profile": request.profile,
-                    "artifact_mode": request.effective_artifact_mode,
-                    "server_agent_capabilities": sorted(
-                        capability.value
-                        for capability in (
-                            {ServerAgentCapability.OFFLINE_CUSTODY, ServerAgentCapability.ARTIFACT_STORAGE}
-                            if request.effective_artifact_mode == "enabled"
-                            else {ServerAgentCapability.OFFLINE_CUSTODY}
-                        )
-                    ),
-                    "domain_id": request.domain_id,
-                    "public_origin": request.core_public_origin,
-                    "service_audience": request.service_audience,
-                    "runtime_instance_id": request.runtime_instance_id,
-                    "deployment_binding": {
-                        "ready": True,
-                        "required": True,
-                        "credential_state": ("current", "renewal_needed"),
-                        "credential_supersession": supersession_evidence,
-                    },
-                    "approval_broker": {"ready": True, "required": True},
-                }
-                _health(f"http://127.0.0.1:{CORE_PORT}/readyz", expected=readiness)
-                try:
-                    _health(
-                        f"{request.core_public_origin}/readyz",
-                        expected=readiness,
-                        attempts=_START_HEALTH_ATTEMPTS,
-                    )
-                except ServerSetupError as exc:
-                    raise ServerSetupError(
-                        exc.blocker,
-                        str(exc),
-                        identity_enrolled=True,
-                    ) from exc
-                if c0_responder_required:
-                    if responder_payload is None:  # pragma: no cover - fixed branch invariant
-                        raise ServerSetupError(
-                            "c0_responder_conflict",
-                            "C0 responder configuration is unavailable",
-                        )
-                    steps.append(
-                        {
-                            "id": "c0_responder_config",
-                            "status": _atomic_write(
-                                c0_responder_config_path,
-                                responder_payload,
-                                mode=0o600,
-                                uid=c0_responder_account.pw_uid,
-                                gid=c0_responder_account.pw_gid,
-                            ),
-                        }
-                    )
-                auxiliary_commands = _credential_renewal_activation_commands(
-                    c0_responder_required=c0_responder_required,
-                )
-                auxiliary_status = _run_systemctl_sequence_or_reconcile(
-                    systemctl_executable,
-                    auxiliary_commands,
-                    reconcile=lambda: verify_live_service_state(
-                        auxiliary_ready=True
-                    ),
-                )
-                if auxiliary_status == "completed":
-                    verify_live_service_state(auxiliary_ready=True)
-                if auxiliary_status != "completed":
-                    start_status = auxiliary_status
-                steps.append({"id": "operational_readiness", "status": "completed"})
-                status = "operational"
-                next_action = "enroll additional ordinary laptops with agentnet join guided"
-            else:
-                status = "waiting_owner_oidc_or_passkey"
-                next_action = "complete owner passkey registration and guided identity-only enrollment"
-            steps.append({"id": "service_start", "status": start_status})
-            steps.append(
-                {
-                    "id": "managed_unit_runtime",
-                    "status": "validated_hermetic_live_binding",
-                }
-            )
-            steps.append({"id": "public_https_routes", "status": "completed"})
         else:
-            steps.append({"id": "service_start", "status": "pending_explicit_start"})
+            steps.append(
+                {"id": "service_start", "status": "pending_explicit_start"}
+            )
             status = "configured_not_started"
-            next_action = "rerun with the same --expected-request-digest plus --apply --start inside the approved scope"
+            next_action = (
+                "rerun with the same --expected-request-digest plus --apply "
+                "--start inside the approved scope"
+            )
         if rollback_capable_upgrade:
             commit_setup_profile(unit_payloads)
             _clear_upgrade_journal(journal_path)
