@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.authorization.evidence import IssuanceAuthority, SignedAuthorityCommand
+from agentnet.authorization.grant_http import create_task_grant_routes
 from agentnet.authorization.grants import GrantUse
 from agentnet.approval import IndependentApprovalReceipt
 from agentnet.automation_http import create_automation_routes
@@ -47,7 +48,7 @@ from agentnet.organization import (
     RelationshipPolicyException,
     TaskConflictAdjudication,
 )
-from agentnet.protocol.models import Classification, Relationship, TaskGrant
+from agentnet.protocol.models import Classification, Relationship
 from agentnet.provenance_http import create_provenance_routes
 from agentnet.rooms.http import create_room_routes
 from agentnet.security.signatures import canonical_digest, canonical_json
@@ -93,12 +94,6 @@ class RelationshipPolicyExceptionActivationBody(BaseModel):
     expected_transaction_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_relationship_revision: int = Field(ge=1)
     expected_lifecycle_revision: int = Field(ge=1)
-
-
-class TaskGrantIssueBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    grant: TaskGrant
 
 
 class AuthorityCommandBody(BaseModel):
@@ -467,56 +462,6 @@ def create_product_routes(
             {"conflict": outcome.model_dump(mode="json")},
             headers=RELATIONSHIP_RESPONSE_HEADERS,
         )
-
-    async def issue_task_grant(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = TaskGrantIssueBody.model_validate_json(body)
-        issued = core.issue_task_grant(actor=actor, grant=parsed.grant)
-        return JSONResponse({"grant": issued.model_dump(mode="json")}, status_code=201)
-
-    async def get_task_grant(request: Request) -> Response:
-        _body, actor = await body_and_actor(request, core)
-        grant_id = request.path_params["grant_id"]
-        administrative = request.query_params.get("administrative", "false")
-        if administrative not in {"true", "false"}:
-            raise ValidationError("administrative must be true or false")
-        action = (
-            "authorization.task_grant.admin_read"
-            if administrative == "true"
-            else "authorization.task_grant.read"
-        )
-        resource, exact_request = core.grants.read_binding(grant_id)
-        authority = _authority(
-            core,
-            actor=actor,
-            action=action,
-            resource=resource,
-            request=exact_request,
-        )
-        grant = core.grants.get(
-            grant_id,
-            authority=authority,
-            administrative=administrative == "true",
-        )
-        if grant is None:
-            raise AuthorizationError("task grant is not visible")
-        return JSONResponse({"grant": grant.model_dump(mode="json")})
-
-    async def revoke_task_grant(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = AuthorityCommandBody.model_validate_json(body)
-        grant_id = request.path_params["grant_id"]
-        if parsed.command.resource != f"task-grant:{grant_id}":
-            raise AuthorizationError("task grant authority binding mismatch")
-        authority = _authority(
-            core,
-            actor=actor,
-            action=parsed.command.action,
-            resource=parsed.command.resource,
-            request={"request_digest": parsed.command.request_digest},
-        )
-        core.grants.revoke(grant_id, command=parsed.command, authority=authority)
-        return JSONResponse({"grant_id": grant_id, "revoked": True})
 
     async def reserve_artifact(request: Request) -> Response:
         core.artifacts.require_enabled()
@@ -1041,11 +986,7 @@ def create_product_routes(
             RELATIONSHIP_RESPONSE_HEADERS,
         )
     )
-    routes += [
-        Route("/v1/task-grants", issue_task_grant, methods=["POST"]),
-        Route("/v1/task-grants/{grant_id}", get_task_grant, methods=["GET"]),
-        Route("/v1/task-grants/{grant_id}/revoke", revoke_task_grant, methods=["POST"]),
-    ]
+    routes.extend(create_task_grant_routes(core, body_and_actor, _authority))
     routes.extend(create_room_routes(core, body_and_actor, _decode_b64))
     routes += [
         Route("/v1/artifacts/reservations", reserve_artifact, methods=["POST"]),
