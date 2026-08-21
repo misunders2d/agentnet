@@ -17,7 +17,7 @@ def _stable_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Path):
-        return str(value)
+        value = str(value)
     if isinstance(value, Mapping):
         return {
             str(key): _stable_value(item)
@@ -27,7 +27,14 @@ def _stable_value(value: Any) -> Any:
         return [_stable_value(item) for item in value]
     if callable(value):
         return f"{value.__module__}.{value.__qualname__}"
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if isinstance(value, str):
+        home = Path.home()
+        try:
+            relative = Path(value).relative_to(home)
+        except ValueError:
+            return value
+        return f"<HOME>/{relative.as_posix()}"
+    if value is None or isinstance(value, (bool, int, float)):
         return value
     return repr(value)
 
@@ -73,4 +80,4 @@ def _parser_contract(parser: argparse.ArgumentParser) -> dict[str, Any]:
 def test_complete_parser_contract_is_unchanged() -> None:
     contract = _parser_contract(build_parser())
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "b9232d2916463514e02592a8964e1418835ad4efdd3bb1e1cd05700ec492a442", contract
+    assert hashlib.sha256(encoded).hexdigest() == "8baeca2687229db750be4b1481dd0c1c6bb0f1eb936f0efdc491eea194bb538c", contract
