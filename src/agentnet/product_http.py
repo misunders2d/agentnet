@@ -41,13 +41,9 @@ from agentnet.effects.reservations import (
 )
 from agentnet.errors import AuthenticationError, AuthorizationError, ValidationError
 from agentnet.identity.actors import ActorKind, TrustedTransportContext, VerifiedActor
-from agentnet.identity.context import ExpiredCredentialTransportContext
-from agentnet.identity.credentials import (
-    CredentialRenewalRequest,
-    CredentialRotationRequest,
-    LaptopCredentialReauthorizationPendingResult,
-    LaptopCredentialReauthorizationPrepareRequest,
-    LaptopCredentialReauthorizationProgressRequest,
+from agentnet.identity.credential_http import (
+    ExpiredBodyAndContext,
+    create_credential_routes,
 )
 from agentnet.identity.workload import AuthenticatedSPIFFETransport
 from agentnet.operations.incident import IncidentModeChange
@@ -77,10 +73,6 @@ from agentnet.security.signatures import canonical_digest, canonical_json
 
 
 BodyAndActor = Callable[[Request, CommunicationCore], Awaitable[tuple[bytes, VerifiedActor]]]
-ExpiredBodyAndContext = Callable[
-    [Request, CommunicationCore, bool],
-    Awaitable[tuple[bytes, ExpiredCredentialTransportContext]],
-]
 
 RELATIONSHIP_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",
@@ -475,56 +467,6 @@ def create_product_routes(
         if proof_actor != expected:
             raise AuthenticationError("effect proof and verified workload transport disagree")
         return actor
-
-    async def renew_current_credential(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = CredentialRenewalRequest.model_validate_json(body)
-        result = core.renew_current_credential(actor=actor, request=parsed)
-        return JSONResponse(result.model_dump(mode="json", by_alias=True))
-
-    async def rotate_current_credential(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = CredentialRotationRequest.model_validate_json(body)
-        result = core.rotate_credential(actor=actor, request=parsed)
-        return JSONResponse({"credential": result.model_dump(mode="json")}, status_code=201)
-
-    async def prepare_expired_credential_reauthorization(
-        request: Request,
-    ) -> Response:
-        body, context = await expired_body_and_context(request, core, False)
-        parsed = LaptopCredentialReauthorizationPrepareRequest.model_validate_json(
-            body,
-            strict=True,
-        )
-        result = core.prepare_expired_credential_reauthorization(
-            presented_credential_id=context.binding.credential_id,
-            request=parsed,
-        )
-        return JSONResponse(result.model_dump(mode="json", by_alias=True))
-
-    async def progress_expired_credential_reauthorization(
-        request: Request,
-    ) -> Response:
-        body, context = await expired_body_and_context(request, core, True)
-        parsed = LaptopCredentialReauthorizationProgressRequest.model_validate_json(
-            body,
-            strict=True,
-        )
-        result = core.progress_expired_credential_reauthorization(
-            presented_credential_id=context.binding.credential_id,
-            request=parsed,
-        )
-        return JSONResponse(
-            result.model_dump(mode="json", by_alias=True),
-            status_code=(
-                202
-                if isinstance(
-                    result,
-                    LaptopCredentialReauthorizationPendingResult,
-                )
-                else 200
-            ),
-        )
 
     async def propose_relationship(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
@@ -1662,19 +1604,12 @@ def create_product_routes(
         parsed = VersionReplayBody.model_validate_json(body)
         return JSONResponse(core.replay_unsupported_events(actor=actor, **parsed.model_dump()))
 
-    routes = [
-        Route("/v1/credentials/current/renew", renew_current_credential, methods=["POST"]),
-        Route("/v1/credentials/current/rotate", rotate_current_credential, methods=["POST"]),
-        Route(
-            "/v1/credentials/current/reauthorize-expired/prepare",
-            prepare_expired_credential_reauthorization,
-            methods=["POST"],
-        ),
-        Route(
-            "/v1/credentials/current/reauthorize-expired",
-            progress_expired_credential_reauthorization,
-            methods=["POST"],
-        ),
+    routes = create_credential_routes(
+        core,
+        body_and_actor,
+        expired_body_and_context,
+    )
+    routes += [
         Route("/v1/relationships", propose_relationship, methods=["POST"]),
         Route("/v1/relationships/{relationship_id}/accept", accept_relationship, methods=["POST"]),
         Route(
