@@ -593,6 +593,14 @@ During implementation:
 - separate transport acknowledgement, custody, processing, and effect facts;
 - retain compatibility or provide explicit migration and rollback;
 - default new high-risk capability off until evidence and owner policy exist;
+- keep every function, class, and module focused on one cohesive responsibility and
+  one clear abstraction level; do not create or expand god functions or god modules;
+- keep composition roots and orchestrators thin: they may sequence collaborators,
+  but policy, storage, transport, parsing, and presentation logic stay in their
+  owning modules behind explicit typed interfaces;
+- when touched code mixes independent responsibilities, extract cohesive units at
+  the responsibility boundary; do not use arbitrary file splitting or empty
+  indirection as a substitute for modular design;
 - avoid broad rewrites that make evidence provenance impossible to review;
 - never weaken a negative test or secure default merely to get green output.
 
