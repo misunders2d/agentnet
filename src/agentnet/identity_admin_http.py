@@ -19,9 +19,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agentnet.approval.service import IndependentApprovalVerifier
-from agentnet.authorization.elevation import ElevationRequest
+from agentnet.authorization.admin_http import create_authority_admin_routes
 from agentnet.authorization.evidence import IssuanceAuthority, SignedAuthorityCommand
-from agentnet.authorization.policy import AuthorizationRequest, HumanEntitlement
+from agentnet.authorization.policy import AuthorizationRequest
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthenticationError, GateBlocked, ValidationError
 from agentnet.identity.revocation import HarnessRevocationRequest, HarnessRevocationService
@@ -46,26 +46,6 @@ def _headers() -> dict[str, str]:
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
     }
-
-
-class EntitlementIssueBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    entitlement: HumanEntitlement
-    command: SignedAuthorityCommand
-
-
-class EntitlementRevokeBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    command: SignedAuthorityCommand
-
-
-class ElevationIssueBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    request: ElevationRequest
-    independent_approvals: tuple[dict[str, Any], ...] = Field(min_length=1, max_length=5)
 
 
 class HarnessRevocationPrepareBody(BaseModel):
@@ -205,69 +185,6 @@ def create_identity_admin_routes(
         relationships=core.relationships,
         task_grants=core.grants,
     )
-
-    async def issue_entitlement(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = EntitlementIssueBody.model_validate_json(body)
-        resource, mutation = core.policy.entitlement_issuance_binding(
-            parsed.entitlement,
-            reason=parsed.command.reason,
-        )
-        authority = _decision(
-            core,
-            actor=actor,
-            action="authorization.entitlement.issue",
-            resource=resource,
-            request_digest=canonical_digest(mutation),
-        )
-        result = core.policy.add_entitlement(
-            parsed.entitlement,
-            command=parsed.command,
-            authority=authority,
-        )
-        return JSONResponse(result.model_dump(mode="json"), status_code=201, headers=_headers())
-
-    async def revoke_entitlement(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = EntitlementRevokeBody.model_validate_json(body)
-        entitlement_id = request.path_params["entitlement_id"]
-        resource, mutation = core.policy.entitlement_revocation_binding(
-            entitlement_id,
-            expected_entity_revision=parsed.command.expected_entity_revision,
-            reason=parsed.command.reason,
-        )
-        authority = _decision(
-            core,
-            actor=actor,
-            action="authorization.entitlement.revoke",
-            resource=resource,
-            request_digest=canonical_digest(mutation),
-        )
-        core.policy.revoke_entitlement(
-            entitlement_id,
-            command=parsed.command,
-            authority=authority,
-        )
-        return JSONResponse({"entitlement_id": entitlement_id, "revoked": True}, headers=_headers())
-
-    async def issue_elevation(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = ElevationIssueBody.model_validate_json(body)
-        resource, mutation = elevations.authority_binding(parsed.request)
-        authority = _decision(
-            core,
-            actor=actor,
-            action="authorization.elevation.request",
-            resource=resource,
-            request_digest=mutation["request_digest"],
-        )
-        result = elevations.issue(
-            parsed.request,
-            beneficiary=actor,
-            authority=authority,
-            approvals=parsed.independent_approvals,
-        )
-        return JSONResponse(result.model_dump(mode="json"), status_code=201, headers=_headers())
 
     async def prepare_harness_revocation(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
@@ -533,10 +450,14 @@ def create_identity_admin_routes(
         )
         return JSONResponse({"expired": count}, headers=_headers())
 
-    routes = [
-        Route("/v1/admin/entitlements", issue_entitlement, methods=["POST"]),
-        Route("/v1/admin/entitlements/{entitlement_id}/revoke", revoke_entitlement, methods=["POST"]),
-        Route("/v1/admin/elevations", issue_elevation, methods=["POST"]),
+    routes = create_authority_admin_routes(
+        core,
+        body_and_actor,
+        elevations,
+        _decision,
+        _headers(),
+    )
+    routes += [
         Route("/v1/admin/harness-revocations/prepare", prepare_harness_revocation, methods=["POST"]),
         Route("/v1/admin/harness-revocations/commit", commit_harness_revocation, methods=["POST"]),
         Route("/v1/admin/workloads", register_workload, methods=["POST"]),
