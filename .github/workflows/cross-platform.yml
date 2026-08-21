@@ -87,11 +87,20 @@ jobs:
           cd "$UNRELATED"
           node "$LAUNCHER" --version
 
-      # `agentnet verify` runs the complete suite, which includes Linux-only
-      # setup, POSIX ownership, and distribution-artifact contracts. macOS and
-      # Windows lifecycle qualification remains a separate blocked gate, so the
-      # installed-runtime journey stays on the host it is proven for.
-      - name: Verify the installed runtime and packaged journey
+      # Development pushes prove the current source tree without rewriting the
+      # immutable evidence for the last release. Exact installed-release
+      # verification remains a separate manual/tag gate below.
+      - name: Verify current source regression
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          uv run pytest -q \
+            --ignore=tests/adapters/test_installed_live_inference.py \
+            --ignore=tests/conformance/test_release_manifest.py
+
+      # macOS and Windows lifecycle qualification remains a separate blocked
+      # gate, so the installed-runtime journey stays on the proven Linux host.
+      - name: Verify the packaged journey
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -100,14 +109,23 @@ jobs:
           PORTABLE_RUNTIME="$RUNNER_TEMP/agentnet-portable-runtime"
           mkdir -p "$PORTABLE_RUNTIME"
           PACKAGE_ROOT="$PREFIX/node_modules/@misunders2d/agentnet"
-          LAUNCHER="$PACKAGE_ROOT/npm/bin/agentnet.mjs"
           cd "$UNRELATED"
-          node "$LAUNCHER" verify
           UV_PROJECT_ENVIRONMENT="$PORTABLE_RUNTIME" uv run \
             --project "$PACKAGE_ROOT" --frozen --no-default-groups \
             --python 3.13.13 python -B -I \
             "$PACKAGE_ROOT/scripts/ci/packaged_v0145_user_journey.py" portable \
             --package-root "$PACKAGE_ROOT"
+
+      # This gate intentionally fails when source differs from the immutable
+      # release manifest or bundled Python artifacts. Run it only for an exact
+      # release tag or an explicit release-readiness dispatch.
+      - name: Verify immutable installed-release evidence
+        if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        run: |
+          PREFIX="$RUNNER_TEMP/agentnet-prefix"
+          PACKAGE_ROOT="$PREFIX/node_modules/@misunders2d/agentnet"
+          node "$PACKAGE_ROOT/npm/bin/agentnet.mjs" verify
 
       - name: Verify recursive packed package and server preflight
         if: runner.os == 'Linux'
