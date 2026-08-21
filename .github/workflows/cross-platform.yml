@@ -127,8 +127,8 @@ jobs:
           PACKAGE_ROOT="$PREFIX/node_modules/@misunders2d/agentnet"
           node "$PACKAGE_ROOT/npm/bin/agentnet.mjs" verify
 
-      - name: Verify recursive packed package and server preflight
-        if: runner.os == 'Linux'
+      - name: Verify immutable recursive packed package and server preflight
+        if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
         shell: bash
         run: npm run check:packed
 
