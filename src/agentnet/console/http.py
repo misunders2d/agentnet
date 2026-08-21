@@ -11,7 +11,7 @@ from importlib.resources import files
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
+from pydantic import ValidationError as PydanticValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -32,6 +32,7 @@ from agentnet.console.session_http import (
     SESSION_COOKIE,
     create_console_session_routes,
 )
+from agentnet.console.sponsored_candidate_http import create_sponsored_candidate_routes
 from agentnet.identity.invitation_links import InvitationLinkService
 from agentnet.identity.sponsored_enrollment import SponsoredEnrollmentService
 from agentnet.core.app import CommunicationCore
@@ -46,16 +47,6 @@ from agentnet.errors import (
 from agentnet.http_auth import authenticate_proof_request
 
 _MAX_FORM_BYTES = 65_536
-
-
-class _SponsoredCandidateBegin(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    candidate_harness_id: str = Field(min_length=1, max_length=256)
-    harness_kind: str = Field(min_length=1, max_length=64)
-    harness_name: str = Field(min_length=1, max_length=128)
-    binding_assurance: str = Field(pattern=r"^(os_bound|hardware_bound)$")
-    public_key_pem: str = Field(min_length=128, max_length=16_384)
-    idempotency_key: str = Field(min_length=16, max_length=128)
 
 
 def _asset(name: str) -> bytes:
@@ -297,56 +288,6 @@ def create_console_app(
                 read_service.activity(actor=status.actor),
                 mutation_authorizer(request),
             )
-        )
-
-    async def sponsored_candidate_begin(request: Request) -> Response:
-        require_host(request)
-        if sponsored_enrollment is None:
-            raise GateBlocked("admin_console", "sponsored enrollment is unavailable")
-        raw = await request.body()
-        if len(raw) > _MAX_FORM_BYTES:
-            raise ValidationError("request is too large")
-        try:
-            body = _SponsoredCandidateBegin.model_validate_json(raw)
-        except PydanticValidationError as exc:
-            raise ValidationError("candidate enrollment request is invalid") from exc
-        result = sponsored_enrollment.begin_candidate(**body.model_dump())
-        return JSONResponse(
-            {
-                "schema": "agentnet.sponsored-enrollment.candidate-begin-result.v1",
-                "transaction_id": result.transaction_id,
-                "authorization_url": result.authorization_url,
-                "state": result.state,
-                "continuation_token": result.continuation_token,
-                "expires_at": result.expires_at,
-            },
-            status_code=201,
-            headers=protected_headers(),
-        )
-
-    async def sponsored_candidate_status(request: Request) -> Response:
-        require_host(request)
-        if sponsored_enrollment is None:
-            raise GateBlocked("admin_console", "sponsored enrollment is unavailable")
-        raw = await request.body()
-        if len(raw) > _MAX_FORM_BYTES:
-            raise ValidationError("request is too large")
-        try:
-            body = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValidationError("candidate status request is invalid") from exc
-        if (
-            not isinstance(body, dict)
-            or set(body) != {"continuation_token"}
-            or not isinstance(body["continuation_token"], str)
-        ):
-            raise ValidationError("candidate status request is invalid")
-        result = sponsored_enrollment.candidate_status(
-            continuation_token=body["continuation_token"]
-        )
-        return JSONResponse(
-            {"schema": "agentnet.sponsored-enrollment.candidate-status-result.v1", **result},
-            headers=protected_headers(),
         )
 
     async def sign_out(request: Request) -> Response:
@@ -697,8 +638,15 @@ def create_console_app(
         Route("/harnesses/{harness_id}/revoke", revoke_harness, methods=["POST"]),
         Route("/harnesses/{harness_id}/revoke/review", review_harness_revocation, methods=["POST"]),
         Route("/mutations/{mutation_id}/reconcile", reconcile_mutation, methods=["POST"]),
-        Route("/v1/sponsored-enrollment/candidate/begin", sponsored_candidate_begin, methods=["POST"]),
-        Route("/v1/sponsored-enrollment/candidate/status", sponsored_candidate_status, methods=["POST"]),
+    ]
+    routes.extend(
+        create_sponsored_candidate_routes(
+            sponsored_enrollment=sponsored_enrollment,
+            require_host=require_host,
+            max_request_bytes=_MAX_FORM_BYTES,
+        )
+    )
+    routes += [
         Route("/enrollments/{intent_id}/request-approval", request_enrollment_approval, methods=["POST"]),
         Route("/enrollments/{intent_id}/reconcile", reconcile_enrollment, methods=["POST"]),
         Route("/v1/console/events", events, methods=["GET"]),
