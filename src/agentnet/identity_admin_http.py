@@ -24,7 +24,8 @@ from agentnet.authorization.evidence import IssuanceAuthority, SignedAuthorityCo
 from agentnet.authorization.policy import AuthorizationRequest
 from agentnet.core.app import CommunicationCore
 from agentnet.errors import AuthenticationError, GateBlocked, ValidationError
-from agentnet.identity.revocation import HarnessRevocationRequest, HarnessRevocationService
+from agentnet.identity.revocation import HarnessRevocationService
+from agentnet.identity.revocation_http import create_harness_revocation_routes
 from agentnet.identity.recovery import OIDCCredentialRecoveryCoordinator
 from agentnet.identity.workload import (
     AuthenticatedSPIFFETransport,
@@ -46,20 +47,6 @@ def _headers() -> dict[str, str]:
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
     }
-
-
-class HarnessRevocationPrepareBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    harness_id: str = Field(min_length=1, max_length=256)
-    reason: str = Field(min_length=1, max_length=512)
-
-
-class HarnessRevocationCommitBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    request: HarnessRevocationRequest
-    independent_approval: dict[str, Any]
 
 
 class WorkloadRegistrationBody(BaseModel):
@@ -185,51 +172,6 @@ def create_identity_admin_routes(
         relationships=core.relationships,
         task_grants=core.grants,
     )
-
-    async def prepare_harness_revocation(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = HarnessRevocationPrepareBody.model_validate_json(body)
-        # Gate the named target before reading it so this route cannot become
-        # an authenticated harness-existence oracle.
-        _decision(
-            core,
-            actor=actor,
-            action="identity.harness.revoke",
-            resource=f"harness:{parsed.harness_id}",
-            request_digest=canonical_digest(
-                {
-                    "domain_id": core.config.domain_id,
-                    "harness_id": parsed.harness_id,
-                    "reason": parsed.reason,
-                }
-            ),
-        )
-        prepared = revocations.prepare(
-            domain_id=core.config.domain_id,
-            harness_id=parsed.harness_id,
-            reason=parsed.reason,
-        )
-        return JSONResponse(prepared.model_dump(mode="json"), status_code=201, headers=_headers())
-
-    async def commit_harness_revocation(request: Request) -> Response:
-        body, actor = await body_and_actor(request, core)
-        parsed = HarnessRevocationCommitBody.model_validate_json(body)
-        if parsed.request.domain_id != core.config.domain_id:
-            raise AuthenticationError("harness revocation domain binding mismatch")
-        resource, mutation = revocations.authority_binding(parsed.request)
-        authority = _decision(
-            core,
-            actor=actor,
-            action="identity.harness.revoke",
-            resource=resource,
-            request_digest=mutation["request_digest"],
-        )
-        result = revocations.revoke(
-            request=parsed.request,
-            authority=authority,
-            approval=parsed.independent_approval,
-        )
-        return JSONResponse(asdict(result), headers=_headers())
 
     async def register_workload(request: Request) -> Response:
         body, actor = await body_and_actor(request, core)
@@ -457,9 +399,16 @@ def create_identity_admin_routes(
         _decision,
         _headers(),
     )
+    routes.extend(
+        create_harness_revocation_routes(
+            core,
+            body_and_actor,
+            revocations,
+            _decision,
+            _headers(),
+        )
+    )
     routes += [
-        Route("/v1/admin/harness-revocations/prepare", prepare_harness_revocation, methods=["POST"]),
-        Route("/v1/admin/harness-revocations/commit", commit_harness_revocation, methods=["POST"]),
         Route("/v1/admin/workloads", register_workload, methods=["POST"]),
         Route("/v1/admin/workloads/{registration_id}/renew", renew_workload, methods=["POST"]),
         Route("/v1/admin/workloads/{registration_id}/revoke", revoke_workload, methods=["POST"]),
