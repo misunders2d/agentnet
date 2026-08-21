@@ -175,10 +175,11 @@ def test_status_and_complete_results_enforce_exact_state_shapes() -> None:
 
     result = CommunicationScopeCompleteResult.model_validate(
         {
-            "schema": "agentnet.communication-scope.complete-result.v1",
+            "schema": "agentnet.communication-scope.complete-result.v2",
             "status": "communication_active",
             "authority_granted": True,
             "communication_usable": True,
+            "collaboration_scope_id": "scope:communication-contract",
             **dict(COMMUNICATION_SCOPE_RESTRICTIONS),
         }
     )

@@ -391,7 +391,7 @@ The signed persistent communication-scope routes are:
 |---|---|
 | `POST /v1/communication-scope/begin` | `agentnet.communication-scope.begin.v1`; caller supplies only a 16–256 byte retry key, while Core resolves the exact completed same-principal C0 harness pair, requires the authenticated ordinary server harness, accepts only its current active credential on the same harness lineage, and creates the one-hour Approval request |
 | `POST /v1/communication-scope/status` | `agentnet.communication-scope.status.v1`; returns only caller-bound pending/ready/terminal state, approval URL/expiry when applicable, and `complete_automatically` only after issuance |
-| `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 38-item commit; exact retry returns the encrypted committed result |
+| `POST /v1/communication-scope/complete` | `agentnet.communication-scope.complete.v1`; possession-bound receipt retrieval and one atomic 38-item commit plus its exact two-member C1 CollaborationScope; both setup-owned endpoints must already exist; exact retry materializes a missing scope and refreshes current endpoint/directory projections for a verified legacy v1 committed result, then returns the upgraded result |
 Before `begin` resolves an active-scope conflict, Core atomically expires every
 due pre-commit reservation for that principal and profile. A not-yet-due
 reservation remains exclusive. Same-key retry of a newly expired reservation
@@ -400,12 +400,15 @@ returns terminal state without calling Approval again. CLI
 from initial read through replacement begin and rotates both retry keys only
 after exact Core `410` error-envelope proof with no extra fields.
 
-The only success body is
-`agentnet.communication-scope.complete-result.v1` with
+The only current success body is
+`agentnet.communication-scope.complete-result.v2` with
 `status=communication_active`, `authority_granted=true`,
-`communication_usable=true`, `authority_expires_at=null`, and all artifact,
-business-effect, federation, and public-A2A flags false. CLI persists retry
-identity in an owner-only file and exposes the same flow as
+`communication_usable=true`, `authority_expires_at=null`, the exact
+`collaboration_scope_id`, and all artifact, business-effect, federation, and
+public-A2A flags false. Core accepts a retained exact v1 result only during
+committed-result replay, deterministically materializes its missing scope from
+the already approved authority, and returns v2. CLI persists retry identity in
+an owner-only file and exposes the same flow as
 `agentnet communication-scope begin|status|complete`.
 
 The canonical local tool set additionally exposes

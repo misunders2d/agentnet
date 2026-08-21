@@ -63,7 +63,7 @@ _STATUS_RESULT = {
     "next_action": "complete_automatically",
 }
 _COMPLETE_RESULT = {
-    "schema": "agentnet.communication-scope.complete-result.v1",
+    "schema": "agentnet.communication-scope.complete-result.v2",
     "status": "communication_active",
     "authority_granted": True,
     "communication_usable": True,
@@ -72,6 +72,7 @@ _COMPLETE_RESULT = {
     "business_effects_enabled": False,
     "federation_enabled": False,
     "public_a2a_enabled": False,
+    "collaboration_scope_id": "scope:communication-cli-test",
 }
 _TERMINAL_ERROR = {
     "schema": "agentnet.communication-scope.error.v1",

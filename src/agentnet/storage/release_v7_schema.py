@@ -44,7 +44,7 @@ _LEGACY_COMMUNICATION_ACTIONS = frozenset(
         "room.read",
     }
 )
-_MIGRATED_COLLABORATION_ACTIONS = tuple(
+COMMUNICATION_COLLABORATION_ACTIONS = tuple(
     sorted(
         {
             "message.acknowledge",
@@ -64,7 +64,7 @@ _MIGRATED_COLLABORATION_ACTIONS = tuple(
         }
     )
 )
-_MIGRATED_RESOURCE_PREFIXES = (
+COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES = (
     "conversation:",
     "obligation:",
     "room:",
@@ -126,8 +126,8 @@ def _scope_digest(
             "owner_principal_id": principal_id,
             "owner_harness_id": owner_harness_id,
             "members": members,
-            "allowed_actions": list(_MIGRATED_COLLABORATION_ACTIONS),
-            "allowed_resource_prefixes": list(_MIGRATED_RESOURCE_PREFIXES),
+            "allowed_actions": list(COMMUNICATION_COLLABORATION_ACTIONS),
+            "allowed_resource_prefixes": list(COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES),
             "allowed_classifications": ["C1"],
             "canonical_references": [f"communication-scope:{scope_id}"],
             "policy_revision": policy_revision,
@@ -308,8 +308,8 @@ def migrate_v6_communication_scopes(
                 principal_id,
                 owner_harness_id,
                 scope_id,
-                _canonical_text(list(_MIGRATED_COLLABORATION_ACTIONS)),
-                _canonical_text(list(_MIGRATED_RESOURCE_PREFIXES)),
+                _canonical_text(list(COMMUNICATION_COLLABORATION_ACTIONS)),
+                _canonical_text(list(COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES)),
                 _canonical_text(["C1"]),
                 _canonical_text([f"communication-scope:{scope_id}"]),
                 int(row["policy_revision"]),
@@ -348,6 +348,8 @@ def migrate_v6_communication_scopes(
 
 
 __all__ = [
+    "COMMUNICATION_COLLABORATION_ACTIONS",
+    "COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES",
     "RELEASE_V7_SCHEMA",
     "RELEASE_V7_SCHEMA_VERSION",
     "migrate_v6_communication_scopes",

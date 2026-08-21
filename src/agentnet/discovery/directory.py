@@ -94,6 +94,96 @@ class DirectoryService:
     def __init__(self, store: StoreBackend) -> None:
         self.store = store
 
+    def synchronize_agent_record_in_connection(
+        self,
+        connection: Any,
+        *,
+        domain_id: str,
+        principal_id: str,
+        harness_id: str,
+        expires_at: int,
+        now: int,
+    ) -> None:
+        """Create or refresh one lifecycle-owned agent projection."""
+
+        record_id = f"agent:{harness_id}"
+        row = connection.execute(
+            "SELECT * FROM directory_records WHERE record_id=?",
+            (record_id,),
+        ).fetchone()
+        if row is None:
+            record = DirectoryRecord(
+                record_id=record_id,
+                record_type="agent",
+                domain_id=domain_id,
+                epoch=1,
+                attributes={"harness_id": harness_id},
+                visible_to_principal_ids=(principal_id,),
+                expires_at=expires_at,
+            )
+            action = "directory.agent.materialized"
+        else:
+            current = DirectoryRecord.model_validate_json(row["record_json"])
+            if (
+                current.record_type != "agent"
+                or current.domain_id != domain_id
+                or current.attributes.get("harness_id") != harness_id
+                or current.visible_to_principal_ids != (principal_id,)
+                or current.status != "active"
+            ):
+                raise ConflictError("endpoint directory binding conflicted")
+            if current.expires_at == expires_at:
+                return
+            record = current.model_copy(
+                update={"epoch": current.epoch + 1, "expires_at": expires_at}
+            )
+            action = "directory.agent.refreshed"
+        serialized = canonical_json(record.model_dump(mode="json")).decode("utf-8")
+        if row is None:
+            connection.execute(
+                """INSERT INTO directory_records(
+                       record_id,record_type,domain_id,epoch,record_json,status,
+                       expires_at,updated_at
+                   ) VALUES(?,?,?,?,?,'active',?,?)""",
+                (
+                    record.record_id,
+                    record.record_type,
+                    record.domain_id,
+                    record.epoch,
+                    serialized,
+                    record.expires_at,
+                    now,
+                ),
+            )
+        else:
+            updated = connection.execute(
+                """UPDATE directory_records
+                      SET epoch=?,record_json=?,expires_at=?,updated_at=?
+                    WHERE record_id=? AND epoch=?""",
+                (
+                    record.epoch,
+                    serialized,
+                    record.expires_at,
+                    now,
+                    record.record_id,
+                    int(row["epoch"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ConflictError("directory record epoch changed concurrently")
+        self.store.append_audit(
+            connection,
+            {
+                "action": action,
+                "domain_id": domain_id,
+                "principal_id": principal_id,
+                "harness_id": harness_id,
+                "record_id": record.record_id,
+                "record_digest": record.digest,
+                "recorded_at": now,
+            },
+        )
+
     @staticmethod
     def publication_binding(record: DirectoryRecord) -> tuple[str, dict[str, str]]:
         return f"directory:{record.record_id}", {"record_digest": record.digest}

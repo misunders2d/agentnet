@@ -10,9 +10,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentnet.discovery.directory import DirectoryService
 from agentnet.errors import AuthenticationError, AuthorizationError, ConflictError, ValidationError
 from agentnet.identity.actors import ActorKind, VerifiedActor
-from agentnet.identity.credentials import load_credential_binding_from_connection
+from agentnet.identity.credentials import CredentialBinding, load_credential_binding_from_connection
 from agentnet.identity.domains import validate_domain_id
 from agentnet.storage.backend import StoreBackend
 
@@ -95,6 +96,7 @@ class EndpointLifecycleService:
         if not isinstance(store, StoreBackend):
             raise TypeError("endpoint lifecycle requires a StoreBackend")
         self.store = store
+        self.directory = DirectoryService(store)
         self.clock = clock or (lambda: int(time.time()))
 
     def register_existing(
@@ -111,7 +113,7 @@ class EndpointLifecycleService:
         now = int(self.clock())
         try:
             with self.store.transaction() as connection:
-                self._require_current_actor(connection, actor=actor, now=now)
+                binding = self._require_current_actor(connection, actor=actor, now=now)
                 harness = connection.execute(
                     "SELECT kind FROM harnesses WHERE domain_id=? AND harness_id=?",
                     (actor.domain_id, actor.harness_id),
@@ -124,14 +126,39 @@ class EndpointLifecycleService:
                     (actor.domain_id, actor.harness_id),
                 ).fetchone()
                 if current is not None:
-                    if not self._same_registered_binding(
+                    if not self._same_endpoint_identity(
                         current,
                         actor=actor,
                         harness_kind=kind,
-                        profile_key=profile,
                     ):
                         raise ConflictError("endpoint binding already exists")
-                    return _status_from_row(current)
+                    self._reconcile_explicit_profile_in_connection(
+                        connection,
+                        row=current,
+                        actor=actor,
+                        harness_kind=kind,
+                        profile_key=profile,
+                        now=now,
+                    )
+                    self.synchronize_current_credential_in_connection(
+                        connection,
+                        domain_id=binding.domain_id,
+                        principal_id=binding.principal_id,
+                        harness_id=binding.harness_id,
+                        harness_kind=binding.harness_kind,
+                        credential_id=binding.credential_id,
+                        credential_epoch=binding.credential_epoch,
+                        credential_expires_at=binding.expires_at,
+                        now=now,
+                        reason="current_enrollment_verified",
+                    )
+                    return _status_from_row(
+                        self._load_exact_row(
+                            connection,
+                            domain_id=actor.domain_id,
+                            harness_id=actor.harness_id,
+                        )
+                    )
 
                 claimed = connection.execute(
                     """SELECT harness_id FROM endpoint_lifecycle
@@ -159,6 +186,18 @@ class EndpointLifecycleService:
                         now,
                         now,
                     ),
+                )
+                self.synchronize_current_credential_in_connection(
+                    connection,
+                    domain_id=binding.domain_id,
+                    principal_id=binding.principal_id,
+                    harness_id=binding.harness_id,
+                    harness_kind=binding.harness_kind,
+                    credential_id=binding.credential_id,
+                    credential_epoch=binding.credential_epoch,
+                    credential_expires_at=binding.expires_at,
+                    now=now,
+                    reason="current_enrollment_verified",
                 )
                 row = self._load_exact_row(
                     connection,
@@ -435,25 +474,218 @@ class EndpointLifecycleService:
             )
             return _status_from_row(reconnected)
 
+    def _reconcile_explicit_profile_in_connection(
+        self,
+        connection: Any,
+        *,
+        row: Any,
+        actor: VerifiedActor,
+        harness_kind: str,
+        profile_key: str,
+        now: int,
+    ) -> None:
+        if row["profile_key"] == profile_key:
+            return
+        if not (
+            row["profile_key"] == row["harness_id"]
+            and row["state_reason"] == "communication_scope_enrollment_verified"
+        ):
+            raise ConflictError("endpoint binding already exists")
+        claimed = connection.execute(
+            """SELECT harness_id FROM endpoint_lifecycle
+                 WHERE domain_id=? AND harness_kind=? AND profile_key=?""",
+            (actor.domain_id, harness_kind, profile_key),
+        ).fetchone()
+        if claimed is not None:
+            raise ConflictError("endpoint binding already exists")
+        updated = connection.execute(
+            """UPDATE endpoint_lifecycle
+                  SET profile_key=?,state_reason='explicit_profile_reconciled',
+                      revision=revision+1,updated_at=?
+                WHERE domain_id=? AND harness_id=? AND revision=? AND profile_key=?""",
+            (
+                profile_key,
+                now,
+                actor.domain_id,
+                actor.harness_id,
+                int(row["revision"]),
+                row["profile_key"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise ConflictError("endpoint lifecycle revision changed concurrently")
+        self.store.append_audit(
+            connection,
+            {
+                "action": "endpoint.lifecycle.profile_reconciled",
+                "domain_id": actor.domain_id,
+                "principal_id": actor.principal_id,
+                "harness_id": actor.harness_id,
+                "profile_key": profile_key,
+                "recorded_at": now,
+            },
+        )
+
+    def synchronize_current_credential_in_connection(
+        self,
+        connection: Any,
+        *,
+        domain_id: str,
+        principal_id: str | None,
+        harness_id: str,
+        harness_kind: str,
+        credential_id: str,
+        credential_epoch: int,
+        credential_expires_at: int,
+        now: int,
+        reason: str,
+    ) -> None:
+        """Refresh an existing endpoint and its agent directory projection atomically."""
+
+        if credential_expires_at <= now:
+            raise AuthenticationError("endpoint authority is unavailable")
+        endpoint = connection.execute(
+            "SELECT * FROM endpoint_lifecycle WHERE domain_id=? AND harness_id=?",
+            (domain_id, harness_id),
+        ).fetchone()
+        if endpoint is not None:
+            if (
+                endpoint["principal_id"] != principal_id
+                or endpoint["harness_kind"] != harness_kind
+            ):
+                raise ConflictError("endpoint binding already exists")
+            if endpoint["current_credential_id"] != credential_id:
+                previous = connection.execute(
+                    "SELECT harness_id,epoch FROM credentials WHERE credential_id=?",
+                    (endpoint["current_credential_id"],),
+                ).fetchone()
+                if (
+                    previous is None
+                    or previous["harness_id"] != harness_id
+                    or int(previous["epoch"]) >= credential_epoch
+                ):
+                    raise ConflictError("endpoint credential lineage conflicted")
+                updated = connection.execute(
+                    """UPDATE endpoint_lifecycle
+                          SET current_credential_id=?,state_reason=?,revision=revision+1,
+                              updated_at=?
+                        WHERE domain_id=? AND harness_id=? AND revision=?
+                          AND current_credential_id=?""",
+                    (
+                        credential_id,
+                        reason,
+                        now,
+                        domain_id,
+                        harness_id,
+                        int(endpoint["revision"]),
+                        endpoint["current_credential_id"],
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise ConflictError("endpoint lifecycle revision changed concurrently")
+                self.store.append_audit(
+                    connection,
+                    {
+                        "action": "endpoint.lifecycle.credential_synchronized",
+                        "domain_id": domain_id,
+                        "principal_id": principal_id,
+                        "harness_id": harness_id,
+                        "credential_id": credential_id,
+                        "credential_epoch": credential_epoch,
+                        "reason": reason,
+                        "recorded_at": now,
+                    },
+                )
+        if principal_id is not None and endpoint is not None:
+            self.directory.synchronize_agent_record_in_connection(
+                connection,
+                domain_id=domain_id,
+                principal_id=principal_id,
+                harness_id=harness_id,
+                expires_at=credential_expires_at,
+                now=now,
+            )
+
+    def require_communication_members_in_connection(
+        self,
+        connection: Any,
+        *,
+        source: Any,
+        now: int,
+    ) -> None:
+        """Require two setup-owned endpoints and refresh only their current projections."""
+
+        harness_ids = tuple(
+            sorted(
+                (
+                    str(source["owner_harness_id"]),
+                    str(source["fresh_harness_id"]),
+                )
+            )
+        )
+        for harness_id in harness_ids:
+            row = connection.execute(
+                """SELECT h.domain_id,h.principal_id,h.kind,h.status,h.credential_epoch,
+                          c.credential_id,c.status AS credential_status,c.not_before,c.expires_at
+                     FROM harnesses h
+                     JOIN credentials c ON c.harness_id=h.harness_id
+                      AND c.epoch=h.credential_epoch
+                    WHERE h.harness_id=?""",
+                (harness_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["domain_id"] != source["domain_id"]
+                or row["principal_id"] != source["principal_id"]
+                or row["status"] != "active"
+                or row["credential_status"] != "active"
+                or int(row["not_before"]) > now
+                or int(row["expires_at"]) <= now
+            ):
+                raise AuthenticationError("communication endpoint authority is unavailable")
+            endpoint = connection.execute(
+                """SELECT state FROM endpoint_lifecycle
+                     WHERE domain_id=? AND harness_id=?""",
+                (row["domain_id"], harness_id),
+            ).fetchone()
+            if endpoint is None:
+                raise ConflictError("communication endpoint setup is required")
+            if endpoint["state"] == EndpointActivationState.BLOCKED.value:
+                raise AuthenticationError("communication endpoint authority is unavailable")
+            self.synchronize_current_credential_in_connection(
+                connection,
+                domain_id=str(row["domain_id"]),
+                principal_id=str(row["principal_id"]),
+                harness_id=harness_id,
+                harness_kind=str(row["kind"]),
+                credential_id=str(row["credential_id"]),
+                credential_epoch=int(row["credential_epoch"]),
+                credential_expires_at=int(row["expires_at"]),
+                now=now,
+                reason="communication_scope_reconciled",
+            )
+
     @staticmethod
-    def _same_registered_binding(
+    def _same_endpoint_identity(
         row: Any,
         *,
         actor: VerifiedActor,
         harness_kind: str,
-        profile_key: str,
     ) -> bool:
         return (
             row["domain_id"] == actor.domain_id
             and row["principal_id"] == actor.principal_id
             and row["harness_id"] == actor.harness_id
-            and row["current_credential_id"] == actor.credential_id
             and row["harness_kind"] == harness_kind
-            and row["profile_key"] == profile_key
         )
 
     @staticmethod
-    def _require_current_actor(connection: Any, *, actor: VerifiedActor, now: int) -> None:
+    def _require_current_actor(
+        connection: Any,
+        *,
+        actor: VerifiedActor,
+        now: int,
+    ) -> CredentialBinding:
         if actor.kind is not ActorKind.VERIFIED_HUMAN_HARNESS:
             raise AuthenticationError("endpoint authority is unavailable")
         if actor.principal_id is None or actor.harness_id is None or actor.credential_id is None:
@@ -474,6 +706,7 @@ class EndpointLifecycleService:
             or binding.binding_assurance != actor.binding_assurance
         ):
             raise AuthenticationError("endpoint authority is unavailable")
+        return binding
 
     @staticmethod
     def _require_row_actor_binding(row: Any, *, actor: VerifiedActor) -> None:

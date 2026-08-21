@@ -145,18 +145,23 @@ class ExactBootstrapHarnessResolver:
                 self._enrollment_harness_id(row),
                 str(uuid5(NAMESPACE_URL, f"agentnet:credential:{challenge_id}")),
             )
-            if (
-                row not in owner_rows
-                and enrollment_ids in eligible_enrollments
-                and 0 <= now - int(row["oidc_consumed_at"]) <= self.fresh_max_age_seconds
+            enrollment_is_fresh = (
+                0
+                <= now - int(row["oidc_consumed_at"])
+                <= self.fresh_max_age_seconds
                 and 0
                 <= now - int(row["enrollment_consumed_at"])
                 <= self.fresh_max_age_seconds
+            )
+            if (
+                row not in owner_rows
+                and enrollment_ids in eligible_enrollments
+                and (not self.require_fresh_enrollment or enrollment_is_fresh)
             ):
                 fresh_rows.append(row)
         if len(owner_rows) != 1 or len(fresh_rows) != 1:
             raise ConflictError(
-                "communication scope requires one configured server and one fresh guided harness"
+                "communication scope requires one configured server and one eligible guided harness"
             )
         return [owner_rows[0], fresh_rows[0]]
 

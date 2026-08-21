@@ -447,12 +447,14 @@ class CommunicationCore:
             store,
             credential_ttl_seconds=config.policies.identity.credential_ttl_seconds,
             outage_gate=self.outage,
+            endpoint_lifecycle=self.endpoint_lifecycle,
         )
         self.credential_renewal = CredentialRenewalService(
             store,
             credential_ttl_seconds=config.policies.identity.always_on_credential_ttl_seconds,
             renewal_window_seconds=config.policies.identity.credential_renewal_window_seconds,
             outage_gate=self.outage,
+            endpoint_lifecycle=self.endpoint_lifecycle,
         )
         scanner_policy = None
         scanner_keys: dict[str, str] | None = None
@@ -605,6 +607,10 @@ class CommunicationCore:
                     public_approval_url=(
                         oidc.approval_service.public_origin.rstrip("/") + "/approval"
                     ),
+                    approver_principal_id=(
+                        oidc.approval_service.approver_principal_id
+                    ),
+                    endpoint_lifecycle=self.endpoint_lifecycle,
                     clock=lambda: int(time.time()),
                 )
                 self.c0_pilot_service = C0PilotService(

@@ -17,13 +17,16 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeBeginRequest,
     CommunicationScopeCompleteRequest,
     CommunicationScopeStatusRequest,
+    digest_canonical,
 )
 from agentnet.authorization.communication_scope_service import (
     CommunicationScopeService,
     CommunicationScopeTerminalError,
 )
+from agentnet.discovery.directory import DirectoryRecord
 from agentnet.errors import AuthenticationError, ConflictError
 from agentnet.identity.actors import ActorKind, VerifiedActor
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.security.signatures import P256KeyPair
 
 NOW = 1_800_000_000
@@ -175,10 +178,36 @@ def communication_stack(store, actor):
                 "active", 1, NOW - 100, NOW + 86_400,
             ),
         )
+    endpoint_lifecycle = EndpointLifecycleService(store, clock=lambda: NOW)
+    actor_kind = str(
+        store.fetch_one(
+            "SELECT kind FROM harnesses WHERE harness_id=?",
+            (actor.harness_id,),
+        )["kind"]
+    )
+    endpoint_lifecycle.register_existing(
+        actor=actor,
+        harness_kind=actor_kind,
+        profile_key="member-profile",
+    )
+    owner_actor = VerifiedActor(
+        kind=ActorKind.VERIFIED_HUMAN_HARNESS,
+        domain_id=actor.domain_id,
+        principal_id=actor.principal_id,
+        harness_id="owner-harness",
+        credential_id="owner-credential",
+        credential_epoch=1,
+        binding_assurance="os_bound",
+    )
+    endpoint_lifecycle.register_existing(
+        actor=owner_actor,
+        harness_kind="pi",
+        profile_key="owner-profile",
+    )
     resolver = MutableResolver(actor)
     key = P256KeyPair.generate()
     approver = TrustedApprover(
-        principal_id=actor.principal_id,
+        principal_id="approval-owner",
         domain_id=actor.domain_id,
         signer_key_id=key.thumbprint,
         public_key_pem=key.public_pem,
@@ -194,6 +223,8 @@ def communication_stack(store, actor):
         verifier,
         resolver=resolver,
         public_approval_url="https://approval.corp.example/approval",
+        approver_principal_id=approver.principal_id,
+        endpoint_lifecycle=endpoint_lifecycle,
         clock=lambda: NOW,
     )
     return SimpleNamespace(
@@ -221,9 +252,9 @@ def _status(stack, *, actor=None):
     )
 
 
-def _complete(stack):
+def _complete(stack, *, actor=None):
     return stack.service.complete(
-        actor=stack.actor,
+        actor=actor or stack.actor,
         request=CommunicationScopeCompleteRequest(
             schema="agentnet.communication-scope.complete.v1",
             begin_idempotency_key=BEGIN_KEY,
@@ -246,21 +277,43 @@ def test_pending_approval_creates_no_authority(communication_stack) -> None:
         _complete(communication_stack)
     assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM entitlements")["n"] == 0
     assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM replay_nonces")["n"] == 0
+    assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM endpoint_lifecycle")["n"] == 2
+    assert communication_stack.store.fetch_one("SELECT COUNT(*) AS n FROM directory_records")["n"] == 2
 
 
 def test_approved_completion_commits_exact_persistent_scope(communication_stack) -> None:
     result = _commit(communication_stack)
-    assert result == {
-        "schema": "agentnet.communication-scope.complete-result.v1",
-        "status": "communication_active",
-        "authority_granted": True,
-        "communication_usable": True,
-        "authority_expires_at": None,
-        "artifacts_enabled": False,
-        "business_effects_enabled": False,
-        "federation_enabled": False,
-        "public_a2a_enabled": False,
+    assert result["schema"] == "agentnet.communication-scope.complete-result.v2"
+    assert result["status"] == "communication_active"
+    assert result["authority_granted"] is True
+    assert result["communication_usable"] is True
+    assert result["authority_expires_at"] is None
+    assert result["artifacts_enabled"] is False
+    assert result["business_effects_enabled"] is False
+    assert result["federation_enabled"] is False
+    assert result["public_a2a_enabled"] is False
+    assert result["collaboration_scope_id"]
+    collaboration = communication_stack.store.fetch_one(
+        """SELECT scope_id,source_communication_scope_id,state,owner_harness_id
+             FROM collaboration_scopes"""
+    )
+    assert dict(collaboration) == {
+        "scope_id": result["collaboration_scope_id"],
+        "source_communication_scope_id": result["collaboration_scope_id"],
+        "state": "active",
+        "owner_harness_id": "owner-harness",
     }
+    members = communication_stack.store.fetch_all(
+        """SELECT harness_id,role FROM collaboration_scope_members
+            ORDER BY harness_id"""
+    )
+    assert [dict(row) for row in members] == [
+        {
+            "harness_id": communication_stack.actor.harness_id,
+            "role": "member",
+        },
+        {"harness_id": "owner-harness", "role": "owner"},
+    ]
     entitlements = communication_stack.store.fetch_all(
         "SELECT action,resource_pattern,expires_at FROM entitlements ORDER BY action"
     )
@@ -273,6 +326,87 @@ def test_approved_completion_commits_exact_persistent_scope(communication_stack)
     )
     assert row["state"] == "committed"
     assert row["authority_expires_at"] is None
+    endpoints = communication_stack.store.fetch_all(
+        """SELECT harness_id,state FROM endpoint_lifecycle ORDER BY harness_id"""
+    )
+    assert [dict(endpoint) for endpoint in endpoints] == [
+        {"harness_id": communication_stack.actor.harness_id, "state": "access_ready"},
+        {"harness_id": "owner-harness", "state": "access_ready"},
+    ]
+    records = communication_stack.store.fetch_all(
+        "SELECT record_json FROM directory_records ORDER BY record_id"
+    )
+    parsed = [DirectoryRecord.model_validate_json(record["record_json"]) for record in records]
+    assert [record.attributes["harness_id"] for record in parsed] == [
+        communication_stack.actor.harness_id,
+        "owner-harness",
+    ]
+    assert all(
+        record.visible_to_principal_ids == (communication_stack.actor.principal_id,)
+        for record in parsed
+    )
+
+
+def test_committed_v1_replay_materializes_missing_scope_and_directory(
+    communication_stack,
+) -> None:
+    completed = _commit(communication_stack)
+    legacy = completed | {"schema": "agentnet.communication-scope.complete-result.v1"}
+    legacy.pop("collaboration_scope_id")
+    source = communication_stack.store.fetch_one(
+        "SELECT scope_id FROM communication_scopes WHERE state='committed'"
+    )
+    with communication_stack.store.transaction() as connection:
+        connection.execute(
+            "DELETE FROM collaboration_scope_members WHERE scope_id=?",
+            (source["scope_id"],),
+        )
+        connection.execute(
+            "DELETE FROM collaboration_scopes WHERE scope_id=?",
+            (source["scope_id"],),
+        )
+        connection.execute("DELETE FROM directory_records")
+        connection.execute(
+            """UPDATE communication_scopes
+                  SET committed_result_encrypted=?,committed_result_digest=?
+                WHERE scope_id=?""",
+            (
+                communication_stack.store.cipher.encrypt_json(
+                    legacy,
+                    purpose=f"communication-scope-result:{source['scope_id']}",
+                ),
+                digest_canonical(legacy),
+                source["scope_id"],
+            ),
+        )
+
+    replayed = _complete(communication_stack)
+
+    assert replayed["schema"] == "agentnet.communication-scope.complete-result.v2"
+    assert replayed["collaboration_scope_id"] == source["scope_id"]
+    assert communication_stack.store.fetch_one(
+        """SELECT scope_id FROM collaboration_scopes
+            WHERE source_communication_scope_id=? AND state='active'""",
+        (source["scope_id"],),
+    )["scope_id"] == source["scope_id"]
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM endpoint_lifecycle"
+    )["n"] == 2
+    assert communication_stack.store.fetch_one(
+        "SELECT COUNT(*) AS n FROM directory_records"
+    )["n"] == 2
+
+
+def test_committed_replay_requires_setup_owned_endpoint(communication_stack) -> None:
+    _commit(communication_stack)
+    with communication_stack.store.transaction() as connection:
+        connection.execute(
+            "DELETE FROM endpoint_lifecycle WHERE harness_id=?",
+            (communication_stack.actor.harness_id,),
+        )
+
+    with pytest.raises(ConflictError, match="endpoint setup is required"):
+        _complete(communication_stack)
 
 
 def test_begin_and_complete_are_idempotent(communication_stack) -> None:
@@ -462,7 +596,21 @@ def test_committed_scope_survives_issuance_credential_renewal(communication_stac
         credential_epoch=2,
         binding_assurance=communication_stack.actor.binding_assurance,
     )
-    assert _status(communication_stack, actor=rotated_actor) == expected
+    assert _complete(communication_stack, actor=rotated_actor) == expected
+    assert dict(
+        communication_stack.store.fetch_one(
+            """SELECT current_credential_id,profile_key
+                 FROM endpoint_lifecycle WHERE harness_id=?""",
+            (rotated_actor.harness_id,),
+        )
+    ) == {
+        "current_credential_id": rotated_actor.credential_id,
+        "profile_key": "member-profile",
+    }
+    assert communication_stack.store.fetch_one(
+        "SELECT expires_at FROM directory_records WHERE record_id=?",
+        (f"agent:{rotated_actor.harness_id}",),
+    )["expires_at"] == NOW + 86_400
 
 
 @pytest.mark.parametrize("approval_issued", [False, True])

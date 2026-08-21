@@ -33,6 +33,7 @@ from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.http_api import create_app
 from agentnet.identity.actors import VerifiedActor
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
 from agentnet.protocol.models import Classification, DeliveryFact
 from agentnet.security.dpop import canonical_request_target, create_request_proof
@@ -126,7 +127,20 @@ def _activate_scope(store: Any, *, owner: VerifiedActor, server: VerifiedActor, 
     approver = TrustedApprover(principal_id=server.principal_id, domain_id=server.domain_id, signer_key_id=key.thumbprint, public_key_pem=key.public_pem, allowed_purposes=frozenset({COMMUNICATION_SCOPE_APPROVAL_PURPOSE}))
     verifier = IndependentApprovalVerifier({key.thumbprint: approver}, verifier_id=f"manager-journey-approval-{server.harness_id}")
     approval = _IssuedApproval(key=key, approver=approver, verifier=verifier, now=now, suffix=server.harness_id)
-    service = CommunicationScopeService(store, approval, verifier, resolver=_scope_resolver(owner, server), public_approval_url="https://approval.example/approval", clock=lambda: now)
+    endpoint_lifecycle = EndpointLifecycleService(store, clock=lambda: now)
+    for actor, profile_key in ((owner, "owner-profile"), (server, "server-profile")):
+        harness_kind = str(
+            store.fetch_one(
+                "SELECT kind FROM harnesses WHERE harness_id=?",
+                (actor.harness_id,),
+            )["kind"]
+        )
+        endpoint_lifecycle.register_existing(
+            actor=actor,
+            harness_kind=harness_kind,
+            profile_key=profile_key,
+        )
+    service = CommunicationScopeService(store, approval, verifier, resolver=_scope_resolver(owner, server), public_approval_url="https://approval.example/approval", approver_principal_id=approver.principal_id, endpoint_lifecycle=endpoint_lifecycle, clock=lambda: now)
     begin_key = f"manager-journey-begin-{server.harness_id}"
     begin = service.begin(actor=server, request=CommunicationScopeBeginRequest(schema="agentnet.communication-scope.begin.v1", begin_idempotency_key=begin_key))
     assert begin["status"] == "approval_pending"

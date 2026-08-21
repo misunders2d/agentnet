@@ -8,7 +8,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable, Literal, Mapping, cast
+from typing import Any, Callable, Literal, Mapping, Protocol, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from cryptography.hazmat.primitives import serialization
@@ -378,6 +378,25 @@ class CredentialRotationResult(BaseModel):
     expires_at: int
 
 
+class CredentialEndpointLifecycle(Protocol):
+    """Transaction-aware owner of endpoint and directory credential projections."""
+
+    def synchronize_current_credential_in_connection(
+        self,
+        connection: Any,
+        *,
+        domain_id: str,
+        principal_id: str | None,
+        harness_id: str,
+        harness_kind: str,
+        credential_id: str,
+        credential_epoch: int,
+        credential_expires_at: int,
+        now: int,
+        reason: str,
+    ) -> None: ...
+
+
 class CredentialRotationService:
     """Rotate one current harness credential without expanding its authority."""
 
@@ -387,6 +406,7 @@ class CredentialRotationService:
         *,
         credential_ttl_seconds: int = 3_600,
         outage_gate: OutageGate | None = None,
+        endpoint_lifecycle: CredentialEndpointLifecycle | None = None,
         clock: Callable[[], int] | None = None,
     ) -> None:
         if credential_ttl_seconds < 60 or credential_ttl_seconds > 86_400:
@@ -394,6 +414,7 @@ class CredentialRotationService:
         self.store = store
         self.credential_ttl_seconds = credential_ttl_seconds
         self.outage_gate = outage_gate
+        self.endpoint_lifecycle = endpoint_lifecycle
         self.clock = clock or (lambda: int(time.time()))
 
     def rotate(
@@ -504,6 +525,24 @@ class CredentialRotationService:
                     expires_at,
                 ),
             )
+            if self.endpoint_lifecycle is not None:
+                self.endpoint_lifecycle.synchronize_current_credential_in_connection(
+                    connection,
+                    domain_id=current.domain_id,
+                    principal_id=current.principal_id,
+                    harness_id=current.harness_id,
+                    harness_kind=current.harness_kind,
+                    credential_id=credential_id,
+                    credential_epoch=next_epoch,
+                    credential_expires_at=expires_at,
+                    now=current_time,
+                    reason="credential_rotated",
+                )
+            elif connection.execute(
+                "SELECT 1 FROM endpoint_lifecycle WHERE harness_id=?",
+                (current.harness_id,),
+            ).fetchone() is not None:
+                raise ConflictError("credential endpoint lifecycle is unavailable")
             self.store.append_audit(
                 connection,
                 {
@@ -1610,6 +1649,7 @@ class CredentialRenewalService:
         credential_ttl_seconds: int = 86_400,
         renewal_window_seconds: int = 21_600,
         outage_gate: OutageGate | None = None,
+        endpoint_lifecycle: CredentialEndpointLifecycle | None = None,
         clock: Callable[[], int] | None = None,
     ) -> None:
         if not 3_600 <= credential_ttl_seconds <= 604_800:
@@ -1620,6 +1660,7 @@ class CredentialRenewalService:
         self.credential_ttl_seconds = credential_ttl_seconds
         self.renewal_window_seconds = renewal_window_seconds
         self.outage_gate = outage_gate
+        self.endpoint_lifecycle = endpoint_lifecycle
         self.clock = clock or (lambda: int(time.time()))
 
     def renew(
@@ -1666,9 +1707,28 @@ class CredentialRenewalService:
             if previous is not None:
                 if previous["request_digest"] != request_digest:
                     raise ConflictError("credential renewal request identifier conflicts")
+                previous_expires_at = int(previous["new_expires_at"])
+                if self.endpoint_lifecycle is not None:
+                    self.endpoint_lifecycle.synchronize_current_credential_in_connection(
+                        connection,
+                        domain_id=current.domain_id,
+                        principal_id=current.principal_id,
+                        harness_id=current.harness_id,
+                        harness_kind=current.harness_kind,
+                        credential_id=current.credential_id,
+                        credential_epoch=current.credential_epoch,
+                        credential_expires_at=int(current.expires_at),
+                        now=now,
+                        reason="credential_renewal_replayed",
+                    )
+                elif connection.execute(
+                    "SELECT 1 FROM endpoint_lifecycle WHERE harness_id=?",
+                    (current.harness_id,),
+                ).fetchone() is not None:
+                    raise ConflictError("credential endpoint lifecycle is unavailable")
                 return CredentialRenewalResult(
                     status=previous["result_status"],
-                    expires_at=int(previous["new_expires_at"]),
+                    expires_at=previous_expires_at,
                 )
             if self.outage_gate is not None:
                 self.outage_gate.require_issuance()
@@ -1704,6 +1764,24 @@ class CredentialRenewalService:
                     now,
                 ),
             )
+            if self.endpoint_lifecycle is not None:
+                self.endpoint_lifecycle.synchronize_current_credential_in_connection(
+                    connection,
+                    domain_id=current.domain_id,
+                    principal_id=current.principal_id,
+                    harness_id=current.harness_id,
+                    harness_kind=current.harness_kind,
+                    credential_id=current.credential_id,
+                    credential_epoch=current.credential_epoch,
+                    credential_expires_at=new_expires_at,
+                    now=now,
+                    reason="credential_renewed" if in_window else "credential_current",
+                )
+            elif connection.execute(
+                "SELECT 1 FROM endpoint_lifecycle WHERE harness_id=?",
+                (current.harness_id,),
+            ).fetchone() is not None:
+                raise ConflictError("credential endpoint lifecycle is unavailable")
             self.store.append_audit(
                 connection,
                 {

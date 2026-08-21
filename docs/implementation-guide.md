@@ -868,6 +868,15 @@ agentnet communication-scope complete \
   --identity /var/lib/agentnet/server-agent-identity.json \
   --state /var/lib/agentnet/communication-scope-state.json
 ```
+Successful completion returns `agentnet.communication-scope.complete-result.v2`
+with the exact `collaboration_scope_id` used by message, inbox, and
+acknowledgement commands. Core creates that exact two-member C1 scope in the
+same transaction as the approved persistent authority. Both participants must
+first complete normal endpoint setup; scope completion never invents a profile
+key. Retrying a previously committed v1 completion deterministically creates
+the missing scope, refreshes current directory projections, and returns the
+upgraded v2 result; it does not require another approval or entitlement.
+
 If a crash leaves an incomplete pre-commit reservation, Core keeps it exclusive
 until the displayed one-hour deadline. The next `begin` atomically expires it
 before conflict evaluation. Same-key retry then reports terminal state without

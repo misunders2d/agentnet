@@ -32,6 +32,7 @@ from agentnet.identity.credentials import (
     ManagedServerCredentialReauthorizationRequestV2,
 )
 from agentnet.operations.config import ExtensionConfig
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.security.dpop import create_request_proof
 from agentnet.security.signatures import P256KeyPair, canonical_json
 
@@ -73,10 +74,26 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
             (actor.credential_id,),
         )["expires_at"]
     )
+    endpoint_lifecycle = EndpointLifecycleService(
+        store,
+        clock=lambda: original_expiry - 600,
+    )
+    harness_kind = str(
+        store.fetch_one(
+            "SELECT kind FROM harnesses WHERE harness_id=?",
+            (actor.harness_id,),
+        )["kind"]
+    )
+    endpoint_lifecycle.register_existing(
+        actor=actor,
+        harness_kind=harness_kind,
+        profile_key="credential-test-profile",
+    )
     outside = CredentialRenewalService(
         store,
         credential_ttl_seconds=86_400,
         renewal_window_seconds=300,
+        endpoint_lifecycle=endpoint_lifecycle,
         clock=lambda: original_expiry - 600,
     )
     current_request = CredentialRenewalRequest(request_id=str(uuid4()))
@@ -89,6 +106,7 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
         store,
         credential_ttl_seconds=86_400,
         renewal_window_seconds=300,
+        endpoint_lifecycle=endpoint_lifecycle,
         clock=lambda: original_expiry - 100,
     )
     renewal_request = CredentialRenewalRequest(request_id=str(uuid4()))
@@ -97,6 +115,10 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
     assert renewed.expires_at == original_expiry - 100 + 86_400
     assert inside.renew(actor=actor, request=renewal_request) == renewed
     assert store.fetch_one(
+        "SELECT expires_at FROM directory_records WHERE record_id=?",
+        (f"agent:{actor.harness_id}",),
+    )["expires_at"] == renewed.expires_at
+    assert store.fetch_one(
         "SELECT COUNT(*) AS n FROM credential_renewal_requests"
     )["n"] == 2
 
@@ -104,6 +126,7 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
         store,
         credential_ttl_seconds=86_400,
         renewal_window_seconds=300,
+        endpoint_lifecycle=endpoint_lifecycle,
         clock=lambda: renewed.expires_at,
     )
     with pytest.raises(AuthenticationError, match="validity interval"):
@@ -281,6 +304,61 @@ def test_renewal_is_finite_idempotent_and_expired_credentials_fail_closed(
     )
     with pytest.raises(ConflictError, match="expired binding changed"):
         recovery.reauthorize(request=drifted, approval=drifted_receipt)
+
+
+def test_older_renewal_replay_does_not_regress_current_directory_expiry(
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory(kind="server", binding_assurance="os_bound")
+    original_expiry = int(
+        store.fetch_one(
+            "SELECT expires_at FROM credentials WHERE credential_id=?",
+            (actor.credential_id,),
+        )["expires_at"]
+    )
+    endpoint_lifecycle = EndpointLifecycleService(
+        store,
+        clock=lambda: original_expiry - 200,
+    )
+    endpoint_lifecycle.register_existing(
+        actor=actor,
+        harness_kind="server",
+        profile_key="renewal-replay-profile",
+    )
+    first_service = CredentialRenewalService(
+        store,
+        credential_ttl_seconds=86_400,
+        renewal_window_seconds=300,
+        endpoint_lifecycle=endpoint_lifecycle,
+        clock=lambda: original_expiry - 100,
+    )
+    first_request = CredentialRenewalRequest(request_id=str(uuid4()))
+    first = first_service.renew(actor=actor, request=first_request)
+
+    second_service = CredentialRenewalService(
+        store,
+        credential_ttl_seconds=86_400,
+        renewal_window_seconds=300,
+        endpoint_lifecycle=endpoint_lifecycle,
+        clock=lambda: first.expires_at - 100,
+    )
+    second = second_service.renew(
+        actor=actor,
+        request=CredentialRenewalRequest(request_id=str(uuid4())),
+    )
+    replayed = second_service.renew(actor=actor, request=first_request)
+
+    assert replayed == first
+    assert second.expires_at > first.expires_at
+    assert store.fetch_one(
+        "SELECT expires_at FROM credentials WHERE credential_id=?",
+        (actor.credential_id,),
+    )["expires_at"] == second.expires_at
+    assert store.fetch_one(
+        "SELECT expires_at FROM directory_records WHERE record_id=?",
+        (f"agent:{actor.harness_id}",),
+    )["expires_at"] == second.expires_at
 
 
 def test_managed_server_reauthorization_v1_vector_remains_frozen() -> None:
@@ -482,7 +560,24 @@ def test_rotation_atomically_retires_current_key_and_fences_replay_without_touch
     actor, _old_key = identity_factory(binding_assurance="os_bound")
     sibling, _sibling_key = identity_factory(binding_assurance="os_bound")
     now = int(time.time())
-    service = CredentialRotationService(store, credential_ttl_seconds=600, clock=lambda: now)
+    endpoint_lifecycle = EndpointLifecycleService(store, clock=lambda: now)
+    harness_kind = str(
+        store.fetch_one(
+            "SELECT kind FROM harnesses WHERE harness_id=?",
+            (actor.harness_id,),
+        )["kind"]
+    )
+    endpoint_lifecycle.register_existing(
+        actor=actor,
+        harness_kind=harness_kind,
+        profile_key="rotation-profile",
+    )
+    service = CredentialRotationService(
+        store,
+        credential_ttl_seconds=600,
+        endpoint_lifecycle=endpoint_lifecycle,
+        clock=lambda: now,
+    )
     new_key = P256KeyPair.generate()
     request = _rotation_request(actor, new_key, expected_epoch=1)
 
@@ -515,6 +610,20 @@ def test_rotation_atomically_retires_current_key_and_fences_replay_without_touch
     )["credential_epoch"] == 2
     assert dict(
         store.fetch_one(
+            """SELECT current_credential_id,profile_key
+                 FROM endpoint_lifecycle WHERE harness_id=?""",
+            (actor.harness_id,),
+        )
+    ) == {
+        "current_credential_id": result.credential_id,
+        "profile_key": "rotation-profile",
+    }
+    assert store.fetch_one(
+        "SELECT expires_at FROM directory_records WHERE record_id=?",
+        (f"agent:{actor.harness_id}",),
+    )["expires_at"] == result.expires_at
+    assert dict(
+        store.fetch_one(
             """SELECT h.credential_epoch,c.status,c.epoch
                  FROM harnesses h JOIN credentials c ON c.harness_id=h.harness_id
                 WHERE h.harness_id=? AND c.credential_id=?""",
@@ -524,6 +633,43 @@ def test_rotation_atomically_retires_current_key_and_fences_replay_without_touch
 
     with pytest.raises(AuthenticationError, match="credential is unavailable"):
         service.rotate(actor=actor, request=request)
+
+
+def test_rotation_with_registered_endpoint_requires_lifecycle_owner(
+    store,
+    identity_factory,
+) -> None:
+    actor, _ = identity_factory(kind="pi", binding_assurance="os_bound")
+    now = int(time.time())
+    EndpointLifecycleService(store, clock=lambda: now).register_existing(
+        actor=actor,
+        harness_kind="pi",
+        profile_key="required-owner-profile",
+    )
+    service = CredentialRotationService(
+        store,
+        credential_ttl_seconds=600,
+        clock=lambda: now,
+    )
+
+    with pytest.raises(ConflictError, match="endpoint lifecycle is unavailable"):
+        service.rotate(
+            actor=actor,
+            request=_rotation_request(
+                actor,
+                P256KeyPair.generate(),
+                expected_epoch=1,
+            ),
+        )
+
+    assert store.fetch_one(
+        "SELECT credential_epoch FROM harnesses WHERE harness_id=?",
+        (actor.harness_id,),
+    )["credential_epoch"] == 1
+    assert store.fetch_one(
+        "SELECT status FROM credentials WHERE credential_id=?",
+        (actor.credential_id,),
+    )["status"] == "active"
 
 
 def test_rotation_rejects_stale_epoch_and_new_key_substitution(store, identity_factory) -> None:

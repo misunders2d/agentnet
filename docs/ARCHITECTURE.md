@@ -430,7 +430,12 @@ finite current-credential renewal request custody. Migration 6 adds the durable
 persistent communication scope, private administration state, and exact-harness
 entitlement mapping. Migration 7 adds the endpoint lifecycle,
 collaboration-scope/member, artifact-transfer/recipient, and invitation-link
-catalogs. Fresh SQLite and PostgreSQL stores create v7; the tested N/N-1 Core
+catalogs. Current communication completion atomically materializes the exact
+two-member C1 CollaborationScope from its already approved authority; exact
+legacy-result replay provides deterministic backfill without a second grant.
+Endpoint lifecycle remains setup-owned, and credential rotation or renewal
+atomically refreshes its directory projection through that existing owner.
+Fresh SQLite and PostgreSQL stores create v7; the tested N/N-1 Core
 path accepts only an exact catalog/checksum-verified v6 store for atomic
 v6→v7 upgrade. PostgreSQL verifies the complete live v6/v7 table, column type,
 nullability/default, constraint-definition, and non-constraint-index catalog in

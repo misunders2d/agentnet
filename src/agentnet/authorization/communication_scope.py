@@ -124,8 +124,8 @@ class CommunicationScopeStatusResult(BaseModel):
         return self
 
 
-class CommunicationScopeCompleteResult(BaseModel):
-    """The only successful persistent-authority completion body."""
+class LegacyCommunicationScopeCompleteResult(BaseModel):
+    """Previously stored v1 result accepted only for exact upgrade replay."""
 
     model_config = _STRICT
     schema_id: Literal["agentnet.communication-scope.complete-result.v1"] = Field(alias="schema")
@@ -137,6 +137,22 @@ class CommunicationScopeCompleteResult(BaseModel):
     business_effects_enabled: Literal[False]
     federation_enabled: Literal[False]
     public_a2a_enabled: Literal[False]
+
+
+class CommunicationScopeCompleteResult(BaseModel):
+    """Successful authority completion with its exact operational scope."""
+
+    model_config = _STRICT
+    schema_id: Literal["agentnet.communication-scope.complete-result.v2"] = Field(alias="schema")
+    status: Literal["communication_active"]
+    authority_granted: Literal[True]
+    communication_usable: Literal[True]
+    authority_expires_at: None
+    artifacts_enabled: Literal[False]
+    business_effects_enabled: Literal[False]
+    federation_enabled: Literal[False]
+    public_a2a_enabled: Literal[False]
+    collaboration_scope_id: str = Field(min_length=16, max_length=256)
 
 
 ALLOWED_COMMUNICATION_SCOPE_TRANSITIONS = MappingProxyType(
@@ -373,6 +389,7 @@ __all__ = [
     "CommunicationScopeBeginRequest",
     "CommunicationScopeBeginResult",
     "CommunicationScopeCompleteResult",
+    "LegacyCommunicationScopeCompleteResult",
     "CommunicationScopeCompleteRequest",
     "CommunicationScopeStatusRequest",
     "CommunicationScopeStatusResult",

@@ -46,6 +46,37 @@ def test_register_existing_rejects_duplicate_profile_address_binding(
         )
 
 
+def test_explicit_setup_reconciles_only_known_legacy_profile_marker(
+    store: SQLiteStore,
+    identity_factory,
+) -> None:
+    now = int(time.time())
+    actor, _ = identity_factory(kind="pi")
+    service = _service(store, now)
+    service.register_existing(
+        actor=actor,
+        harness_kind="pi",
+        profile_key="initial-profile",
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            """UPDATE endpoint_lifecycle
+                  SET profile_key=harness_id,
+                      state_reason='communication_scope_enrollment_verified'
+                WHERE harness_id=?""",
+            (actor.harness_id,),
+        )
+
+    reconciled = service.register_existing(
+        actor=actor,
+        harness_kind="pi",
+        profile_key="explicit-profile",
+    )
+
+    assert reconciled.profile_key == "explicit-profile"
+    assert reconciled.state_reason == "explicit_profile_reconciled"
+
+
 def test_status_resolves_stable_exact_address_or_harness_id(
     store: SQLiteStore,
     identity_factory,

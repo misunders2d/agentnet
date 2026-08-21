@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,19 +21,14 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeCompleteRequest,
     CommunicationScopeStatusRequest,
 )
-from agentnet.authorization.communication_scope_service import (
-    COLLABORATION_SCOPE_ISSUE_ACTION,
-    CollaborationScopeProposal,
-    CommunicationScopeService,
-)
-from agentnet.authorization.evidence import IssuanceAuthority
-from agentnet.authorization.policy import HumanEntitlement, LocalConformancePolicyEngine
+from agentnet.authorization.communication_scope_service import CommunicationScopeService
 from agentnet.bindings.tools import CanonicalToolDispatcher
 from agentnet.core.app import CommunicationCore
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.errors import AuthorizationError, GateBlocked
 from agentnet.identity.actors import VerifiedActor
 from agentnet.operations.config import ExtensionConfig, RuntimeProfile
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.protocol.models import Classification, DeliveryFact, ReleasedArtifactBinding
 from agentnet.security.signatures import P256KeyPair
 
@@ -254,12 +249,25 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         verifier=verifier,
         now=now,
     )
+    endpoint_lifecycle = EndpointLifecycleService(store, clock=lambda: now)
+    endpoint_lifecycle.register_existing(
+        actor=owner,
+        harness_kind="pi",
+        profile_key="owner-profile",
+    )
+    endpoint_lifecycle.register_existing(
+        actor=server,
+        harness_kind="codex",
+        profile_key="server-profile",
+    )
     scope_service = CommunicationScopeService(
         store,
         approval,
         verifier,
         resolver=_scope_resolver(owner, server),
         public_approval_url="https://approval.example/approval",
+        approver_principal_id=approver.principal_id,
+        endpoint_lifecycle=endpoint_lifecycle,
         clock=lambda: now,
     )
     begin_key = "persistent-communication-begin-0001"
@@ -293,17 +301,16 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
             }
         ),
     )
-    assert completed == {
-        "schema": "agentnet.communication-scope.complete-result.v1",
-        "status": "communication_active",
-        "authority_granted": True,
-        "communication_usable": True,
-        "authority_expires_at": None,
-        "artifacts_enabled": False,
-        "business_effects_enabled": False,
-        "federation_enabled": False,
-        "public_a2a_enabled": False,
-    }
+    assert completed["schema"] == "agentnet.communication-scope.complete-result.v2"
+    assert completed["status"] == "communication_active"
+    assert completed["authority_granted"] is True
+    assert completed["communication_usable"] is True
+    assert completed["authority_expires_at"] is None
+    assert completed["artifacts_enabled"] is False
+    assert completed["business_effects_enabled"] is False
+    assert completed["federation_enabled"] is False
+    assert completed["public_a2a_enabled"] is False
+    collaboration_scope_id = completed["collaboration_scope_id"]
 
     scope = store.fetch_one(
         "SELECT * FROM communication_scopes WHERE begin_idempotency_key_sha256=?",
@@ -405,67 +412,12 @@ def test_persistent_same_principal_communication_is_exact_harness_scoped(
         server_agent_capabilities={ServerAgentCapability.OFFLINE_CUSTODY},
     )
     core = CommunicationCore(config, store)
-    collaboration_scope_id = "scope:persistent-communication"
-    collaboration_scope_domain = store.fetch_one(
-        "SELECT policy_revision,revocation_epoch FROM domains WHERE domain_id=?",
-        (domain_id,),
-    )
-    assert collaboration_scope_domain is not None
-    collaboration_scope_proposal = CollaborationScopeProposal(
+    collaboration_scope = core.collaboration_scopes.require(
+        actor=server,
         scope_id=collaboration_scope_id,
-        scope_kind="direct",
-        member_harness_ids=tuple(sorted((owner.harness_id, server.harness_id))),
-        allowed_actions=(
-            "message.acknowledge",
-            "message.read",
-            "message.send",
-            "obligation.create",
-            "obligation.respond",
-            "room.create",
-            "room.member.add",
-            "room.read",
-            "room.send",
-            "task.propose",
-        ),
-        allowed_resource_prefixes=(
-            "conversation:conversation:persistent-communication",
-            "conversation:direct",
-            "room:",
-            "task:",
-        ),
-        allowed_classifications=(Classification.C1_INTERNAL,),
-        canonical_references=(),
-        policy_revision=int(collaboration_scope_domain["policy_revision"]),
-        domain_revocation_epoch=int(collaboration_scope_domain["revocation_epoch"]),
-        expires_at=int(time.time()) + 3600,
-    )
-    collaboration_scope_request = core.collaboration_scopes.issuance_request(
-        actor=owner,
-        proposal=collaboration_scope_proposal,
-    )
-    LocalConformancePolicyEngine(store).bootstrap_entitlement_for_local_conformance(
-        HumanEntitlement(
-            domain_id=owner.domain_id,
-            principal_id=owner.principal_id,
-            action=COLLABORATION_SCOPE_ISSUE_ACTION,
-            resource_pattern=f"scope:{collaboration_scope_id}",
-            revision=int(collaboration_scope_domain["policy_revision"]),
-            expires_at=datetime.now(UTC) + timedelta(hours=1),
-        )
-    )
-    collaboration_scope_decision = core._require(
-        actor=owner,
-        action=COLLABORATION_SCOPE_ISSUE_ACTION,
-        resource=f"scope:{collaboration_scope_id}",
-        context=collaboration_scope_request,
-    )
-    collaboration_scope = core.collaboration_scopes.issue(
-        actor=owner,
-        proposal=collaboration_scope_proposal,
-        authority=IssuanceAuthority(
-            actor=owner,
-            policy_decision_id=collaboration_scope_decision.decision_id,
-        ),
+        action="message.send",
+        resource="conversation:direct",
+        target_harness_ids=(owner.harness_id,),
     )
     assert collaboration_scope.scope_id == collaboration_scope_id
     assert collaboration_scope.state == "active"

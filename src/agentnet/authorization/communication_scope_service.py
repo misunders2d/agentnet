@@ -25,6 +25,7 @@ from agentnet.authorization.communication_scope import (
     CommunicationScopeCompleteResult,
     CommunicationScopeStatusRequest,
     CommunicationScopeStatusResult,
+    LegacyCommunicationScopeCompleteResult,
     build_communication_scope_transaction,
     digest_canonical,
 )
@@ -36,10 +37,15 @@ from agentnet.errors import (
     ValidationError,
 )
 from agentnet.identity.actors import ActorKind, VerifiedActor
+from agentnet.operations.endpoint_lifecycle import EndpointLifecycleService
 from agentnet.protocol.models import Classification
 from agentnet.security.signatures import canonical_digest, canonical_json
 from agentnet.storage.backend import StoreBackend
 from agentnet.storage.communication_scope_schema import COMMUNICATION_SCOPE_TABLE_DDL
+from agentnet.storage.release_v7_schema import (
+    COMMUNICATION_COLLABORATION_ACTIONS,
+    COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -52,7 +58,7 @@ class _FinalCommitExpired(Exception):
 
 
 class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
-    """Resolve a fresh peer for the exact authenticated owner server harness."""
+    """Resolve one recent guided peer for the authenticated owner server harness."""
     allow_current_credential_rotation = True
     require_fresh_enrollment = False
 
@@ -73,71 +79,6 @@ class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
         )
         self.owner_harness_id = owner_harness_id
 
-    def _select_authenticated_rows(
-        self,
-        connection: Any,
-        *,
-        actor: VerifiedActor,
-        now: int,
-        rows: list[Any],
-    ) -> list[Any]:
-        pairs = connection.execute(
-            """SELECT DISTINCT p.owner_harness_id,p.fresh_harness_id
-            FROM c0_pilot_attempts a
-            JOIN bootstrap_grant_plans p ON p.plan_id=a.plan_id
-            JOIN c0_plan_guards g ON g.guard_id=a.guard_id AND g.plan_id=p.plan_id
-            JOIN harnesses owner ON owner.harness_id=p.owner_harness_id
-            JOIN credentials owner_credential
-              ON owner_credential.harness_id=owner.harness_id
-             AND owner_credential.epoch=owner.credential_epoch
-            JOIN harnesses fresh ON fresh.harness_id=p.fresh_harness_id
-            JOIN credentials fresh_credential
-              ON fresh_credential.harness_id=fresh.harness_id
-             AND fresh_credential.epoch=fresh.credential_epoch
-            WHERE p.domain_id=? AND p.principal_id=? AND p.owner_harness_id=?
-              AND p.state='committed'
-              AND a.state='communication_revoked'
-              AND a.sanitized_result='COMPLETED_C0_ROUND_TRIP'
-              AND a.evidence_completed_at IS NOT NULL
-              AND a.communication_revoked_at IS NOT NULL
-              AND a.terminal_at IS NOT NULL
-              AND g.state='revoked'
-              AND g.request_remaining_uses=0 AND g.reply_remaining_uses=0
-              AND owner.status='active' AND fresh.status='active'
-              AND owner.domain_id=p.domain_id AND fresh.domain_id=p.domain_id
-              AND owner.principal_id=p.principal_id AND fresh.principal_id=p.principal_id
-              AND owner_credential.status='active'
-              AND fresh_credential.status='active'
-              AND owner_credential.not_before<=? AND owner_credential.expires_at>?
-              AND fresh_credential.not_before<=? AND fresh_credential.expires_at>?
-            ORDER BY p.owner_harness_id,p.fresh_harness_id""",
-            (
-                actor.domain_id,
-                actor.principal_id,
-                actor.harness_id,
-                now,
-                now,
-                now,
-                now,
-            ),
-        ).fetchall()
-        if len(pairs) != 1:
-            raise ConflictError(
-                "communication scope requires exactly one completed C0 harness pair"
-            )
-        enrollment_by_harness = {
-            self._enrollment_harness_id(row): row
-            for row in rows
-        }
-        pair = pairs[0]
-        try:
-            owner_row = enrollment_by_harness[str(pair["owner_harness_id"])]
-            fresh_row = enrollment_by_harness[str(pair["fresh_harness_id"])]
-        except KeyError as exc:
-            raise ConflictError(
-                "completed C0 harness pair lacks guided enrollment evidence"
-            ) from exc
-        return [owner_row, fresh_row]
 
     def __call__(
         self,
@@ -152,6 +93,16 @@ class ExactCommunicationHarnessResolver(ExactBootstrapHarnessResolver):
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _canonical_text(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _actor_binding(actor: VerifiedActor) -> str:
@@ -184,6 +135,8 @@ class CommunicationScopeService:
         *,
         resolver: HarnessResolver,
         public_approval_url: str,
+        approver_principal_id: str,
+        endpoint_lifecycle: EndpointLifecycleService,
         clock: Callable[[], int],
     ) -> None:
         if getattr(approval_verifier, "lab_only", True) or getattr(
@@ -195,11 +148,16 @@ class CommunicationScopeService:
             )
         if not public_approval_url.startswith("https://") or not public_approval_url.endswith("/approval"):
             raise ValueError("public Approval URL must be exact HTTPS /approval")
+        if not approver_principal_id:
+            raise ValueError("communication scope approver principal is required")
         self.store = store
         self.approval_client = approval_client
         self.approval_verifier = approval_verifier
         self.resolver = resolver
         self.public_approval_url = public_approval_url
+        self.approver_principal_id = approver_principal_id
+        self.endpoint_lifecycle = endpoint_lifecycle
+        self.collaboration_scopes = CollaborationScopeService(store)
         self.clock = clock
 
     @staticmethod
@@ -314,7 +272,15 @@ class CommunicationScopeService:
         )
         if not secrets.compare_digest(digest_canonical(value), str(expected)):
             raise AuthenticationError("communication scope stored result denied")
-        return CommunicationScopeCompleteResult.model_validate(value).model_dump(by_alias=True)
+        try:
+            result = CommunicationScopeCompleteResult.model_validate(value)
+        except Exception:
+            legacy = LegacyCommunicationScopeCompleteResult.model_validate(value)
+            upgraded = legacy.model_dump(by_alias=True)
+            upgraded["schema"] = "agentnet.communication-scope.complete-result.v2"
+            upgraded["collaboration_scope_id"] = str(row["scope_id"])
+            result = CommunicationScopeCompleteResult.model_validate(upgraded)
+        return result.model_dump(by_alias=True)
 
     @staticmethod
     def _require_stored_transaction(row: Any) -> bytes:
@@ -937,6 +903,12 @@ class CommunicationScopeService:
                 self._require_committed_current(
                     connection, row=row, actor=actor, now=now
                 )
+                self.collaboration_scopes.materialize_communication_scope(
+                    connection,
+                    endpoint_lifecycle=self.endpoint_lifecycle,
+                    source=row,
+                    now=now,
+                )
                 return self._stored_complete(row, reservation_digest)
             self._require_row_actor(row, actor)
             if row["state"] in {
@@ -1002,14 +974,19 @@ class CommunicationScopeService:
             expected_domain_id=actor.domain_id,
             when=datetime.fromtimestamp(now, UTC),
         )
-        if receipt.approver_principal_id != actor.principal_id:
+        if receipt.approver_principal_id != self.approver_principal_id:
             raise AuthorizationError("communication scope owner approval denied")
         result = CommunicationScopeCompleteResult(
-            schema="agentnet.communication-scope.complete-result.v1",
+            schema="agentnet.communication-scope.complete-result.v2",
             status="communication_active",
             authority_granted=True,
             communication_usable=True,
-            **dict(COMMUNICATION_SCOPE_RESTRICTIONS),
+            authority_expires_at=None,
+            artifacts_enabled=False,
+            business_effects_enabled=False,
+            federation_enabled=False,
+            public_a2a_enabled=False,
+            collaboration_scope_id=scope_id,
         ).model_dump(by_alias=True)
         try:
             with self.store.transaction() as connection:
@@ -1018,6 +995,12 @@ class CommunicationScopeService:
                 if row["state"] == "committed":
                     self._require_committed_current(
                         connection, row=row, actor=actor, now=int(self.clock())
+                    )
+                    self.collaboration_scopes.materialize_communication_scope(
+                        connection,
+                        endpoint_lifecycle=self.endpoint_lifecycle,
+                        source=row,
+                        now=int(self.clock()),
                     )
                     return self._stored_complete(row, reservation_digest)
                 if (
@@ -1045,7 +1028,7 @@ class CommunicationScopeService:
                     expected_domain_id=actor.domain_id,
                     when=datetime.fromtimestamp(commit_now, UTC),
                 )
-                if receipt.approver_principal_id != row["principal_id"]:
+                if receipt.approver_principal_id != self.approver_principal_id:
                     raise AuthorizationError(
                         "communication scope owner approval denied"
                     )
@@ -1158,6 +1141,19 @@ class CommunicationScopeService:
                         audit_hash,
                         scope_id,
                     ),
+                )
+                committed = self._row_for_begin(connection, begin_hash)
+                self._require_committed_current(
+                    connection,
+                    row=committed,
+                    actor=actor,
+                    now=commit_now,
+                )
+                self.collaboration_scopes.materialize_communication_scope(
+                    connection,
+                    endpoint_lifecycle=self.endpoint_lifecycle,
+                    source=committed,
+                    now=commit_now,
                 )
                 return self._stored_complete(
                     self._row_for_begin(connection, begin_hash),
@@ -2061,6 +2057,166 @@ class CollaborationScopeService:
                 classification=classification,
                 when=when,
             )
+
+
+    def materialize_communication_scope(
+        self,
+        connection: Any,
+        *,
+        endpoint_lifecycle: EndpointLifecycleService,
+        source: Any,
+        now: int,
+    ) -> CollaborationScope:
+        """Map one exact committed communication authority into operational bounds."""
+
+        scope_id = str(source["scope_id"])
+        if source["state"] != "committed":
+            raise AuthenticationError("communication scope current authority denied")
+        existing = self._scope_row(connection, scope_id)
+        if existing is not None and existing["source_communication_scope_id"] != scope_id:
+            raise ConflictError("collaboration scope identifier is unavailable")
+        endpoint_lifecycle.require_communication_members_in_connection(
+            connection,
+            source=source,
+            now=now,
+        )
+        if existing is not None:
+            return self._scope_from_row(connection, existing)
+
+        owner_harness_id = str(source["owner_harness_id"])
+        member_harness_id = str(source["fresh_harness_id"])
+        if owner_harness_id == member_harness_id:
+            raise AuthenticationError("communication scope current authority denied")
+        created_at = int(source["committed_at"])
+        principal_id = str(source["principal_id"])
+        members: list[dict[str, object]] = []
+        member_rows: list[tuple[object, ...]] = []
+        for harness_id, role in sorted(
+            ((owner_harness_id, "owner"), (member_harness_id, "member"))
+        ):
+            members.append(
+                {
+                    "authority_kind": "principal",
+                    "authority_id": principal_id,
+                    "harness_id": harness_id,
+                    "role": role,
+                    "state": "active",
+                    "joined_sequence": 1,
+                    "joined_at": created_at,
+                }
+            )
+            member_rows.append(
+                (
+                    scope_id,
+                    principal_id,
+                    harness_id,
+                    role,
+                    self._member_digest(
+                        scope_id=scope_id,
+                        authority_kind="principal",
+                        authority_id=principal_id,
+                        harness_id=harness_id,
+                        role=role,
+                        joined_at=created_at,
+                    ),
+                    created_at,
+                )
+            )
+
+        actions = COMMUNICATION_COLLABORATION_ACTIONS
+        resources = COMMUNICATION_COLLABORATION_RESOURCE_PREFIXES
+        classifications = (Classification.C1_INTERNAL,)
+        references = (f"communication-scope:{scope_id}",)
+        proposal_digest = canonical_digest(
+            {
+                "materialization": "committed-communication-scope-v1",
+                "source_communication_scope_id": scope_id,
+                "source_scope_digest": str(source["scope_digest"]),
+                "source_transaction_digest": str(source["transaction_digest"]),
+            }
+        )
+        state_reason = "communication_scope_committed"
+        scope_digest = self._scope_digest(
+            scope_id=scope_id,
+            scope_kind="direct",
+            domain_id=str(source["domain_id"]),
+            owner_principal_id=principal_id,
+            owner_harness_id=owner_harness_id,
+            members=members,
+            allowed_actions=actions,
+            allowed_resource_prefixes=resources,
+            allowed_classifications=classifications,
+            canonical_references=references,
+            policy_revision=int(source["policy_revision"]),
+            domain_revocation_epoch=int(source["domain_revocation_epoch"]),
+            control_sequence=1,
+            membership_sequence=1,
+            proposal_digest=proposal_digest,
+            revision=1,
+            state="active",
+            state_reason=state_reason,
+            created_at=created_at,
+            updated_at=created_at,
+            expires_at=None,
+            revoked_at=None,
+        )
+        audit_hash = self.store.append_audit(
+            connection,
+            {
+                "schema": "agentnet.audit.collaboration-scope.v1",
+                "action": "collaboration_scope.materialized",
+                "scope_id": scope_id,
+                "source_communication_scope_id": scope_id,
+                "domain_id": source["domain_id"],
+                "principal_id": principal_id,
+                "owner_harness_id": owner_harness_id,
+                "scope_digest": scope_digest,
+            },
+        )
+        connection.execute(
+            """INSERT INTO collaboration_scopes(
+                scope_id,schema_version,domain_id,scope_kind,owner_principal_id,
+                owner_harness_id,source_communication_scope_id,state,state_reason,
+                allowed_actions_json,allowed_resource_prefixes_json,
+                allowed_classifications_json,canonical_references_json,policy_floor,
+                policy_revision,domain_revocation_epoch,control_sequence,
+                membership_sequence,proposal_digest,scope_digest,audit_record_hash,
+                revision,created_at,updated_at,expires_at,revoked_at,archived_at,deleted_at
+            ) VALUES(?,1,?,?,?,?,?,'active',?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,NULL,NULL,NULL,NULL)""",
+            (
+                scope_id,
+                source["domain_id"],
+                "direct",
+                principal_id,
+                owner_harness_id,
+                scope_id,
+                state_reason,
+                _canonical_text(list(actions)),
+                _canonical_text(list(resources)),
+                _canonical_text([value.value for value in classifications]),
+                _canonical_text(list(references)),
+                int(source["policy_revision"]),
+                int(source["policy_revision"]),
+                int(source["domain_revocation_epoch"]),
+                proposal_digest,
+                scope_digest,
+                audit_hash,
+                created_at,
+                created_at,
+            ),
+        )
+        for member_row in member_rows:
+            connection.execute(
+                """INSERT INTO collaboration_scope_members(
+                    scope_id,authority_kind,authority_id,harness_id,role,state,
+                    joined_sequence,removed_sequence,member_digest,joined_at,removed_at
+                ) VALUES(?,'principal',?,?,?,'active',1,NULL,?,?,NULL)""",
+                member_row,
+            )
+        created = self._scope_row(connection, scope_id)
+        if created is None:  # pragma: no cover - database invariant
+            raise ConflictError("collaboration scope materialization failed")
+        return self._scope_from_row(connection, created)
 
     def issue(
         self,
