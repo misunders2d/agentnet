@@ -261,7 +261,14 @@ Approval broker readiness through the configured public path using explicit
 host trust with certificate/key-log environment denied before setup; authoritative
 post-enrollment setup evidence; recoverable OIDC begin; finite current credential
 renewal; Core schema v5; current-package clean-state custody; an isolated
-package-owned C0 responder; and exact five-unit setup/reset lifecycle. Current
+package-owned C0 responder; and exact five-unit setup/reset lifecycle. It also
+contains one release-bound, setup-owned `0.1.31 -> 0.1.32` transition for the
+realized public two-unit marker and retained non-lab ordinary-server credential
+expired within 24 hours. Retained-key proof binds setup/config/expiry; the
+transaction preserves principal/harness/key and existing authority/message
+state, advances epoch once, records replay custody, grants no authority, starts
+no service, and cannot chain on the same harness. Prior frozen evidence below
+predates this addition and must be regenerated before release. Current
 affected source lane reports `599 passed, 7 expected dedicated-PostgreSQL skips`.
 The source regression lane excluding only installed-harness pins and release
 manifest self-check reports `1639 passed, 16 expected platform/dedicated-

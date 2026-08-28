@@ -334,6 +334,39 @@ def _realized_0130_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     return harness, digest
 
 
+def _realized_0131_two_unit_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Harness, str]:
+    """Freeze the exact published 0.1.31 Approval/Core-only marker shape."""
+
+    harness = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "__version__", "0.1.31")
+    digest = harness.plan_digest()
+    harness.apply(digest)
+    marker = harness.marker()
+    for unit in set(setup.MANAGED_UNITS) - set(setup.LEGACY_0_1_31_MANAGED_UNITS):
+        harness.layout.unit(unit).unlink()
+    marker["units"] = list(setup.LEGACY_0_1_31_MANAGED_UNITS)
+    marker["unit_digests"] = {
+        unit: marker["unit_digests"][unit]
+        for unit in setup.LEGACY_0_1_31_MANAGED_UNITS
+    }
+    harness.marker_path.write_bytes(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    harness.marker_path.chmod(0o600)
+    assert marker["package_version"] == "0.1.31"
+    assert all(
+        harness.layout.unit(unit).exists() for unit in setup.LEGACY_0_1_31_MANAGED_UNITS
+    )
+    assert all(
+        not harness.layout.unit(unit).exists()
+        for unit in set(setup.MANAGED_UNITS) - set(setup.LEGACY_0_1_31_MANAGED_UNITS)
+    )
+    return harness, digest
+
+
 def _stage_public_0130_owner_policy_shape(
     harness: _Harness,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,6 +471,39 @@ def test_marker_accepts_only_released_package_caused_digest_drift(
     assert marker["package_version"] == source
 
 
+def test_marker_accepts_exact_real_0131_two_unit_source_for_0132(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup, "__version__", "0.1.32")
+    payload = json.dumps(
+        {
+            "schema": "agentnet.server-setup.marker.v3",
+            "request_digest": "1" * 64,
+            "approval_config_digest": "2" * 64,
+            "core_config_digest": "3" * 64,
+            "units": list(setup.LEGACY_0_1_31_MANAGED_UNITS),
+            "package_version": "0.1.31",
+            "previous_marker_digest": None,
+            "revision": 7,
+            "unit_digests": {
+                unit: "4" * 64 for unit in setup.LEGACY_0_1_31_MANAGED_UNITS
+            },
+            "artifact_mode": "disabled",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode() + b"\n"
+    marker = setup._validated_setup_marker(
+        payload,
+        request_digest="9" * 64,
+        legacy_request_digest="8" * 64,
+        artifact_mode="disabled",
+    )
+    assert marker is not None
+    assert marker["package_version"] == "0.1.31"
+    assert marker["units"] == list(setup.LEGACY_0_1_31_MANAGED_UNITS)
+
+
 @pytest.mark.parametrize(
     ("package_version", "current_version"),
     [
@@ -468,6 +534,71 @@ def test_marker_rejects_every_unsupported_request_digest_drift(
             artifact_mode="disabled",
         )
     assert exc_info.value.blocker == "setup_marker_conflict"
+
+
+def test_public_0131_two_unit_upgrade_replaces_binding_without_starting_services(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, _old_digest = _realized_0131_two_unit_deployment(tmp_path, monkeypatch)
+    old_config = setup.load_config_json("{}")
+    old_config.enrolled_harness_id = "server-harness"
+    old_config.enrolled_credential_id = "credential-old"
+    monkeypatch.setattr(setup, "load_config_json", lambda _text: old_config)
+    monkeypatch.setattr(
+        setup,
+        "_validated_managed_identity_profile",
+        lambda *_args, **_kwargs: None,
+    )
+    original_run_as = setup._run_as
+    replacement_calls: list[list[str]] = []
+
+    def run_with_replacement(
+        account,
+        argv,
+        *,
+        environment,
+        stage,
+        accepted_returncodes=frozenset({0}),
+    ):
+        if argv[2:5] == ["server-agent", "replace-expired-binding", "--config"]:
+            replacement_calls.append(list(argv))
+            old_config.enrolled_credential_id = "credential-new"
+            return {
+                "schema": "agentnet.expired-server-replacement-cli-result.v1",
+                "status": "replaced",
+                "authority_granted": False,
+                "service_restart": "not_performed",
+            }
+        return original_run_as(
+            account,
+            argv,
+            environment=environment,
+            stage=stage,
+            accepted_returncodes=accepted_returncodes,
+        )
+
+    monkeypatch.setattr(setup, "_run_as", run_with_replacement)
+    monkeypatch.setattr(
+        setup,
+        "_run_systemctl",
+        lambda *_args, **_kwargs: pytest.fail("start=false must not invoke systemctl"),
+    )
+    harness.install_new_package_runtime()
+    monkeypatch.setattr(setup, "__version__", "0.1.32")
+    result = harness.apply(harness.plan_digest(), start=False)
+
+    assert len(replacement_calls) == 1
+    assert {
+        "id": "expired_binding_replacement",
+        "status": "completed",
+    } in result["steps"]
+    assert all(harness.layout.unit(unit).exists() for unit in setup.MANAGED_UNITS)
+    marker = harness.marker()
+    assert marker["package_version"] == "0.1.32"
+    assert marker["units"] == list(setup.MANAGED_UNITS)
+    assert set(marker["unit_digests"]) == set(setup.MANAGED_UNITS)
+    assert not harness.journal_path.exists()
 
 
 def test_marker_upgrade_still_rejects_malformed_recorded_digest(
@@ -989,6 +1120,59 @@ def test_bootstrap_reconciles_one_lost_response_and_requires_fresh_evidence(
     assert result == evidence
     assert status == "reconciled_after_response_loss"
     assert len(calls) == 2
+
+
+def test_expired_binding_replacement_reconciles_one_lost_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    evidence = {
+        "schema": "agentnet.expired-server-replacement-cli-result.v1",
+        "status": "replaced",
+        "authority_granted": False,
+        "service_restart": "not_performed",
+    }
+
+    def response_lost(*_args: object, **_kwargs: object) -> dict[str, object]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ServerSetupError("invalid_product_evidence", "response lost")
+        return evidence
+
+    monkeypatch.setattr(setup, "_run_as", response_lost)
+    result, status = setup._run_expired_binding_replacement_idempotently(
+        SimpleNamespace(),
+        ["node", "agentnet", "server-agent", "replace-expired-binding"],
+        environment={},
+    )
+    assert result == evidence
+    assert status == "reconciled_after_response_loss"
+    assert len(calls) == 2
+
+
+def test_expired_binding_replacement_rejects_bad_evidence_and_does_not_retry_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup, "_run_as", lambda *_args, **_kwargs: {"status": "replaced"})
+    with pytest.raises(ServerSetupError) as exc_info:
+        setup._run_expired_binding_replacement_idempotently(
+            SimpleNamespace(), ["node", "agentnet"], environment={}
+        )
+    assert exc_info.value.blocker == "expired_binding_replacement_evidence"
+
+    calls: list[int] = []
+
+    def refusal(*_args: object, **_kwargs: object) -> dict[str, object]:
+        calls.append(1)
+        raise ServerSetupError("product_command_failed", "refused")
+
+    monkeypatch.setattr(setup, "_run_as", refusal)
+    with pytest.raises(ServerSetupError) as refusal_error:
+        setup._run_expired_binding_replacement_idempotently(
+            SimpleNamespace(), ["node", "agentnet"], environment={}
+        )
+    assert refusal_error.value.blocker == "product_command_failed"
+    assert len(calls) == 1
 
 
 def test_bootstrap_retries_at_most_once_and_never_retries_a_refusal(

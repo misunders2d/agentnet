@@ -162,6 +162,7 @@ for (const required of [
   "Version 0.1.32 has no package-owned in-place broker-credential or database-password rotation transition",
   "Permanent `/var/lib/agentnet-setup/setup.lock` and its root remain as coordination state",
   "Request-v2 writes marker-v3 binding exact `artifact_mode`",
+  "Sole exception: setup may migrate the exact realized public 0.1.31 two-unit marker",
   "communication-only restricted",
   "No-apply planning reaches Python and returns structured `approval_broker_auth` evidence before managed-host mutation",
   "Approved `server-agent setup --apply` is rejected by the npm launcher with fixed sanitized stderr before uv/tool resolution",

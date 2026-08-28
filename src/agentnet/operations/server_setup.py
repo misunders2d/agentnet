@@ -76,6 +76,7 @@ APPROVAL_UNIT = "agentnet-approval.service"
 C0_RESPONDER_UNIT = "agentnet-c0-responder.service"
 CREDENTIAL_RENEW_UNIT = "agentnet-credential-renew.service"
 CREDENTIAL_RENEW_TIMER = "agentnet-credential-renew.timer"
+LEGACY_0_1_31_MANAGED_UNITS = (APPROVAL_UNIT, CORE_UNIT)
 MANAGED_UNITS = (
     APPROVAL_UNIT,
     CORE_UNIT,
@@ -91,6 +92,7 @@ C0_RESPONDER_TERMINAL = C0_RESPONDER_DATA / "terminal.json"
 SERVER_AGENT_IDENTITY = CORE_DATA / "server-agent-identity.json"
 SERVER_AGENT_KEY = CORE_DATA / "guided-join.key.pem"
 CREDENTIAL_RENEW_STATE = CORE_DATA / "credential-renewal-state.json"
+EXPIRED_BINDING_STATE = CORE_DATA / "expired-binding-transition.json"
 CORE_CONFIG = CORE_DATA / "agentnet.json"
 CORE_OIDC_CONFIG = CORE_DATA / "oidc-enrollment.json"
 APPROVAL_CONFIG = APPROVAL_DATA / "config.json"
@@ -124,15 +126,17 @@ _PROTECTED_SERVICE_PATHS = (
     Path("/tmp"),
     Path("/var/tmp"),
 )
-# One exact supported setup-marker upgrade window.  A package upgrade is the only
-# reason an already realized deployment may present a different request digest,
-# and only these source versions were released with a runtime-bound digest.
-_MARKER_UPGRADE_TARGET = "0.1.31"
-_SUPPORTED_MARKER_UPGRADE_SOURCES = frozenset({"0.1.28", "0.1.30"})
+# Exact released setup-marker upgrade windows. A package upgrade is the only
+# reason an already realized deployment may present a different request digest.
+_SUPPORTED_MARKER_UPGRADES = {
+    "0.1.31": frozenset({"0.1.28", "0.1.30"}),
+    "0.1.32": frozenset({"0.1.31"}),
+}
 # Blockers that mean "the response was lost", not "the operation was refused".
 # Only these justify one bounded idempotent retry of a product command.
 _RESPONSE_LOSS_BLOCKERS = frozenset({"invalid_product_evidence", "product_command_failed"})
-_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v1"
+_EXPIRED_REPLACEMENT_RESPONSE_LOSS_BLOCKERS = frozenset({"invalid_product_evidence"})
+_UPGRADE_JOURNAL_SCHEMA = "agentnet.server-setup.upgrade-journal.v2"
 _MAX_UNIT_BYTES = 65_536
 _MAX_CONFIG_BYTES = 1_048_576
 _JOURNALED_CONFIG_KEYS = frozenset({"core_config", "core_oidc_config"})
@@ -1654,10 +1658,10 @@ def _supported_marker_upgrade(marker_package_version: object) -> bool:
     failing closed.
     """
 
+    sources = _SUPPORTED_MARKER_UPGRADES.get(__version__, frozenset())
     return (
-        __version__ == _MARKER_UPGRADE_TARGET
-        and isinstance(marker_package_version, str)
-        and marker_package_version in _SUPPORTED_MARKER_UPGRADE_SOURCES
+        isinstance(marker_package_version, str)
+        and marker_package_version in sources
         and marker_package_version != __version__
     )
 
@@ -1671,6 +1675,12 @@ def _accepted_marker_request_digest(marker: Mapping[str, Any], request_digest: s
         and bool(_HEX64.fullmatch(recorded))
         and _supported_marker_upgrade(marker.get("package_version"))
     )
+
+
+def _marker_unit_profile(marker: Mapping[str, Any]) -> tuple[str, ...]:
+    if __version__ == "0.1.32" and marker.get("package_version") == "0.1.31":
+        return LEGACY_0_1_31_MANAGED_UNITS
+    return MANAGED_UNITS
 
 
 def _validated_setup_marker(
@@ -1691,8 +1701,9 @@ def _validated_setup_marker(
         "units",
     }
     digests = (marker.get("approval_config_digest"), marker.get("core_config_digest"))
+    marker_units = _marker_unit_profile(marker)
     if (
-        marker.get("units") != list(MANAGED_UNITS)
+        marker.get("units") != list(marker_units)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in digests)
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker does not match the fixed profile")
@@ -1724,7 +1735,7 @@ def _validated_setup_marker(
             or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
             or not isinstance(marker.get("package_version"), str)
             or not isinstance(unit_digests, dict)
-            or set(unit_digests) != set(MANAGED_UNITS)
+            or set(unit_digests) != set(marker_units)
             or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
         ):
             raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
@@ -1741,7 +1752,7 @@ def _validated_setup_marker(
         or (previous is not None and (not isinstance(previous, str) or not re.fullmatch(r"[a-f0-9]{64}", previous)))
         or not isinstance(marker.get("package_version"), str)
         or not isinstance(unit_digests, dict)
-        or set(unit_digests) != set(MANAGED_UNITS)
+        or set(unit_digests) != set(marker_units)
         or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in unit_digests.values())
     ):
         raise ServerSetupError("setup_marker_conflict", "setup marker version or provenance is invalid")
@@ -1993,19 +2004,24 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
     journal = _strict_json_bytes(payload, label="setup upgrade journal")
     units = journal.get("previous_units")
     configs = journal.get("previous_configs")
+    schema = journal.get("schema")
+    legacy = schema == "agentnet.server-setup.upgrade-journal.v1"
+    expected_keys = {
+        "schema",
+        "from_marker_sha256",
+        "from_package_version",
+        "from_request_digest",
+        "to_package_version",
+        "to_request_digest",
+        "previous_units",
+        "previous_configs",
+    }
+    if not legacy:
+        expected_keys.add("absent_units")
+    absent_units = [] if legacy else journal.get("absent_units")
     if (
-        journal.get("schema") != _UPGRADE_JOURNAL_SCHEMA
-        or set(journal)
-        != {
-            "schema",
-            "from_marker_sha256",
-            "from_package_version",
-            "from_request_digest",
-            "to_package_version",
-            "to_request_digest",
-            "previous_units",
-            "previous_configs",
-        }
+        schema not in {"agentnet.server-setup.upgrade-journal.v1", _UPGRADE_JOURNAL_SCHEMA}
+        or set(journal) != expected_keys
         or any(
             not isinstance(journal.get(key), str) or not _HEX64.fullmatch(str(journal.get(key)))
             for key in ("from_marker_sha256", "from_request_digest", "to_request_digest")
@@ -2013,11 +2029,17 @@ def _read_upgrade_journal(path: Path, *, uid: int, gid: int) -> dict[str, Any] |
         or not isinstance(journal.get("from_package_version"), str)
         or not isinstance(journal.get("to_package_version"), str)
         or not isinstance(units, dict)
-        or set(units) != set(MANAGED_UNITS)
+        or not units
+        or not set(units) <= set(MANAGED_UNITS)
+        or not isinstance(absent_units, list)
+        or any(not isinstance(unit, str) for unit in absent_units)
+        or set(absent_units) != set(MANAGED_UNITS) - set(units)
         or not isinstance(configs, dict)
         or set(configs) != _JOURNALED_CONFIG_KEYS
     ):
         raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
+    if legacy:
+        journal = {**journal, "absent_units": []}
     for value in units.values():
         if not isinstance(value, str) or len(value) > 4 * _MAX_UNIT_BYTES:
             raise ServerSetupError("setup_upgrade_conflict", "setup upgrade journal is invalid")
@@ -2439,6 +2461,49 @@ def _run_bootstrap_idempotently(
         _require_core_bootstrap_evidence(evidence, expected_domain_id=expected_domain_id)
         return evidence, "completed" if attempt == 1 else "reconciled_after_response_loss"
     raise ServerSetupError("core_bootstrap_evidence", "Core bootstrap did not produce exact evidence")
+
+
+def _run_expired_binding_replacement_idempotently(
+    account: pwd.struct_passwd,
+    argv: list[str],
+    *,
+    environment: Mapping[str, str],
+) -> tuple[dict[str, Any], str]:
+    """Run exact offline replacement, retrying only one unknown response."""
+
+    for attempt in range(1, 3):
+        try:
+            evidence = _run_as(
+                account,
+                argv,
+                environment=environment,
+                stage="expired_binding_replacement",
+            )
+        except ServerSetupError as exc:
+            if (
+                attempt >= 2
+                or exc.blocker not in _EXPIRED_REPLACEMENT_RESPONSE_LOSS_BLOCKERS
+            ):
+                raise
+            continue
+        if (
+            set(evidence)
+            != {"schema", "status", "authority_granted", "service_restart"}
+            or evidence.get("schema")
+            != "agentnet.expired-server-replacement-cli-result.v1"
+            or evidence.get("status") not in {"replaced", "already_current"}
+            or evidence.get("authority_granted") is not False
+            or evidence.get("service_restart") != "not_performed"
+        ):
+            raise ServerSetupError(
+                "expired_binding_replacement_evidence",
+                "expired server replacement did not produce exact evidence",
+            )
+        return evidence, "completed" if attempt == 1 else "reconciled_after_response_loss"
+    raise ServerSetupError(
+        "expired_binding_replacement_evidence",
+        "expired server replacement did not produce exact evidence",
+    )
 
 
 def _ensure_account(
@@ -3560,6 +3625,11 @@ def _prepare_supported_upgrade(
 
     journal = _read_upgrade_journal(journal_path, uid=uid, gid=gid)
     upgrading = existing_marker is not None and existing_marker.get("request_digest") != approved_digest
+    source_unit_paths = (
+        {unit: unit_paths[unit] for unit in _marker_unit_profile(existing_marker)}
+        if existing_marker is not None
+        else dict(unit_paths)
+    )
     if journal is not None:
         committed_target = (
             existing_marker is not None
@@ -3642,12 +3712,12 @@ def _prepare_supported_upgrade(
             blocker="core_custody",
             exclude_top_level=frozenset({"enrolled_harness_id", "enrolled_credential_id"}),
         ),
-        unit_paths=unit_paths,
+        unit_paths=source_unit_paths,
         uid=uid,
         gid=gid,
     )
     previous_units: dict[str, str] = {}
-    for unit, path in unit_paths.items():
+    for unit, path in source_unit_paths.items():
         payload = _read_managed_unit(path, uid=uid, gid=gid, blocker="setup_upgrade_conflict")
         if payload is None:
             raise ServerSetupError(
@@ -3681,6 +3751,7 @@ def _prepare_supported_upgrade(
         "to_package_version": __version__,
         "to_request_digest": approved_digest,
         "previous_units": previous_units,
+        "absent_units": sorted(set(MANAGED_UNITS) - set(previous_units)),
         "previous_configs": previous_configs,
     }
     _write_upgrade_journal(journal_path, journal, uid=uid, gid=gid)
@@ -3712,6 +3783,8 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
     journal = pending.get("journal")
     if not isinstance(journal, Mapping):
         return
+    if pending.get("irreversible_binding_replacement_started") is True:
+        return
     try:
         previous_configs = _journaled_config_payloads(journal)
         replacements = pending.get("replacement_configs", {})
@@ -3740,18 +3813,32 @@ def _rollback_pending_upgrade(pending: Mapping[str, Any]) -> None:
                 previous=replacement,
             )
         previous = _journaled_unit_payloads(journal)
+        replacement_units = pending.get("replacement_units", {})
+        if not isinstance(replacement_units, Mapping):
+            raise ServerSetupError("setup_upgrade_conflict", "upgrade rollback state is invalid")
         for unit, path in dict(pending["unit_paths"]).items():
+            current = _read_managed_unit(
+                path,
+                uid=int(pending["uid"]),
+                gid=int(pending["gid"]),
+                blocker="setup_upgrade_conflict",
+            )
+            if unit not in previous:
+                if current is None:
+                    continue
+                if current != replacement_units.get(unit):
+                    raise ServerSetupError(
+                        "setup_upgrade_conflict",
+                        "new managed unit changed before upgrade rollback",
+                    )
+                path.unlink()
+                continue
             _write_managed_unit(
                 path,
                 previous[unit],
                 uid=int(pending["uid"]),
                 gid=int(pending["gid"]),
-                previous=_read_managed_unit(
-                    path,
-                    uid=int(pending["uid"]),
-                    gid=int(pending["gid"]),
-                    blocker="setup_upgrade_conflict",
-                ),
+                previous=current,
             )
     except Exception:
         return
@@ -4054,6 +4141,11 @@ def _apply_server_setup(
             pending=_pending_upgrade,
         )
         steps.append({"id": "package_upgrade", "status": upgrade_status})
+        expired_binding_upgrade_required = (
+            existing_marker is not None
+            and existing_marker.get("package_version") == "0.1.31"
+            and existing_marker.get("request_digest") != approved_digest
+        )
         journaled_units = (
             _journaled_unit_payloads(_pending_upgrade["journal"])
             if _pending_upgrade.get("journal") is not None
@@ -4261,9 +4353,14 @@ def _apply_server_setup(
         identity_enrolled = bool(config.enrolled_harness_id and config.enrolled_credential_id)
         c0_responder_required = False
         steps.append({"id": "core_bootstrap", "status": bootstrap_status})
-        if identity_enrolled and start:
-            identity_path = layout.host(SERVER_AGENT_IDENTITY)
-            signing_key_path = layout.host(SERVER_AGENT_KEY)
+        identity_path = layout.host(SERVER_AGENT_IDENTITY)
+        signing_key_path = layout.host(SERVER_AGENT_KEY)
+        if expired_binding_upgrade_required:
+            if not identity_enrolled:
+                raise ServerSetupError(
+                    "expired_binding_replacement",
+                    "0.1.31 binding transition requires the existing enrolled identity",
+                )
             _validated_managed_identity_profile(
                 identity_path,
                 signing_key_path,
@@ -4271,7 +4368,67 @@ def _apply_server_setup(
                 config=config,
                 request=request,
             )
+            previous_enrolled_credential_id = config.enrolled_credential_id
+            _pending_upgrade["irreversible_binding_replacement_started"] = True
+            replacement_evidence, replacement_status = _run_expired_binding_replacement_idempotently(
+                core_account,
+                [
+                    str(node_executable),
+                    str(executable),
+                    "server-agent",
+                    "replace-expired-binding",
+                    "--config",
+                    str(core_config_path),
+                    "--identity",
+                    str(identity_path),
+                    "--state",
+                    str(layout.host(EXPIRED_BINDING_STATE)),
+                    "--setup-request-digest",
+                    approved_digest,
+                ],
+                environment=core_environment,
+            )
+            config = _load_validated_core_config(
+                core_config_path,
+                core_account,
+                request=request,
+                core_data=core_data,
+                oidc=oidc,
+                scanner_trust=scanner_trust,
+            )
+            _validated_managed_identity_profile(
+                identity_path,
+                signing_key_path,
+                core_account,
+                config=config,
+                request=request,
+            )
+            changed_binding = (
+                config.enrolled_credential_id != previous_enrolled_credential_id
+            )
+            if (
+                replacement_evidence["status"] == "replaced" and not changed_binding
+            ) or (
+                replacement_evidence["status"] == "already_current" and changed_binding
+            ):
+                raise ServerSetupError(
+                    "expired_binding_replacement_evidence",
+                    "expired server replacement evidence does not match realized binding",
+                )
+            identity_enrolled = True
+            steps.append(
+                {"id": "expired_binding_replacement", "status": replacement_status}
+            )
+        if identity_enrolled:
             _verified["identity_enrolled"] = True
+        if identity_enrolled and start:
+            _validated_managed_identity_profile(
+                identity_path,
+                signing_key_path,
+                core_account,
+                config=config,
+                request=request,
+            )
             terminal = _validated_c0_terminal_marker(
                 c0_responder_terminal_path,
                 c0_responder_account,
@@ -4356,6 +4513,8 @@ def _apply_server_setup(
             raise ServerSetupError("approval_conflict", "Approval trust changed during setup")
 
         unit_payloads = render_units(node_executable, executable, uv_executable)
+        if _pending_upgrade.get("journal") is not None:
+            _pending_upgrade["replacement_units"] = dict(unit_payloads)
         for unit, payload in unit_payloads.items():
             steps.append(
                 {

@@ -197,7 +197,7 @@ Start scope is limited to:
 
 Same approved request is deliberately retryable.
 
-- Fresh 0.1.32 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`. First-C0 setup does not migrate or reuse 0.1.31 state.
+- Fresh 0.1.32 setup writes one root-owned attempt record before first product mutation and removes it only after marker commit. Exact interruption resumes; pre-existing state without current-package attempt/marker custody fails `clean_state_required`. Sole exception: setup may migrate the exact realized public 0.1.31 two-unit marker. It accepts only the retained non-lab ordinary-server credential expired within 24 hours, proves the same key against the frozen setup/config/expiry transcript, preserves principal/harness/key and authority/message state, advances its epoch once, records owner-only replay custody, and commits the five-unit profile. No-start apply starts/restarts nothing; no authority is granted; the transition cannot chain or run outside 0.1.32. Never invoke the internal transition manually, edit its state, reset, or re-enroll as a workaround.
 - Bootstrap is rerun/revalidated for preexisting Core state; old marker never causes bootstrap skip.
 - Core config is reloaded after bootstrap.
 - Approval trust is reloaded and revalidated.

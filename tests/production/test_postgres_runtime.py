@@ -144,8 +144,10 @@ def test_numbered_migration_catalog_preserves_prior_versions_and_adds_identity_l
         "CREATE TABLE IF NOT EXISTS oidc_enrollment_continuations",
         "CREATE INDEX IF NOT EXISTS idx_oidc_continuation_status_expiry",
         "CREATE TABLE IF NOT EXISTS credential_renewal_requests",
+        "CREATE TABLE IF NOT EXISTS expired_server_credential_replacements",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_oidc_enrollment_begin_idempotency",
         "CREATE INDEX IF NOT EXISTS idx_credential_renewal_credential",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_expired_server_replacement_old",
     ):
         assert required in schema
     assert "ON CONFLICT(reservation_id) DO NOTHING" in schema
@@ -257,6 +259,8 @@ def _make_exact_v1_sqlite(path: Path, *, key: bytes) -> None:
 
 
 def _drop_v5_identity_lifecycle_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP INDEX idx_expired_server_replacement_old")
+    connection.execute("DROP TABLE expired_server_credential_replacements")
     connection.execute("DROP INDEX idx_credential_renewal_credential")
     connection.execute("DROP TABLE credential_renewal_requests")
     connection.execute("DROP INDEX idx_oidc_enrollment_begin_idempotency")
@@ -984,7 +988,7 @@ def test_postgres_full_v5_catalog_checks_every_table_column_constraint_and_index
     spec_v4 = expected_catalog(MIGRATIONS[:4])
     spec_v5 = expected_catalog(MIGRATIONS)
     assert len(spec_v4.tables) == 100
-    assert len(spec_v5.tables) == 101
+    assert len(spec_v5.tables) == 102
     assert len(spec_v5.columns) > len(spec_v4.columns)
     assert len(spec_v5.constraints) > len(spec_v4.constraints)
     assert len(spec_v5.indexes) > len(spec_v4.indexes)

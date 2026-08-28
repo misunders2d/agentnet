@@ -6,16 +6,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from agentnet.errors import ConflictError, GateBlocked, ValidationError
 from agentnet.core.capabilities import ServerAgentCapability
 from agentnet.operations.config import (
     A2AAgentCardConfig,
     A2AServiceConfig,
+    A2ASigningCredentialConfig,
     A2ASigningIdentityConfig,
     A2AStandingGrantConfig,
     ExtensionConfig,
     FeatureFlags,
+    RuntimeProfile,
 )
 from agentnet.operations.config_migration import (
     CURRENT_CONFIG_SCHEMA,
@@ -433,3 +436,81 @@ def test_strict_config_accepts_bounded_a2a_key_path_but_not_key_material() -> No
     )
     with pytest.raises(ValidationError, match="current-schema validation"):
         load_config_json(json.dumps(embedded))
+
+
+def test_server_config_binds_enrollment_to_exact_signing_lineage_tail() -> None:
+    config = ExtensionConfig(
+        profile=RuntimeProfile.ALWAYS_ON_SERVER_AGENT,
+        domain_id="corp.example",
+        database_url="postgresql://agentnet@postgres/agentnet",
+        artifact_backend="postgres-manifest",
+        artifact_mode="enabled",
+        public_base_url="https://agents.corp.example",
+        enrolled_harness_id="harness-a2a",
+        enrolled_credential_id="credential-new",
+        features=FeatureFlags(public_a2a=True),
+        server_agent_capabilities=frozenset(
+            {
+                ServerAgentCapability.OFFLINE_CUSTODY,
+                ServerAgentCapability.ARTIFACT_STORAGE,
+                ServerAgentCapability.A2A_GATEWAY,
+            }
+        ),
+        a2a=A2AServiceConfig(
+            route_token="a" * 32,
+            recipient_harness_id="harness-a2a",
+            card=A2AAgentCardConfig(
+                name="Agent",
+                description="Ordinary extension endpoint",
+                version="1",
+                streaming=False,
+            ),
+            standing_grant=A2AStandingGrantConfig(
+                grant_id="standing-a2a",
+                allowed_actions=frozenset({"a2a.message.send"}),
+                allowed_output_sinks=frozenset({"public-response"}),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            ),
+            signing_identity=A2ASigningIdentityConfig(
+                harness_id="harness-a2a",
+                credential_id="credential-old",
+                private_key_path=Path("secrets/a2a-signing.pem"),
+                successors=(
+                    A2ASigningCredentialConfig(
+                        credential_id="credential-new",
+                        private_key_path=Path("secrets/a2a-signing.pem"),
+                    ),
+                ),
+            ),
+        ),
+    )
+    assert config.a2a is not None
+    assert config.a2a.signing_identity.credential_lineage[-1].credential_id == (
+        config.enrolled_credential_id
+    )
+    assert load_config_json(json.dumps(config.redacted_export())) == config
+
+    missing_tail = deepcopy(config.redacted_export())
+    missing_tail["a2a"]["signing_identity"]["successors"] = []
+    with pytest.raises(
+        PydanticValidationError,
+        match="exact enrolled ordinary server-agent binding",
+    ):
+        ExtensionConfig.model_validate(missing_tail)
+
+    wrong_tail = deepcopy(config.redacted_export())
+    wrong_tail["a2a"]["signing_identity"]["successors"][0]["credential_id"] = (
+        "credential-other"
+    )
+    with pytest.raises(
+        PydanticValidationError,
+        match="exact enrolled ordinary server-agent binding",
+    ):
+        ExtensionConfig.model_validate(wrong_tail)
+
+    duplicate = deepcopy(config.redacted_export())
+    duplicate["a2a"]["signing_identity"]["successors"][0]["credential_id"] = (
+        "credential-old"
+    )
+    with pytest.raises(PydanticValidationError, match="duplicate credential"):
+        ExtensionConfig.model_validate(duplicate)

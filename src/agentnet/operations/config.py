@@ -865,13 +865,15 @@ class ExtensionConfig(BaseModel):
             if (
                 self.a2a.recipient_harness_id != self.enrolled_harness_id
                 or self.a2a.signing_identity.harness_id != self.enrolled_harness_id
-                or self.a2a.signing_identity.credential_id != self.enrolled_credential_id
+                or self.a2a.signing_identity.credential_lineage[-1].credential_id
+                != self.enrolled_credential_id
             ):
                 raise ValueError("always-on A2A must use the exact enrolled ordinary server-agent binding")
         if self.profile is RuntimeProfile.ALWAYS_ON_SERVER_AGENT and self.relay is not None:
             if (
                 self.relay.signing_identity.harness_id != self.enrolled_harness_id
-                or self.relay.signing_identity.credential_id != self.enrolled_credential_id
+                or self.relay.signing_identity.credential_lineage[-1].credential_id
+                != self.enrolled_credential_id
             ):
                 raise ValueError("always-on relay must use the exact enrolled ordinary server-agent binding")
         if self.oidc_enrollment is not None:

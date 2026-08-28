@@ -496,6 +496,17 @@ sudo -- <resolved-root-owned-agentnet-path> server-agent setup \
   --apply --start
 ```
 
+During the sole supported `0.1.31 -> 0.1.32` recovery, the manager reruns the
+same approved setup request; operators do not invoke the internal binding
+transition directly. Setup first validates the exact public 0.1.31 two-unit
+marker and prior bytes. If the retained ordinary-server credential is non-lab
+and expired no more than 24 hours earlier, 0.1.32 proves possession of its
+existing key, preserves principal/harness/key and all authority/message state,
+advances the credential epoch once, durably reconciles response loss, and then
+commits the five-unit marker. Apply without `--start` performs no service start
+or restart. A current, changed, revoked, older, repeated, or differently
+versioned binding fails closed; reset or re-enrollment is not a fallback.
+
 Guided command defaults to local system browser without printing authorization
 URL. Explicit server-only `--browser remote` stores authorization URL encrypted
 inside Core continuation custody, opens/discloses nothing, and waits. Owner opens
@@ -888,7 +899,8 @@ migration 1 is the complete first-release schema and retains checksum
 Current unreleased Core schema v5 adds durable protected payload-release
 receipts in migration 2, guided OIDC enrollment continuation in migration 3,
 the bounded C0 bootstrap-plan contract in migration 4, and exact OIDC-begin
-response-loss recovery plus current-credential renewal custody in migration 5.
+response-loss recovery, current-credential renewal custody, and one-time
+setup-bound expired ordinary-server replacement custody in migration 5.
 Fresh SQLite and PostgreSQL stores create schema v5. An existing SQLite store
 upgrades only when metadata, every migration record/checksum, and the entire
 N/N-1 v4 object catalog match exactly; the v4→v5 change commits atomically or

@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -21,7 +22,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import uvicorn
 import httpx
@@ -65,6 +66,11 @@ from agentnet.gateways.a2a import (
 )
 from agentnet.identity.actors import ActorKind, VerifiedActor
 from agentnet.identity.credentials import load_credential_binding, public_key_thumbprint
+from agentnet.identity.expired_server_replacement import (
+    EXPIRED_SERVER_REPLACEMENT_POP_PURPOSE,
+    ExpiredServerReplacementRequest,
+    ExpiredServerReplacementService,
+)
 from agentnet.identity.invitations import (
     INTERNAL_INVITATION_POP_PURPOSE,
     INTERNAL_INVITATION_REVOKE_ACTION,
@@ -89,6 +95,8 @@ from agentnet.operations.server_setup import (
     load_server_setup_request,
     plan_server_setup,
 )
+from agentnet.operations.outage import OutageGate
+from agentnet.operations.telemetry import Telemetry
 from agentnet.operations.incident import (
     DomainIncidentService,
     IncidentMode,
@@ -300,14 +308,14 @@ def _read_json_object(path: Path, *, label: str) -> dict[str, object]:
     return value
 
 
-def _owner_only_file(path: Path, *, label: str) -> bytes:
+def _owner_only_file(path: Path, *, label: str, max_bytes: int = 65_536) -> bytes:
     if not path.is_absolute():
         raise SystemExit(f"{label} must be an owner-only absolute regular file")
     if host_platform() == "windows":
         from agentnet.windows_security import read_private_file
 
         try:
-            return read_private_file(path, max_bytes=65_536)
+            return read_private_file(path, max_bytes=max_bytes)
         except Exception as exc:
             raise SystemExit(f"{label} must have a private current-user DACL") from exc
     try:
@@ -320,7 +328,7 @@ def _owner_only_file(path: Path, *, label: str) -> bytes:
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
             or before.st_mode & 0o077
-            or before.st_size > 65_536
+            or before.st_size > max_bytes
         ):
             raise SystemExit(f"{label} must be an owner-only bounded regular file")
         content = bytearray()
@@ -629,8 +637,9 @@ def _public_json_request(
     return value
 
 
-def _load_identity_profile(path: Path) -> tuple[dict[str, object], VerifiedActor, P256KeyPair]:
-    value = _read_json_object(path, label="AgentNet identity profile")
+def _validated_identity_profile(
+    value: dict[str, object],
+) -> tuple[dict[str, object], VerifiedActor, P256KeyPair]:
     if set(value) != {
         "schema",
         "server_base_url",
@@ -650,6 +659,12 @@ def _load_identity_profile(path: Path) -> tuple[dict[str, object], VerifiedActor
         _owner_only_file(key_path, label="AgentNet identity private key")
     )
     return value, actor, key
+
+
+def _load_identity_profile(path: Path) -> tuple[dict[str, object], VerifiedActor, P256KeyPair]:
+    return _validated_identity_profile(
+        _read_json_object(path, label="AgentNet identity profile")
+    )
 
 
 def _load_identity_client(path: Path) -> tuple[AgentNetClient, VerifiedActor, P256KeyPair]:
@@ -1305,6 +1320,277 @@ def command_server_agent_activate(args: argparse.Namespace) -> int:
                     "agentnet serve --config " + str(config_path),
                     "agentnet status --config " + str(config_path) + " --live",
                 ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+_EXPIRED_SERVER_REPLACEMENT_STATE_SCHEMA = "agentnet.expired-server-replacement-state.v1"
+
+
+def _append_replacement_lineage(
+    document: dict[str, object],
+    *,
+    old_credential_id: str,
+    new_credential_id: str,
+    private_key_path: str,
+) -> None:
+    for channel in ("a2a", "relay"):
+        configured = document.get(channel)
+        if configured is None:
+            continue
+        if not isinstance(configured, dict) or not isinstance(configured.get("signing_identity"), dict):
+            raise SystemExit("expired server replacement channel configuration is invalid")
+        signing = configured["signing_identity"]
+        successors = signing.get("successors")
+        if not isinstance(successors, list):
+            raise SystemExit("expired server replacement signing lineage is invalid")
+        lineage = [signing.get("credential_id")]
+        lineage.extend(
+            item.get("credential_id") for item in successors if isinstance(item, dict)
+        )
+        if lineage[-1:] == [new_credential_id]:
+            continue
+        if lineage[-1:] != [old_credential_id]:
+            raise SystemExit("expired server replacement signing lineage changed")
+        successors.append(
+            {"credential_id": new_credential_id, "private_key_path": private_key_path}
+        )
+
+
+def _reconcile_replacement_file(
+    path: Path,
+    *,
+    previous: bytes,
+    candidate: dict[str, object],
+    label: str,
+) -> None:
+    candidate_bytes = json.dumps(candidate, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    current = _owner_only_file(path, label=label)
+    if current == candidate_bytes:
+        return
+    if current != previous:
+        raise SystemExit(f"{label} changed during expired server replacement")
+    _write_private_config(path, candidate, force=True)
+    if _owner_only_file(path, label=label) != candidate_bytes:
+        raise SystemExit(f"{label} replacement could not be verified")
+
+
+def command_server_agent_replace_expired_binding(args: argparse.Namespace) -> int:
+    """Package-owned, offline, replay-safe 0.1.31 expired-binding transition."""
+
+    if __version__ != "0.1.32":
+        raise SystemExit("expired server replacement is available only in AgentNet 0.1.32")
+    setup_digest = str(args.setup_request_digest)
+    if not re.fullmatch(r"[a-f0-9]{64}", setup_digest):
+        raise SystemExit("expired server replacement requires an exact setup request digest")
+    config_path = Path(args.config).resolve()
+    identity_path = Path(args.identity).resolve()
+    state_path = Path(args.state).resolve()
+
+    if os.path.lexists(state_path):
+        try:
+            state = json.loads(
+                _owner_only_file(
+                    state_path,
+                    label="expired server replacement state",
+                    max_bytes=262_144,
+                )
+            )
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise SystemExit("expired server replacement state is invalid") from exc
+        expected_state_keys = {
+            "schema",
+            "package_version",
+            "request_id",
+            "setup_request_digest",
+            "expected_expires_at",
+            "previous_config",
+            "previous_identity",
+        }
+        if (
+            not isinstance(state, dict)
+            or set(state) != expected_state_keys
+            or state.get("schema") != _EXPIRED_SERVER_REPLACEMENT_STATE_SCHEMA
+            or state.get("package_version") != __version__
+            or state.get("setup_request_digest") != setup_digest
+            or type(state.get("expected_expires_at")) is not int
+        ):
+            raise SystemExit("expired server replacement state conflicts with this setup")
+        try:
+            previous_config = base64.b64decode(str(state["previous_config"]), validate=True)
+            previous_identity = base64.b64decode(str(state["previous_identity"]), validate=True)
+            UUID(str(state["request_id"]))
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("expired server replacement state is invalid") from exc
+    else:
+        previous_config = _owner_only_file(config_path, label="expired server Core config")
+        previous_identity = _owner_only_file(identity_path, label="expired server identity")
+        try:
+            config = load_config_json(previous_config.decode("utf-8"))
+            identity_document = json.loads(previous_identity)
+        except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemExit("expired server replacement source state is invalid") from exc
+        if not isinstance(identity_document, dict):
+            raise SystemExit("expired server replacement identity is invalid")
+        identity, actor, key = _validated_identity_profile(identity_document)
+        if (
+            config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+            or config.enrolled_harness_id != actor.harness_id
+            or config.enrolled_credential_id != actor.credential_id
+            or actor.domain_id != config.domain_id
+            or actor.binding_assurance == "lab"
+            or _canonical_server_origin(str(identity["server_base_url"]))
+            != config.public_base_url
+            or canonical_service_audience(str(identity["audience"]))
+            != config.effective_service_audience
+        ):
+            raise SystemExit("expired server replacement config and identity do not match")
+        store = _open_server_agent_activation_store(config)
+        try:
+            binding = load_credential_binding(store, str(actor.credential_id))
+            if (
+                binding.public_key_pem != key.public_pem
+                or binding.key_id != key.thumbprint
+                or binding.domain_id != config.domain_id
+                or binding.harness_id != actor.harness_id
+                or binding.principal_id != actor.principal_id
+                or binding.credential_epoch != actor.credential_epoch
+            ):
+                raise SystemExit("expired server replacement stored binding changed")
+            if int(time.time()) < binding.expires_at:
+                _require_server_agent_activation_binding(
+                    store, config=config, actor=actor, key=key
+                )
+                print(
+                    json.dumps(
+                        {
+                            "schema": "agentnet.expired-server-replacement-cli-result.v1",
+                            "status": "already_current",
+                            "authority_granted": False,
+                            "service_restart": "not_performed",
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 0
+        finally:
+            store.close()
+        state = {
+            "schema": _EXPIRED_SERVER_REPLACEMENT_STATE_SCHEMA,
+            "package_version": __version__,
+            "request_id": str(
+                uuid5(
+                    NAMESPACE_URL,
+                    "agentnet:expired-server-replacement:"
+                    f"{config.domain_id}:{actor.harness_id}:{actor.credential_id}:"
+                    f"{actor.credential_epoch}:{setup_digest}",
+                )
+            ),
+            "setup_request_digest": setup_digest,
+            "expected_expires_at": binding.expires_at,
+            "previous_config": base64.b64encode(previous_config).decode("ascii"),
+            "previous_identity": base64.b64encode(previous_identity).decode("ascii"),
+        }
+        _write_private_config(state_path, state, force=False)
+
+    try:
+        old_config_document = json.loads(previous_config)
+        old_identity_document = json.loads(previous_identity)
+        config = load_config_json(previous_config.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit("expired server replacement source state is invalid") from exc
+    if not isinstance(old_config_document, dict) or not isinstance(old_identity_document, dict):
+        raise SystemExit("expired server replacement source state is invalid")
+    identity, actor, key = _validated_identity_profile(old_identity_document)
+    if (
+        config.profile is not RuntimeProfile.ALWAYS_ON_SERVER_AGENT
+        or config.enrolled_harness_id != actor.harness_id
+        or config.enrolled_credential_id != actor.credential_id
+        or actor.domain_id != config.domain_id
+        or actor.binding_assurance == "lab"
+        or _canonical_server_origin(str(identity["server_base_url"]))
+        != config.public_base_url
+        or canonical_service_audience(str(identity["audience"]))
+        != config.effective_service_audience
+    ):
+        raise SystemExit("expired server replacement source binding is invalid")
+    config_digest = hashlib.sha256(previous_config).hexdigest()
+    signed_fields = ExpiredServerReplacementRequest.possession_fields(
+        request_id=str(state["request_id"]),
+        actor=actor,
+        setup_request_digest=setup_digest,
+        expected_config_digest=config_digest,
+        expected_expires_at=int(state["expected_expires_at"]),
+    )
+    request = ExpiredServerReplacementRequest(
+        request_id=str(state["request_id"]),
+        setup_request_digest=setup_digest,
+        expected_config_digest=config_digest,
+        expected_expires_at=int(state["expected_expires_at"]),
+        possession_signature=key.sign(
+            EXPIRED_SERVER_REPLACEMENT_POP_PURPOSE,
+            signed_fields,
+        ),
+    )
+    store = _open_server_agent_activation_store(config)
+    try:
+        incidents = DomainIncidentService(store)
+        result = ExpiredServerReplacementService(
+            store,
+            outage_gate=OutageGate(
+                config.policies.outage,
+                telemetry=Telemetry(store),
+                incident_mode_provider=lambda: incidents.current_mode(config.domain_id),
+            ),
+        ).replace(actor=actor, request=request)
+    finally:
+        store.close()
+
+    candidate_config_document = config.model_dump(mode="json")
+    candidate_config_document["enrolled_credential_id"] = result.credential_id
+    _append_replacement_lineage(
+        candidate_config_document,
+        old_credential_id=result.old_credential_id,
+        new_credential_id=result.credential_id,
+        private_key_path=str(identity["private_key_path"]),
+    )
+    candidate_config = ExtensionConfig.model_validate(candidate_config_document)
+    candidate_identity = dict(identity)
+    candidate_actor = dict(candidate_identity["actor"])
+    candidate_actor["credential_id"] = result.credential_id
+    candidate_actor["credential_epoch"] = result.credential_epoch
+    VerifiedActor.model_validate(candidate_actor)
+    candidate_identity["actor"] = candidate_actor
+    _reconcile_replacement_file(
+        config_path,
+        previous=previous_config,
+        candidate=candidate_config.redacted_export(),
+        label="expired server Core config",
+    )
+    _reconcile_replacement_file(
+        identity_path,
+        previous=previous_identity,
+        candidate=candidate_identity,
+        label="expired server identity",
+    )
+    state_path.unlink(missing_ok=True)
+    directory = os.open(state_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    print(
+        json.dumps(
+            {
+                "schema": "agentnet.expired-server-replacement-cli-result.v1",
+                "status": "replaced",
+                "authority_granted": False,
+                "service_restart": "not_performed",
             },
             indent=2,
             sort_keys=True,
@@ -3965,6 +4251,17 @@ def build_parser() -> argparse.ArgumentParser:
     server_agent_activate.add_argument("--config", default="agentnet.json")
     server_agent_activate.add_argument("--identity", default=".agentnet/identity.json")
     server_agent_activate.set_defaults(func=command_server_agent_activate)
+    server_agent_replace_expired = server_agent_commands.add_parser(
+        "replace-expired-binding",
+        help="complete the package-owned offline expired-binding transition",
+    )
+    server_agent_replace_expired.add_argument("--config", required=True)
+    server_agent_replace_expired.add_argument("--identity", required=True)
+    server_agent_replace_expired.add_argument("--state", required=True)
+    server_agent_replace_expired.add_argument("--setup-request-digest", required=True)
+    server_agent_replace_expired.set_defaults(
+        func=command_server_agent_replace_expired_binding
+    )
 
     join = commands.add_parser("join", help="enroll this person and device into an AgentNet")
     join_commands = join.add_subparsers(dest="join_command", required=True)

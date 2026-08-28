@@ -271,4 +271,6 @@ def test_postgres_catalog_preserves_v4_plan_and_adds_v5_identity_lifecycle() -> 
     assert lifecycle.name == "identity_begin_idempotency_and_credential_renewal"
     assert "begin_idempotency_key_hash" in lifecycle.sql
     assert "credential_renewal_requests" in lifecycle.sql
+    assert "expired_server_credential_replacements" in lifecycle.sql
+    assert "idx_expired_server_replacement_old" in lifecycle.sql
     assert " INTEGER" not in lifecycle.sql
