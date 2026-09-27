@@ -263,6 +263,8 @@ func TestInterruptedJobNotRerunUntilAccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, w.bob, q.ID, stateRunning)
+	// Running is recorded before the harness starts; stop only once it has.
+	eventually(t, "stub child", func() bool { _, err := os.Stat(st.log + ".child"); return err == nil })
 	stop()
 	if s, _ := w.bob.store.jobState(q.ID); s != stateInterrupt {
 		t.Fatalf("after stop: %s", s)

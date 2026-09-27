@@ -176,6 +176,7 @@ func TestFollowUpInterruptedNotRerun(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, w.alice, r.ID, stateRunning)
+	eventually(t, "stub child", func() bool { _, err := os.Stat(st.log + ".child"); return err == nil })
 	stop()
 	runWith(t, w, w.alice, RunOptions{})
 	time.Sleep(300 * time.Millisecond)
