@@ -17,6 +17,7 @@ import (
 // Proc is a Hub serving on a local port.
 type Proc struct {
 	Dir, Addr string
+	Hub       *hub.Hub
 	stop      context.CancelFunc
 	done      chan struct{}
 }
@@ -24,20 +25,29 @@ type Proc struct {
 // Start serves a Hub from dir on addr ("127.0.0.1:0" for any port). publicURL
 // defaults to https://ADDR. The Hub stops at test cleanup if still running.
 func Start(t *testing.T, dir, addr, publicURL string) *Proc {
+	return StartConfig(t, hub.Config{DataDir: dir, PublicURL: publicURL}, addr)
+}
+
+// StartConfig is Start with explicit Hub configuration.
+func StartConfig(t *testing.T, cfg hub.Config, addr string) *Proc {
 	t.Helper()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Proc{Dir: dir, Addr: ln.Addr().String(), done: make(chan struct{})}
-	if publicURL == "" {
-		publicURL = "https://" + p.Addr
+	p := &Proc{Dir: cfg.DataDir, Addr: ln.Addr().String(), done: make(chan struct{})}
+	if cfg.PublicURL == "" {
+		cfg.PublicURL = "https://" + p.Addr
 	}
-	h, err := hub.Open(hub.Config{DataDir: dir, PublicURL: publicURL, Logf: t.Logf})
+	if cfg.Logf == nil {
+		cfg.Logf = t.Logf
+	}
+	h, err := hub.Open(cfg)
 	if err != nil {
 		ln.Close()
 		t.Fatal(err)
 	}
+	p.Hub = h
 	ctx, cancel := context.WithCancel(context.Background())
 	p.stop = cancel
 	go func() {

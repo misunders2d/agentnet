@@ -1,16 +1,14 @@
 package hub
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/blobfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -37,7 +35,7 @@ func (h *Hub) reclaim() error {
 	}
 	done := 0
 	for _, id := range ids {
-		err := removeIfExists(h.blobPath(id, false), h.blobPath(id, true))
+		err := blobfile.RemoveIfExists(h.blobPath(id, false), h.blobPath(id, true))
 		if err == nil {
 			err = h.syncDir(filepath.Join(h.cfg.DataDir, "blobs"))
 		}
@@ -52,15 +50,6 @@ func (h *Hub) reclaim() error {
 	}
 	if done > 0 {
 		h.cfg.Logf("reclaimed %d abandoned upload(s)", done)
-	}
-	return nil
-}
-
-func removeIfExists(paths ...string) error {
-	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
 	}
 	return nil
 }
@@ -167,19 +156,12 @@ func (h *Hub) handleBlobChunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "", "chunk does not continue the upload; fetch its status")
 		return
 	}
-	f, err := os.OpenFile(h.blobPath(id, false), os.O_CREATE|os.O_WRONLY, 0o600)
-	if err == nil {
-		if err = f.Truncate(offset); err == nil { // drop bytes written before a crash
-			if _, err = f.WriteAt(body, offset); err == nil {
-				err = f.Sync()
-			}
-		}
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-	}
+	err = blobfile.WriteChunk(h.blobPath(id, false), offset, body)
 	if err == nil {
 		err = h.store.setReceived(id, offset+int64(len(body)))
+	}
+	if err == nil {
+		h.stats.BlobBytesIn.Add(int64(len(body)))
 	}
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusConflict, "", "upload no longer active; fetch its status")
@@ -211,36 +193,29 @@ func (h *Hub) handleBlobComplete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, blobStatus(id, b))
 		return
 	}
-	src := h.blobPath(id, false)
+	part, final := h.blobPath(id, false), h.blobPath(id, true)
+	src := part
 	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
-		src = h.blobPath(id, true) // crashed after rename, before recording
+		src = final // crashed after rename, before recording
 	}
-	size, sum, err := digestFile(src)
-	if err != nil || size != b.Size {
-		writeError(w, http.StatusConflict, "", "upload incomplete; fetch its status")
-		return
-	}
-	if sum != b.SHA256 {
-		err := removeIfExists(src)
+	err := blobfile.Check(src, b.Size, b.SHA256)
+	if errors.Is(err, blobfile.ErrDigest) {
+		err = blobfile.RemoveIfExists(src)
 		if err == nil {
 			err = h.store.setBlobState(id, protocol.BlobUploading)
 		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "", "storage error")
+		if err == nil {
+			writeError(w, http.StatusUnprocessableEntity, "", blobfile.ErrDigest.Error())
 			return
 		}
-		writeError(w, http.StatusUnprocessableEntity, "", "uploaded bytes do not match the reserved digest")
+	} else if err != nil {
+		writeError(w, http.StatusConflict, "", "upload incomplete; fetch its status")
 		return
 	}
 	// Record "stored" only after the rename is durable; a failure here leaves
 	// the upload unstored and a repeated complete finishes it.
-	final := h.blobPath(id, true)
-	err = nil
-	if src != final {
-		err = os.Rename(src, final)
-	}
 	if err == nil {
-		err = h.syncDir(filepath.Dir(final))
+		err = blobfile.Promote(src, final, h.syncDir)
 	}
 	if err == nil {
 		err = h.store.setBlobState(id, protocol.BlobStored)
@@ -274,18 +249,7 @@ func (h *Hub) handleBlobData(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, "", time.Time{}, f)
-}
-
-func digestFile(path string) (int64, string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	return n, hex.EncodeToString(h.Sum(nil)), err
+	http.ServeContent(countingWriter{w, &h.stats.BlobBytesOut}, r, "", time.Time{}, f)
 }
 
 func (h *Hub) prepareBlobs() error {

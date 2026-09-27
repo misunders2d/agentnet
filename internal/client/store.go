@@ -60,6 +60,20 @@ CREATE TABLE attachments(
   ct_sha256 TEXT NOT NULL,
   saved_path TEXT,
   PRIMARY KEY(message_id, blob_id));
+`, `
+ALTER TABLE inbox ADD COLUMN session TEXT;
+ALTER TABLE outbox ADD COLUMN path TEXT;
+CREATE TABLE routes(
+  endpoint TEXT PRIMARY KEY,
+  until INTEGER NOT NULL);
+CREATE TABLE direct_blobs(
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  received INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL,
+  updated_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -180,8 +194,34 @@ func (s *store) releaseUploads(messageID string) error {
 	return err
 }
 
-func (s *store) setOutboxState(id, state, errText string) error {
-	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, '') WHERE id = ?`, state, errText, id)
+func (s *store) setOutboxState(id, state, errText, path string) error {
+	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path) WHERE id = ?`,
+		state, errText, path, id)
+	return err
+}
+
+// outboxState returns a sent message's last known state and path.
+func (s *store) outboxState(id string) (state, path string, found bool, err error) {
+	err = s.db.QueryRow(`SELECT state, coalesce(path, '') FROM outbox WHERE id = ?`, id).Scan(&state, &path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	return state, path, err == nil, err
+}
+
+// routeCooling reports whether a direct endpoint failed recently.
+func (s *store) routeCooling(endpoint string, now time.Time) (bool, error) {
+	var until int64
+	err := s.db.QueryRow(`SELECT until FROM routes WHERE endpoint = ?`, endpoint).Scan(&until)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && until > now.Unix(), err
+}
+
+func (s *store) coolRoute(endpoint string, until time.Time) error {
+	_, err := s.db.Exec(`INSERT INTO routes(endpoint, until) VALUES(?, ?) ON CONFLICT(endpoint) DO UPDATE SET until = excluded.until`,
+		endpoint, until.Unix())
 	return err
 }
 
@@ -213,10 +253,10 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at) VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?)`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session) VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''))`
 
 func inboxArgs(in envelope.Inner) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix()}
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session}
 }
 
 type execer interface {
@@ -429,4 +469,22 @@ func (s *store) inboxSender(id string) (string, error) {
 	var sender string
 	err := s.db.QueryRow(`SELECT sender FROM inbox WHERE id = ?`, id).Scan(&sender)
 	return sender, err
+}
+
+// disposition reports how a received message was filed.
+func (s *store) disposition(id string) (string, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM inbox WHERE id = ?`, id).Scan(&n); err != nil {
+		return "", err
+	}
+	if n > 0 {
+		return protocol.StateDelivered, nil
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id = ?`, id).Scan(&n); err != nil {
+		return "", err
+	}
+	if n > 0 {
+		return protocol.StateQuarantined, nil
+	}
+	return "", errors.New("message not stored")
 }

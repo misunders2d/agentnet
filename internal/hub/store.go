@@ -56,6 +56,9 @@ CREATE TABLE blobs(
   message_id TEXT,
   updated_at INTEGER NOT NULL);
 CREATE INDEX blobs_state ON blobs(state, updated_at);
+`, `
+ALTER TABLE messages ADD COLUMN session TEXT;
+ALTER TABLE messages ADD COLUMN fallback INTEGER NOT NULL DEFAULT 0;
 `}
 
 var (
@@ -236,8 +239,8 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte) (string, err
 			return "", fmt.Errorf("%w: %s", errBlobNotReady, b.ID)
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO messages(id, sender, recipient, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
-		env.ID, env.From, env.To, canonical, protocol.StateCustody, time.Now().Unix()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?)`,
+		env.ID, env.From, env.To, canonical, protocol.StateCustody, time.Now().Unix(), env.Session, env.Fallback); err != nil {
 		return "", err
 	}
 	return protocol.StateCustody, tx.Commit()
@@ -248,10 +251,13 @@ type pending struct {
 	Envelope []byte
 }
 
-func (s *store) pendingFor(recipient string, afterSeq int64) ([]pending, error) {
+// pendingFor lists undelivered messages for one connection of recipient:
+// those for the agent, for this session, or for any session with fallback.
+func (s *store) pendingFor(recipient, session string, afterSeq int64) ([]pending, error) {
 	rows, err := s.db.Query(`SELECT seq, envelope FROM messages
-		WHERE recipient = ? AND state = ? AND seq > ? ORDER BY seq LIMIT 100`,
-		recipient, protocol.StateCustody, afterSeq)
+		WHERE recipient = ? AND state = ? AND seq > ? AND (session IS NULL OR session = ? OR fallback = 1)
+		ORDER BY seq LIMIT 100`,
+		recipient, protocol.StateCustody, afterSeq, session)
 	if err != nil {
 		return nil, err
 	}
@@ -416,4 +422,12 @@ func (s *store) setBlobState(id, state string) error {
 	return mustAffectOne(s.db.Exec(`UPDATE blobs SET state = ?, received = CASE WHEN ? = ? THEN size ELSE 0 END, updated_at = ?
 		WHERE id = ? AND state IN (?, ?)`,
 		state, state, protocol.BlobStored, time.Now().Unix(), id, protocol.BlobUploading, protocol.BlobStored))
+}
+
+// expireSession marks undelivered messages addressed only to an ended
+// session as expired, so their senders learn they were not delivered.
+func (s *store) expireSession(recipient, session string) error {
+	_, err := s.db.Exec(`UPDATE messages SET state = ? WHERE recipient = ? AND session = ? AND fallback = 0 AND state = ?`,
+		protocol.StateExpired, recipient, session, protocol.StateCustody)
+	return err
 }

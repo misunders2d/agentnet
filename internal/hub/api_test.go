@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,4 +117,39 @@ func TestEnrollmentReplay(t *testing.T) {
 	if c := join(other); c != http.StatusForbidden {
 		t.Fatalf("invite reuse with other key: %d", c)
 	}
+}
+
+func TestPingAckOnlyForOwnLiveConnection(t *testing.T) {
+	h, id, addr := testHub(t)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub := h.streams.add(addr, cancel)
+	ack := func(conn string) int {
+		body, _ := json.Marshal(protocol.PingAck{Conn: conn})
+		return serve(h, signed(t, id, addr, "POST", "/v1/stream/ack", body)).Code
+	}
+	if c := ack(sub.id); c != http.StatusNoContent {
+		t.Fatalf("own live connection: %d", c)
+	}
+	h.streams.remove(addr, sub)
+	if c := ack(sub.id); c != http.StatusNotFound {
+		t.Fatalf("closed connection renewed: %d", c)
+	}
+	other := enrollOther(t, h)
+	sub2 := h.streams.add(other, cancel)
+	if c := ack(sub2.id); c != http.StatusNotFound {
+		t.Fatalf("another agent's connection renewed: %d", c)
+	}
+}
+
+func enrollOther(t *testing.T, h *Hub) string {
+	t.Helper()
+	id, _ := identity.Generate()
+	if err := h.store.createInvite("o", "other", false, time.Hour, "admin/test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.enroll("o", id.Public("other/x"), "other"); err != nil {
+		t.Fatal(err)
+	}
+	return "other/x"
 }

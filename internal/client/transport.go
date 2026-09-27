@@ -172,3 +172,9 @@ func checkStatus(resp *http.Response) error {
 	}
 	return &HubError{Status: resp.StatusCode, Code: e.Code, Msg: e.Error}
 }
+
+func decodeStrict(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}

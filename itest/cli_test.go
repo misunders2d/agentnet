@@ -111,7 +111,7 @@ func TestCLIFileJourney(t *testing.T) {
 	copy(data, "CLI-PLAINTEXT-MARKER")
 	os.WriteFile(filepath.Join(c.dir, "quarterly-secret.bin"), data, 0o600)
 	out := c.run("--home", "alice", "send", "--file", "quarterly-secret.bin", "bob/desk", "numbers attached")
-	if !strings.HasSuffix(out, " custody") {
+	if f := strings.Fields(out); len(f) != 3 || f[1] != "custody" || f[2] != "relay" {
 		t.Fatalf("send: %s", out)
 	}
 	id := strings.Fields(out)[0]
@@ -131,7 +131,7 @@ func TestCLIFileJourney(t *testing.T) {
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("downloaded file differs (%v)", err)
 	}
-	if st := c.run("--home", "alice", "status", id); !strings.HasSuffix(st, " delivered") {
+	if st := c.run("--home", "alice", "status", id); st != id+" delivered relay" {
 		t.Fatalf("status: %s", st)
 	}
 	filepath.Walk(filepath.Join(c.dir, "hub"), func(p string, info os.FileInfo, err error) error {
@@ -143,4 +143,37 @@ func TestCLIFileJourney(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestCLIDirectFile: a recipient daemon started with --listen receives a
+// 10 MiB file straight from the sender process; the Hub log shows no upload.
+func TestCLIDirectFile(t *testing.T) {
+	c := buildCLI(t)
+	addr := freeAddr(t)
+	c.start("hub.log", "hub", "serve", "--data", "hub", "--listen", addr)
+	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
+	code, _ := os.ReadFile(filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
+	c.run("--home", "alice", "join", "--agent", "laptop", strings.TrimSpace(string(code)))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
+	c.start("bob.log", "--home", "bob", "daemon", "--listen", freeAddr(t))
+	waitFor(t, "bob's direct endpoint", func() bool {
+		return strings.Contains(c.run("--home", "alice", "sessions", "bob/desk"), "direct https://")
+	})
+
+	data := make([]byte, 10<<20)
+	rand.Read(data)
+	os.WriteFile(filepath.Join(c.dir, "direct.bin"), data, 0o600)
+	out := c.run("--home", "alice", "send", "--file", "direct.bin", "bob/desk", "direct please")
+	f := strings.Fields(out)
+	if len(f) != 3 || f[1] != "delivered" || f[2] != "direct" {
+		t.Fatalf("send: %s", out)
+	}
+	os.Mkdir(filepath.Join(c.dir, "out"), 0o700)
+	saved := c.run("--home", "bob", "download", "--dir", "out", f[0])
+	if got, _ := os.ReadFile(filepath.Join(c.dir, saved)); !bytes.Equal(got, data) {
+		t.Fatal("direct file differs")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(c.dir, "hub", "blobs")); len(entries) != 0 {
+		t.Fatalf("Hub stored %d blob files for a direct transfer", len(entries))
+	}
 }

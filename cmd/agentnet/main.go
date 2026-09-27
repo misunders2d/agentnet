@@ -24,8 +24,9 @@ const usage = `usage: agentnet [--home DIR] <command> [flags] [args]
 Client:
   join [--agent NAME] CODE      enroll this agent with an invite code
   whoami                        show this agent's address and key fingerprint
-  send [--file PATH]... ADDRESS TEXT
-                                send an end-to-end encrypted message with files
+  send [--file PATH]... [--fallback] ADDRESS[#SESSION] TEXT
+                                send an end-to-end encrypted message with files,
+                                directly when the recipient is reachable
   reply [--file PATH]... ID TEXT
                                 reply to an inbox message
   inbox [--unread] [--json]     list received messages (marks them read)
@@ -33,7 +34,10 @@ Client:
                                 save a message's attachments (never overwrites
                                 unless --force)
   status ID                     show what the Hub can prove about a sent message
-  daemon                        stay connected and receive messages as they arrive
+  daemon [--listen ADDR] [--advertise URL]
+                                stay connected (one session) and receive messages;
+                                --listen also accepts direct deliveries
+  sessions ADDRESS              list an agent's live sessions
   fingerprint ADDRESS           compare trusted and directory keys for ADDRESS
   trust ADDRESS                 trust ADDRESS's current keys after verifying them
 
@@ -102,11 +106,38 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s %s\n", r.ID, r.State)
+		fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
 		return nil
 	case "daemon":
+		fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+		var opts client.RunOptions
+		fs.StringVar(&opts.Listen, "listen", "", "accept direct deliveries on this address (e.g. :7443); off by default")
+		fs.StringVar(&opts.Advertise, "advertise", "", "https://host:port peers can reach (default https://LISTEN)")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
 		a.Logf = log.Printf
-		return a.Run(ctx)
+		return a.Run(ctx, opts)
+	case "sessions":
+		if len(rest) != 1 {
+			return errors.New("usage: sessions ADDRESS")
+		}
+		infos, err := a.Sessions(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		for _, in := range infos {
+			state := "connected"
+			if !in.Connected {
+				state = "reconnecting"
+			}
+			direct := "hub only"
+			if in.Ad.Endpoint != "" {
+				direct = "direct " + in.Ad.Endpoint
+			}
+			fmt.Printf("%s#%s  %s  %s\n", in.Ad.Address, in.Ad.Session, state, direct)
+		}
+		return nil
 	case "fingerprint":
 		if len(rest) != 1 {
 			return errors.New("usage: fingerprint ADDRESS")
@@ -222,6 +253,7 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	var files []string
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
+	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -233,12 +265,12 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	if reply {
 		r, err = a.Reply(ctx, fs.Arg(0), fs.Arg(1), files...)
 	} else {
-		r, err = a.Send(ctx, fs.Arg(0), fs.Arg(1), "", files...)
+		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Fallback: *fallback})
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s %s\n", r.ID, r.State)
+	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
 	if r.Detail != "" {
 		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
 	}

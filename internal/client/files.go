@@ -127,7 +127,7 @@ func (a *Agent) uploadAll(ctx context.Context, env envelope.Envelope) error {
 		if done {
 			continue
 		}
-		if err := a.upload(ctx, env.To, b); err != nil {
+		if err := a.upload(ctx, a.hub, "/v1/blobs", env.To, b); err != nil {
 			return fmt.Errorf("attachment upload: %w", err)
 		}
 		if err := a.store.setUploadStored(b.ID); err != nil {
@@ -137,16 +137,17 @@ func (a *Agent) uploadAll(ctx context.Context, env envelope.Envelope) error {
 	return nil
 }
 
-// upload resumes from wherever the Hub's copy ends, then asks the Hub to
-// verify and finalise it. Every step is safe to repeat.
-func (a *Agent) upload(ctx context.Context, to string, b envelope.Blob) error {
+// upload resumes from wherever the receiving side's copy ends (the Hub, or a
+// peer for direct delivery; prefix selects the API), then asks it to verify
+// and finalise the file. Every step is safe to repeat.
+func (a *Agent) upload(ctx context.Context, conn *hubConn, prefix, to string, b envelope.Blob) error {
 	f, err := os.Open(a.spoolPath(b.ID))
 	if err != nil {
 		return fmt.Errorf("spooled attachment missing: %w", errPermanent)
 	}
 	defer f.Close()
 	var st protocol.BlobStatus
-	if err := a.hub.do(ctx, "POST", "/v1/blobs", protocol.BlobReserve{ID: b.ID, Recipient: to, Size: b.Size, SHA256: b.SHA256}, &st); err != nil {
+	if err := conn.do(ctx, "POST", prefix, protocol.BlobReserve{ID: b.ID, Recipient: to, Size: b.Size, SHA256: b.SHA256}, &st); err != nil {
 		return err
 	}
 	buf := make([]byte, protocol.ChunkSize)
@@ -158,10 +159,10 @@ func (a *Agent) upload(ctx context.Context, to string, b envelope.Blob) error {
 			if _, err := f.ReadAt(buf[:n], st.Received); err != nil {
 				return err
 			}
-			path := "/v1/blobs/" + b.ID + "?offset=" + strconv.FormatInt(st.Received, 10)
-			err = a.hub.doBytes(ctx, "PUT", path, buf[:n], &st)
+			path := prefix + "/" + b.ID + "?offset=" + strconv.FormatInt(st.Received, 10)
+			err = conn.doBytes(ctx, "PUT", path, buf[:n], &st)
 		} else {
-			err = a.hub.do(ctx, "POST", "/v1/blobs/"+b.ID+"/complete", nil, &st)
+			err = conn.do(ctx, "POST", prefix+"/"+b.ID+"/complete", nil, &st)
 		}
 		var he *HubError
 		if errors.As(err, &he) && he.Status == 409 {
@@ -170,7 +171,7 @@ func (a *Agent) upload(ctx context.Context, to string, b envelope.Blob) error {
 			if stale++; stale > maxStaleConflicts {
 				return errors.New("upload keeps conflicting with another sender of the same message; will retry later")
 			}
-			err = a.hub.do(ctx, "GET", "/v1/blobs/"+b.ID, nil, &st)
+			err = conn.do(ctx, "GET", prefix+"/"+b.ID, nil, &st)
 		}
 		if err != nil {
 			return err
@@ -259,7 +260,10 @@ func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final
 	if err != nil {
 		return err
 	}
-	os.Remove(a.downloadPath(f.BlobID))
+	// Ciphertext that arrived directly may be the only copy; keep it.
+	if local, err := a.store.heldLocally(f.BlobID); err == nil && !local {
+		os.Remove(a.downloadPath(f.BlobID))
+	}
 	return a.store.setSaved(msgID, f.BlobID, final)
 }
 

@@ -1,0 +1,336 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"filippo.io/age"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/hub"
+	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/testhub"
+)
+
+// runWith runs a's daemon with opts and waits until the Hub lists its session.
+func runWith(t *testing.T, w *world, a *Agent, opts RunOptions) (stop func(), session string) {
+	t.Helper()
+	a.Logf = t.Logf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.Run(ctx, opts); close(done) }()
+	stop = func() { cancel(); <-done }
+	t.Cleanup(stop)
+	eventually(t, a.Address+" session", func() bool {
+		infos, err := w.alice.sessions(tctx(t), a.Address)
+		for _, in := range infos {
+			if in.Connected && (opts.Listen == "" || in.Ad.Endpoint != "") {
+				session = in.Ad.Session
+			}
+		}
+		return err == nil && session != ""
+	})
+	return stop, session
+}
+
+type hubCounters struct{ requests, messages, in, out int64 }
+
+func counters(w *world) hubCounters {
+	s := w.hub.Hub.Stats()
+	return hubCounters{s.Requests.Load(), s.Messages.Load(), s.BlobBytesIn.Load(), s.BlobBytesOut.Load()}
+}
+
+func TestDirectMessageAndFileBypassHub(t *testing.T) {
+	w := newWorld(t, "")
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
+	path, data := writeFile(t, t.TempDir(), "direct.bin", 10<<20)
+	before := counters(w)
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "straight to you", "", path)
+	if err != nil || res.Path != protocol.PathDirect || res.State != protocol.StateDelivered {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	after := counters(w)
+	if after.messages != before.messages || after.in != before.in {
+		t.Fatalf("payload went through the Hub: %+v -> %+v", before, after)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 0 {
+		t.Fatal("spool kept after direct custody")
+	}
+	if r, err := w.alice.Status(tctx(t), res.ID); err != nil || r.State != protocol.StateDelivered || r.Path != protocol.PathDirect {
+		t.Fatalf("status = %+v, %v", r, err)
+	}
+	msgs, _ := w.bob.Inbox(false, false)
+	if len(msgs) != 1 || msgs[0].Body != "straight to you" {
+		t.Fatalf("inbox = %+v", msgs)
+	}
+	paths, err := w.bob.Download(tctx(t), msgs[0].ID, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("direct file differs")
+	}
+	if counters(w).out != before.out {
+		t.Fatal("download fetched from the Hub")
+	}
+	if _, err := os.Stat(w.bob.downloadPath(msgs[0].Attachments[0].BlobID)); err != nil {
+		t.Fatal("directly received ciphertext (the only copy) was discarded")
+	}
+}
+
+func TestUnreachableEndpointFallsBackAndCools(t *testing.T) {
+	w := newWorld(t, "")
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0", Advertise: "https://" + deadAddr})
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "via hub", "")
+	if err != nil || res.Path != protocol.PathRelay {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	if cooling, _ := w.alice.store.routeCooling("https://"+deadAddr, time.Now()); !cooling {
+		t.Fatal("failed route not cooled")
+	}
+	eventually(t, "relayed delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
+}
+
+func TestWrongPeerCertificateFallsBack(t *testing.T) {
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	_, _ = runWith(t, w, carol, RunOptions{Listen: "127.0.0.1:0"})
+	infos, _ := w.alice.sessions(tctx(t), carol.Address)
+	carolEndpoint := infos[0].Ad.Endpoint
+	// Bob's signed ad points at carol's listener, which cannot present bob's certificate.
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0", Advertise: carolEndpoint})
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "not for carol", "")
+	if err != nil || res.Path != protocol.PathRelay {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	if msgs, _ := carol.Inbox(false, false); len(msgs) != 0 {
+		t.Fatal("message reached the wrong peer")
+	}
+}
+
+func TestInterruptedDirectTransferFallsBackWithoutDuplicates(t *testing.T) {
+	w := newWorld(t, "")
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
+	path, data := writeFile(t, t.TempDir(), "half.bin", 3<<20)
+	f := &faults{}
+	f.addAfter("PUT", "/v1/direct/blobs/", 2, 1, false)
+	wrapTransport = func(rt http.RoundTripper) http.RoundTripper { return faultRT{rt, f} }
+	defer func() { wrapTransport = nil }()
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "half then hub", "", path)
+	if err != nil || res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	eventually(t, "relayed delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
+	msgs, _ := w.bob.Inbox(false, false)
+	if len(msgs) != 1 {
+		t.Fatalf("inbox has %d messages", len(msgs))
+	}
+	paths, err := w.bob.Download(tctx(t), msgs[0].ID, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("file differs")
+	}
+}
+
+// The peer stored the message but its receipt was lost: the sender keeps its
+// spool, relays through the Hub, and the recipient files it once.
+func TestDirectReceiptLossThenRelay(t *testing.T) {
+	w := newWorld(t, "")
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
+	path, data := writeFile(t, t.TempDir(), "lost.bin", 1<<20)
+	f := &faults{}
+	f.add("POST", "/v1/direct/messages", 1, true)
+	wrapTransport = func(rt http.RoundTripper) http.RoundTripper { return faultRT{rt, f} }
+	defer func() { wrapTransport = nil }()
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "receipt lost", "", path)
+	if err != nil || res.Path != protocol.PathRelay {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	eventually(t, "Hub learns delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
+	if msgs, _ := w.bob.Inbox(false, false); len(msgs) != 1 {
+		t.Fatalf("inbox has %d messages", len(msgs))
+	}
+	paths, err := w.bob.Download(tctx(t), res.ID, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("file differs")
+	}
+}
+
+func TestDirectReceiverChecksCallerAndMembership(t *testing.T) {
+	defer func(d time.Duration) { memberTTL = d }(memberTTL)
+	memberTTL = 300 * time.Millisecond
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
+	infos, _ := w.alice.sessions(tctx(t), w.bob.Address)
+	ad := infos[0].Ad
+
+	// Alice starts a direct upload; carol cannot touch it or claim her message.
+	aliceConn, _ := w.alice.directConn(ad)
+	id := protocol.NewID()
+	aliceConn.do(tctx(t), "POST", "/v1/direct/blobs", protocol.BlobReserve{ID: id, Recipient: w.bob.Address, Size: 10, SHA256: digestHex(nil)}, nil)
+	carolConn, _ := carol.directConn(ad)
+	var he *HubError
+	if err := carolConn.doBytes(tctx(t), "PUT", "/v1/direct/blobs/"+id+"?offset=0", []byte("x"), nil); !errors.As(err, &he) || he.Status != 404 {
+		t.Fatalf("third party chunk: %v", err)
+	}
+	peer, _ := w.alice.sendKey(tctx(t), w.bob.Address)
+	r, _ := peer.Recipient()
+	env := sealFor(t, w.alice, w.bob.Address, r)
+	if err := carolConn.do(tctx(t), "POST", "/v1/direct/messages", env, nil); !errors.As(err, &he) || he.Status != 403 {
+		t.Fatalf("message posted by someone else: %v", err)
+	}
+
+	// Revocation reaches direct delivery within memberTTL.
+	if err := carolConn.do(tctx(t), "GET", "/v1/direct/blobs/"+protocol.NewID(), nil, nil); !errors.As(err, &he) || he.Status != 404 {
+		t.Fatalf("member request before revoke: %v", err)
+	}
+	if err := w.alice.Revoke(tctx(t), carol.Address); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(memberTTL + 50*time.Millisecond)
+	if err := carolConn.do(tctx(t), "GET", "/v1/direct/blobs/"+protocol.NewID(), nil, nil); !errors.As(err, &he) || he.Status != 403 {
+		t.Fatalf("revoked peer after TTL: %v", err)
+	}
+
+	// With the Hub down and the membership check expired, direct fails closed.
+	w.hub.Stop()
+	time.Sleep(memberTTL + 50*time.Millisecond)
+	if err := aliceConn.do(tctx(t), "GET", "/v1/direct/blobs/"+id, nil, nil); !errors.As(err, &he) || he.Status != 503 {
+		t.Fatalf("expired membership with Hub down: %v", err)
+	}
+}
+
+func TestSessionAddressing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hub")
+	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, SessionGrace: 500 * time.Millisecond}, "127.0.0.1:0")}
+	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
+	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
+	w.bobHome = filepath.Join(t.TempDir(), "bob")
+	w.bob = mustJoin(t, w.bobHome, code, "laptop")
+
+	stop, s1 := runWith(t, w, w.bob, RunOptions{})
+	res, err := w.alice.Send(tctx(t), w.bob.Address+"#"+s1, "to this session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "session delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
+
+	// Ended session, still in its grace period: accepted, then expires.
+	stop()
+	res, err = w.alice.Send(tctx(t), w.bob.Address+"#"+s1, "too late", "")
+	if err != nil || res.State != protocol.StateCustody {
+		t.Fatalf("send during grace = %+v, %v", res, err)
+	}
+	eventually(t, "expired receipt", func() bool { return state(t, w.alice, res.ID) == protocol.StateExpired })
+
+	// After the grace period: refused without fallback, inbox with fallback.
+	if _, err := w.alice.Send(tctx(t), w.bob.Address+"#"+s1, "refused", ""); !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("stale session: %v", err)
+	}
+	res, err = w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address + "#" + s1, Body: "fallback", Fallback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, s2 := runWith(t, w, w.bob, RunOptions{})
+	if s2 == s1 {
+		t.Fatal("new daemon reused the old session id")
+	}
+	eventually(t, "fallback delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
+	msgs, _ := w.bob.Inbox(false, false)
+	bodies := map[string]bool{}
+	for _, m := range msgs {
+		bodies[m.Body] = true
+	}
+	if !bodies["to this session"] || !bodies["fallback"] || bodies["too late"] || bodies["refused"] {
+		t.Fatalf("inbox = %v", bodies)
+	}
+}
+
+// With both daemons connected and nothing to send, the only traffic is the
+// Hub's pings on the already-open streams: no requests reach the Hub.
+func TestIdleDaemonsDoNotPoll(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hub")
+	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: 50 * time.Millisecond}, "127.0.0.1:0")}
+	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
+	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
+	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
+	w.alice.heartbeat, w.bob.heartbeat = 50*time.Millisecond, 50*time.Millisecond
+	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
+	runWith(t, w, w.alice, RunOptions{})
+	time.Sleep(200 * time.Millisecond) // let connect-time sync finish
+	stats := w.hub.Hub.Stats()
+	reqs, acks := stats.Requests.Load(), stats.Acks.Load()
+	time.Sleep(time.Second) // ~20 ping intervals
+	reqs, acks = stats.Requests.Load()-reqs, stats.Acks.Load()-acks
+	// Two connected daemons answer ~20 pings each; nothing else is asked.
+	if reqs != acks || acks > 2*(1000/50+1) {
+		t.Fatalf("%d requests (%d ping acks) during idle", reqs, acks)
+	}
+}
+
+// A peer that keeps its TCP connection open but stops answering pings (a
+// sleeping laptop, a half-open link) loses its session within the lease.
+func TestSilentPeerSessionExpires(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hub")
+	const beat, grace = 50 * time.Millisecond, 100 * time.Millisecond
+	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat, SessionGrace: grace}, "127.0.0.1:0")}
+	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
+	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
+	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
+
+	// Bob's stream stays open and is read, but no ping is ever acknowledged.
+	ad := protocol.SessionAd{Address: w.bob.Address, Session: protocol.NewID()}
+	protocol.SignAd(&ad, w.bob.id.Sign)
+	req, _ := w.bob.hub.request(context.Background(), "GET", "/v1/stream?ad="+ad.Encode(), nil)
+	resp, err := w.bob.hub.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	go io.Copy(io.Discard, resp.Body)
+	start := time.Now()
+	res, err := w.alice.Send(tctx(t), w.bob.Address+"#"+ad.Session, "for the sleeping session", "")
+	if err != nil || res.State != protocol.StateCustody {
+		t.Fatalf("send while registered = %+v, %v", res, err)
+	}
+	eventually(t, "silent session to end", func() bool {
+		infos, _ := w.alice.sessions(tctx(t), w.bob.Address)
+		return len(infos) == 0
+	})
+	if bound := 3*beat + grace + 200*time.Millisecond; time.Since(start) > bound {
+		t.Fatalf("silent session lasted %s, bound %s", time.Since(start), bound)
+	}
+	if s := state(t, w.alice, res.ID); s != protocol.StateExpired {
+		t.Fatalf("queued session message state %s, want expired", s)
+	}
+}
+
+func digestHex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+
+func sealFor(t *testing.T, from *Agent, to string, r *age.X25519Recipient) envelope.Envelope {
+	t.Helper()
+	env, err := envelope.Seal(envelope.Inner{ID: protocol.NewID(), From: from.Address, To: to, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: "x"}, from.id.Sign, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}

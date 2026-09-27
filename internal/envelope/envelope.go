@@ -55,7 +55,12 @@ type Envelope struct {
 	Kind  string `json:"kind"`
 	CT    []byte `json:"ct"`
 	Blobs []Blob `json:"blobs,omitempty"`
-	Sig   []byte `json:"sig,omitempty"`
+	// Session, when set, addresses one running daemon of the recipient.
+	// Without Fallback the message expires if that session ends first;
+	// with Fallback it goes to the agent's inbox instead.
+	Session  string `json:"session,omitempty"`
+	Fallback bool   `json:"fallback,omitempty"`
+	Sig      []byte `json:"sig,omitempty"`
 }
 
 // Inner is the encrypted content.
@@ -69,6 +74,8 @@ type Inner struct {
 	Body        string       `json:"body"`
 	ReplyTo     string       `json:"reply_to,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	Session     string       `json:"session,omitempty"`
+	Fallback    bool         `json:"fallback,omitempty"`
 }
 
 // Kinds of messages.
@@ -104,7 +111,8 @@ func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelop
 	if ct.Len() > MaxCiphertext {
 		return Envelope{}, fmt.Errorf("message too large (%d bytes encrypted, max %d)", ct.Len(), MaxCiphertext)
 	}
-	env := Envelope{V: Version, ID: in.ID, From: in.From, To: in.To, TS: in.TS, Kind: in.Kind, CT: ct.Bytes()}
+	env := Envelope{V: Version, ID: in.ID, From: in.From, To: in.To, TS: in.TS, Kind: in.Kind, CT: ct.Bytes(),
+		Session: in.Session, Fallback: in.Fallback}
 	for _, a := range in.Attachments {
 		env.Blobs = append(env.Blobs, a.Blob)
 	}
@@ -125,6 +133,9 @@ func (e Envelope) VerifySig(senderKey ed25519.PublicKey) error {
 	}
 	if len(e.Blobs) > MaxAttachments {
 		return fmt.Errorf("too many attachments (max %d)", MaxAttachments)
+	}
+	if e.Session != "" && !validID(e.Session) {
+		return errors.New("invalid session id")
 	}
 	seen := map[string]bool{}
 	for _, b := range e.Blobs {
@@ -165,7 +176,8 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := dec.Decode(&in); err != nil {
 		return in, fmt.Errorf("inner: %w", err)
 	}
-	if in.V != e.V || in.ID != e.ID || in.From != e.From || in.To != e.To || in.TS != e.TS || in.Kind != e.Kind {
+	if in.V != e.V || in.ID != e.ID || in.From != e.From || in.To != e.To || in.TS != e.TS || in.Kind != e.Kind ||
+		in.Session != e.Session || in.Fallback != e.Fallback {
 		return in, errors.New("encrypted header does not match signed envelope")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

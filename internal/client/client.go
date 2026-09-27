@@ -41,6 +41,7 @@ type Agent struct {
 	store     *store
 	hub       *hubConn
 	heartbeat time.Duration
+	adQuery   string // this run's signed session ad, for the push stream
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -199,16 +200,37 @@ func (a *Agent) sendKey(ctx context.Context, address string) (identity.Public, e
 // SendResult reports what is known about a message after Send.
 type SendResult struct {
 	ID     string `json:"id"`
+	Path   string `json:"path,omitempty"`   // direct or relay once handed over
 	State  string `json:"state"`            // queued, custody or delivered
 	Detail string `json:"detail,omitempty"` // why it is still queued
 }
 
-// Send encrypts body and any files to the recipient and hands them to the
-// Hub. Files are encrypted into a private spool first; if the Hub is
-// unreachable the message stays queued and the daemon resumes it.
+// Outgoing is a message to send.
+type Outgoing struct {
+	To       string // person/agent, or person/agent#session for one running daemon
+	Body     string
+	ReplyTo  string
+	Files    []string
+	Fallback bool // if the addressed session has ended, deliver to the agent's inbox
+}
+
+// Send is SendMessage for the common case.
 func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...string) (SendResult, error) {
-	if len(files) > envelope.MaxAttachments {
+	return a.SendMessage(ctx, Outgoing{To: to, Body: body, ReplyTo: replyTo, Files: files})
+}
+
+// SendMessage encrypts the body and files to the recipient and delivers
+// them: straight to a reachable daemon of the recipient when one advertises
+// a verified endpoint, otherwise (or if that fails) through the Hub. Files
+// are encrypted into a private spool first; if the Hub is unreachable the
+// message stays queued and the daemon resumes it.
+func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
+	if len(m.Files) > envelope.MaxAttachments {
 		return SendResult{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
+	}
+	to, session, err := protocol.SplitTarget(m.To)
+	if err != nil {
+		return SendResult{}, err
 	}
 	peer, err := a.sendKey(ctx, to)
 	if err != nil {
@@ -218,11 +240,18 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 	if err != nil {
 		return SendResult{}, err
 	}
+	var route *protocol.SessionAd
+	if infos, err := a.sessions(ctx, to); err == nil {
+		if session != "" && !m.Fallback && !live(infos, session) {
+			return SendResult{}, ErrSessionExpired
+		}
+		route = a.directRoute(infos, to, session, peer)
+	}
 	in := envelope.Inner{
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
-		Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo,
+		Kind: envelope.KindMessage, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback,
 	}
-	for _, path := range files {
+	for _, path := range m.Files {
 		att, err := a.spoolFile(path, recipient)
 		if err != nil {
 			a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
@@ -232,13 +261,13 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 	}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err == nil {
-		err = a.store.addOutbox(env, body)
+		err = a.store.addOutbox(env, m.Body)
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 		return SendResult{}, err
 	}
-	return a.deliver(ctx, env)
+	return a.deliver(ctx, env, route)
 }
 
 func blobsOf(atts []envelope.Attachment) []envelope.Blob {
@@ -255,10 +284,24 @@ func (a *Agent) Reply(ctx context.Context, id, body string, files ...string) (Se
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
 	}
-	return a.Send(ctx, sender, body, id, files...)
+	return a.SendMessage(ctx, Outgoing{To: sender, Body: body, ReplyTo: id, Files: files})
 }
 
-func (a *Agent) deliver(ctx context.Context, env envelope.Envelope) (SendResult, error) {
+// deliver tries the direct route (if any) and then the Hub. The spool is
+// released only once one of them has confirmed custody of the message.
+func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *protocol.SessionAd) (SendResult, error) {
+	if route != nil {
+		r, err := a.sendDirect(ctx, env, *route)
+		if err == nil {
+			a.releaseSpool(env)
+			return SendResult{ID: env.ID, State: r.State, Path: protocol.PathDirect},
+				a.store.setOutboxState(env.ID, r.State, "", protocol.PathDirect)
+		}
+		a.Logf("direct delivery to %s failed (%v); using the Hub", route.Endpoint, err)
+		if err := a.store.coolRoute(route.Endpoint, time.Now().Add(routeCooldown)); err != nil {
+			a.Logf("route cooldown: %v", err)
+		}
+	}
 	var r protocol.Receipt
 	err := a.uploadAll(ctx, env)
 	if err == nil {
@@ -267,11 +310,12 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope) (SendResult,
 	switch {
 	case err == nil:
 		a.releaseSpool(env)
-		return SendResult{ID: env.ID, State: r.State}, a.store.setOutboxState(env.ID, r.State, "")
+		return SendResult{ID: env.ID, State: r.State, Path: protocol.PathRelay},
+			a.store.setOutboxState(env.ID, r.State, "", protocol.PathRelay)
 	case retryable(err):
-		return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error())
+		return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
 	default:
-		a.store.setOutboxState(env.ID, stateFailed, err.Error())
+		a.store.setOutboxState(env.ID, stateFailed, err.Error(), "")
 		return SendResult{ID: env.ID, State: stateFailed}, err
 	}
 }
@@ -283,17 +327,28 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 		return err
 	}
 	for _, env := range envs {
-		if _, err := a.deliver(ctx, env); err != nil && !retryable(err) {
+		if _, err := a.deliver(ctx, env, nil); err != nil && !retryable(err) {
 			a.Logf("message %s to %s rejected: %v", env.ID, env.To, err)
 		}
 	}
 	return nil
 }
 
-// Status asks the Hub what it can prove about message id.
+// Status reports what is known about message id: for a direct delivery,
+// the recipient's own receipt; otherwise what the Hub can prove.
 func (a *Agent) Status(ctx context.Context, id string) (protocol.Receipt, error) {
+	state, path, found, err := a.store.outboxState(id)
+	if err != nil {
+		return protocol.Receipt{}, err
+	}
+	if found && path == protocol.PathDirect {
+		return protocol.Receipt{ID: id, State: state, Path: path}, nil
+	}
 	var r protocol.Receipt
-	err := a.hub.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id), nil, &r)
+	err = a.hub.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id), nil, &r)
+	if found {
+		r.Path = protocol.PathRelay
+	}
 	return r, err
 }
 

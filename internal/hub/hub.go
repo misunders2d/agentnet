@@ -4,17 +4,11 @@ package hub
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +19,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
+	"github.com/misunders2d/agentnet/internal/tlscert"
 )
 
 // BootstrapFile holds the first admin invite inside the data directory.
@@ -42,6 +37,9 @@ type Config struct {
 	MaxFileSize  int64         // plaintext bytes per attachment (default 100 MiB)
 	StorageQuota int64         // total ciphertext bytes held (default 1 GiB)
 	UploadTTL    time.Duration // idle time before an incomplete upload is reclaimed (default 24h)
+
+	Heartbeat    time.Duration // ping interval on idle push streams (default protocol.HeartbeatInterval)
+	SessionGrace time.Duration // how long a disconnected session may reconnect before it ends (default 30s)
 }
 
 // Hub serves the AgentNet Hub API.
@@ -51,6 +49,8 @@ type Hub struct {
 	cert      tls.Certificate
 	certPEM   string
 	streams   streams
+	presence  presence
+	stats     Stats
 	heartbeat time.Duration
 	blobMu    sync.Mutex // serialises blob file writes, finalisation and reclamation
 	syncDir   func(dir string) error
@@ -76,6 +76,12 @@ func Open(cfg Config) (*Hub, error) {
 	if cfg.UploadTTL <= 0 {
 		cfg.UploadTTL = 24 * time.Hour
 	}
+	if cfg.Heartbeat <= 0 {
+		cfg.Heartbeat = protocol.HeartbeatInterval
+	}
+	if cfg.SessionGrace <= 0 {
+		cfg.SessionGrace = 30 * time.Second
+	}
 	if !protocol.ValidName(cfg.AdminLabel) {
 		return nil, fmt.Errorf("invalid admin label %q", cfg.AdminLabel)
 	}
@@ -92,7 +98,12 @@ func Open(cfg Config) (*Hub, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Hub{cfg: cfg, store: st, heartbeat: protocol.HeartbeatInterval, syncDir: secfile.SyncDir, done: make(chan struct{})}
+	h := &Hub{cfg: cfg, store: st, heartbeat: cfg.Heartbeat, syncDir: secfile.SyncDir, done: make(chan struct{})}
+	h.presence = presence{grace: cfg.SessionGrace, onEnd: func(agent, session string) {
+		if err := st.expireSession(agent, session); err != nil {
+			cfg.Logf("expire session %s#%s: %v", agent, session, err)
+		}
+	}}
 	if err := h.loadOrCreateCert(u.Hostname()); err != nil {
 		st.db.Close()
 		return nil, err
@@ -153,39 +164,10 @@ func (h *Hub) loadOrCreateCert(host string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	certPEM, keyPEM, err := tlscert.Generate(host, "AgentNet Hub "+host, 10*365*24*time.Hour)
 	if err != nil {
 		return err
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
-	if err != nil {
-		return err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "AgentNet Hub " + host},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		tmpl.IPAddresses = []net.IP{ip}
-	} else {
-		tmpl.DNSNames = []string{host}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return err
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return err
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	if err := secfile.Write(keyPath, keyPEM); err != nil {
 		return err
 	}

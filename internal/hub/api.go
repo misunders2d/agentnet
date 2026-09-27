@@ -19,10 +19,12 @@ func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
+	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
 	mux.HandleFunc("POST /v1/messages/{id}/ack", h.handleAck)
 	mux.HandleFunc("GET /v1/stream", h.handleStream)
+	mux.HandleFunc("POST /v1/stream/ack", h.handleStreamAck)
 	mux.HandleFunc("POST /v1/blobs", h.handleBlobReserve)
 	mux.HandleFunc("GET /v1/blobs/{id}", h.handleBlobStatus)
 	mux.HandleFunc("PUT /v1/blobs/{id}", h.handleBlobChunk)
@@ -30,7 +32,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/blobs/{id}/data", h.handleBlobData)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
-	return mux
+	return h.countRequests(mux)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -182,6 +184,10 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, protocol.CodeRecipientRevoked, "recipient revoked")
 		return
 	}
+	if env.Session != "" && !env.Fallback && !h.presence.live(env.To, env.Session) {
+		writeError(w, http.StatusConflict, protocol.CodeSessionExpired, "addressed session is not live")
+		return
+	}
 	// Store a canonical re-encoding so identical retries compare equal.
 	canonical, _ := json.Marshal(env)
 	state, err := h.store.putMessage(env, canonical)
@@ -193,6 +199,7 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
+	h.stats.Messages.Add(1)
 	h.streams.notify(env.To)
 	writeJSON(w, http.StatusAccepted, protocol.Receipt{ID: env.ID, State: state})
 }
@@ -273,6 +280,19 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.streams.disconnect(req.Address)
+	h.presence.drop(req.Address)
 	h.cfg.Logf("revoked %s by %s", req.Address, caller)
 	writeJSON(w, http.StatusOK, map[string]string{"revoked": req.Address})
+}
+
+func (h *Hub) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authenticate(w, r); !ok {
+		return
+	}
+	address := protocol.Address(r.PathValue("label"), r.PathValue("agent"))
+	if a, err := h.store.agent(address); err != nil || a.Revoked {
+		writeError(w, http.StatusNotFound, "", "unknown agent")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.presence.list(address))
 }

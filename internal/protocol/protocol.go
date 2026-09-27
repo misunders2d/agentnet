@@ -142,8 +142,15 @@ type RevokeRequest struct {
 // Receipt reports what the Hub can prove about a message.
 type Receipt struct {
 	ID    string `json:"id"`
-	State string `json:"state"` // one of the State constants
+	State string `json:"state"`          // one of the State constants
+	Path  string `json:"path,omitempty"` // PathDirect or PathRelay, when known
 }
+
+// Delivery paths.
+const (
+	PathDirect = "direct" // straight to the recipient's daemon
+	PathRelay  = "relay"  // through the Hub
+)
 
 // Message states the Hub can attest. A recipient moves a message from
 // custody to delivered or quarantined; quarantined may later become
@@ -152,6 +159,7 @@ const (
 	StateCustody     = "custody"     // Hub persisted the envelope
 	StateDelivered   = "delivered"   // recipient verified, decrypted and stored it
 	StateQuarantined = "quarantined" // recipient received it but could not verify it
+	StateExpired     = "expired"     // addressed to a session that ended before delivery
 )
 
 // AckRequest is the recipient's disposition of a pushed message.
@@ -186,6 +194,7 @@ type Error struct {
 const (
 	CodeRevoked          = "revoked"           // the caller is revoked
 	CodeRecipientRevoked = "recipient_revoked" // the addressed agent is revoked
+	CodeSessionExpired   = "session_expired"   // the addressed session is not live
 )
 
 // DirectoryEntry is the Hub's answer for one address.
@@ -194,8 +203,14 @@ type DirectoryEntry struct {
 	Revoked bool            `json:"revoked"`
 }
 
-// HeartbeatInterval is how often an idle push stream carries a ping. Clients
-// treat three missed pings as a dead connection.
+// PingAck acknowledges a push-stream ping; Conn is the id the ping carried.
+type PingAck struct {
+	Conn string `json:"conn"`
+}
+
+// HeartbeatInterval is how often an idle push stream carries a ping, which
+// the client acknowledges. Clients treat three missed pings as a dead
+// connection; the Hub closes a stream after two unacknowledged intervals.
 const HeartbeatInterval = 90 * time.Second
 
 // Request authentication headers.
@@ -300,3 +315,93 @@ const (
 	BlobUploading = "uploading"
 	BlobStored    = "stored" // complete, verified, durable
 )
+
+// SessionAd announces one running daemon ("session") of an agent, and
+// optionally an HTTPS endpoint where it accepts direct deliveries. It is
+// signed by the agent's key, so the Hub cannot redirect direct traffic; the
+// endpoint is routing information only and proves nothing about reachability.
+type SessionAd struct {
+	Address  string `json:"address"`
+	Session  string `json:"session"`
+	Endpoint string `json:"endpoint,omitempty"` // https origin
+	CertPEM  string `json:"cert,omitempty"`     // the endpoint's exact TLS certificate
+	Sig      []byte `json:"sig"`
+}
+
+func (s SessionAd) signed() []byte {
+	s.Sig = nil
+	data, _ := json.Marshal(s)
+	return append([]byte("agentnet-session-v1\n"), data...)
+}
+
+// SignAd fills in the ad's signature.
+func SignAd(s *SessionAd, key ed25519.PrivateKey) { s.Sig = ed25519.Sign(key, s.signed()) }
+
+// Verify checks the ad's shape and its signature by the agent's key.
+func (s SessionAd) Verify(signKey ed25519.PublicKey) error {
+	if _, _, err := SplitAddress(s.Address); err != nil {
+		return err
+	}
+	if !ValidID(s.Session) {
+		return errors.New("invalid session id")
+	}
+	if (s.Endpoint == "") != (s.CertPEM == "") {
+		return errors.New("endpoint and certificate go together")
+	}
+	if s.Endpoint != "" {
+		if origin, err := NormalizeHubURL(s.Endpoint); err != nil || origin != s.Endpoint {
+			return errors.New("endpoint must be a bare https origin")
+		}
+	}
+	if !ed25519.Verify(signKey, s.signed(), s.Sig) {
+		return errors.New("session ad signature invalid")
+	}
+	return nil
+}
+
+// Encode renders the ad for a URL query parameter.
+func (s SessionAd) Encode() string {
+	data, _ := json.Marshal(s)
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// DecodeAd parses SessionAd.Encode output.
+func DecodeAd(raw string) (SessionAd, error) {
+	var s SessionAd
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err == nil {
+		err = json.Unmarshal(data, &s)
+	}
+	return s, err
+}
+
+// SessionInfo is a live (or briefly reconnecting) session in the directory.
+type SessionInfo struct {
+	Ad        SessionAd `json:"ad"`
+	Connected bool      `json:"connected"` // false during the reconnect grace period
+}
+
+// ValidID reports whether s is a 128-bit lowercase hex identifier.
+func ValidID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// SplitTarget splits "person/agent" or "person/agent#session".
+func SplitTarget(target string) (address, session string, err error) {
+	address, session, _ = strings.Cut(target, "#")
+	if _, _, err := SplitAddress(address); err != nil {
+		return "", "", err
+	}
+	if session != "" && !ValidID(session) {
+		return "", "", fmt.Errorf("invalid session id in %q", target)
+	}
+	return address, session, nil
+}

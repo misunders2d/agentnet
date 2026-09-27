@@ -141,7 +141,7 @@ func runAgent(t *testing.T, a *Agent) func() {
 	a.Logf = t.Logf
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { a.Run(ctx); close(done) }()
+	go func() { a.Run(ctx, RunOptions{}); close(done) }()
 	stop := func() { cancel(); <-done }
 	t.Cleanup(stop)
 	return stop

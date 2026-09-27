@@ -27,7 +27,22 @@ const (
 // exponential backoff. It never polls: the Hub pushes messages and sparse
 // pings. A message that cannot be processed yet ends the connection; the Hub
 // pushes every unacknowledged message again on the next one.
-func (a *Agent) Run(ctx context.Context) error {
+//
+// Each Run is one session: a fresh session id announced to the Hub, and,
+// with opts.Listen, an HTTPS listener for direct deliveries.
+func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
+	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
+	if opts.Listen != "" {
+		endpoint, cert, stop, err := a.startDirect(opts, ad.Session)
+		if err != nil {
+			return err
+		}
+		defer stop()
+		ad.Endpoint, ad.CertPEM = endpoint, cert
+	}
+	protocol.SignAd(&ad, a.id.Sign)
+	a.adQuery = "?ad=" + ad.Encode()
+	a.Logf("session %s#%s", a.Address, ad.Session)
 	backoff := time.Second
 	for {
 		healthy, err := a.streamOnce(ctx)
@@ -56,7 +71,7 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req, err := a.hub.request(ctx, "GET", "/v1/stream", nil)
+	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery, nil)
 	if err != nil {
 		return false, err
 	}
@@ -122,6 +137,13 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 			return errors.Join(errors.New("message "+env.ID+" not processed yet"), err)
 		}
 	case "ping":
+		// Prove this connection is alive; the Hub drops unanswered streams.
+		var ping protocol.PingAck
+		if err := json.Unmarshal([]byte(data), &ping); err == nil && ping.Conn != "" {
+			if err := a.hub.do(ctx, "POST", "/v1/stream/ack", ping, nil); err != nil {
+				a.Logf("ping ack: %v", err)
+			}
+		}
 		a.sync(ctx)
 	}
 	return nil

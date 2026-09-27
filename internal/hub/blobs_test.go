@@ -327,3 +327,36 @@ func TestReclaimKeepsRowUntilDirectorySynced(t *testing.T) {
 		t.Fatalf("row kept after successful reclaim: %v", err)
 	}
 }
+
+func TestPresenceKeepsNewerConnection(t *testing.T) {
+	ended := make(chan string, 4)
+	p := presence{grace: 50 * time.Millisecond, onEnd: func(agent, s string) { ended <- s }}
+	sid := protocol.NewID()
+	p.connect("bob/x", protocol.SessionAd{Session: sid, Endpoint: "https://old.example"})
+	p.connect("bob/x", protocol.SessionAd{Session: sid, Endpoint: "https://new.example"})
+	p.disconnect("bob/x", sid) // the old, half-open connection finally closes
+	time.Sleep(100 * time.Millisecond)
+	if !p.live("bob/x", sid) || p.list("bob/x")[0].Ad.Endpoint != "https://new.example" {
+		t.Fatal("old connection's exit removed the newer registration")
+	}
+	p.disconnect("bob/x", sid)
+	if !p.live("bob/x", sid) {
+		t.Fatal("session ended before its grace period")
+	}
+	select {
+	case s := <-ended:
+		if s != sid || p.live("bob/x", sid) {
+			t.Fatal("wrong session ended")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session never ended")
+	}
+	// Reconnecting within grace keeps the session.
+	p.connect("bob/x", protocol.SessionAd{Session: sid})
+	p.disconnect("bob/x", sid)
+	p.connect("bob/x", protocol.SessionAd{Session: sid})
+	time.Sleep(100 * time.Millisecond)
+	if !p.live("bob/x", sid) || len(ended) != 0 {
+		t.Fatal("reconnect within grace ended the session")
+	}
+}

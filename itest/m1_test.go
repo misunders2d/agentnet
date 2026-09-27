@@ -47,7 +47,7 @@ func runDaemon(t *testing.T, a *client.Agent) *daemon {
 	a.Logf = t.Logf
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &daemon{cancel: cancel, done: make(chan struct{})}
-	go func() { d.err = a.Run(ctx); close(d.done) }()
+	go func() { d.err = a.Run(ctx, client.RunOptions{}); close(d.done) }()
 	t.Cleanup(d.stop)
 	return d
 }
