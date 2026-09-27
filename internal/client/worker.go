@@ -147,17 +147,29 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if h.stdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// A codex session run reports on stdout as JSON events; the answer is
+	// taken from them (codexstream.go).
+	var events *codexStream
+	if plan.ref != nil && h.sessions == codexSessions {
+		events = &codexStream{}
+		cmd.Stdout = events
+	} else {
+		cmd.Stdout = &stdout
+	}
+	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
 	runErr := cmd.Run()
 	cancel()
 	<-watchDone
-	if plan.ref != nil && plan.ref.ID == "" && ctx.Err() == nil {
+	if events != nil {
+		events.flush()
+	}
+	if events != nil && plan.ref.ID == "" && ctx.Err() == nil {
 		// Codex names a new session only once it has run; record it before
 		// the result is used.
-		if plan.ref.ID = codexThreadID(stdout.String()); plan.ref.ID == "" {
+		if plan.ref.ID = events.threadID; plan.ref.ID == "" {
 			a.Logf("%s %s: %s reported no session id; the next job of this conversation starts a new session", j.Kind, j.ID, r.Harness)
 		} else if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
 			a.store.finishJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err))
@@ -165,7 +177,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 
-	if outPath != "" {
+	turnFailed := false
+	switch text, ok := events.answer(); {
+	case events != nil && ok:
+		stdout.Write([]byte(text))
+	case events != nil && events.turnFailed:
+		turnFailed = true
+	case outPath != "":
 		stdout.Reset()
 		stdout.truncated = false
 		if data, err := readCapped(outPath, maxOutput+1); err == nil {
@@ -188,7 +206,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.resume {
 			body = "resuming the background session " + plan.ref.ID + " failed; not retried automatically. " + body
 		}
+	case turnFailed:
+		status, body = envelope.StatusFailed, r.Harness+" reported that its turn failed"
 	case body == "":
+		// The peer gets a generic reason; the harness's own words stay in
+		// the local daemon log.
+		a.Logf("%s %s: %s gave no answer; its stderr ends: %q", j.Kind, j.ID, r.Harness, tail(stderr.String(), 1024))
 		status, body = envelope.StatusFailed, r.Harness+" produced no answer"
 	}
 	if stdout.truncated {
@@ -360,6 +383,14 @@ func (a *Agent) prompt(j job, r *Responder) (string, error) {
 	}
 	fmt.Fprintf(&b, "\n## %s from %s\n%s\n", heading, j.From, j.Body)
 	return b.String(), nil
+}
+
+// tail returns the last max bytes of s.
+func tail(s string, max int) string {
+	if len(s) > max {
+		return s[len(s)-max:]
+	}
+	return s
 }
 
 func readCapped(path string, max int) (string, error) {

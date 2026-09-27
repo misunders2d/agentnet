@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -13,18 +14,39 @@ import (
 )
 
 // sessionStub registers "cstyle" (claude-style sessions) on the shell stub
-// and "xstyle" (codex-style) on a stand-in that reports $STUB_THREAD as its
-// thread id when asked for JSON and writes its answer to the -o file.
+// and "xstyle" (codex-style) on a stand-in that, asked for JSON, reports
+// $STUB_THREAD as its thread id, $STUB_NOISE bytes of other events, then an
+// agent message and a completed turn ($STUB_TURN=fail: a failed turn after a
+// partial message; $STUB_NO_AGENT: no agent message), and writes $STUB_O
+// (possibly nothing) to the -o file.
 func sessionStub(t *testing.T) *stub {
 	st := installStub(t, "answer")
 	x := filepath.Join(t.TempDir(), "codex.sh")
 	os.WriteFile(x, []byte(`#!/bin/sh
 echo "run $*" >> "$STUB_LOG"
 cat > /dev/null
-case " $* " in *" --json "*) [ -n "$STUB_THREAD" ] && echo "{\"type\":\"thread.started\",\"thread_id\":\"$STUB_THREAD\"}";; esac
-while [ $# -gt 0 ]; do [ "$1" = -o ] && printf 'codex answer' > "$2"; shift; done
+case " $* " in *" --json "*)
+  [ -n "$STUB_THREAD" ] && echo "{\"type\":\"thread.started\",\"thread_id\":\"$STUB_THREAD\"}"
+  echo '{"type":"turn.started"}'
+  if [ "$STUB_NOISE" -gt 0 ] 2>/dev/null; then
+    printf '{"type":"item.completed","item":{"type":"reasoning","text":"'; head -c "$STUB_NOISE" /dev/zero | tr '\0' x; printf '"}}\n'
+    echo 'not json at all'
+  fi
+  if [ "$STUB_TURN" = fail ]; then
+    echo '{"type":"item.completed","item":{"type":"agent_message","text":"partial commentary"}}'
+    echo '{"type":"turn.failed","error":{"message":"boom"}}'
+  else
+    [ -z "$STUB_NO_AGENT" ] && echo '{"type":"item.completed","item":{"type":"agent_message","text":"codex json answer"}}'
+    printf '{"type":"turn.completed","usage":{}}'
+  fi;;
+esac
+while [ $# -gt 0 ]; do [ "$1" = -o ] && [ -n "$STUB_O" ] && printf '%s' "$STUB_O" > "$2"; shift; done
 `), 0o700)
 	t.Setenv("STUB_THREAD", "thread-1")
+	t.Setenv("STUB_O", "codex answer")
+	t.Setenv("STUB_NOISE", "0")
+	t.Setenv("STUB_TURN", "")
+	t.Setenv("STUB_NO_AGENT", "")
 	Harnesses["cstyle"] = harness{bin: Harnesses["stub"].bin, question: []string{"--question-mode", sessionOneShot},
 		task: []string{"--task-mode", sessionOneShot}, stdin: true, sessions: claudeSessions}
 	Harnesses["cstyle2"] = harness{bin: Harnesses["stub"].bin, question: []string{"--other-flags", sessionOneShot},
@@ -245,10 +267,10 @@ func TestCodexStyleSession(t *testing.T) {
 	if !strings.HasPrefix(runs[0], "run exec --sandbox read-only --color never --disable shell_tool --json -o ") || !strings.HasSuffix(runs[0], " -") {
 		t.Fatalf("first run: %s", runs[0])
 	}
-	if !strings.HasPrefix(runs[1], `run exec resume thread-1 -c sandbox_mode="read-only" --disable shell_tool -o `) || !strings.HasSuffix(runs[1], " -") {
+	if !strings.HasPrefix(runs[1], `run exec resume thread-1 --json -c sandbox_mode="read-only" --disable shell_tool -o `) || !strings.HasSuffix(runs[1], " -") {
 		t.Fatalf("resume: %s", runs[1])
 	}
-	if m, _ := w.alice.store.inboxMessage(a2); m == nil || m.Body != "codex answer" || sessionOf(t, w.bob, q2).ID != "thread-1" {
+	if m, _ := w.alice.store.inboxMessage(a2); m == nil || m.Body != "codex json answer" || sessionOf(t, w.bob, q2).ID != "thread-1" {
 		t.Fatalf("resumed answer %+v", m)
 	}
 
@@ -404,5 +426,86 @@ func TestCheckReplyTo(t *testing.T) {
 	}
 	if err := w.alice.CheckReplyTo("nope", w.bob.Address); err == nil || !strings.Contains(err.Error(), "no message nope") {
 		t.Fatalf("unknown id: %v", err)
+	}
+}
+
+// Codex's answer comes from its JSON events, even when its -o file stays
+// empty and more than the output limit of other events comes first; a
+// turn that fails after a partial message is a failure, not an answer; a
+// completed turn without an agent message falls back to the -o file.
+func TestCodexAnswerFromEvents(t *testing.T) {
+	st := sessionStub(t)
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "xstyle", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	body := func(answer string) string { m, _ := w.alice.store.inboxMessage(answer); return m.Body }
+
+	t.Setenv("STUB_O", "")
+	t.Setenv("STUB_NOISE", "200000")
+	q1, a1 := ask(t, w, "")
+	if body(a1) != "codex json answer" || sessionOf(t, w.bob, q1).ID != "thread-1" {
+		t.Fatalf("answer %q", body(a1))
+	}
+
+	t.Setenv("STUB_NOISE", "0")
+	t.Setenv("STUB_TURN", "fail")
+	t.Setenv("STUB_O", "partial commentary")
+	q2, a2 := ask(t, w, "")
+	if m, _ := w.alice.store.inboxMessage(a2); m.Status != envelope.StatusFailed || strings.Contains(m.Body, "partial") {
+		t.Fatalf("failed turn became %+v", m)
+	}
+	if s, _ := w.bob.store.jobState(q2); s != stateJobFailed {
+		t.Fatalf("state %s", s)
+	}
+
+	t.Setenv("STUB_TURN", "")
+	t.Setenv("STUB_NO_AGENT", "1")
+	t.Setenv("STUB_O", "from the file")
+	_, a3 := ask(t, w, "")
+	if body(a3) != "from the file" {
+		t.Fatalf("fallback %q", body(a3))
+	}
+}
+
+func TestCodexStreamParsing(t *testing.T) {
+	events := `{"type":"thread.started","thread_id":"T1"}
+garbage line
+{"type":"item.completed","item":{"type":"agent_message","text":"first"}}
+{"type":"item.completed","item":{"type":"command_execution","text":"ignored"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"final"}}
+{"type":"turn.completed"}`
+	var c codexStream
+	for i := 0; i < len(events); i++ { // one byte per write
+		c.Write([]byte{events[i]})
+	}
+	c.flush() // the last line has no newline
+	if got, ok := c.answer(); !ok || got != "final" || c.threadID != "T1" {
+		t.Fatalf("split writes: %q %v %q", got, ok, c.threadID)
+	}
+
+	var big codexStream
+	big.Write([]byte(`{"type":"thread.started","thread_id":"T2"}` + "\n"))
+	huge := append([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"`), bytes.Repeat([]byte("x"), codexLineMax)...)
+	big.Write(append(huge, []byte(`"}}`+"\n")...)) // oversized: skipped whole
+	big.Write([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"after"}}` + "\n" + `{"type":"turn.completed"}` + "\n"))
+	if got, ok := big.answer(); !ok || got != "after" {
+		t.Fatalf("after an oversized line: %q %v", got, ok)
+	}
+
+	var failed codexStream
+	failed.Write([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"partial"}}` + "\n" + `{"type":"turn.failed"}` + "\n"))
+	if _, ok := failed.answer(); ok || !failed.turnFailed {
+		t.Fatal("a failed turn gave an answer")
+	}
+	var unfinished codexStream
+	unfinished.Write([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"cut off"}}` + "\n"))
+	if _, ok := unfinished.answer(); ok {
+		t.Fatal("a turn that never completed gave an answer")
+	}
+	var none *codexStream
+	if _, ok := none.answer(); ok {
+		t.Fatal("nil stream answered")
 	}
 }

@@ -113,7 +113,7 @@ func createArgs(h harness, base []string, id string) []string {
 	case claudeSessions:
 		return append(args, "--session-id", id)
 	case codexSessions:
-		return append(args, "--json") // stdout: JSON lines, the first names the thread
+		return append(args, "--json") // stdout: JSON events (codexstream.go)
 	}
 	return args
 }
@@ -127,7 +127,7 @@ func resumeArgs(h harness, mode string, base []string, id string) []string {
 		// `codex exec resume` takes the global -c/--enable/--disable options
 		// but not --sandbox or --color: the sandbox is given as its
 		// documented config key instead.
-		args := []string{"exec", "resume", id}
+		args := []string{"exec", "resume", id, "--json"}
 		rest := withoutFlags(base, "--ephemeral")
 		for i := 0; i < len(rest); i++ {
 			switch rest[i] {
@@ -189,20 +189,6 @@ func newUUID() string {
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b)
 	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
-}
-
-// codexThreadID finds the thread id codex reports first on its JSON stdout.
-func codexThreadID(stdout string) string {
-	for _, line := range strings.Split(stdout, "\n") {
-		var ev struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-		}
-		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "thread.started" {
-			return ev.ThreadID
-		}
-	}
-	return ""
 }
 
 // sessionAncestor walks from message id (itself included) up its reply
