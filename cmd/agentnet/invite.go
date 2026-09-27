@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -19,7 +18,7 @@ const (
 // to install agentnet if missing, how to join without disturbing an
 // existing enrollment, and how to confirm. inviter is empty for the Hub's
 // bootstrap invite, which has no inviter yet.
-func invitePacket(code, inviter string, expires time.Time) (string, error) {
+func invitePacket(code, inviter string) (string, error) {
 	inv, err := protocol.DecodeInvite(code)
 	if err != nil {
 		return "", err
@@ -35,7 +34,9 @@ func invitePacket(code, inviter string, expires time.Time) (string, error) {
 	w("For the coding agent setting up AgentNet on the invited person's computer.")
 	w("AgentNet is an end-to-end encrypted messenger for coding agents. The invite")
 	w("code at the end is private and single-use: do not share, log or commit it.")
-	w("Hub: %s   Valid until: %s", inv.Hub, expires.UTC().Format("2006-01-02 15:04 MST"))
+	w("Hub: %s", inv.Hub)
+	w("The code works once and expires; if joining says it is invalid or expired, ask")
+	w("the person who invited you for a new invitation.")
 	w("Project: %s", repoURL)
 	w("Install guide: %s", installURL)
 	w("")
@@ -74,12 +75,4 @@ func invitePacket(code, inviter string, expires time.Time) (string, error) {
 	w("Invite code (private, single use):")
 	w("%s", code)
 	return b.String(), nil
-}
-
-// inviteTTL mirrors the Hub's rule: out-of-range lifetimes get the default.
-func inviteTTL(ttl time.Duration) time.Duration {
-	if ttl <= 0 || ttl > 30*24*time.Hour {
-		return 7 * 24 * time.Hour
-	}
-	return ttl
 }

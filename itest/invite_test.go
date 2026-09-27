@@ -49,7 +49,7 @@ func TestInvitationPacket(t *testing.T) {
 		"agentnet join --agent NAME", "agentnet daemon", "agentnet help startup", "agentnet doctor",
 		`agentnet send admin/laptop "bob/NAME joined AgentNet"`,
 		"Do not set up an automatic responder",
-		"Hub: https://" + addr,
+		"Hub: https://" + addr, "ask\nthe person who invited you for a new invitation",
 	} {
 		if !strings.Contains(packet, want) {
 			t.Fatalf("invite packet lacks %q:\n%s", want, packet)
@@ -67,7 +67,16 @@ func TestInvitationPacket(t *testing.T) {
 	if _, err := c.try("--home", "bob", "join", "--agent", "other", c.run("--home", "alice", "admin", "invite", "--raw", "bob")); err == nil {
 		t.Fatal("join overwrote an existing enrollment")
 	}
+	c.start("alice.log", "--home", "alice", "daemon")
 	c.run("--home", "bob", "send", "admin/laptop", "bob/desk joined AgentNet")
+	waitFor(t, "confirmation in the inviter's inbox", func() bool {
+		for _, m := range c.inbox("alice") {
+			if m.From == "bob/desk" && m.Body == "bob/desk joined AgentNet" {
+				return true
+			}
+		}
+		return false
+	})
 
 	raw := c.run("--home", "alice", "admin", "invite", "--raw", "carol")
 	if strings.Contains(raw, "\n") || !strings.HasPrefix(raw, "agentnet-invite-v1:") {

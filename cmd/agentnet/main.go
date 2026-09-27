@@ -375,7 +375,7 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 			fmt.Println(code)
 			return nil
 		}
-		packet, err := invitePacket(code, a.Address, time.Now().Add(inviteTTL(*ttl)))
+		packet, err := invitePacket(code, a.Address)
 		if err != nil {
 			return err
 		}

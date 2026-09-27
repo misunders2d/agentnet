@@ -86,11 +86,7 @@ func runHub(ctx context.Context, args []string) error {
 			fmt.Println(code)
 			return nil
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return err
-		}
-		packet, err := invitePacket(code, "", info.ModTime().Add(7*24*time.Hour))
+		packet, err := invitePacket(code, "")
 		if err != nil {
 			return err
 		}
