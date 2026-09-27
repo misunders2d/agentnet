@@ -323,3 +323,22 @@ func TestAnswerFromOutputFile(t *testing.T) {
 		t.Fatalf("answer files left: %v", left)
 	}
 }
+
+// An item notified once and then back in review for a new reason (a held
+// question accepted, then marked needs_human) is notified again, once.
+func TestReturnToReviewNotifiedAgain(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	n := fakeNotify(w.bob)
+	setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "held first", Kind: envelope.KindQuestion})
+	waitState(t, w.bob, q.ID, stateHeld)
+	eventually(t, "held notification", func() bool { return n.count() == 1 })
+	if err := w.bob.Accept(q.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q.ID, stateNeedHuman)
+	eventually(t, "needs-human notification", func() bool { return n.count() == 2 })
+	quiet(t, w.bob, n, 2)
+}

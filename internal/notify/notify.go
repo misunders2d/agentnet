@@ -4,6 +4,7 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os/exec"
@@ -16,21 +17,23 @@ var ErrUnsupported = errors.New("desktop notifications are not supported on this
 
 const timeout = 10 * time.Second
 
-// run starts a notifier with argv only (no shell) and reports its failure,
-// including the start of its error output.
-func run(name string, args ...string) error {
+// run starts a notifier with argv only (no shell) and returns its standard
+// output, or its failure including the start of its error output.
+func run(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
 		if msg != "" {
-			return errors.New(name + ": " + err.Error() + ": " + msg)
+			return "", errors.New(name + ": " + err.Error() + ": " + msg)
 		}
-		return errors.New(name + ": " + err.Error())
+		return "", errors.New(name + ": " + err.Error())
 	}
-	return nil
+	return stdout.String(), nil
 }

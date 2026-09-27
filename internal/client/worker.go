@@ -228,6 +228,10 @@ func (a *Agent) notifyReview() {
 	}
 	if err := a.store.markNotified(ids); err != nil {
 		a.Logf("review: %v", err)
+		return
+	}
+	for _, id := range ids {
+		delete(a.notifyTried, id) // durably notified; a later return to review is new
 	}
 }
 
