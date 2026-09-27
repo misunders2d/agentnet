@@ -334,3 +334,79 @@ func sealFor(t *testing.T, from *Agent, to string, r *age.X25519Recipient) envel
 	}
 	return env
 }
+
+// The receipt is stored before the sender's spool goes: if recording it
+// fails, the spooled ciphertext is still there.
+func TestSpoolKeptUntilReceiptRecorded(t *testing.T) {
+	w := newWorld(t, "")
+	path, _ := writeFile(t, t.TempDir(), "k.bin", 1000)
+	if _, err := w.alice.store.db.Exec(`CREATE TRIGGER no_receipt BEFORE UPDATE OF state ON outbox
+		BEGIN SELECT RAISE(FAIL, 'injected receipt write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.Send(tctx(t), w.bob.Address, "keep my spool", "", path); err == nil {
+		t.Fatal("send succeeded without recording its receipt")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 1 {
+		t.Fatalf("spool has %d files after a failed receipt write", len(entries))
+	}
+}
+
+// slowPuts delays chunk uploads to make a long transfer.
+type slowPuts struct{ base http.RoundTripper }
+
+func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == "PUT" {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return s.base.RoundTrip(r)
+}
+
+// A long queued upload runs beside the stream: pings are still answered and
+// incoming messages still arrive while it is in progress.
+func TestQueuedUploadDoesNotBlockStream(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hub")
+	const beat = 50 * time.Millisecond
+	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
+	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
+	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
+	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
+	w.alice.heartbeat = beat
+
+	path, _ := writeFile(t, t.TempDir(), "long.bin", 5<<20) // ~11 chunks × 100 ms
+	if _, err := w.alice.Send(tctx(t), w.bob.Address, "pin keys", ""); err != nil {
+		t.Fatal(err)
+	}
+	f := injectFaults(w.alice)
+	f.add("POST", "/v1/blobs", 1, false) // first attempt fails, so it is queued
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "long upload", "", path)
+	if err != nil || res.State != stateQueued {
+		t.Fatalf("queue = %+v, %v", res, err)
+	}
+	w.alice.hub.http.Transport = slowPuts{w.alice.hub.http.Transport}
+
+	runWith(t, w, w.alice, RunOptions{})
+	acks := w.hub.Hub.Stats().Acks.Load()
+	if _, err := w.bob.Send(tctx(t), w.alice.Address, "while you upload", ""); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "incoming message during upload", func() bool { return hasInbox(w.alice, "while you upload") })
+	if s, _, _, _ := w.alice.store.outboxState(res.ID); s != stateQueued {
+		t.Fatalf("upload finished before the check (state %s); test is not measuring concurrency", s)
+	}
+	time.Sleep(3 * beat)
+	if w.hub.Hub.Stats().Acks.Load() == acks {
+		t.Fatal("no ping acknowledged while the upload ran")
+	}
+	eventually(t, "upload to finish", func() bool { return state(t, w.alice, res.ID) == protocol.StateCustody })
+}
+
+func hasInbox(a *Agent, body string) bool {
+	msgs, _ := a.Inbox(false, false)
+	for _, m := range msgs {
+		if m.Body == body {
+			return true
+		}
+	}
+	return false
+}

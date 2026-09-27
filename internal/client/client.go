@@ -42,6 +42,7 @@ type Agent struct {
 	hub       *hubConn
 	heartbeat time.Duration
 	adQuery   string // this run's signed session ad, for the push stream
+	kick      func() // wakes the current stream's retry worker
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -293,9 +294,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	if route != nil {
 		r, err := a.sendDirect(ctx, env, *route)
 		if err == nil {
-			a.releaseSpool(env)
-			return SendResult{ID: env.ID, State: r.State, Path: protocol.PathDirect},
-				a.store.setOutboxState(env.ID, r.State, "", protocol.PathDirect)
+			return a.handedOver(env, r.State, protocol.PathDirect)
 		}
 		a.Logf("direct delivery to %s failed (%v); using the Hub", route.Endpoint, err)
 		if err := a.store.coolRoute(route.Endpoint, time.Now().Add(routeCooldown)); err != nil {
@@ -309,15 +308,23 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	switch {
 	case err == nil:
-		a.releaseSpool(env)
-		return SendResult{ID: env.ID, State: r.State, Path: protocol.PathRelay},
-			a.store.setOutboxState(env.ID, r.State, "", protocol.PathRelay)
+		return a.handedOver(env, r.State, protocol.PathRelay)
 	case retryable(err):
 		return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
 	default:
 		a.store.setOutboxState(env.ID, stateFailed, err.Error(), "")
 		return SendResult{ID: env.ID, State: stateFailed}, err
 	}
+}
+
+// handedOver records who now holds the message, then frees the spool: the
+// receipt is persisted before the sender's own copy of the files goes.
+func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResult, error) {
+	if err := a.store.setOutboxState(env.ID, state, "", path); err != nil {
+		return SendResult{}, err
+	}
+	a.releaseSpool(env)
+	return SendResult{ID: env.ID, State: state, Path: path}, nil
 }
 
 // FlushOutbox retries every queued message once.

@@ -89,7 +89,30 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)
 	defer watchdog.Stop()
-	a.sync(ctx)
+
+	// One worker retries queued sends and receipts, so a large upload never
+	// delays reading the stream (pings, acks, incoming messages).
+	kick := make(chan struct{}, 1)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-kick:
+				a.sync(ctx)
+			}
+		}
+	}()
+	defer func() { cancel(); <-workerDone }()
+	a.kick = func() {
+		select {
+		case kick <- struct{}{}:
+		default: // a retry pass is already pending
+		}
+	}
+	a.kick()
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 2*protocol.MaxBody)
@@ -115,8 +138,9 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	return true, io.EOF
 }
 
-// sync retries queued sends and unsent receipts. It runs on connect and on
-// each Hub ping, so retries ride on existing traffic instead of a poll loop.
+// sync retries queued sends and unsent receipts. The stream's worker runs it
+// on connect and on each Hub ping, so retries ride on existing traffic
+// instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
@@ -144,7 +168,7 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 				a.Logf("ping ack: %v", err)
 			}
 		}
-		a.sync(ctx)
+		a.kick()
 	}
 	return nil
 }
