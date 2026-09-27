@@ -15,6 +15,8 @@ import (
 // 10 and 11 show it as a banner attributed to this program. A balloon needs
 // an icon in the notification area, and deleting the icon removes the
 // balloon, so the icon stays from the first notification until Close.
+// Windows queues a balloon behind one still shown, so each new one first
+// removes the previous one (empty szInfo, as documented).
 
 var (
 	shell32           = windows.NewLazySystemDLL("shell32.dll")
@@ -29,11 +31,15 @@ const (
 	nimAdd          = 0
 	nimModify       = 1
 	nimDelete       = 2
+	nimSetVersion   = 4
 	nifIcon         = 0x02
 	nifTip          = 0x04
 	nifInfo         = 0x10
+	nifShowTip      = 0x80 // keep the standard tooltip under version 4
 	niifInfo        = 0x01
 	niifNoSound     = 0x10
+	niifQuietTime   = 0x80 // NIIF_RESPECT_QUIET_TIME
+	iconVersion4    = 4    // NOTIFYICON_VERSION_4
 	idiInformation  = 32516
 	hwndMessage     = ^uintptr(2) // HWND_MESSAGE, (HWND)-3
 	iconID          = 1
@@ -137,23 +143,50 @@ func owner() {
 			}
 			wnd = w
 		}
-		icon, _, _ := procLoadIcon.Call(0, idiInformation)
-		nid := notifyIconData{Wnd: wnd, ID: iconID, Flags: nifIcon | nifTip | nifInfo, Icon: icon, InfoFlags: niifInfo | niifNoSound}
-		copyUTF16(nid.Tip[:], "AgentNet")
-		copyUTF16(nid.InfoTitle[:], r.title)
-		copyUTF16(nid.Info[:], r.body)
-		ok := added && shellNotify(nimModify, &nid)
-		if !ok { // first notification, or the icon was lost (e.g. Explorer restarted)
-			shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: iconID})
-			ok = shellNotify(nimAdd, &nid)
+		ok := false
+		for attempt := 0; attempt < 2 && !ok; attempt++ { // a second try re-adds a lost icon (e.g. Explorer restarted)
+			if !added {
+				shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: iconID})
+				added = addIcon(wnd)
+			}
+			ok = added && balloon(wnd, r.title, r.body)
+			if !ok {
+				added = false
+			}
 		}
-		added = ok
 		if !ok {
 			r.done <- errors.New(errNoNotifyArea)
 			continue
 		}
 		r.done <- nil
 	}
+}
+
+// addIcon adds the icon without a balloon and then selects
+// NOTIFYICON_VERSION_4, which must follow every successful NIM_ADD.
+func addIcon(wnd uintptr) bool {
+	icon, _, _ := procLoadIcon.Call(0, idiInformation)
+	nid := notifyIconData{Wnd: wnd, ID: iconID, Flags: nifIcon | nifTip | nifShowTip, Icon: icon}
+	copyUTF16(nid.Tip[:], "AgentNet")
+	if !shellNotify(nimAdd, &nid) {
+		return false
+	}
+	nid.Version = iconVersion4
+	if shellNotify(nimSetVersion, &nid) {
+		return true
+	}
+	shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: iconID})
+	return false
+}
+
+// balloon removes any balloon still shown, so the new one is not queued
+// behind it, then shows a silent one that respects quiet time.
+func balloon(wnd uintptr, title, body string) bool {
+	shellNotify(nimModify, &notifyIconData{Wnd: wnd, ID: iconID, Flags: nifInfo}) // empty szInfo
+	nid := notifyIconData{Wnd: wnd, ID: iconID, Flags: nifInfo, InfoFlags: niifInfo | niifNoSound | niifQuietTime}
+	copyUTF16(nid.InfoTitle[:], title)
+	copyUTF16(nid.Info[:], body)
+	return shellNotify(nimModify, &nid)
 }
 
 func shellNotify(msg uintptr, nid *notifyIconData) bool {
