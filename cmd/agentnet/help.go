@@ -245,15 +245,20 @@ With the daemon stopped, remove encrypted copies of messages that failed or
 were abandoned, and direct uploads never attached to a message.
   --saved   also remove directly received ciphertext of files already saved`,
 
-	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] LABEL
+	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
        agentnet admin revoke ADDRESS
 
-Run on an admin agent. invite prints a single-use code for the person LABEL
-(their address becomes LABEL/agent); send it to them privately. The label is
-your statement about who they are. revoke immediately cuts ADDRESS off.
+Run on an admin agent. invite prints a self-contained invitation for the
+person LABEL (their address becomes LABEL/agent): project and install links,
+install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
+steps, how to confirm back to you, and the private single-use invite code.
+Give the whole text to the coding agent on their computer, privately. The
+label is your statement about who they are. revoke immediately cuts ADDRESS
+off.
 
   --ttl D    how long the invite is valid (max 720h)
-  --admin    the invited agent becomes an admin too`,
+  --admin    the invited agent becomes an admin too
+  --raw      print only the invite code (for scripts)`,
 
 	"hub": `Usage: agentnet hub serve|bootstrap-invite|storage|cleanup|backup|restore [flags]
 
@@ -288,9 +293,11 @@ Examples:
   agentnet hub serve --data /var/lib/agentnet --listen :8443 --public-url https://hub.example.com:8443
   docker compose up -d --build     (compose.yaml in the repository)`,
 
-	"hub bootstrap-invite": `Usage: agentnet hub bootstrap-invite --data DIR
+	"hub bootstrap-invite": `Usage: agentnet hub bootstrap-invite --data DIR [--raw]
 
-Print the first admin invite (only until someone uses it). In Docker:
+Print the first admin invitation (only until someone uses it) as the same
+self-contained text as agentnet admin invite; --raw prints only the code.
+In Docker:
   docker compose exec hub agentnet hub bootstrap-invite`,
 
 	"hub storage": `Usage: agentnet hub storage --data DIR
@@ -335,7 +342,7 @@ listing are not supported. Keep agentnet daemon running for replies.`,
 Needs git and Go 1.26 or newer (https://go.dev/dl). No Docker, root or admin
 rights. The same commands build the Hub on a server.
 
-  git clone -b revival/mvp https://github.com/misunders2d/agentnet
+  git clone https://github.com/misunders2d/agentnet
   cd agentnet
 
 Linux / macOS:

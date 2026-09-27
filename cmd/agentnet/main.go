@@ -360,17 +360,26 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		fs := flag.NewFlagSet("admin invite", flag.ContinueOnError)
 		ttl := fs.Duration("ttl", 7*24*time.Hour, "invite lifetime (max 720h)")
 		admin := fs.Bool("admin", false, "grant admin rights")
+		raw := fs.Bool("raw", false, "print only the invite code (for scripts)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: admin invite [--ttl D] [--admin] LABEL")
+			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL")
 		}
 		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
 		if err != nil {
 			return err
 		}
-		fmt.Println(code)
+		if *raw {
+			fmt.Println(code)
+			return nil
+		}
+		packet, err := invitePacket(code, a.Address, time.Now().Add(inviteTTL(*ttl)))
+		if err != nil {
+			return err
+		}
+		fmt.Print(packet)
 		return nil
 	case "revoke":
 		if len(args) != 2 {

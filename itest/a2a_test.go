@@ -86,8 +86,8 @@ func TestA2AStockClientJourney(t *testing.T) {
 	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	code, _ := os.ReadFile(filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	c.run("--home", "alice", "join", "--agent", "laptop", strings.TrimSpace(string(code)))
-	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
-	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "carol"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
+	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "carol"))
 	c.start("alice-daemon.log", "--home", "alice", "daemon")
 
 	a2aAddr := freeAddr(t)

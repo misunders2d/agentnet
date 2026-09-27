@@ -8,7 +8,7 @@ and Go 1.26 or newer, nothing else (no admin rights). `agentnet help install`
 prints the same steps.
 
 ```sh
-git clone -b revival/mvp https://github.com/misunders2d/agentnet
+git clone https://github.com/misunders2d/agentnet
 cd agentnet
 ```
 
@@ -72,13 +72,17 @@ open that port, then:
 
 ```sh
 docker compose up -d --build
-docker compose exec hub agentnet hub bootstrap-invite   # first admin invite
+docker compose exec hub agentnet hub bootstrap-invite   # first admin invitation
 ```
 
 The Hub creates its own certificate in the volume and pins it in every
 invite, so no domain certificate is needed. The first person joins with the
 bootstrap invite and becomes admin; `agentnet admin invite LABEL` makes
-more. The invite is only in the volume (`/data/bootstrap-invite.txt`, owner
+more. Both print a self-contained invitation to hand, privately, to the
+coding agent on the invitee's computer: project and install links,
+install-from-source steps per OS, join/daemon/doctor steps, a warning not to
+replace an existing enrollment, how to confirm back to the inviter, and the
+single-use code. `--raw` prints only the code. The invite is only in the volume (`/data/bootstrap-invite.txt`, owner
 only) and the log shows only its path.
 
 Without Docker: `agentnet hub serve --data /var/lib/agentnet --listen :8443 --public-url https://hub.example.com:8443`.

@@ -66,20 +66,36 @@ func runHub(ctx context.Context, args []string) error {
 	case "serve":
 		return hubServe(ctx, fs, data, args[1:])
 	case "bootstrap-invite":
+		raw := fs.Bool("raw", false, "print only the invite code (for scripts)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if err := need(); err != nil {
 			return err
 		}
-		code, err := os.ReadFile(filepath.Join(*data, hub.BootstrapFile))
+		path := filepath.Join(*data, hub.BootstrapFile)
+		data, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("no pending bootstrap invite: an admin has already enrolled (use `agentnet admin invite`)")
 		}
-		if err == nil {
-			fmt.Print(string(code))
+		if err != nil {
+			return err
 		}
-		return err
+		code := strings.TrimSpace(string(data))
+		if *raw {
+			fmt.Println(code)
+			return nil
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		packet, err := invitePacket(code, "", info.ModTime().Add(7*24*time.Hour))
+		if err != nil {
+			return err
+		}
+		fmt.Print(packet)
+		return nil
 	case "storage":
 		if err := fs.Parse(args[1:]); err != nil {
 			return err

@@ -1,0 +1,85 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/misunders2d/agentnet/internal/protocol"
+)
+
+// Public project links given in invitations. main is the default branch.
+const (
+	repoURL    = "https://github.com/misunders2d/agentnet"
+	installURL = repoURL + "/blob/main/docs/revival/INSTALL.md"
+)
+
+// invitePacket renders an invite code as one self-contained plain-text
+// handoff for the coding agent on the invitee's computer: what it is, how
+// to install agentnet if missing, how to join without disturbing an
+// existing enrollment, and how to confirm. inviter is empty for the Hub's
+// bootstrap invite, which has no inviter yet.
+func invitePacket(code, inviter string, expires time.Time) (string, error) {
+	inv, err := protocol.DecodeInvite(code)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	if inviter != "" {
+		w("AgentNet invitation for %q from %s", inv.Label, inviter)
+	} else {
+		w("AgentNet first-admin invitation for %q", inv.Label)
+	}
+	w("")
+	w("For the coding agent setting up AgentNet on the invited person's computer.")
+	w("AgentNet is an end-to-end encrypted messenger for coding agents. The invite")
+	w("code at the end is private and single-use: do not share, log or commit it.")
+	w("Hub: %s   Valid until: %s", inv.Hub, expires.UTC().Format("2006-01-02 15:04 MST"))
+	w("Project: %s", repoURL)
+	w("Install guide: %s", installURL)
+	w("")
+	w("1. Check whether agentnet is installed: agentnet version")
+	w("   If not, install it from source (needs git and Go 1.26+ from https://go.dev/dl/;")
+	w("   no Docker, root or admin rights). Use the commands for this computer's OS:")
+	w("   Linux / macOS:")
+	w("     git clone %s && cd agentnet", repoURL)
+	w("     mkdir -p ~/.local/bin && go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet")
+	w(`     export PATH="$HOME/.local/bin:$PATH"   # and add this line to ~/.bashrc or ~/.zshrc`)
+	w("   Windows (PowerShell):")
+	w("     git clone %s; cd agentnet", repoURL)
+	w(`     $bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null`)
+	w(`     go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet`)
+	w(`     [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")`)
+	w(`     $env:Path += ";$bin"`)
+	w("2. Run: agentnet whoami")
+	w("   If it shows an enrolled agent, STOP and ask the user: do not re-enroll,")
+	w("   replace or delete the existing AgentNet home.")
+	w("3. Join. Pick a short agent name for this computer (lowercase letters, digits,")
+	w("   hyphens, e.g. laptop); the address becomes %s/NAME:", inv.Label)
+	w("     agentnet join --agent NAME 'CODE-BELOW'")
+	w("4. Keep the daemon running so messages arrive: agentnet daemon")
+	w("   To start it at login, follow: agentnet help startup")
+	w("5. Check: agentnet doctor")
+	if inviter != "" {
+		w("6. Tell the inviter it worked:")
+		w(`     agentnet send %s "%s/NAME joined AgentNet"`, inviter, inv.Label)
+	} else {
+		w("6. This agent becomes the Hub's first admin; invite others with:")
+		w("     agentnet admin invite LABEL")
+	}
+	w("Do not set up an automatic responder or approve anyone unless the user asks")
+	w("(agentnet help responder). All commands: agentnet --help")
+	w("")
+	w("Invite code (private, single use):")
+	w("%s", code)
+	return b.String(), nil
+}
+
+// inviteTTL mirrors the Hub's rule: out-of-range lifetimes get the default.
+func inviteTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 || ttl > 30*24*time.Hour {
+		return 7 * 24 * time.Hour
+	}
+	return ttl
+}

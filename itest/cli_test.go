@@ -127,7 +127,7 @@ func TestCLIFileJourney(t *testing.T) {
 	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	code, _ := os.ReadFile(filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	c.run("--home", "alice", "join", "--agent", "laptop", strings.TrimSpace(string(code)))
-	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
 
 	data := make([]byte, 10<<20+777)
 	rand.Read(data)
@@ -177,7 +177,7 @@ func TestCLIDirectFile(t *testing.T) {
 	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	code, _ := os.ReadFile(filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 	c.run("--home", "alice", "join", "--agent", "laptop", strings.TrimSpace(string(code)))
-	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
 	c.start("bob.log", "--home", "bob", "daemon", "--listen", freeAddr(t))
 	waitFor(t, "bob's direct endpoint", func() bool {
 		return strings.Contains(c.run("--home", "alice", "sessions", "bob/desk"), "direct https://")

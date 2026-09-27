@@ -1,7 +1,7 @@
 name: go
 on:
   push:
-    branches: [revival/mvp]
+    branches: [main, revival/mvp]
   pull_request:
   workflow_dispatch:
 permissions:

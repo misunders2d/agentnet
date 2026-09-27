@@ -83,9 +83,9 @@ vol hubdata; vol alice; vol bob; vol restored
 
 step "bootstrap and enroll"
 hub hub1 hubdata
-code=$(docker exec "$p-hub1" agentnet hub bootstrap-invite)
+code=$(docker exec "$p-hub1" agentnet hub bootstrap-invite --raw)
 agent alice join --agent laptop "$code"
-invite=$(agent alice admin invite bob)
+invite=$(agent alice admin invite --raw bob)
 agent bob join --agent desk "$invite"
 
 step "send the image's own 15 MB binary while bob is offline"

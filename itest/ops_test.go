@@ -28,9 +28,9 @@ func (c *cli) setup(t *testing.T, dataDir string) (string, func()) {
 	addr := freeAddr(t)
 	stop := c.start("hub-"+dataDir+".log", "hub", "serve", "--data", dataDir, "--listen", addr)
 	waitFile(t, filepath.Join(c.dir, dataDir, "bootstrap-invite.txt"))
-	code := c.run("hub", "bootstrap-invite", "--data", dataDir)
+	code := c.run("hub", "bootstrap-invite", "--raw", "--data", dataDir)
 	c.run("--home", "alice", "join", "--agent", "laptop", code)
-	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
 	return addr, stop
 }
 
@@ -136,7 +136,7 @@ func TestCLIPlatformTLS(t *testing.T) {
 
 	c.start("hub.log", "hub", "serve", "--data", "hub", "--listen", backend, "--platform-tls", "--public-url", "https://"+public)
 	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
-	code := c.run("hub", "bootstrap-invite", "--data", "hub")
+	code := c.run("hub", "bootstrap-invite", "--raw", "--data", "hub")
 	if inv, err := protocol.DecodeInvite(code); err != nil || inv.CertPEM != "" || inv.Hub != "https://"+public {
 		t.Fatalf("platform invite %+v %v", inv, err)
 	}
@@ -145,7 +145,7 @@ func TestCLIPlatformTLS(t *testing.T) {
 	}
 	c.env = []string{"SSL_CERT_FILE=" + filepath.Join(c.dir, "ca.pem")}
 	c.run("--home", "alice", "join", "--agent", "laptop", code)
-	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "bob"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
 	c.start("bob.log", "--home", "bob", "daemon")
 	c.run("--home", "alice", "send", "bob/desk", "through the platform")
 	waitFor(t, "message via platform TLS", func() bool { return len(c.inbox("bob")) == 1 })
@@ -171,7 +171,7 @@ func TestCLIFullJourney(t *testing.T) {
 	}
 	c := buildCLI(t)
 	_, _ = c.setup(t, "hub")
-	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "carol"))
+	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "carol"))
 	stubDir := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stubDir, 0o700)
 	os.WriteFile(filepath.Join(stubDir, "claude"), []byte(stubClaude), 0o700)
