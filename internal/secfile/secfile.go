@@ -39,7 +39,25 @@ func Write(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return SyncDir(filepath.Dir(path))
+}
+
+// CreateTemp creates a new temporary file in dir restricted to the current
+// user before any data is written, whatever access dir itself grants.
+func CreateTemp(dir, pattern string) (*os.File, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return nil, err
+	}
+	if err := restrict(f.Name(), false); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, err
+	}
+	return f, nil
 }
 
 // Touch creates path as an empty owner-only file if it does not exist, so

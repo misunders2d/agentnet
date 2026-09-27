@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -338,5 +339,123 @@ func TestStoreUpgradeFromM1(t *testing.T) {
 	msgs, err := st.inbox(false)
 	if err != nil || len(msgs) != 1 || msgs[0].Body != "kept" {
 		t.Fatalf("after upgrade: %+v, %v", msgs, err)
+	}
+}
+
+// R2: a second file's interruption, a crash after release but before the
+// saved path is recorded, colliding names, and a modified existing output.
+func TestMultiFileDownloadResumesWithUniqueNames(t *testing.T) {
+	w := newWorld(t, "")
+	src := t.TempDir()
+	os.Mkdir(filepath.Join(src, "a"), 0o700)
+	os.Mkdir(filepath.Join(src, "b"), 0o700)
+	p1, d1 := writeFile(t, filepath.Join(src, "a"), "x.bin", 1000)
+	p2, d2 := writeFile(t, filepath.Join(src, "b"), "x.bin", 5<<20) // two ranges
+	if _, err := w.alice.Send(tctx(t), w.bob.Address, "same names", "", p1, p2); err != nil {
+		t.Fatal(err)
+	}
+	msg := receive(t, w)
+	out := t.TempDir()
+	f := injectFaults(w.bob)
+	f.addAfter("GET", "/data", 2, 1, false) // first file ok, second file's 2nd range fails
+	if _, err := w.bob.Download(tctx(t), msg.ID, out, false); err == nil {
+		t.Fatal("interrupted download succeeded")
+	}
+	assertOnlyFiles(t, out, "x.bin")
+
+	paths, err := w.bob.Download(tctx(t), msg.ID, out, false) // plain rerun, no --force
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(paths[1]) != "x (2).bin" {
+		t.Fatalf("colliding name saved as %s", paths[1])
+	}
+	for i, want := range [][]byte{d1, d2} {
+		if got, _ := os.ReadFile(paths[i]); !bytes.Equal(got, want) {
+			t.Fatalf("file %d differs", i)
+		}
+	}
+
+	// Crash after the final link, before the saved path was recorded.
+	w.bob.store.db.Exec(`UPDATE attachments SET saved_path = NULL`)
+	if _, err := w.bob.Download(tctx(t), msg.ID, out, false); err != nil {
+		t.Fatalf("rerun after unrecorded release: %v", err)
+	}
+
+	// A changed file is never mistaken for ours.
+	os.WriteFile(paths[0], []byte("edited by the user"), 0o600)
+	if _, err := w.bob.Download(tctx(t), msg.ID, out, false); !errors.Is(err, ErrExists) {
+		t.Fatalf("modified output: %v", err)
+	}
+	if _, err := w.bob.Download(tctx(t), msg.ID, out, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, d1) {
+		t.Fatal("forced download did not restore the file")
+	}
+	assertOnlyFiles(t, out, "x (2).bin", "x.bin")
+}
+
+func TestFinalNames(t *testing.T) {
+	got := finalNames([]FileInfo{{Name: "a.txt"}, {Name: "A.TXT"}, {Name: "../a.txt"}, {Name: "a.txt"}, {Name: ".."}, {Name: ""}})
+	want := []string{"a.txt", "A (2).TXT", "_a.txt", "a (3).txt", "attachment", "attachment (2)"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("finalNames = %q, want %q", got, want)
+	}
+}
+
+// staleOffsets answers chunk uploads with 409 as if another process had
+// moved the offset. With forward, the chunk really reaches the Hub first.
+type staleOffsets struct {
+	base    http.RoundTripper
+	forward bool
+}
+
+func (s staleOffsets) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != "PUT" {
+		return s.base.RoundTrip(r)
+	}
+	if s.forward {
+		resp, err := s.base.RoundTrip(r)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+	}
+	return &http.Response{StatusCode: http.StatusConflict, Status: "409 Conflict", Request: r, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(`{"error":"chunk does not continue the upload"}`))}, nil
+}
+
+// R5: conflicts that come with progress never exhaust the retry budget, and
+// contention without progress leaves the message queued, not failed.
+func TestUploadConflicts(t *testing.T) {
+	w := newWorld(t, "")
+	path, data := writeFile(t, t.TempDir(), "c.bin", 3<<20) // 7 chunks, each answered 409
+	base := w.alice.hub.http.Transport
+	w.alice.hub.http.Transport = staleOffsets{base: base, forward: true}
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "contended", "", path)
+	if err != nil || res.State != protocol.StateCustody {
+		t.Fatalf("progressing conflicts: %+v, %v", res, err)
+	}
+
+	w.alice.hub.http.Transport = staleOffsets{base: base}
+	res, err = w.alice.Send(tctx(t), w.bob.Address, "stuck", "", path)
+	if err != nil || res.State != stateQueued {
+		t.Fatalf("contention without progress: %+v, %v", res, err)
+	}
+	w.alice.hub.http.Transport = base
+	if err := w.alice.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if s := state(t, w.alice, res.ID); s != protocol.StateCustody {
+		t.Fatalf("queued message after contention cleared: %s", s)
+	}
+	msg := receive(t, w)
+	paths, err := w.bob.Download(tctx(t), msg.ID, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("file differs")
 	}
 }

@@ -26,14 +26,39 @@ func (h *Hub) blobPath(id string, complete bool) string {
 	return filepath.Join(h.cfg.DataDir, "blobs", id+ext)
 }
 
-func (h *Hub) removeBlobFiles(ids []string) {
+// reclaim deletes abandoned incomplete uploads: rows are flagged first, then
+// files removed, then rows deleted, so a crash or failed delete leaves a
+// flagged, still-counted row that the next reclaim finishes. Callers hold
+// blobMu so no chunk or finalisation runs concurrently.
+func (h *Hub) reclaim() error {
+	ids, err := h.store.markReclaiming(time.Now().Add(-h.cfg.UploadTTL))
+	if err != nil {
+		return err
+	}
+	done := 0
 	for _, id := range ids {
-		os.Remove(h.blobPath(id, false))
-		os.Remove(h.blobPath(id, true))
+		if err := removeIfExists(h.blobPath(id, false), h.blobPath(id, true)); err != nil {
+			h.cfg.Logf("reclaim %s: %v (will retry)", id, err)
+			continue
+		}
+		if err := h.store.deleteReclaimed(id); err != nil {
+			return err
+		}
+		done++
 	}
-	if len(ids) > 0 {
-		h.cfg.Logf("reclaimed %d abandoned upload(s)", len(ids))
+	if done > 0 {
+		h.cfg.Logf("reclaimed %d abandoned upload(s)", done)
 	}
+	return nil
+}
+
+func removeIfExists(paths ...string) error {
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // validHex reports whether s is n lowercase hex digits.
@@ -81,8 +106,17 @@ func (h *Hub) handleBlobReserve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "", "unknown or revoked recipient")
 		return
 	}
-	b, stale, err := h.store.reserveBlob(caller, req, h.cfg.StorageQuota, time.Now().Add(-h.cfg.UploadTTL))
+	h.blobMu.Lock()
+	defer h.blobMu.Unlock()
+	if err := h.reclaim(); err != nil {
+		writeError(w, http.StatusInternalServerError, "", "storage error")
+		return
+	}
+	b, err := h.store.reserveBlob(caller, req, h.cfg.StorageQuota)
 	switch {
+	case errors.Is(err, errBlobBusy):
+		writeError(w, http.StatusServiceUnavailable, "", err.Error())
+		return
 	case errors.Is(err, errQuota):
 		writeError(w, http.StatusRequestEntityTooLarge, "", err.Error())
 		return
@@ -93,7 +127,6 @@ func (h *Hub) handleBlobReserve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
-	h.removeBlobFiles(stale)
 	writeJSON(w, http.StatusOK, blobStatus(req.ID, b))
 }
 
@@ -144,6 +177,10 @@ func (h *Hub) handleBlobChunk(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = h.store.setReceived(id, offset+int64(len(body)))
 	}
+	if errors.Is(err, errNotFound) {
+		writeError(w, http.StatusConflict, "", "upload no longer active; fetch its status")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
@@ -180,17 +217,32 @@ func (h *Hub) handleBlobComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sum != b.SHA256 {
-		os.Remove(src)
-		h.store.setBlobState(id, protocol.BlobUploading)
+		err := removeIfExists(src)
+		if err == nil {
+			err = h.store.setBlobState(id, protocol.BlobUploading)
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "", "uploaded bytes do not match the reserved digest")
 		return
 	}
-	if err := os.Rename(src, h.blobPath(id, true)); err != nil && src != h.blobPath(id, true) {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
-		return
+	// Record "stored" only after the rename is durable; a failure here leaves
+	// the upload unstored and a repeated complete finishes it.
+	final := h.blobPath(id, true)
+	err = nil
+	if src != final {
+		err = os.Rename(src, final)
 	}
-	syncDir(filepath.Dir(src))
-	if err := h.store.setBlobState(id, protocol.BlobStored); err != nil {
+	if err == nil {
+		err = h.syncDir(filepath.Dir(final))
+	}
+	if err == nil {
+		err = h.store.setBlobState(id, protocol.BlobStored)
+	}
+	if err != nil {
+		h.cfg.Logf("finalise %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
@@ -232,19 +284,11 @@ func digestFile(path string) (int64, string, error) {
 	return n, hex.EncodeToString(h.Sum(nil)), err
 }
 
-// syncDir makes a rename durable where the platform allows it.
-func syncDir(dir string) {
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-}
-
 func (h *Hub) prepareBlobs() error {
 	if err := secfile.EnsureDir(filepath.Join(h.cfg.DataDir, "blobs")); err != nil {
 		return err
 	}
-	stale, err := h.store.reclaimStale(time.Now().Add(-h.cfg.UploadTTL))
-	h.removeBlobFiles(stale)
-	return err
+	h.blobMu.Lock()
+	defer h.blobMu.Unlock()
+	return h.reclaim()
 }

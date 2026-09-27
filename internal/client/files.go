@@ -108,7 +108,10 @@ func (a *Agent) spoolFile(path string, recipient age.Recipient) (envelope.Attach
 		Size:   pt.n,
 		SHA256: pt.hex(),
 	}
-	return att, os.Rename(tmp.Name(), a.spoolPath(att.Blob.ID))
+	if err := os.Rename(tmp.Name(), a.spoolPath(att.Blob.ID)); err != nil {
+		return att, err
+	}
+	return att, secfile.SyncDir(dir) // the outbox row will point at this file
 }
 
 // uploadAll sends every attachment of env the Hub does not hold yet.
@@ -144,8 +147,9 @@ func (a *Agent) upload(ctx context.Context, to string, b envelope.Blob) error {
 		return err
 	}
 	buf := make([]byte, protocol.ChunkSize)
-	resyncs := 0
+	stale := 0 // consecutive conflicts without progress
 	for st.State != protocol.BlobStored {
+		before := st.Received
 		if st.Received < st.Size {
 			n := min(int64(len(buf)), st.Size-st.Received)
 			if _, err := f.ReadAt(buf[:n], st.Received); err != nil {
@@ -157,17 +161,25 @@ func (a *Agent) upload(ctx context.Context, to string, b envelope.Blob) error {
 			err = a.hub.do(ctx, "POST", "/v1/blobs/"+b.ID+"/complete", nil, &st)
 		}
 		var he *HubError
-		if errors.As(err, &he) && he.Status == 409 && resyncs < 3 {
-			// Our view of the offset is stale (e.g. a lost response); ask.
-			resyncs++
+		if errors.As(err, &he) && he.Status == 409 {
+			// Our view of the offset is stale: a lost response, or another
+			// process (CLI and daemon) sending the same message. Ask.
+			if stale++; stale > maxStaleConflicts {
+				return errors.New("upload keeps conflicting with another sender of the same message; will retry later")
+			}
 			err = a.hub.do(ctx, "GET", "/v1/blobs/"+b.ID, nil, &st)
 		}
 		if err != nil {
 			return err
 		}
+		if st.Received > before || st.State == protocol.BlobStored {
+			stale = 0
+		}
 	}
 	return nil
 }
+
+const maxStaleConflicts = 3
 
 // releaseSpool deletes spooled ciphertext once the Hub holds the message.
 func (a *Agent) releaseSpool(env envelope.Envelope) {
@@ -184,9 +196,12 @@ var ErrExists = errors.New("target file already exists (use --force to replace i
 
 // Download saves every attachment of inbox message id into dir and returns
 // the saved paths. Each file is fetched resumably, checked against the
-// signed ciphertext digest, decrypted to a temporary file, checked against
-// the manifest, and only then given its final name. Existing files are kept
-// unless overwrite is set.
+// signed ciphertext digest, decrypted to a private temporary file, checked
+// against the manifest, and only then given its final name. Names are made
+// safe and unique within the message. A file already at its final path with
+// exactly the manifest's content counts as saved, so an interrupted
+// download can simply be repeated; any other existing file is kept unless
+// overwrite is set.
 func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([]string, error) {
 	files, err := a.store.attachments(id)
 	if err != nil {
@@ -196,29 +211,33 @@ func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([
 		return nil, fmt.Errorf("message %s has no attachments", id)
 	}
 	var saved []string
-	for _, f := range files {
-		path, err := a.downloadOne(ctx, id, f, dir, overwrite)
-		if err != nil {
+	for i, name := range finalNames(files) {
+		f, final := files[i], filepath.Join(dir, name)
+		if err := a.downloadOne(ctx, id, f, final, overwrite); err != nil {
 			return saved, fmt.Errorf("%s: %w", f.Name, err)
 		}
-		saved = append(saved, path)
+		saved = append(saved, final)
 	}
 	return saved, nil
 }
 
-func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, dir string, overwrite bool) (string, error) {
-	final := filepath.Join(dir, SafeName(f.Name))
-	if !overwrite {
-		if _, err := os.Lstat(final); err == nil {
-			return "", ErrExists
-		}
+func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final string, overwrite bool) error {
+	match, exists, err := matchesManifest(final, f)
+	if err != nil {
+		return err
+	}
+	if match {
+		return a.store.setSaved(msgID, f.BlobID, final)
+	}
+	if exists && !overwrite {
+		return ErrExists
 	}
 	if err := a.fetchCiphertext(ctx, f); err != nil {
-		return "", err
+		return err
 	}
-	tmp, err := a.decryptTo(dir, f)
+	tmp, err := a.decryptTo(filepath.Dir(final), f)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.Remove(tmp)
 	if overwrite {
@@ -226,11 +245,54 @@ func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, dir s
 	} else if err = os.Link(tmp, final); errors.Is(err, os.ErrExist) {
 		err = ErrExists
 	}
+	if err == nil {
+		err = secfile.SyncDir(filepath.Dir(final))
+	}
 	if err != nil {
-		return "", err
+		return err
 	}
 	os.Remove(a.downloadPath(f.BlobID))
-	return final, a.store.setSaved(msgID, f.BlobID, final)
+	return a.store.setSaved(msgID, f.BlobID, final)
+}
+
+// matchesManifest reports whether path is a regular file (not a link) with
+// exactly the attachment's size and digest, and whether anything is there.
+func matchesManifest(path string, f FileInfo) (match, exists bool, err error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() != f.Size {
+		return false, true, nil
+	}
+	size, sum, err := fileDigest(path)
+	return err == nil && size == f.Size && sum == f.SHA256, true, err
+}
+
+// finalNames gives each attachment a safe file name, adding " (2)", " (3)"
+// ... before the extension when names collide (case-insensitively, as on
+// Windows and macOS). The result depends only on the manifest order.
+func finalNames(files []FileInfo) []string {
+	used := map[string]bool{}
+	names := make([]string, len(files))
+	for i, f := range files {
+		base := SafeName(f.Name)
+		name := base
+		for k := 2; used[strings.ToLower(name)]; k++ {
+			ext := filepath.Ext(base)
+			stem := strings.TrimSuffix(base, ext)
+			if stem == "" {
+				stem, ext = base, ""
+			}
+			name = fmt.Sprintf("%s (%d)%s", stem, k, ext)
+		}
+		used[strings.ToLower(name)] = true
+		names[i] = name
+	}
+	return names
 }
 
 // fetchCiphertext completes the private ciphertext copy, resuming a partial
@@ -277,7 +339,10 @@ func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 	if size != f.ctSize || sum != f.ctSHA256 {
 		return a.discard(part, "downloaded attachment does not match the sender's signed digest")
 	}
-	return os.Rename(part, done)
+	if err := os.Rename(part, done); err != nil {
+		return err
+	}
+	return secfile.SyncDir(filepath.Dir(done))
 }
 
 func (a *Agent) discard(part, why string) error {
@@ -293,7 +358,7 @@ func (a *Agent) decryptTo(dir string, f FileInfo) (string, error) {
 		return "", err
 	}
 	defer src.Close()
-	tmp, err := os.CreateTemp(dir, ".agentnet-*.part")
+	tmp, err := secfile.CreateTemp(dir, ".agentnet-*.part") // owner-only before plaintext lands
 	if err != nil {
 		return "", err
 	}

@@ -66,6 +66,7 @@ var (
 	errBlobNotReady  = errors.New("attachment is not a completed upload for this recipient")
 	errQuota         = errors.New("Hub storage quota exceeded")
 	errBlobConflict  = errors.New("blob id already used for a different upload")
+	errBlobBusy      = errors.New("upload is being reclaimed; retry later")
 )
 
 type store struct{ db *sql.DB }
@@ -318,92 +319,101 @@ func (s *store) blob(id string) (blobRow, error) {
 }
 
 // reserveBlob creates an upload, or returns the existing one if the request
-// repeats it exactly. Uploads abandoned before staleBefore are reclaimed
-// first; their ids are returned so the caller can delete their files. The
-// quota check and insert share one write transaction, so concurrent
-// reservations cannot oversubscribe it.
-func (s *store) reserveBlob(owner string, r protocol.BlobReserve, quota int64, staleBefore time.Time) (b blobRow, stale []string, err error) {
+// repeats it exactly. The quota check and insert share one write
+// transaction, so concurrent reservations cannot oversubscribe it. Rows
+// being reclaimed still count toward the quota until their files are gone.
+func (s *store) reserveBlob(owner string, r protocol.BlobReserve, quota int64) (blobRow, error) {
+	var b blobRow
 	tx, err := s.db.Begin()
 	if err != nil {
-		return b, nil, err
+		return b, err
 	}
 	defer tx.Rollback()
-	if stale, err = reclaimStale(tx, staleBefore); err != nil {
-		return b, nil, err
-	}
 	var msg sql.NullString
 	err = tx.QueryRow(`SELECT owner, recipient, size, received, sha256, state, message_id FROM blobs WHERE id = ?`, r.ID).
 		Scan(&b.Owner, &b.Recipient, &b.Size, &b.Received, &b.SHA256, &b.State, &msg)
 	switch {
 	case err == nil:
 		if b.Owner != owner || b.Recipient != r.Recipient || b.Size != r.Size || b.SHA256 != r.SHA256 {
-			return b, nil, errBlobConflict
+			return b, errBlobConflict
+		}
+		if b.State == blobReclaiming {
+			return b, errBlobBusy
 		}
 		b.Attached = msg.Valid
-		return b, stale, tx.Commit()
+		return b, tx.Commit()
 	case !errors.Is(err, sql.ErrNoRows):
-		return b, nil, err
+		return b, err
 	}
 	var used int64
 	if err := tx.QueryRow(`SELECT coalesce(sum(size), 0) FROM blobs`).Scan(&used); err != nil {
-		return b, nil, err
+		return b, err
 	}
 	if used+r.Size > quota {
-		return b, nil, errQuota
+		return b, errQuota
 	}
 	if _, err := tx.Exec(`INSERT INTO blobs(id, owner, recipient, size, sha256, state, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, owner, r.Recipient, r.Size, r.SHA256, protocol.BlobUploading, time.Now().Unix()); err != nil {
-		return b, nil, err
+		return b, err
 	}
 	b = blobRow{Owner: owner, Recipient: r.Recipient, Size: r.Size, SHA256: r.SHA256, State: protocol.BlobUploading}
-	return b, stale, tx.Commit()
+	return b, tx.Commit()
 }
 
-// reclaimStale deletes incomplete uploads idle since before and returns their
-// ids. Completed uploads are never reclaimed here.
-func reclaimStale(tx *sql.Tx, before time.Time) ([]string, error) {
-	rows, err := tx.Query(`SELECT id FROM blobs WHERE state = ? AND updated_at < ?`, protocol.BlobUploading, before.Unix())
+// blobReclaiming marks an abandoned upload whose files are being deleted. The
+// row (and its quota share) stays until the files are really gone, so a crash
+// or failed delete is retried rather than leaking unaccounted disk.
+const blobReclaiming = "reclaiming"
+
+// markReclaiming flags incomplete uploads idle since before and returns
+// every row awaiting reclamation, including ones left by earlier attempts.
+// Completed uploads are never reclaimed.
+func (s *store) markReclaiming(before time.Time) ([]string, error) {
+	if _, err := s.db.Exec(`UPDATE blobs SET state = ? WHERE state = ? AND updated_at < ?`,
+		blobReclaiming, protocol.BlobUploading, before.Unix()); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT id FROM blobs WHERE state = ?`, blobReclaiming)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	_, err = tx.Exec(`DELETE FROM blobs WHERE state = ? AND updated_at < ?`, protocol.BlobUploading, before.Unix())
-	return ids, err
+	return ids, rows.Err()
 }
 
-func (s *store) reclaimStale(before time.Time) ([]string, error) {
-	tx, err := s.db.Begin()
+func (s *store) deleteReclaimed(id string) error {
+	_, err := s.db.Exec(`DELETE FROM blobs WHERE id = ? AND state = ?`, id, blobReclaiming)
+	return err
+}
+
+// mustAffectOne turns "no such row" into errNotFound.
+func mustAffectOne(res sql.Result, err error) error {
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer tx.Rollback()
-	ids, err := reclaimStale(tx, before)
-	if err != nil {
-		return nil, err
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return errNotFound
 	}
-	return ids, tx.Commit()
+	return nil
 }
 
 func (s *store) setReceived(id string, received int64) error {
-	_, err := s.db.Exec(`UPDATE blobs SET received = ?, updated_at = ? WHERE id = ? AND state = ?`,
-		received, time.Now().Unix(), id, protocol.BlobUploading)
-	return err
+	return mustAffectOne(s.db.Exec(`UPDATE blobs SET received = ?, updated_at = ? WHERE id = ? AND state = ?`,
+		received, time.Now().Unix(), id, protocol.BlobUploading))
 }
 
+// setBlobState moves an upload to stored (complete) or back to uploading
+// from zero (after a digest mismatch).
 func (s *store) setBlobState(id, state string) error {
-	_, err := s.db.Exec(`UPDATE blobs SET state = ?, received = CASE WHEN ? = ? THEN size ELSE 0 END, updated_at = ? WHERE id = ?`,
-		state, state, protocol.BlobStored, time.Now().Unix(), id)
-	return err
+	return mustAffectOne(s.db.Exec(`UPDATE blobs SET state = ?, received = CASE WHEN ? = ? THEN size ELSE 0 END, updated_at = ?
+		WHERE id = ? AND state IN (?, ?)`,
+		state, state, protocol.BlobStored, time.Now().Unix(), id, protocol.BlobUploading, protocol.BlobStored))
 }

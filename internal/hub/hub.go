@@ -52,7 +52,8 @@ type Hub struct {
 	certPEM   string
 	streams   streams
 	heartbeat time.Duration
-	blobMu    sync.Mutex // serialises blob file writes
+	blobMu    sync.Mutex // serialises blob file writes, finalisation and reclamation
+	syncDir   func(dir string) error
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -91,7 +92,7 @@ func Open(cfg Config) (*Hub, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Hub{cfg: cfg, store: st, heartbeat: protocol.HeartbeatInterval, done: make(chan struct{})}
+	h := &Hub{cfg: cfg, store: st, heartbeat: protocol.HeartbeatInterval, syncDir: secfile.SyncDir, done: make(chan struct{})}
 	if err := h.loadOrCreateCert(u.Hostname()); err != nil {
 		st.db.Close()
 		return nil, err

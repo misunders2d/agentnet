@@ -30,3 +30,16 @@ func TestWriteReadAndRejectLoosened(t *testing.T) {
 		t.Fatal("world-readable secret accepted")
 	}
 }
+
+func TestCreateTempIsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o755)
+	f, err := CreateTemp(dir, "x-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := check(f.Name()); err != nil {
+		t.Fatal(err)
+	}
+}

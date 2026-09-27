@@ -206,3 +206,103 @@ func TestAbandonedUploadsReclaimedCompletedKept(t *testing.T) {
 		t.Fatal(fmt.Errorf("completed blob file removed: %w", err))
 	}
 }
+
+func TestReclaimRetriesFailedDeleteAndKeepsAccounting(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 100)
+	stale := protocol.NewID()
+	alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: stale, Recipient: bob.addr, Size: 60, SHA256: digest(nil)})
+	alice.call(t, h, "PUT", "/v1/blobs/"+stale+"?offset=0", []byte("12345"))
+	h.store.db.Exec(`UPDATE blobs SET updated_at = ?`, time.Now().Add(-25*time.Hour).Unix())
+	// Make the partial file undeletable: a non-empty directory in its place.
+	part := h.blobPath(stale, false)
+	os.Remove(part)
+	os.MkdirAll(filepath.Join(part, "x"), 0o700)
+
+	reserve := func(size int64) int {
+		c, _ := alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: protocol.NewID(), Recipient: bob.addr, Size: size, SHA256: digest(nil)})
+		return c
+	}
+	if c := reserve(50); c != http.StatusRequestEntityTooLarge {
+		t.Fatalf("undeleted upload stopped counting toward quota: %d", c)
+	}
+	if b, err := h.store.blob(stale); err != nil || b.State != blobReclaiming {
+		t.Fatalf("stale row = %+v, %v", b, err)
+	}
+	os.RemoveAll(part)
+	if c := reserve(50); c != http.StatusOK {
+		t.Fatalf("reservation after cleanup: %d", c)
+	}
+	if _, err := h.store.blob(stale); err != errNotFound {
+		t.Fatalf("reclaimed row kept: %v", err)
+	}
+}
+
+func TestUpdatesOfMissingUploadsFail(t *testing.T) {
+	h, _, _, _ := blobHub(t, 1<<30)
+	if err := h.store.setReceived(protocol.NewID(), 1); err != errNotFound {
+		t.Fatalf("setReceived on missing row: %v", err)
+	}
+	if err := h.store.setBlobState(protocol.NewID(), protocol.BlobStored); err != errNotFound {
+		t.Fatalf("setBlobState on missing row: %v", err)
+	}
+}
+
+// Reclamation and chunk writes race only through blobMu; whatever order they
+// run in, a surviving row matches its file and a removed row leaves no file.
+func TestReclaimAndChunksStayConsistent(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	data := bytes.Repeat([]byte("z"), 4000)
+	for round := 0; round < 20; round++ {
+		id := protocol.NewID()
+		alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: id, Recipient: bob.addr, Size: 4000, SHA256: digest(data)})
+		alice.call(t, h, "PUT", "/v1/blobs/"+id+"?offset=0", data[:1000])
+		h.store.db.Exec(`UPDATE blobs SET updated_at = ? WHERE id = ?`, time.Now().Add(-25*time.Hour).Unix(), id)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			alice.call(t, h, "PUT", "/v1/blobs/"+id+"?offset=1000", data[1000:2000])
+		}()
+		go func() {
+			defer wg.Done()
+			alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: protocol.NewID(), Recipient: bob.addr, Size: 1, SHA256: digest(nil)})
+		}()
+		wg.Wait()
+		info, statErr := os.Stat(h.blobPath(id, false))
+		b, err := h.store.blob(id)
+		switch {
+		case err == errNotFound:
+			if statErr == nil {
+				t.Fatalf("round %d: reclaimed upload left its file", round)
+			}
+		case err != nil:
+			t.Fatal(err)
+		default:
+			if statErr != nil || info.Size() != b.Received {
+				t.Fatalf("round %d: row received %d, file %v %v", round, b.Received, info, statErr)
+			}
+		}
+	}
+}
+
+func TestFinaliseWaitsForDurableRename(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	data := []byte("ciphertext")
+	id := protocol.NewID()
+	alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: id, Recipient: bob.addr, Size: int64(len(data)), SHA256: digest(data)})
+	alice.call(t, h, "PUT", "/v1/blobs/"+id+"?offset=0", data)
+	h.syncDir = func(string) error { return fmt.Errorf("injected fsync failure") }
+	if c, _ := alice.call(t, h, "POST", "/v1/blobs/"+id+"/complete", nil); c != http.StatusInternalServerError {
+		t.Fatalf("complete with failed fsync: %d", c)
+	}
+	if b, _ := h.store.blob(id); b.State != protocol.BlobUploading {
+		t.Fatalf("stored claimed before durable rename: %s", b.State)
+	}
+	h.syncDir = func(string) error { return nil }
+	if c, b := alice.call(t, h, "POST", "/v1/blobs/"+id+"/complete", nil); c != 200 {
+		t.Fatalf("repeated complete: %d %s", c, b)
+	}
+	if b, _ := h.store.blob(id); b.State != protocol.BlobStored {
+		t.Fatalf("state after recovery: %s", b.State)
+	}
+}
