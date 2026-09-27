@@ -25,6 +25,9 @@ func TestHooksInstallMerge(t *testing.T) {
 }`
 	os.WriteFile(file, []byte(orig), 0o640)
 	home := t.TempDir()
+	if refusedOnWindows(t, home, file, orig) {
+		return
+	}
 	if err := runHooks(home, []string{"install", "claude", "--file", file}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +102,15 @@ func TestHooksRefuseBadConfigAndUnsupportedHarness(t *testing.T) {
 	}
 	// A new file is created owner-only.
 	fresh := filepath.Join(t.TempDir(), "sub", "hooks.json")
+	if runtime.GOOS == "windows" {
+		if err := runHooks(t.TempDir(), []string{"install", "codex", "--file", fresh}); err == nil || !strings.Contains(err.Error(), "not supported on Windows") {
+			t.Fatalf("Windows install: %v", err)
+		}
+		if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+			t.Fatalf("Windows install created %s", fresh)
+		}
+		return
+	}
 	if err := runHooks(t.TempDir(), []string{"install", "codex", "--file", fresh}); err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +146,9 @@ func TestHooksOwnershipAndBackups(t *testing.T) {
 ]}]}}`
 	os.WriteFile(file, []byte(orig), 0o600)
 	home := t.TempDir()
+	if refusedOnWindows(t, home, file, orig) {
+		return
+	}
 	if err := runHooks(home, []string{"install", "claude", "--file", file}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +211,55 @@ func TestHookCommandQuoting(t *testing.T) {
 	}
 	if _, err := hookCommand(filepath.Join(t.TempDir(), "it's"), "claude"); err == nil {
 		t.Fatal("single quote accepted")
+	}
+}
+
+// refusedOnWindows checks that installing on Windows is refused with the
+// file left as it was, and reports whether this is Windows.
+func refusedOnWindows(t *testing.T, home, file, orig string) bool {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if err := runHooks(home, []string{"install", "claude", "--file", file}); err == nil || !strings.Contains(err.Error(), "not supported on Windows") {
+		t.Fatalf("Windows install: %v", err)
+	}
+	if b, _ := os.ReadFile(file); string(b) != orig {
+		t.Fatal("Windows install changed the file")
+	}
+	return true
+}
+
+// The merge itself is the same on every platform: adding is idempotent,
+// removing restores the rest, and only the exact AgentNet shape is removed.
+func TestMergeHooksPortable(t *testing.T) {
+	const cmd = "'/usr/local/bin/agentnet' --home '/h' hook claude"
+	parse := func(s string) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(s), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	orig := `{"x": 1, "hooks": {"Stop": [{"hooks": [
+		{"type": "command", "command": "'/opt/agentnet/guard.sh' --home '/h' hook claude", "timeout": 10}]}]}}`
+	once, err := mergeHooks(parse(orig), "claude", cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(once)
+	twice, _ := mergeHooks(parse(string(a)), "claude", cmd)
+	b, _ := json.Marshal(twice)
+	if string(a) != string(b) || strings.Count(string(a), "hook claude") != 5 {
+		t.Fatalf("not idempotent:\n%s\n%s", a, b)
+	}
+	removed, _ := mergeHooks(parse(string(b)), "claude", "")
+	r, _ := json.Marshal(removed)
+	want, _ := json.Marshal(parse(orig))
+	if string(r) != string(want) {
+		t.Fatalf("remove:\n%s\nwant\n%s", r, want)
+	}
+	if _, err := mergeHooks(parse(`{"hooks": {"Stop": "x"}}`), "claude", cmd); err == nil {
+		t.Fatal("malformed known event accepted")
 	}
 }
