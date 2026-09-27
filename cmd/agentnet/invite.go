@@ -68,7 +68,7 @@ func releaseInstall(base string) (posix, windows []string) {
 		`$ErrorActionPreference = "Stop"; $a = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }; $f = "agentnet-windows-$a.exe"`,
 		`$d = Join-Path $env:TEMP ("agentnet-" + [guid]::NewGuid()); New-Item -ItemType Directory $d | Out-Null`,
 		`Invoke-WebRequest ` + base + `/$f -OutFile "$d\$f"; Invoke-WebRequest ` + base + `/SHA256SUMS -OutFile "$d\SHA256SUMS"`,
-		`$want = ((Get-Content "$d\SHA256SUMS" | Where-Object { $_ -match " $f$" }) -split "\s+")[0]; $got = (Get-FileHash "$d\$f" -Algorithm SHA256).Hash.ToLower()`,
+		`$want = ((Get-Content "$d\SHA256SUMS" | Where-Object { $_ -match " $f$" }) -split "\s+")[0]; $got = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes("$d\$f"))) -replace "-", "").ToLower()`,
 		`if (-not $want -or $want -ne $got) { throw "checksum mismatch: agentnet was not installed" }`,
 		`$bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null; Copy-Item "$d\$f" "$bin\agentnet.exe"`,
 	}

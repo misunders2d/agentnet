@@ -31,7 +31,7 @@ func TestInvitePacketInstallsInvitersRelease(t *testing.T) {
 		"install release v0.2.0",
 		"https://github.com/misunders2d/agentnet/releases/download/v0.2.0/$f",
 		"https://github.com/misunders2d/agentnet/releases/download/v0.2.0/SHA256SUMS",
-		"sha256sum -c -", "Get-FileHash", "checksum mismatch",
+		"sha256sum -c -", "[Security.Cryptography.SHA256]::Create()", "checksum mismatch",
 		"agentnet version must print agentnet v0.2.0",
 		"git clone --branch v0.2.0",
 	} {
