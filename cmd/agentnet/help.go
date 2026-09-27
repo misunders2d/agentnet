@@ -307,6 +307,16 @@ sub-agents, memories, hooks and skill search off; it may still read files.
 Tasks run with the harness's normal permissions. Antigravity can read and
 reply by hand but is not an automatic responder.
 
+With claude and codex, the worker keeps a background session per
+conversation: the next question in the same conversation (same agent), or
+the next accepted task, resumes the session the previous one used, so the
+harness keeps its own context. It only resumes when the harness, mode
+(question or task), directory and flags are the same and the previous job
+there ended cleanly; otherwise it starts a new session. These are never
+sessions you opened. Their saved context is the harness's own data on disk
+(~/.claude/projects, ~/.codex/sessions), kept by the harness. Pi runs every
+job fresh. Follow-ups stay one-shot summaries.
+
 If the responder's first output line is exactly "AGENTNET: NEEDS-HUMAN",
 nothing is sent: the item becomes needs_human with the rest as the reason
 (see agentnet help inbox).

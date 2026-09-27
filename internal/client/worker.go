@@ -79,11 +79,23 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return
 	}
 	h := Harnesses[r.Harness]
-	args := h.question
-	if j.Kind == envelope.KindTask {
-		args = h.task
+	plan, err := a.planSession(j, r, h)
+	if err != nil {
+		a.store.finishJob(j.ID, stateJobFailed, "background session: "+err.Error())
+		return
 	}
-	args = append([]string(nil), args...)
+	if plan.note != "" {
+		a.Logf("%s %s: new session: %s", j.Kind, j.ID, plan.note)
+		prompt = "(New background session: " + plan.note + ".)\n\n" + prompt
+	}
+	if plan.ref != nil && plan.ref.ID != "" {
+		// Known before the run (claude, or any resume): record it first.
+		if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
+			a.store.finishJob(j.ID, stateJobFailed, "background session not recorded, so nothing was run: "+err.Error())
+			return
+		}
+	}
+	args := plan.args
 	runCtx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
@@ -121,6 +133,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		defer os.Remove(outPath)
 		args = append(args, h.out, outPath)
 	}
+	args = append(args, plan.tail...)
 	if !h.stdin {
 		args = append(args, "--", prompt)
 	}
@@ -139,6 +152,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	runErr := cmd.Run()
 	cancel()
 	<-watchDone
+	if plan.ref != nil && plan.ref.ID == "" && ctx.Err() == nil {
+		// Codex names a new session only once it has run; record it before
+		// the result is used.
+		if plan.ref.ID = codexThreadID(stdout.String()); plan.ref.ID == "" {
+			a.Logf("%s %s: %s reported no session id; the next job of this conversation starts a new session", j.Kind, j.ID, r.Harness)
+		} else if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
+			a.store.finishJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err))
+			return
+		}
+	}
 
 	if outPath != "" {
 		stdout.Reset()
@@ -160,6 +183,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	case runErr != nil:
 		status = envelope.StatusFailed
 		body = strings.TrimSpace(fmt.Sprintf("%s failed: %v\n%s", r.Harness, runErr, stderr.String()))
+		if plan.resume {
+			body = "resuming the background session " + plan.ref.ID + " failed; not retried automatically. " + body
+		}
 	case body == "":
 		status, body = envelope.StatusFailed, r.Harness+" produced no answer"
 	}

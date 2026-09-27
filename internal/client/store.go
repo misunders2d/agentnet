@@ -122,6 +122,8 @@ UPDATE config SET v = (SELECT max(arrival) FROM inbox)
   WHERE k = 'arrival' AND (SELECT max(arrival) FROM inbox) > CAST(v AS INTEGER);
 CREATE INDEX inbox_links ON inbox(sender, id, reply_to, received_at);
 CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at);
+`, `
+ALTER TABLE inbox ADD COLUMN session_ref TEXT;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

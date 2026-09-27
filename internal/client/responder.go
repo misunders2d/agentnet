@@ -26,12 +26,13 @@ type Responder struct {
 // limits says precisely what it does instead.
 type harness struct {
 	bin      string
-	question []string // no tools, no MCP servers, no persisted session
-	task     []string // the harness's normal permissions; nothing bypassed
-	stdin    bool     // prompt on stdin; otherwise as the last argument
-	out      string   // flag naming a file for the final answer; otherwise stdout
-	limits   string   // how question mode falls short of "no tools", if it does
-	tested   string   // what was run live with the real harness (docs/revival/M4.md); empty: nothing
+	question []string     // no tools, no MCP servers, no persisted session
+	task     []string     // the harness's normal permissions; nothing bypassed
+	stdin    bool         // prompt on stdin; otherwise as the last argument
+	out      string       // flag naming a file for the final answer; otherwise stdout
+	limits   string       // how question mode falls short of "no tools", if it does
+	tested   string       // what was run live with the real harness (docs/revival/M4.md); empty: nothing
+	sessions sessionStyle // how the worker keeps a background session per conversation (session.go)
 }
 
 // Harnesses lists the supported automatic responders. Flags were checked
@@ -42,9 +43,10 @@ var Harnesses = map[string]harness{
 		bin: "claude",
 		question: []string{"-p", "--output-format", "text", "--no-session-persistence",
 			"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"},
-		task:   []string{"-p", "--output-format", "text", "--no-session-persistence"},
-		stdin:  true,
-		tested: "questions and tasks tested live",
+		task:     []string{"-p", "--output-format", "text", "--no-session-persistence"},
+		stdin:    true,
+		tested:   "questions and tasks tested live",
+		sessions: claudeSessions,
 	},
 	"codex": {
 		bin: "codex",
@@ -53,10 +55,11 @@ var Harnesses = map[string]harness{
 			"--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "browser_use",
 			"--disable", "computer_use", "--disable", "image_generation", "--disable", "multi_agent",
 			"--disable", "memories", "--disable", "hooks", "--disable", "skill_search"},
-		task:   []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
-		stdin:  true,
-		out:    "-o",
-		tested: "questions, follow-ups and tasks tested live",
+		task:     []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
+		stdin:    true,
+		out:      "-o",
+		tested:   "questions, follow-ups and tasks tested live",
+		sessions: codexSessions,
 		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +
 			"web search, shell, apps, plugins, browser, computer use, image generation, sub-agents, memories, hooks and skill search off; " +
 			"Codex has no switch that removes every built-in tool, so it may still read files",

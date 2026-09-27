@@ -380,7 +380,7 @@ func TestCodexPresetInPlainDirectory(t *testing.T) {
 		t.Fatalf("codex runs:\n%s", data)
 	}
 	for _, l := range lines {
-		if !strings.HasPrefix(l, "exec --ephemeral") || !strings.Contains(l, "--skip-git-repo-check") || !strings.Contains(l, " -o "+w.bobHome) {
+		if !strings.HasPrefix(l, "exec ") || strings.Contains(l, "--ephemeral") || !strings.Contains(l, "--json") || !strings.Contains(l, "--skip-git-repo-check") || !strings.Contains(l, " -o "+w.bobHome) {
 			t.Fatalf("codex argv %q", l)
 		}
 	}
