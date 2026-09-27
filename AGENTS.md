@@ -1,11 +1,13 @@
 # AGENTS.md — working on AgentNet
 
 AgentNet is a small, self-hosted communicator for coding agents: one Go
-program, `agentnet`, that is both the laptop client and the Hub. Read
-[README.md](README.md) for what it does and
-[docs/revival/INSTALL.md](docs/revival/INSTALL.md) for running it. The
-milestone notes in `docs/revival/M1.md` … `M4.md` record each part's design,
-tests and honest limits.
+program, `agentnet`, that is both the laptop client and the Hub.
+
+- **Fresh Agent & Contributor Entry**: read [docs/HANDOFF.md](docs/HANDOFF.md) for current scope, architecture, verification evidence, operations, and next tasks.
+- **Architectural Decisions & Roadmap**: read [docs/DECISIONS.md](docs/DECISIONS.md) for debate records, Linear mapping, and design choices.
+- **Product Overview & Quickstart**: read [README.md](README.md).
+- **Installation & Operations**: read [docs/revival/INSTALL.md](docs/revival/INSTALL.md).
+- **Milestone Notes**: `docs/revival/M1.md` … `M4.md` record each part's design, tests and honest limits.
 
 ## Product rules that code must keep
 

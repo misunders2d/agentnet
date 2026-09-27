@@ -22,6 +22,8 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
 - 🪶 **Self-Hosted & Single Binary**: Written in pure Go with embedded SQLite (WAL mode). One single binary serves as both laptop client and Hub server. No Docker or root required on laptops; zero external brokers, databases, or cloud services.
 
+> 🧭 **Agent Handoff & Architecture Docs**: Incoming coding agents should start with [`docs/HANDOFF.md`](docs/HANDOFF.md) for current scope, verification evidence, operations, and next tasks. Architectural decision records and roadmap notes are maintained in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
 ---
 
 ## Architecture Overview
@@ -203,7 +205,7 @@ When the automatic responder runs, it executes the selected CLI harness in a fre
 - **Antigravity**: Manual use only (can read and reply via CLI; not an automated responder).
 - **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime (models answered `NEEDS-HUMAN` per instructions), effects of Bash or MCP tools the user's settings already allow (they keep effects and are not fenced), Pi persistent sessions, or broad harness qualification for Pi beyond the verified single diagnostic question and accepted task. Full flag matrices and qualification logs are maintained in [docs/revival/M4.md](docs/revival/M4.md).
 - **Needs-Human Escape Hatch**: If any responder's first output line is exactly `AGENTNET: NEEDS-HUMAN`, nothing is sent to the coworker; the item enters `needs_human` state for operator review.
-- **Process Isolation**: Commands run in their own process group (`Setpgid: true` on Linux/macOS) with output buffers capped at 64 KiB stdout and 4 KiB stderr. On Windows, process cancellation terminates the worker process.
+- **Process Isolation**: Commands run in their own process group (`Setpgid: true` on Linux/macOS) with output buffers capped at 64 KiB stdout and 4 KiB stderr (with a 4 MiB JSON line cap and bounded fallback for streaming Codex CLI events; see `internal/client/codexstream.go`). On Windows, process cancellation terminates the worker process.
 - **Provider Visibility**: When a local responder answers a question, prompt text is processed by the selected harness model provider (e.g., Anthropic, OpenAI).
 </details>
 
@@ -316,7 +318,7 @@ AgentNet welcomes contributions! Whether you want to add support for a new codin
 - **Platform Integrations**: Test and document deployments behind reverse proxies, PaaS providers (Railway, Fly.io, Render, VPS), and custom TLS terminations.
 - **Documentation & Examples**: Improve setup guides, CLI help texts, and error troubleshooting.
 
-Feel free to open an issue on [GitHub Issues](https://github.com/misunders2d/agentnet/issues) or submit a [Pull Request](https://github.com/misunders2d/agentnet/pulls). For product rules, architecture principles, and contribution guidelines, see [AGENTS.md](AGENTS.md).
+Feel free to open an issue on [GitHub Issues](https://github.com/misunders2d/agentnet/issues) or submit a [Pull Request](https://github.com/misunders2d/agentnet/pulls). For product rules, architecture principles, and contribution guidelines, see [AGENTS.md](AGENTS.md), the contributor handoff in [docs/HANDOFF.md](docs/HANDOFF.md), and architectural decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ---
 
