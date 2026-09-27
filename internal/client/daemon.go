@@ -322,7 +322,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 			os.Remove(f) // answers of jobs a previous daemon left running
 		}
 	}
-	a.notifyTried, a.releaseTried = nil, "" // a new run tries failed notices once more
+	a.notifyTried, a.reviewTried, a.releaseTried = nil, nil, "" // a new run tries failed notices once more
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {

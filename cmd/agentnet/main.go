@@ -106,6 +106,33 @@ func run(args []string) error {
 			fmt.Printf("%s %s\n", cmd, rest[0])
 		}
 		return err
+	case "review-to":
+		switch {
+		case len(rest) == 0:
+			to, err := a.ReviewTo()
+			if err != nil {
+				return err
+			}
+			if to == "" {
+				fmt.Println("off: waiting items are shown only here (desktop notification, agentnet inbox --review)")
+			} else {
+				fmt.Printf("review notices go to %s\n", to)
+			}
+			return nil
+		case len(rest) == 1 && rest[0] == "--off":
+			if err := a.ClearReviewTo(); err != nil {
+				return err
+			}
+			fmt.Println("review notices off")
+			return nil
+		case len(rest) == 1 && !strings.HasPrefix(rest[0], "-"):
+			if err := a.SetReviewTo(rest[0]); err != nil {
+				return err
+			}
+			fmt.Printf("review notices go to %s\n", rest[0])
+			return nil
+		}
+		return errors.New("usage: review-to [ADDRESS | --off]")
 	case "decline":
 		if len(rest) < 1 || len(rest) > 2 {
 			return errors.New("usage: decline ID [REASON]")

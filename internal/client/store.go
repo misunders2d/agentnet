@@ -126,6 +126,8 @@ CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at);
 ALTER TABLE inbox ADD COLUMN session_ref TEXT;
 `, `
 ALTER TABLE attention ADD COLUMN release_seen TEXT;
+`, `
+ALTER TABLE inbox ADD COLUMN review_sent INTEGER NOT NULL DEFAULT 0;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -366,8 +368,19 @@ func initialState(db querier, in envelope.Inner) (string, error) {
 		return stateHeld, nil
 	case envelope.KindTask:
 		return stateAwaiting, nil
+	case envelope.KindMessage:
+		if isReviewNotice(in) {
+			return stateNeedHuman, nil
+		}
 	}
 	return "", nil
+}
+
+// isReviewNotice reports whether in is exactly a review notice (see
+// envelope.StatusReviewNotice). Its body is never parsed.
+func isReviewNotice(in envelope.Inner) bool {
+	return in.Kind == envelope.KindMessage && in.Status == envelope.StatusReviewNotice &&
+		in.ReplyTo == "" && len(in.Attachments) == 0
 }
 
 // bindFollowUp makes a reply to a request sent with a follow-up eligible for
@@ -412,6 +425,11 @@ func insertInner(tx *sql.Tx, in envelope.Inner) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already stored
+	}
+	if state == stateNeedHuman { // a review notice: say locally what it is
+		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, reviewNoticeDetail(in.From), in.ID); err != nil {
+			return err
+		}
 	}
 	// The inbox_arrival trigger numbers the row (see schema step 8), for
 	// this and any older writer alike.
@@ -702,7 +720,7 @@ func (s *store) jobState(id string) (string, error) {
 // finishJob records a job's end without a reply. A new needs_human
 // outcome is notified afresh.
 func (s *store) finishJob(id, state, detail string) error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0 WHERE id = ? AND state IN (?, ?)`,
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
 		state, detail, id, stateRunning, stateCancelReq)
 	return err
 }

@@ -105,6 +105,13 @@ const (
 	StatusCancelled   = "cancelled"
 	StatusDeclined    = "declined"
 	StatusInterrupted = "interrupted"
+
+	// StatusReviewNotice on a plain message with no reply_to and no files
+	// says only that items wait for a person on the sender's machine. It is
+	// content-free and grants nothing: the recipient files it for its own
+	// person's attention and never runs, accepts or forwards it. Clients
+	// before it store such a message as an ordinary one.
+	StatusReviewNotice = "review_notice"
 )
 
 // ErrNotForMe means the envelope is addressed to another agent.

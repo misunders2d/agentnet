@@ -50,6 +50,7 @@ type Agent struct {
 
 	notify       func(title, body string) error // desktop notification
 	notifyTried  map[string]bool                // review items a notification was attempted for, this run
+	reviewTried  map[string]bool                // review items a review notice was attempted for, this run
 	releaseTried string                         // release a notification was attempted for, this run
 }
 

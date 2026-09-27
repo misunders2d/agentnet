@@ -41,7 +41,7 @@ func needsHuman(out string) (why string, ok bool) {
 
 func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 	for {
-		for a.notifyReview(); a.runNext(ctx, wake); a.notifyReview() {
+		for a.reviewAttention(ctx); a.runNext(ctx, wake); a.reviewAttention(ctx) {
 		}
 		a.notifyRelease()
 		select {
@@ -110,7 +110,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			case <-runCtx.Done():
 				return
 			case <-wake:
-				a.notifyReview() // new items may arrive while a job runs
+				a.reviewAttention(ctx) // new items may arrive while a job runs
 				a.notifyRelease()
 				if s, _ := a.store.jobState(j.ID); s == stateCancelReq {
 					cancelled.Store(true)
@@ -257,6 +257,14 @@ const BackgroundEnv = "AGENTNET_BACKGROUND"
 
 // outFilePrefix names the private files harnesses write answers to.
 const outFilePrefix = "answer-"
+
+// reviewAttention tells the person about items that entered review: by a
+// desktop notification and, if configured, a review notice to their agent.
+// Each has its own bookkeeping, so neither suppresses the other.
+func (a *Agent) reviewAttention(ctx context.Context) {
+	a.notifyReview()
+	a.sendReviewNotice(ctx)
+}
 
 // notifyReview shows one desktop notification, with a count and no
 // content, when items entered human review since the last one. Items are

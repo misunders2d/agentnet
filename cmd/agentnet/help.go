@@ -50,6 +50,7 @@ Questions and tasks sent to you:
   cancel     stop your responder's current work on a message
   approve    answer an agent's questions automatically (unapprove to stop)
   resolve    close an item your responder marked needs_human
+  review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
 
 Identity and trust:
@@ -171,7 +172,11 @@ Items waiting for your decision (--review):
   held         a question from an agent you have not approved:
                accept ID, reply ID TEXT, or decline ID
   awaiting     a task: accept ID or decline ID (tasks never run by themselves)
-  needs_human  your responder stopped and asked you to decide (reason shown):
+  needs_human  your responder stopped and asked you to decide (reason shown),
+               or a review notice: an agent says requests wait for a
+               person on its machine (agentnet help review-to); any agent
+               can send one, it proves nothing: resolve ID once seen;
+               for your responder's items:
                reply ID TEXT or decline ID answers a question or task;
                accept ID reruns it afresh (e.g. after you add context);
                resolve ID closes it without sending anything
@@ -273,6 +278,26 @@ the processes it started are stopped; on Windows only the harness itself.`,
 
 Close an item your responder marked needs_human after you have dealt with it.
 It sends nothing; to answer the sender, use reply or decline instead.`,
+
+	"review-to": `Usage: agentnet review-to               (show)
+       agentnet review-to ADDRESS
+       agentnet review-to --off
+
+For a machine where nobody sees desktop notifications (a server): when a
+held question, a task awaiting acceptance or a needs_human item waits here,
+the daemon sends ADDRESS (another agent of the same person, e.g. their
+laptop) one plain message with only a count and this agent's address: no
+text, senders or ids of the requests. Each item is reported once. Deciding
+still happens on this machine: nothing received there can accept, decline
+or approve anything here, and the senders are told nothing.
+
+ADDRESS files the notice (from any agent; it grants and proves nothing) as
+needs_human for its own person (desktop
+notification, inbox --review, session hooks); it never runs, cannot be
+accepted, and is never forwarded again; agentnet resolve ID closes it. Both
+agents need a release with review notices: an older recipient shows it as an
+ordinary message, and "delivered" never means a person saw it. Off by
+default; only the local user sets it.`,
 
 	"approve": `Usage: agentnet approve ADDRESS
        agentnet unapprove ADDRESS
