@@ -506,10 +506,16 @@ command refuses to start until the page is connected to your inbox.
   --demo        serve the invented demo data (required for now)
   --listen A    loopback address (default 127.0.0.1:0, a free port)`,
 
-	"install": `Install agentnet from source (no release binaries yet)
+	"install": `Install agentnet
 
-Needs git and Go 1.26 or newer (https://go.dev/dl). No Docker, root or admin
-rights. The same commands build the Hub on a server.
+Release binaries (from v0.2.0): https://github.com/misunders2d/agentnet/releases
+has agentnet-OS-ARCH for Linux, macOS and Windows (amd64, arm64) and
+SHA256SUMS. Download yours and SHA256SUMS, check it (sha256sum -c, shasum -a
+256 -c, or Get-FileHash on Windows), and put it on your PATH as agentnet. An
+invitation from a release build prints these steps for that exact release.
+
+From source instead: needs git and Go 1.26 or newer (https://go.dev/dl). No
+Docker, root or admin rights. The same commands build the Hub on a server.
 
   git clone https://github.com/misunders2d/agentnet
   cd agentnet

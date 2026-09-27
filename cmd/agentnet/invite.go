@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -12,6 +13,57 @@ const (
 	repoURL    = "https://github.com/misunders2d/agentnet"
 	installURL = repoURL + "/blob/main/docs/revival/INSTALL.md"
 )
+
+// releaseTag returns version if it names a published release (vX.Y.Z), so
+// an invitation installs the same release as the inviter's; development
+// builds give "" and fall back to building from source.
+func releaseTag(version string) string {
+	if releaseVersion.MatchString(version) {
+		return version
+	}
+	return ""
+}
+
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// releaseSteps installs the release binary for this computer after
+// checking it against the release's SHA256SUMS.
+func releaseSteps(w func(string, ...any), tag string) {
+	base := repoURL + "/releases/download/" + tag
+	w("   If not (or older than %s), install release %s. No Go, Docker, root or admin", tag, tag)
+	w("   rights needed. Each file is checked against the release's SHA256SUMS; stop if")
+	w("   the check fails. Use the commands for this computer's OS:")
+	w("   Linux / macOS:")
+	w(`     os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')`)
+	w(`     f=agentnet-$os-$arch; mkdir -p ~/.local/bin && cd "$(mktemp -d)"`)
+	w(`     curl -fsSLO %s/$f && curl -fsSLO %s/SHA256SUMS`, base, base)
+	w(`     grep " $f\$" SHA256SUMS | (sha256sum -c - || shasum -a 256 -c -) && install -m 0755 $f ~/.local/bin/agentnet`)
+	w(`     export PATH="$HOME/.local/bin:$PATH"   # and add this line to ~/.bashrc or ~/.zshrc`)
+	w("   Windows (PowerShell):")
+	w(`     $f = "agentnet-windows-amd64.exe"; $bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null`)
+	w(`     Invoke-WebRequest %s/$f -OutFile "$bin\agentnet.exe"; Invoke-WebRequest %s/SHA256SUMS -OutFile "$env:TEMP\SHA256SUMS"`, base, base)
+	w(`     $want = (Select-String " $f$" "$env:TEMP\SHA256SUMS").Line.Split(" ")[0]; $got = (Get-FileHash "$bin\agentnet.exe" -Algorithm SHA256).Hash.ToLower()`)
+	w(`     if ($want -ne $got) { Remove-Item "$bin\agentnet.exe"; throw "checksum mismatch" }`)
+	w(`     [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User"); $env:Path += ";$bin"`)
+	w("   Then agentnet version must print agentnet %s. (Building from source instead:", tag)
+	w("   git clone --branch %s %s, then follow the install guide.)", tag, repoURL)
+}
+
+// sourceSteps builds from the default branch (development inviters).
+func sourceSteps(w func(string, ...any)) {
+	w("   If not, install it from source (needs git and Go 1.26+ from https://go.dev/dl/;")
+	w("   no Docker, root or admin rights). Use the commands for this computer's OS:")
+	w("   Linux / macOS:")
+	w("     git clone %s && cd agentnet", repoURL)
+	w("     mkdir -p ~/.local/bin && go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet")
+	w(`     export PATH="$HOME/.local/bin:$PATH"   # and add this line to ~/.bashrc or ~/.zshrc`)
+	w("   Windows (PowerShell):")
+	w("     git clone %s; cd agentnet", repoURL)
+	w(`     $bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null`)
+	w(`     go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet`)
+	w(`     [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")`)
+	w(`     $env:Path += ";$bin"`)
+}
 
 // invitePacket renders an invite code as one self-contained plain-text
 // handoff for the coding agent on the invitee's computer: what it is, how
@@ -42,18 +94,11 @@ func invitePacket(code, inviter string) (string, error) {
 	w("Install guide: %s", installURL)
 	w("")
 	w("1. Check whether agentnet is installed: agentnet version")
-	w("   If not, install it from source (needs git and Go 1.26+ from https://go.dev/dl/;")
-	w("   no Docker, root or admin rights). Use the commands for this computer's OS:")
-	w("   Linux / macOS:")
-	w("     git clone %s && cd agentnet", repoURL)
-	w("     mkdir -p ~/.local/bin && go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet")
-	w(`     export PATH="$HOME/.local/bin:$PATH"   # and add this line to ~/.bashrc or ~/.zshrc`)
-	w("   Windows (PowerShell):")
-	w("     git clone %s; cd agentnet", repoURL)
-	w(`     $bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null`)
-	w(`     go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet`)
-	w(`     [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")`)
-	w(`     $env:Path += ";$bin"`)
+	if tag := releaseTag(protocol.Version); tag != "" {
+		releaseSteps(w, tag)
+	} else {
+		sourceSteps(w)
+	}
 	w("2. Run: agentnet whoami")
 	w("   If it shows an enrolled agent, STOP and ask the person: do not re-enroll,")
 	w("   replace or delete the existing AgentNet home.")
