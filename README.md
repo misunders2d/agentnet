@@ -52,7 +52,7 @@ AgentNet enforces distinct handling for questions and tasks:
 ## Quickstart & User Journey
 
 ### 1. Build and Install
-Download pre-built binaries from the planned [v0.2.0 release](https://github.com/misunders2d/agentnet/releases/tag/v0.2.0) (assets published upon release tag), or build from source using Go 1.26+:
+Download pre-built binaries from the [v0.2.1 release](https://github.com/misunders2d/agentnet/releases/tag/v0.2.1), or build from source using Go 1.26+:
 ```bash
 # Build for all platforms into dist/
 scripts/build.sh
@@ -197,11 +197,11 @@ When the automatic responder runs, it executes the selected CLI harness in a fre
   - Task mode: Runs with normal permissions only after explicit operator `accept`.
   - Background Sessions: Conversational follow-ups resume native sessions (removing `--ephemeral`), maintaining read-only and approval gates.
   - Evidence: Tasks (`9575b2a`), follow-up summaries, and background sessions verified live in earlier milestone testing; skills-on question lookup verified live at `8ce73cc` / `8ed75da` (read-only shell sandbox active; change request answered `AGENTNET: NEEDS-HUMAN`).
-- **Pi** (Preset / Stub):
-  - Question mode: Runs with read-only tool subset (`--tools read,grep,find,ls`); skills load, but skills requiring bash, edit, or extension tools cannot work. Stub only; not run live (local wrapper injects secrets).
-  - Task mode: Runs with standard preset after accept.
+- **Pi**:
+  - Question mode: Runs with read-only tool subset (`--tools read,grep,find,ls`); skills load, but skills requiring bash, edit, or extension tools cannot work. Diagnostic question lookup verified live at `611b633` / `v0.2.1` using read-only records.
+  - Task mode: Runs with standard preset only after explicit operator `accept`. Verified live at `611b633` / `v0.2.1`: accepted task sent single Telegram notification via canonical skill/tool setup (`done`, delivery ledger verified, zero duplicates). Headless environment used dedicated PATH wrapper invoking host Infisical runner (no secrets in daemon, no product dependency). Persistent sessions not supported.
 - **Antigravity**: Manual use only (can read and reply via CLI; not an automated responder).
-- **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime (models answered `NEEDS-HUMAN` per instructions), effects of Bash or MCP tools the user's settings already allow (they keep effects and are not fenced), or Pi live execution. Full flag matrices and qualification logs are maintained in [docs/revival/M4.md](docs/revival/M4.md).
+- **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime (models answered `NEEDS-HUMAN` per instructions), effects of Bash or MCP tools the user's settings already allow (they keep effects and are not fenced), Pi persistent sessions, or broad harness qualification for Pi beyond the verified single diagnostic question and accepted task. Full flag matrices and qualification logs are maintained in [docs/revival/M4.md](docs/revival/M4.md).
 - **Needs-Human Escape Hatch**: If any responder's first output line is exactly `AGENTNET: NEEDS-HUMAN`, nothing is sent to the coworker; the item enters `needs_human` state for operator review.
 - **Process Isolation**: Commands run in their own process group (`Setpgid: true` on Linux/macOS) with output buffers capped at 64 KiB stdout and 4 KiB stderr. On Windows, process cancellation terminates the worker process.
 - **Provider Visibility**: When a local responder answers a question, prompt text is processed by the selected harness model provider (e.g., Anthropic, OpenAI).
@@ -277,7 +277,7 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M1: Core Identity & Messaging** — Ed25519 enrollment, age encrypted envelopes, offline Hub relay.
 - ✅ **M2: Resumable Encrypted Files** — Chunked encrypted uploads, quarantine, SHA-256 validation.
 - ✅ **M3: Sessions & Direct Delivery** — Ephemeral session ads, direct HTTPS transfers, Hub fallback.
-- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions, follow-ups, and accepted tasks; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux verified live; macOS and Windows unverified live on desktop).
+- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions, follow-ups, and accepted tasks; Pi live for question and accepted task), local follow-up summaries, headless review notices, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux verified live; macOS and Windows unverified live on desktop).
 - ✅ **M4b: Standard A2A Gateway** — Official `a2a-go/v2` SDK loopback adapter.
 - ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (self-hosted Hub relay deployed and healthy).
 
@@ -285,9 +285,10 @@ AgentNet is under active development as a lean, resilient Go product:
 - **Live Harness Qualification**:
   - Claude Code 2.1.283: Synthetic tasks verified live after operator accept in earlier milestone tests; skills-on question mode verified live on Linux at `8ce73cc` / `8ed75da` for skill-backed lookup (delivered secret) and write request (answered `NEEDS-HUMAN`).
   - Codex CLI 0.157.1: Synthetic questions (`4 s`, `d6785bd`), follow-up summaries (`6 s`, `d6785bd`), tasks (`9575b2a`, `35 s`), and background sessions verified live on Linux in earlier milestone runs; skills-on question mode verified live on Linux at `8ce73cc` / `8ed75da` for skill-backed lookup (delivered secret) and change request (answered `NEEDS-HUMAN`).
-- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
-- **Desktop Notifications**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). Windows (`Shell_NotifyIconW`, [run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) passed native API execution in CI, but real desktop balloon display has not been verified live. macOS (`osascript`) builds and passes native suite tests, but has no live notification execution evidence (the author currently has neither macOS nor Windows desktop environment available).
-- **Containers**: Container qualification passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) and remote host container verification; self-hosted Hub relay is deployed and healthy.
+  - Pi (2026-09-27 18:55 UTC, binary `611b633` / `v0.2.1`): Real diagnostic question answered live via read-only records; explicitly accepted task sent exactly one Telegram message via canonical skill/tool setup (`done` status; provider message ID matched by supervisor in delivery ledger with zero duplicates; initial attempt timed out, host credential setup gap corrected via PATH wrapper, and retry succeeded; no persistent sessions or broad qualification claimed).
+- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions for `v0.2.1` ([run 36341139910](https://github.com/misunders2d/agentnet/actions/runs/36341139910), all 4 matrix jobs). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
+- **Desktop Notifications & Headless Review Notices**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). Live review notice verified at `v0.2.1`: awaiting task on headless host never executed, single review notice reached laptop as `needs_human`/`notified=1`, owner visually confirmed desktop banner, synthetic item declined and resolved. Windows (`Shell_NotifyIconW`, [run 36341139910](https://github.com/misunders2d/agentnet/actions/runs/36341139910)) passed native API execution in CI, but real desktop balloon display has not been verified live. macOS (`osascript`) builds and passes native suite tests, but has no live notification execution evidence (the author currently has neither macOS nor Windows desktop environment available).
+- **Containers**: Container qualification passed in GitHub Actions ([run 36341139910](https://github.com/misunders2d/agentnet/actions/runs/36341139910)) and remote host container verification; self-hosted Hub relay is deployed and healthy.
 
 ---
 
