@@ -38,6 +38,10 @@ type Config struct {
 	PublicURL  string // https URL clients use; its host goes into the certificate
 	AdminLabel string // person label for the bootstrap admin invite
 	Logf       func(format string, args ...any)
+
+	MaxFileSize  int64         // plaintext bytes per attachment (default 100 MiB)
+	StorageQuota int64         // total ciphertext bytes held (default 1 GiB)
+	UploadTTL    time.Duration // idle time before an incomplete upload is reclaimed (default 24h)
 }
 
 // Hub serves the AgentNet Hub API.
@@ -48,6 +52,7 @@ type Hub struct {
 	certPEM   string
 	streams   streams
 	heartbeat time.Duration
+	blobMu    sync.Mutex // serialises blob file writes
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -60,6 +65,15 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	if cfg.AdminLabel == "" {
 		cfg.AdminLabel = "admin"
+	}
+	if cfg.MaxFileSize <= 0 {
+		cfg.MaxFileSize = protocol.DefaultMaxFileSize
+	}
+	if cfg.StorageQuota <= 0 {
+		cfg.StorageQuota = protocol.DefaultStorageQuota
+	}
+	if cfg.UploadTTL <= 0 {
+		cfg.UploadTTL = 24 * time.Hour
 	}
 	if !protocol.ValidName(cfg.AdminLabel) {
 		return nil, fmt.Errorf("invalid admin label %q", cfg.AdminLabel)
@@ -83,6 +97,10 @@ func Open(cfg Config) (*Hub, error) {
 		return nil, err
 	}
 	if err := h.bootstrap(); err != nil {
+		st.db.Close()
+		return nil, err
+	}
+	if err := h.prepareBlobs(); err != nil {
 		st.db.Close()
 		return nil, err
 	}

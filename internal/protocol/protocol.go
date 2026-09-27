@@ -261,3 +261,42 @@ func ReadSignedRequest(r *http.Request, keyFor func(agent string) (ed25519.Publi
 	}
 	return sr, nil
 }
+
+// File transfer limits and wire bodies.
+const (
+	// ChunkSize is the largest upload chunk; it stays under MaxBody.
+	ChunkSize = 512 << 10
+	// DefaultMaxFileSize is the default plaintext limit per attachment.
+	DefaultMaxFileSize = 100 << 20
+	// DefaultStorageQuota is the default total ciphertext the Hub holds.
+	DefaultStorageQuota = 1 << 30
+)
+
+// CiphertextBound is the largest age ciphertext for plain bytes of input:
+// header allowance, 16-byte nonce, and a 16-byte tag per 64 KiB chunk.
+func CiphertextBound(plain int64) int64 {
+	return plain + (plain/(64<<10)+1)*16 + 16 + 4096
+}
+
+// BlobReserve asks the Hub to accept an upload of Size ciphertext bytes for
+// Recipient. Repeating it with identical fields is harmless.
+type BlobReserve struct {
+	ID        string `json:"id"`
+	Recipient string `json:"recipient"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+}
+
+// BlobStatus reports an upload's progress.
+type BlobStatus struct {
+	ID       string `json:"id"`
+	Size     int64  `json:"size"`
+	Received int64  `json:"received"`
+	State    string `json:"state"` // BlobUploading or BlobStored
+}
+
+// Blob states.
+const (
+	BlobUploading = "uploading"
+	BlobStored    = "stored" // complete, verified, durable
+)

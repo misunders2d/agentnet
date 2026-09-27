@@ -36,6 +36,7 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	home      string
 	id        *identity.Identity
 	store     *store
 	hub       *hubConn
@@ -121,7 +122,7 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run the same `agentnet join` command again", home)
 	}
-	a := &Agent{id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}}
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}}
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
@@ -202,9 +203,13 @@ type SendResult struct {
 	Detail string `json:"detail,omitempty"` // why it is still queued
 }
 
-// Send encrypts body to the recipient and hands it to the Hub. If the Hub is
-// unreachable the message stays queued and the daemon retries it.
-func (a *Agent) Send(ctx context.Context, to, body, replyTo string) (SendResult, error) {
+// Send encrypts body and any files to the recipient and hands them to the
+// Hub. Files are encrypted into a private spool first; if the Hub is
+// unreachable the message stays queued and the daemon resumes it.
+func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...string) (SendResult, error) {
+	if len(files) > envelope.MaxAttachments {
+		return SendResult{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
+	}
 	peer, err := a.sendKey(ctx, to)
 	if err != nil {
 		return SendResult{}, err
@@ -213,33 +218,55 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string) (SendResult,
 	if err != nil {
 		return SendResult{}, err
 	}
-	env, err := envelope.Seal(envelope.Inner{
+	in := envelope.Inner{
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo,
-	}, a.id.Sign, recipient)
-	if err != nil {
-		return SendResult{}, err
 	}
-	if err := a.store.addOutbox(env, body); err != nil {
+	for _, path := range files {
+		att, err := a.spoolFile(path, recipient)
+		if err != nil {
+			a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
+			return SendResult{}, err
+		}
+		in.Attachments = append(in.Attachments, att)
+	}
+	env, err := envelope.Seal(in, a.id.Sign, recipient)
+	if err == nil {
+		err = a.store.addOutbox(env, body)
+	}
+	if err != nil {
+		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 		return SendResult{}, err
 	}
 	return a.deliver(ctx, env)
 }
 
-// Reply sends body to the sender of inbox message id.
-func (a *Agent) Reply(ctx context.Context, id, body string) (SendResult, error) {
+func blobsOf(atts []envelope.Attachment) []envelope.Blob {
+	var out []envelope.Blob
+	for _, a := range atts {
+		out = append(out, a.Blob)
+	}
+	return out
+}
+
+// Reply sends body (and files) to the sender of inbox message id.
+func (a *Agent) Reply(ctx context.Context, id, body string, files ...string) (SendResult, error) {
 	sender, err := a.store.inboxSender(id)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
 	}
-	return a.Send(ctx, sender, body, id)
+	return a.Send(ctx, sender, body, id, files...)
 }
 
 func (a *Agent) deliver(ctx context.Context, env envelope.Envelope) (SendResult, error) {
 	var r protocol.Receipt
-	err := a.hub.do(ctx, "POST", "/v1/messages", env, &r)
+	err := a.uploadAll(ctx, env)
+	if err == nil {
+		err = a.hub.do(ctx, "POST", "/v1/messages", env, &r)
+	}
 	switch {
 	case err == nil:
+		a.releaseSpool(env)
 		return SendResult{ID: env.ID, State: r.State}, a.store.setOutboxState(env.ID, r.State, "")
 	case retryable(err):
 		return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error())

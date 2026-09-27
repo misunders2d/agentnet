@@ -24,9 +24,14 @@ const usage = `usage: agentnet [--home DIR] <command> [flags] [args]
 Client:
   join [--agent NAME] CODE      enroll this agent with an invite code
   whoami                        show this agent's address and key fingerprint
-  send ADDRESS TEXT             send an end-to-end encrypted message
-  reply ID TEXT                 reply to an inbox message
+  send [--file PATH]... ADDRESS TEXT
+                                send an end-to-end encrypted message with files
+  reply [--file PATH]... ID TEXT
+                                reply to an inbox message
   inbox [--unread] [--json]     list received messages (marks them read)
+  download [--dir DIR] [--force] ID
+                                save a message's attachments (never overwrites
+                                unless --force)
   status ID                     show what the Hub can prove about a sent message
   daemon                        stay connected and receive messages as they arrive
   fingerprint ADDRESS           compare trusted and directory keys for ADDRESS
@@ -87,6 +92,8 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, true)
 	case "inbox":
 		return runInbox(a, rest)
+	case "download":
+		return runDownload(ctx, a, rest)
 	case "status":
 		if len(rest) != 1 {
 			return errors.New("usage: status ID")
@@ -208,18 +215,25 @@ func sanitizeName(s string) string {
 }
 
 func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) error {
-	if len(args) != 2 {
-		if reply {
-			return errors.New("usage: reply ID TEXT")
-		}
-		return errors.New("usage: send ADDRESS TEXT")
+	name, target := "send", "ADDRESS"
+	if reply {
+		name, target = "reply", "ID"
+	}
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	var files []string
+	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("usage: %s [--file PATH]... %s TEXT", name, target)
 	}
 	var r client.SendResult
 	var err error
 	if reply {
-		r, err = a.Reply(ctx, args[0], args[1])
+		r, err = a.Reply(ctx, fs.Arg(0), fs.Arg(1), files...)
 	} else {
-		r, err = a.Send(ctx, args[0], args[1], "")
+		r, err = a.Send(ctx, fs.Arg(0), fs.Arg(1), "", files...)
 	}
 	if err != nil {
 		return err
@@ -229,6 +243,23 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
 	}
 	return nil
+}
+
+func runDownload(ctx context.Context, a *client.Agent, args []string) error {
+	fs := flag.NewFlagSet("download", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "directory to save into")
+	force := fs.Bool("force", false, "replace existing files")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: download [--dir DIR] [--force] ID")
+	}
+	paths, err := a.Download(ctx, fs.Arg(0), *dir, *force)
+	for _, p := range paths {
+		fmt.Println(p)
+	}
+	return err
 }
 
 func runInbox(a *client.Agent, args []string) error {
@@ -260,6 +291,13 @@ func runInbox(a *client.Agent, args []string) error {
 			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
 		}
 		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		for _, f := range m.Attachments {
+			fmt.Printf("  [file] %q %d bytes", f.Name, f.Size)
+			if f.SavedPath != "" {
+				fmt.Printf(" saved %s", f.SavedPath)
+			}
+			fmt.Println()
+		}
 	}
 	return nil
 }

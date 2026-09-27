@@ -4,16 +4,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
-const schemaVersion = 1
-
-const schema = `
+// schema lists the SQL steps from each version to the next.
+var schema = []string{`
 CREATE TABLE agents(
   address TEXT PRIMARY KEY,
   label TEXT NOT NULL,
@@ -43,19 +44,34 @@ CREATE TABLE messages(
   created_at INTEGER NOT NULL,
   delivered_at INTEGER);
 CREATE INDEX messages_pending ON messages(recipient, state, seq);
-`
+`, `
+CREATE TABLE blobs(
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  received INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL,
+  message_id TEXT,
+  updated_at INTEGER NOT NULL);
+CREATE INDEX blobs_state ON blobs(state, updated_at);
+`}
 
 var (
 	errInviteInvalid = errors.New("invite invalid, expired, or already used")
 	errAddressTaken  = errors.New("address already enrolled")
 	errNotFound      = errors.New("not found")
 	errIDConflict    = errors.New("message id already used for different content")
+	errBlobNotReady  = errors.New("attachment is not a completed upload for this recipient")
+	errQuota         = errors.New("Hub storage quota exceeded")
+	errBlobConflict  = errors.New("blob id already used for a different upload")
 )
 
 type store struct{ db *sql.DB }
 
 func openStore(path string) (*store, error) {
-	db, err := sqlitedb.Open(path, schema, schemaVersion)
+	db, err := sqlitedb.Open(path, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -186,29 +202,44 @@ func (s *store) useNonce(agent, nonce string, now time.Time) (bool, error) {
 	return n == 1, err
 }
 
-// putMessage stores an envelope once. A retry with identical bytes returns
-// the existing state; reuse of the id for other content is a conflict.
-func (s *store) putMessage(id, sender, recipient string, envelope []byte) (string, error) {
-	res, err := s.db.Exec(`INSERT OR IGNORE INTO messages(id, sender, recipient, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
-		id, sender, recipient, envelope, protocol.StateCustody, time.Now().Unix())
+// putMessage stores an envelope once, attaching its blobs, which must be
+// complete uploads by the sender for the same recipient with the signed size
+// and digest. A retry with identical bytes returns the existing state; reuse
+// of the id for other content is a conflict.
+func (s *store) putMessage(env envelope.Envelope, canonical []byte) (string, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
 	}
-	if n, _ := res.RowsAffected(); n == 1 {
-		return protocol.StateCustody, nil
-	}
+	defer tx.Rollback()
 	var existing []byte
 	var state string
-	if err := s.db.QueryRow(`SELECT envelope, state FROM messages WHERE id = ? AND sender = ?`, id, sender).Scan(&existing, &state); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	err = tx.QueryRow(`SELECT envelope, state FROM messages WHERE id = ?`, env.ID).Scan(&existing, &state)
+	if err == nil {
+		if string(existing) != string(canonical) {
 			return "", errIDConflict
 		}
+		return state, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	if string(existing) != string(envelope) {
-		return "", errIDConflict
+	for _, b := range env.Blobs {
+		res, err := tx.Exec(`UPDATE blobs SET message_id = ? WHERE id = ? AND owner = ? AND recipient = ?
+			AND size = ? AND sha256 = ? AND state = ? AND message_id IS NULL`,
+			env.ID, b.ID, env.From, env.To, b.Size, b.SHA256, protocol.BlobStored)
+		if err != nil {
+			return "", err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return "", fmt.Errorf("%w: %s", errBlobNotReady, b.ID)
+		}
 	}
-	return state, nil
+	if _, err := tx.Exec(`INSERT INTO messages(id, sender, recipient, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		env.ID, env.From, env.To, canonical, protocol.StateCustody, time.Now().Unix()); err != nil {
+		return "", err
+	}
+	return protocol.StateCustody, tx.Commit()
 }
 
 type pending struct {
@@ -265,4 +296,114 @@ func (s *store) setDisposition(id, recipient, state string) (string, error) {
 		return "", errNotFound
 	}
 	return current, err
+}
+
+type blobRow struct {
+	Owner, Recipient string
+	Size, Received   int64
+	SHA256, State    string
+	Attached         bool
+}
+
+func (s *store) blob(id string) (blobRow, error) {
+	var b blobRow
+	var msg sql.NullString
+	err := s.db.QueryRow(`SELECT owner, recipient, size, received, sha256, state, message_id FROM blobs WHERE id = ?`, id).
+		Scan(&b.Owner, &b.Recipient, &b.Size, &b.Received, &b.SHA256, &b.State, &msg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b, errNotFound
+	}
+	b.Attached = msg.Valid
+	return b, err
+}
+
+// reserveBlob creates an upload, or returns the existing one if the request
+// repeats it exactly. Uploads abandoned before staleBefore are reclaimed
+// first; their ids are returned so the caller can delete their files. The
+// quota check and insert share one write transaction, so concurrent
+// reservations cannot oversubscribe it.
+func (s *store) reserveBlob(owner string, r protocol.BlobReserve, quota int64, staleBefore time.Time) (b blobRow, stale []string, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return b, nil, err
+	}
+	defer tx.Rollback()
+	if stale, err = reclaimStale(tx, staleBefore); err != nil {
+		return b, nil, err
+	}
+	var msg sql.NullString
+	err = tx.QueryRow(`SELECT owner, recipient, size, received, sha256, state, message_id FROM blobs WHERE id = ?`, r.ID).
+		Scan(&b.Owner, &b.Recipient, &b.Size, &b.Received, &b.SHA256, &b.State, &msg)
+	switch {
+	case err == nil:
+		if b.Owner != owner || b.Recipient != r.Recipient || b.Size != r.Size || b.SHA256 != r.SHA256 {
+			return b, nil, errBlobConflict
+		}
+		b.Attached = msg.Valid
+		return b, stale, tx.Commit()
+	case !errors.Is(err, sql.ErrNoRows):
+		return b, nil, err
+	}
+	var used int64
+	if err := tx.QueryRow(`SELECT coalesce(sum(size), 0) FROM blobs`).Scan(&used); err != nil {
+		return b, nil, err
+	}
+	if used+r.Size > quota {
+		return b, nil, errQuota
+	}
+	if _, err := tx.Exec(`INSERT INTO blobs(id, owner, recipient, size, sha256, state, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, owner, r.Recipient, r.Size, r.SHA256, protocol.BlobUploading, time.Now().Unix()); err != nil {
+		return b, nil, err
+	}
+	b = blobRow{Owner: owner, Recipient: r.Recipient, Size: r.Size, SHA256: r.SHA256, State: protocol.BlobUploading}
+	return b, stale, tx.Commit()
+}
+
+// reclaimStale deletes incomplete uploads idle since before and returns their
+// ids. Completed uploads are never reclaimed here.
+func reclaimStale(tx *sql.Tx, before time.Time) ([]string, error) {
+	rows, err := tx.Query(`SELECT id FROM blobs WHERE state = ? AND updated_at < ?`, protocol.BlobUploading, before.Unix())
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(`DELETE FROM blobs WHERE state = ? AND updated_at < ?`, protocol.BlobUploading, before.Unix())
+	return ids, err
+}
+
+func (s *store) reclaimStale(before time.Time) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	ids, err := reclaimStale(tx, before)
+	if err != nil {
+		return nil, err
+	}
+	return ids, tx.Commit()
+}
+
+func (s *store) setReceived(id string, received int64) error {
+	_, err := s.db.Exec(`UPDATE blobs SET received = ?, updated_at = ? WHERE id = ? AND state = ?`,
+		received, time.Now().Unix(), id, protocol.BlobUploading)
+	return err
+}
+
+func (s *store) setBlobState(id, state string) error {
+	_, err := s.db.Exec(`UPDATE blobs SET state = ?, received = CASE WHEN ? = ? THEN size ELSE 0 END, updated_at = ? WHERE id = ?`,
+		state, state, protocol.BlobStored, time.Now().Unix(), id)
+	return err
 }

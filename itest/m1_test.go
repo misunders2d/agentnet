@@ -17,8 +17,9 @@ import (
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/hub"
 	"github.com/misunders2d/agentnet/internal/identity"
-	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"github.com/misunders2d/agentnet/internal/testhub"
+
+	_ "modernc.org/sqlite"
 )
 
 func join(t *testing.T, code, name string) (*client.Agent, string) {
@@ -86,7 +87,7 @@ func hasBody(t *testing.T, a *client.Agent, body string) bool {
 
 func openDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sqlitedb.Open(path, "", 1)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

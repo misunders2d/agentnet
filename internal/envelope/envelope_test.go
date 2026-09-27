@@ -3,6 +3,7 @@ package envelope
 import (
 	"crypto/ed25519"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,5 +76,26 @@ func TestResignedCiphertextRejected(t *testing.T) {
 	env.Sig = ed25519.Sign(mallory.id.Sign, env.signed())
 	if _, err := Open(env, bob.id, bob.pub.Address, mallory.pub); err == nil {
 		t.Fatal("re-signed ciphertext accepted")
+	}
+}
+
+func TestManifestMustMatchSignedBlobs(t *testing.T) {
+	alice, bob := newParty(t, "alice/a"), newParty(t, "bob/b")
+	r, _ := bob.pub.Recipient()
+	blob := Blob{ID: "0123456789abcdef0123456789abcdef", Size: 100, SHA256: strings.Repeat("a", 64)}
+	in := Inner{ID: "m1", From: alice.pub.Address, To: bob.pub.Address, TS: 1, Kind: KindMessage,
+		Attachments: []Attachment{{Blob: blob, Name: "f.txt", Size: 10, SHA256: strings.Repeat("b", 64)}}}
+	env, err := Seal(in, alice.id.Sign, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Open(env, bob.id, bob.pub.Address, alice.pub); err != nil || got.Attachments[0].Name != "f.txt" {
+		t.Fatalf("Open = %+v, %v", got, err)
+	}
+	// A signed outer reference that differs from the encrypted manifest.
+	env.Blobs[0].SHA256 = strings.Repeat("c", 64)
+	env.Sig = ed25519.Sign(alice.id.Sign, env.signed())
+	if _, err := Open(env, bob.id, bob.pub.Address, alice.pub); err == nil {
+		t.Fatal("mismatched blob reference accepted")
 	}
 }

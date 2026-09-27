@@ -30,14 +30,19 @@ type faults struct {
 
 type fault struct {
 	method, pathPart string
-	times            int
+	skip, times      int
 	afterSend        bool
 }
 
 func (f *faults) add(method, pathPart string, times int, afterSend bool) {
+	f.addAfter(method, pathPart, 0, times, afterSend)
+}
+
+// addAfter lets skip matching requests through before failing times of them.
+func (f *faults) addAfter(method, pathPart string, skip, times int, afterSend bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.rules = append(f.rules, &fault{method, pathPart, times, afterSend})
+	f.rules = append(f.rules, &fault{method, pathPart, skip, times, afterSend})
 }
 
 func (f *faults) take(r *http.Request) *fault {
@@ -45,6 +50,10 @@ func (f *faults) take(r *http.Request) *fault {
 	defer f.mu.Unlock()
 	for _, rule := range f.rules {
 		if rule.times > 0 && r.Method == rule.method && strings.Contains(r.URL.Path, rule.pathPart) {
+			if rule.skip > 0 {
+				rule.skip--
+				continue
+			}
 			rule.times--
 			return rule
 		}

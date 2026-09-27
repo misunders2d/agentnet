@@ -12,9 +12,8 @@ import (
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
-const schemaVersion = 1
-
-const schema = `
+// schema lists the SQL steps from each version to the next.
+var schema = []string{`
 CREATE TABLE config(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE peers(
   address TEXT PRIMARY KEY,
@@ -46,7 +45,22 @@ CREATE TABLE quarantine(
   envelope TEXT NOT NULL,
   received_at INTEGER NOT NULL,
   acked INTEGER NOT NULL DEFAULT 0);
-`
+`, `
+CREATE TABLE uploads(
+  blob_id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  state TEXT NOT NULL);
+CREATE TABLE attachments(
+  message_id TEXT NOT NULL,
+  blob_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  ct_size INTEGER NOT NULL,
+  ct_sha256 TEXT NOT NULL,
+  saved_path TEXT,
+  PRIMARY KEY(message_id, blob_id));
+`}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -57,7 +71,7 @@ const (
 type store struct{ db *sql.DB }
 
 func openStore(path string) (*store, error) {
-	db, err := sqlitedb.Open(path, schema, schemaVersion)
+	db, err := sqlitedb.Open(path, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +140,43 @@ func (s *store) setPending(p identity.Public) error {
 	return err
 }
 
+// addOutbox records a message and its pending uploads in one transaction.
 func (s *store) addOutbox(env envelope.Envelope, body string) error {
 	data, _ := json.Marshal(env)
-	_, err := s.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
-		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix())
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix()); err != nil {
+		return err
+	}
+	for _, b := range env.Blobs {
+		if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *store) uploadStored(blobID string) (bool, error) {
+	var state string
+	err := s.db.QueryRow(`SELECT state FROM uploads WHERE blob_id = ?`, blobID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil // already released after custody
+	}
+	return state == protocol.BlobStored, err
+}
+
+func (s *store) setUploadStored(blobID string) error {
+	_, err := s.db.Exec(`UPDATE uploads SET state = ? WHERE blob_id = ?`, protocol.BlobStored, blobID)
+	return err
+}
+
+// releaseUploads forgets a message's uploads once the Hub holds the message.
+func (s *store) releaseUploads(messageID string) error {
+	_, err := s.db.Exec(`DELETE FROM uploads WHERE message_id = ?`, messageID)
 	return err
 }
 
@@ -172,9 +219,34 @@ func inboxArgs(in envelope.Inner) []any {
 	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix()}
 }
 
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// insertInner stores a verified message and its attachment manifest.
+func insertInner(db execer, in envelope.Inner) error {
+	if _, err := db.Exec(insertInbox, inboxArgs(in)...); err != nil {
+		return err
+	}
+	for _, a := range in.Attachments {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO attachments(message_id, blob_id, name, size, sha256, ct_size, ct_sha256) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			in.ID, a.Blob.ID, a.Name, a.Size, a.SHA256, a.Blob.Size, a.Blob.SHA256); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *store) addInbox(in envelope.Inner) error {
-	_, err := s.db.Exec(insertInbox, inboxArgs(in)...)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := insertInner(tx, in); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // quarantine holds an envelope that failed verification, keyed by its id.
@@ -215,7 +287,7 @@ func (s *store) promote(in envelope.Inner) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(insertInbox, inboxArgs(in)...); err != nil {
+	if err := insertInner(tx, in); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
@@ -266,14 +338,27 @@ func (s *store) markAcked(r receipt) error {
 
 // Message is a received message as shown to the user.
 type Message struct {
-	ID         string    `json:"id"`
-	From       string    `json:"from"`
-	Kind       string    `json:"kind"`
-	Body       string    `json:"body"`
-	ReplyTo    string    `json:"reply_to,omitempty"`
-	SentAt     time.Time `json:"sent_at"`
-	ReceivedAt time.Time `json:"received_at"`
-	Read       bool      `json:"read"`
+	ID          string     `json:"id"`
+	From        string     `json:"from"`
+	Kind        string     `json:"kind"`
+	Body        string     `json:"body"`
+	ReplyTo     string     `json:"reply_to,omitempty"`
+	SentAt      time.Time  `json:"sent_at"`
+	ReceivedAt  time.Time  `json:"received_at"`
+	Read        bool       `json:"read"`
+	Attachments []FileInfo `json:"attachments,omitempty"`
+}
+
+// FileInfo describes a received attachment from its encrypted manifest.
+type FileInfo struct {
+	BlobID    string `json:"blob_id"`
+	Name      string `json:"name"` // as the sender named it; not a safe path
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	SavedPath string `json:"saved_path,omitempty"`
+
+	ctSize   int64
+	ctSHA256 string
 }
 
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
@@ -285,18 +370,50 @@ func (s *store) inbox(unreadOnly bool) ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []Message
 	for rows.Next() {
 		var m Message
 		var ts, recv int64
 		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		m.SentAt, m.ReceivedAt = time.Unix(ts, 0), time.Unix(recv, 0)
 		out = append(out, m)
 	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Attachments, err = s.attachments(out[i].ID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *store) attachments(messageID string) ([]FileInfo, error) {
+	rows, err := s.db.Query(`SELECT blob_id, name, size, sha256, ct_size, ct_sha256, coalesce(saved_path, '')
+		FROM attachments WHERE message_id = ? ORDER BY rowid`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FileInfo
+	for rows.Next() {
+		var f FileInfo
+		if err := rows.Scan(&f.BlobID, &f.Name, &f.Size, &f.SHA256, &f.ctSize, &f.ctSHA256, &f.SavedPath); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
 	return out, rows.Err()
+}
+
+func (s *store) setSaved(messageID, blobID, path string) error {
+	_, err := s.db.Exec(`UPDATE attachments SET saved_path = ? WHERE message_id = ? AND blob_id = ?`, path, messageID, blobID)
+	return err
 }
 
 func (s *store) markRead(ids []string) error {

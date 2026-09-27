@@ -23,6 +23,11 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
 	mux.HandleFunc("POST /v1/messages/{id}/ack", h.handleAck)
 	mux.HandleFunc("GET /v1/stream", h.handleStream)
+	mux.HandleFunc("POST /v1/blobs", h.handleBlobReserve)
+	mux.HandleFunc("GET /v1/blobs/{id}", h.handleBlobStatus)
+	mux.HandleFunc("PUT /v1/blobs/{id}", h.handleBlobChunk)
+	mux.HandleFunc("POST /v1/blobs/{id}/complete", h.handleBlobComplete)
+	mux.HandleFunc("GET /v1/blobs/{id}/data", h.handleBlobData)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	return mux
@@ -179,8 +184,8 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Store a canonical re-encoding so identical retries compare equal.
 	canonical, _ := json.Marshal(env)
-	state, err := h.store.putMessage(env.ID, env.From, env.To, canonical)
-	if errors.Is(err, errIDConflict) {
+	state, err := h.store.putMessage(env, canonical)
+	if errors.Is(err, errIDConflict) || errors.Is(err, errBlobNotReady) {
 		writeError(w, http.StatusConflict, "", err.Error())
 		return
 	}

@@ -33,8 +33,14 @@ func (e *HubError) Is(target error) bool {
 	return target == ErrRevoked && e.Code == protocol.CodeRevoked
 }
 
+// errPermanent marks local failures that retrying cannot fix.
+var errPermanent = errors.New("cannot be retried")
+
 // retryable reports whether a failed call may succeed later unchanged.
 func retryable(err error) bool {
+	if errors.Is(err, errPermanent) {
+		return false
+	}
 	var he *HubError
 	if errors.As(err, &he) {
 		return he.Status >= 500
@@ -80,30 +86,37 @@ func newHubConn(base, certPEM, agent string, key ed25519.PrivateKey) (*hubConn, 
 	return &hubConn{base: base, agent: agent, key: key, http: &http.Client{Transport: rt}, timeout: requestTimeout}, nil
 }
 
-// request builds a request, signed unless the connection has no agent yet.
-func (c *hubConn) request(ctx context.Context, method, path string, in any) (*http.Request, error) {
-	var body []byte
-	if in != nil {
-		var err error
-		if body, err = json.Marshal(in); err != nil {
-			return nil, err
-		}
-	}
+// request builds a request with a raw body, signed unless the connection
+// has no agent yet.
+func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	if c.agent != "" {
 		protocol.SignRequest(req, c.agent, c.key, body)
 	}
 	return req, nil
 }
 
+// do sends in as JSON (or no body when nil) and decodes a JSON answer into out.
 func (c *hubConn) do(ctx context.Context, method, path string, in, out any) error {
+	var body []byte
+	if in != nil {
+		var err error
+		if body, err = json.Marshal(in); err != nil {
+			return err
+		}
+	}
+	return c.doBytes(ctx, method, path, body, out)
+}
+
+// doBytes sends a raw body within the request timeout and decodes a JSON
+// answer into out.
+func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	req, err := c.request(ctx, method, path, in)
+	req, err := c.request(ctx, method, path, body)
 	if err != nil {
 		return err
 	}
@@ -119,6 +132,33 @@ func (c *hubConn) do(ctx context.Context, method, path string, in, out any) erro
 		return nil
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, protocol.MaxBody)).Decode(out)
+}
+
+// getRange copies bytes [from, to) of path into w within the request timeout.
+func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := c.request(ctx, "GET", path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", from, to-1))
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp); err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("hub ignored range request (%s)", resp.Status)
+	}
+	n, err := io.Copy(w, io.LimitReader(resp.Body, to-from))
+	if err == nil && n != to-from {
+		err = io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 func checkStatus(resp *http.Response) error {
