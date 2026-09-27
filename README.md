@@ -244,12 +244,11 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M3: Sessions & Direct Delivery** — Ephemeral session ads, direct HTTPS transfers, Hub fallback.
 - ✅ **M4a: Shared Inbox & Native Responder** — Multi-harness auto-answers, human-in-the-loop task gates.
 - ✅ **M4b: Standard A2A Gateway** — Official `a2a-go/v2` SDK loopback adapter.
-- 🔄 **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and platform deployment.
+- ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (actual production rollout remains pending).
 
 **Tested Environments**:
-- **Linux**: Full test pass locally and in GitHub Actions CI (unit tests, race detector, separate-process CLI journeys, and local HTTPS proxy).
-- **Containers**: GitHub Actions container test passed (`run 36318703066`); Contabo remote host container qualification passed on clean image (production Hub unchanged, all test resources removed).
-- **macOS & Windows**: Cross-compilation and native separate-process CLI journeys verified; full native CI matrix qualification pending fixes for long socket path (macOS) and timing/cleanup (Windows).
+- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)), verifying unit tests, race detector, separate-process CLI journeys, and owner-only ACLs on all three target platforms.
+- **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
 
 ---
 
