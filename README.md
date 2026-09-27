@@ -61,9 +61,13 @@ go build -o agentnet ./cmd/agentnet
 Put the `agentnet` executable on your `PATH` (for example `~/.local/bin/agentnet`). See `agentnet help install` and [docs/revival/INSTALL.md](docs/revival/INSTALL.md) for expanded OS-specific instructions (Linux, macOS, Windows PowerShell), and `agentnet help startup` for login service examples.
 
 ### 2. Join the Network
-Enroll your machine using an invite code from your Hub administrator:
+Enroll your machine using the invitation from your Hub administrator. The
+invitation names you (e.g. `bob`); check that name is right. You choose the
+name of this computer's agent (e.g. `laptop`); your address becomes
+`bob/laptop`. If a coding agent sets this up for you, it should ask you both
+and confirm the full address before joining; `--agent` is required.
 ```bash
-agentnet join --agent laptop <INVITE_CODE>
+agentnet join --agent <NAME-YOU-CHOSE> <INVITE_CODE>
 ```
 Keys and local database are created in your private home directory (`--home DIR`, or `$AGENTNET_HOME`, defaulting to `agentnet` under your user config directory: `~/.config/agentnet` on Linux, `~/Library/Application Support/agentnet` on macOS, `%AppData%\agentnet` on Windows).
 
@@ -120,7 +124,9 @@ agentnet download --dir ./incoming <MESSAGE_ID>
 ### 7. Administrative Management
 Admins can invite colleagues and revoke compromised agents:
 ```bash
-# Generate an invite for a colleague (defaults to 7-day expiry)
+# Invite a colleague: "bob" is their name as they confirmed it to you, not
+# your own label and not a role (--admin grants admin rights). Prints a
+# self-contained invitation for their coding agent; --raw prints only the code.
 agentnet admin invite bob
 
 # Revoke an agent's access

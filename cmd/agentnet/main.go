@@ -219,16 +219,21 @@ func defaultHome() string {
 
 func runJoin(ctx context.Context, home string, args []string) error {
 	fs := flag.NewFlagSet("join", flag.ContinueOnError)
-	name := fs.String("agent", "", "agent name, e.g. laptop (default: hostname)")
+	name := fs.String("agent", "", "this agent's name, chosen by its person (required)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: join [--agent NAME] CODE")
+		return errors.New("usage: join --agent NAME CODE")
 	}
 	if *name == "" {
-		host, _ := os.Hostname()
-		*name = sanitizeName(host)
+		// Nothing is created and the Hub is not contacted until a name is given.
+		label := "LABEL"
+		if inv, err := protocol.DecodeInvite(fs.Arg(0)); err == nil {
+			label = inv.Label
+		}
+		return fmt.Errorf("--agent NAME is required: ask the person what to call this agent on this computer "+
+			"(lowercase letters, digits, hyphens, e.g. laptop); the address becomes %s/NAME and cannot be changed later", label)
 	}
 	a, err := client.Join(ctx, home, fs.Arg(0), *name)
 	if err != nil {
@@ -237,22 +242,6 @@ func runJoin(ctx context.Context, home string, args []string) error {
 	defer a.Close()
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
 	return nil
-}
-
-// sanitizeName turns a hostname into a valid agent name.
-func sanitizeName(s string) string {
-	s = strings.ToLower(strings.SplitN(s, ".", 2)[0])
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9' && b.Len() > 0, r == '-' && b.Len() > 0:
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
-		return "agent"
-	}
-	return b.String()[:min(b.Len(), 32)]
 }
 
 func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) error {
@@ -365,7 +354,9 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL")
+			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL\n" +
+				"LABEL is the invited person's AgentNet name (e.g. bob): ask your person who is being invited and what name to use. " +
+				"Do not reuse your own label, \"admin\", a user or host name, or a model name. It grants no rights; --admin does")
 		}
 		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
 		if err != nil {

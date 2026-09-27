@@ -25,8 +25,8 @@ func TestInvitationPacket(t *testing.T) {
 	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
 
 	boot := c.run("hub", "bootstrap-invite", "--data", "hub")
-	for _, want := range []string{"first-admin invitation", "https://github.com/misunders2d/agentnet",
-		"https://github.com/misunders2d/agentnet/blob/main/docs/revival/INSTALL.md", "agentnet admin invite LABEL"} {
+	for _, want := range []string{"first-admin invitation", "https://github.com/misunders2d/agentnet", "--admin-label",
+		"https://github.com/misunders2d/agentnet/blob/main/docs/revival/INSTALL.md", "agentnet admin invite THEIR-NAME"} {
 		if !strings.Contains(boot, want) {
 			t.Fatalf("bootstrap packet lacks %q:\n%s", want, boot)
 		}
@@ -45,8 +45,10 @@ func TestInvitationPacket(t *testing.T) {
 		"https://go.dev/dl/",
 		"go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet",
 		`go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet`,
-		"agentnet whoami", "STOP and ask the user",
+		"agentnet whoami", "STOP and ask the person",
 		"agentnet join --agent NAME", "agentnet daemon", "agentnet help startup", "agentnet doctor",
+		`confirm this invitation is for them under the name "bob"`, "ask admin/laptop for a corrected invitation",
+		"Do not choose it yourself", "address bob/NAME", "explicitly confirms",
 		`agentnet send admin/laptop "bob/NAME joined AgentNet"`,
 		"Do not set up an automatic responder",
 		"Hub: https://" + addr, "ask\nthe person who invited you for a new invitation",
@@ -55,12 +57,23 @@ func TestInvitationPacket(t *testing.T) {
 			t.Fatalf("invite packet lacks %q:\n%s", want, packet)
 		}
 	}
+	if strings.Contains(packet, "e.g. laptop);") || strings.Contains(strings.ToLower(packet), "hostname") && !strings.Contains(packet, "do not use the host name") {
+		t.Fatalf("packet suggests picking a name without asking:\n%s", packet)
+	}
 	code := lastLine(packet)
 	inv, err := protocol.DecodeInvite(code)
 	if err != nil || inv.Label != "bob" {
 		t.Fatalf("packet code %q: %+v %v", code, inv, err)
 	}
-	out := c.run("--home", "bob", "join", "--agent", "desk", code) // clean, isolated home
+	// Without --agent nothing is created and the invite stays unused.
+	out, err := c.try("--home", "bob", "join", code)
+	if err == nil || !strings.Contains(out, "--agent NAME is required") || !strings.Contains(out, "bob/NAME") {
+		t.Fatalf("join without --agent: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(c.dir, "bob")); !os.IsNotExist(err) {
+		t.Fatalf("join without --agent created the home (%v)", err)
+	}
+	out = c.run("--home", "bob", "join", "--agent", "desk", code) // clean, isolated home
 	if !strings.Contains(out, "enrolled bob/desk") {
 		t.Fatalf("join: %s", out)
 	}
@@ -88,5 +101,18 @@ func TestInvitationPacket(t *testing.T) {
 		if strings.Contains(string(data), strings.TrimPrefix(code, "agentnet-invite-v1:")) {
 			t.Fatalf("invite code appears in %s", l)
 		}
+	}
+}
+
+// TestAdminInviteNeedsLabel: a missing label is refused with an instruction
+// to ask the human, and no invite is created.
+func TestAdminInviteNeedsLabel(t *testing.T) {
+	c := buildCLI(t)
+	c.start("hub.log", "hub", "serve", "--data", "hub", "--listen", freeAddr(t))
+	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
+	c.run("--home", "alice", "join", "--agent", "laptop", c.run("hub", "bootstrap-invite", "--raw", "--data", "hub"))
+	out, err := c.try("--home", "alice", "admin", "invite")
+	if err == nil || !strings.Contains(out, "ask your person who is being invited") || !strings.Contains(out, "--admin does") {
+		t.Fatalf("invite without label: %v\n%s", err, out)
 	}
 }

@@ -22,7 +22,8 @@ Docker, root, VPN, OAuth provider, database or model service.
 
 Get started on a laptop:
   1. Install agentnet on your PATH: agentnet help install (Go 1.26 build; no release binaries yet)
-  2. agentnet join --agent laptop 'agentnet-invite-v1:...'   use the invite your admin sent
+  2. agentnet join --agent NAME 'agentnet-invite-v1:...'     the invitation your admin sent;
+     NAME is what the person calls this computer's agent: ask them, never guess
   3. agentnet daemon                                         leave running; it receives messages
   Then: agentnet send bob/desk "hello"   (addresses are person/agent)
 
@@ -60,6 +61,7 @@ Running and checking:
 
 Admin (from an admin agent):
   admin invite, admin revoke
+  Ask the person for the invitee's name (the LABEL); never reuse your own or guess.
 
 Hub (on the server):
   hub serve, hub bootstrap-invite, hub storage, hub cleanup, hub backup, hub restore
@@ -75,14 +77,18 @@ Tested on Linux; macOS and Windows run in CI. Also: docs/revival/INSTALL.md
 
 // topics maps a command (or "command subcommand") to its help text.
 var topics = map[string]string{
-	"join": `Usage: agentnet [--home DIR] join [--agent NAME] CODE
+	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE
 
 Enroll this computer as an agent with an invite code from your admin. Creates
 keys in the home directory, registers them with the Hub, and prints your
-address (person/agent) and key fingerprint. NAME defaults to the host name.
-If the answer is lost, run the same command again; it reuses the same keys.
+address (LABEL/NAME) and key fingerprint. LABEL comes from the invitation;
+NAME is required and chosen by the person: ask them what to call this agent
+(lowercase letters, digits, hyphens) and confirm the full address before
+joining. Nothing is created until NAME is given. If the answer is lost, run
+the same command again; it reuses the same keys. An existing enrollment in
+the home is never replaced.
 
-Example:
+Example (after the person chose "laptop"):
   agentnet join --agent laptop 'agentnet-invite-v1:eyJodWIiOi...'`,
 
 	"whoami": `Usage: agentnet whoami
@@ -248,8 +254,14 @@ were abandoned, and direct uploads never attached to a message.
 	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
        agentnet admin revoke ADDRESS
 
-Run on an admin agent. invite prints a self-contained invitation for the
-person LABEL (their address becomes LABEL/agent): project and install links,
+Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
+bob): ask your person who is being invited and what name to use, unless they
+already said so for this invitation. Never reuse your own label, "admin", a
+user or host name, or a model name. The label is a name, not a role; only
+--admin grants admin rights.
+
+invite prints a self-contained invitation for the person LABEL (their
+address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,
 install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
 steps, how to confirm back to you, and the private single-use invite code.
 Give the whole text to the coding agent on their computer, privately. The
@@ -358,7 +370,7 @@ Windows (PowerShell):
   # open a new terminal so PATH updates
 
 Check: agentnet version
-Next:  agentnet join --agent laptop 'agentnet-invite-v1:...'  then  agentnet help startup
+Next:  agentnet join --agent NAME 'agentnet-invite-v1:...' (ask the person for NAME), then agentnet help startup
 Cross-building for other systems: scripts/build.sh (POSIX shell).`,
 
 	"startup": `Start agentnet daemon at login

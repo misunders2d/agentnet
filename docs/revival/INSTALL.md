@@ -36,8 +36,11 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
 ## A laptop, in three commands
 
 1. Install it as above (on your `PATH`).
-2. `agentnet join --agent laptop 'agentnet-invite-v1:…'` with the invite your
-   admin sent you. Keys and state go to the default home (`agentnet` under
+2. `agentnet join --agent NAME 'agentnet-invite-v1:…'` with the invite your
+   admin sent you. The invitation names you (check it is right); NAME is what
+   you call this computer's agent (e.g. `laptop`), making your address
+   `you/NAME`. `--agent` is required; a coding agent doing this for you should
+   ask you for both and confirm the address before joining. Keys and state go to the default home (`agentnet` under
    your user config directory: `~/.config/agentnet` on Linux,
    `~/Library/Application Support/agentnet` on macOS, `%AppData%\agentnet` on
    Windows) or to `--home DIR` / `AGENTNET_HOME`.
@@ -78,7 +81,10 @@ docker compose exec hub agentnet hub bootstrap-invite   # first admin invitation
 The Hub creates its own certificate in the volume and pins it in every
 invite, so no domain certificate is needed. The first person joins with the
 bootstrap invite and becomes admin; `agentnet admin invite LABEL` makes
-more. Both print a self-contained invitation to hand, privately, to the
+more. LABEL is the invited person's name as they confirm it (not the
+inviter's label, a user name or a role; `--admin` grants admin rights). The
+bootstrap invite's name comes from `--admin-label` (default `admin`); set it
+to the first admin's name before anyone joins. Both print a self-contained invitation to hand, privately, to the
 coding agent on the invitee's computer: project and install links,
 install-from-source steps per OS, join/daemon/doctor steps, a warning not to
 replace an existing enrollment, how to confirm back to the inviter, and the
