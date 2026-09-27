@@ -75,3 +75,35 @@ func TestReceiptWait(t *testing.T) {
 		t.Fatalf("wait on a delivered message: %s after %s", s, time.Since(start))
 	}
 }
+
+// A caller revoked while waiting gets no receipt, even if the recipient
+// acknowledges afterwards.
+func TestReceiptWaitEndsOnRevocation(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	boss := enroll(t, h, "boss")
+	h.store.db.Exec(`UPDATE agents SET admin = 1 WHERE address = ?`, boss.addr)
+	id := sendMessage(t, h, alice, bob)
+	type result struct {
+		code  int
+		state string
+		took  time.Duration
+	}
+	done := make(chan result, 1)
+	go func() {
+		t0 := time.Now()
+		c, s := waitState(t, h, alice, id, "10s")
+		done <- result{c, s, time.Since(t0)}
+	}()
+	time.Sleep(100 * time.Millisecond) // the wait is registered
+	if c, b := boss.call(t, h, "POST", "/v1/admin/revoke", protocol.RevokeRequest{Address: alice.addr}); c != 200 {
+		t.Fatalf("revoke: %d %s", c, b)
+	}
+	r := <-done
+	if r.state != "" || r.took > 5*time.Second {
+		t.Fatalf("revoked waiter got %+v", r)
+	}
+	bob.call(t, h, "POST", "/v1/messages/"+id+"/ack", protocol.AckRequest{State: protocol.StateDelivered})
+	if c, _ := waitState(t, h, alice, id, "1s"); c != http.StatusForbidden {
+		t.Fatalf("revoked agent waiting again: %d", c)
+	}
+}

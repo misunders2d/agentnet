@@ -286,6 +286,7 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	h.streams.disconnect(req.Address)
 	h.presence.drop(req.Address)
+	h.waiters.notifyAll() // a revoked agent's receipt waits end without a state
 	h.cfg.Logf("revoked %s by %s", req.Address, caller)
 	writeJSON(w, http.StatusOK, map[string]string{"revoked": req.Address})
 }

@@ -507,3 +507,20 @@ func countPaths(l *requestLog, part string) int {
 	}
 	return n
 }
+
+// The receipt wait may be longer than the transport's response-header
+// timeout: the Hub sends headers at once.
+func TestReceiptWaitOutlivesHeaderTimeout(t *testing.T) {
+	defer func(d time.Duration) { requestTimeout = d }(requestTimeout)
+	requestTimeout = 300 * time.Millisecond // header timeout of connections made below
+	w := newWorld(t, "")
+	res, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "x"}) // bob offline
+	if err != nil || res.State != protocol.StateCustody {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	start := time.Now()
+	r, err := w.alice.Status(tctx(t), res.ID, time.Second)
+	if err != nil || r.State != protocol.StateCustody || time.Since(start) < time.Second {
+		t.Fatalf("1s wait with 300ms header timeout: %+v, %v after %s", r, err, time.Since(start))
+	}
+}

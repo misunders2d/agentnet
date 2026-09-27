@@ -292,7 +292,7 @@ func printResult(r client.SendResult, wait time.Duration) {
 	case r.State == protocol.StateDelivered:
 		fmt.Fprintln(os.Stderr, "delivered: stored in the recipient's inbox (not necessarily read or answered yet)")
 	case r.State == protocol.StateCustody && wait > 0:
-		fmt.Fprintf(os.Stderr, "held by the Hub, not delivered within %s (recipient offline or busy); it will be delivered when they connect. Check: agentnet status --wait 30s %s\n", wait, r.ID)
+		fmt.Fprintf(os.Stderr, "held by the Hub; delivery to the recipient not confirmed yet. Check: agentnet status --wait 30s %s\n", r.ID)
 	case r.State == protocol.StateQuarantined:
 		fmt.Fprintln(os.Stderr, "the recipient received it but could not verify it (e.g. your key changed for them)")
 	}

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -69,7 +70,10 @@ func (w *waiters) notifyAll() {
 // longer in custody, or with the current state after ?timeout (at most
 // MaxReceiptWait). It is one bounded request per wait, woken by the
 // recipient's acknowledgement; the waiter subscribes before reading the
-// state, so a change between the two is never missed.
+// state, so a change between the two is never missed. Response headers are
+// sent at once so clients' header timeouts do not cut the wait short; the
+// caller's membership is checked again before every answer, and revocation
+// wakes waiters, so a revoked agent learns nothing more.
 func (h *Hub) handleReceiptWait(w http.ResponseWriter, r *http.Request) {
 	caller, ok := h.authenticate(w, r)
 	if !ok {
@@ -86,25 +90,43 @@ func (h *Hub) handleReceiptWait(w http.ResponseWriter, r *http.Request) {
 	defer h.waiters.remove(id, ch)
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
+	if _, _, _, err := h.store.messageState(id, caller); err != nil {
+		writeError(w, http.StatusNotFound, "", "unknown message")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	http.NewResponseController(w).Flush()
+	answer := func(state string) {
+		if a, err := h.store.agent(caller); err != nil || a.Revoked {
+			json.NewEncoder(w).Encode(protocol.Receipt{ID: id}) // no state for a revoked caller
+			return
+		}
+		json.NewEncoder(w).Encode(protocol.Receipt{ID: id, State: state})
+	}
 	for {
 		_, _, state, err := h.store.messageState(id, caller)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "", "unknown message")
+			answer("")
 			return
 		}
 		if state != protocol.StateCustody {
-			writeJSON(w, http.StatusOK, protocol.Receipt{ID: id, State: state})
+			answer(state)
 			return
 		}
 		select {
 		case <-ch:
+			if a, err := h.store.agent(caller); err != nil || a.Revoked {
+				answer("")
+				return
+			}
 		case <-deadline.C:
-			writeJSON(w, http.StatusOK, protocol.Receipt{ID: id, State: state})
+			answer(state)
 			return
 		case <-r.Context().Done():
 			return
 		case <-h.done:
-			writeJSON(w, http.StatusOK, protocol.Receipt{ID: id, State: state})
+			answer(state)
 			return
 		}
 	}

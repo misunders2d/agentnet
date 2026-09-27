@@ -411,8 +411,8 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 	if wait > 0 {
 		r, err = a.waitReceipt(ctx, id, wait)
 		var he *HubError
-		if errors.As(err, &he) && he.Status == 404 && he.Msg != "unknown message" {
-			wait = 0 // an older Hub without receipt waits
+		if (errors.As(err, &he) && he.Status == 404 && he.Msg != "unknown message") || (err == nil && r.State == "") {
+			wait = 0 // an older Hub without receipt waits, or no state given: ask plainly
 		}
 	}
 	if wait <= 0 {
