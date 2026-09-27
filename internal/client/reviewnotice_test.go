@@ -146,7 +146,7 @@ func TestReviewNoticeNotQueuedStaysPending(t *testing.T) {
 	if err := w.bob.SetReviewTo("nobody/none"); err != nil {
 		t.Fatal(err)
 	}
-	stopBob, _ := runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.bob, RunOptions{})
 	runWith(t, w, w.alice, RunOptions{})
 	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
 	if err != nil {
@@ -163,11 +163,19 @@ func TestReviewNoticeNotQueuedStaysPending(t *testing.T) {
 		t.Fatalf("%d notice(s) queued", queued)
 	}
 
-	stopBob()
+	// Wake-ups alone (as Hub pings cause) do not retry the failed item.
+	for i := 0; i < 3; i++ {
+		w.bob.wakeWorker()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if reviewSent(t, w.bob, q.ID) {
+		t.Fatal("retried on a wake-up")
+	}
+	// Correcting the address wakes the running daemon and retries at once,
+	// without a restart.
 	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
-	runWith(t, w, w.bob, RunOptions{})
 	eventually(t, "notice after fixing the address", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 1 })
 	if !reviewSent(t, w.bob, q.ID) {
 		t.Fatal("not marked after the notice was queued")
@@ -239,5 +247,70 @@ func TestReviewNoticeShape(t *testing.T) {
 	w.bob.store.db.QueryRow(`SELECT count(*), max(detail) FROM inbox WHERE id = ?`, in.ID).Scan(&n, &detail)
 	if n != 1 || !strings.Contains(detail.String, w.alice.Address) {
 		t.Fatalf("rows %d, detail %q", n, detail.String)
+	}
+}
+
+// An item reported once and then back in review for a new reason (accepted,
+// then the responder asks for a person) is reported again in the same run.
+func TestReviewNoticeAgainAfterNeedsHuman(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	fakeNotify(w.bob)
+	setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
+	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "first notice", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 1 })
+	if err := w.bob.Accept(q.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "needs_human", func() bool { s, _ := w.bob.store.jobState(q.ID); return s == stateNeedHuman })
+	eventually(t, "second notice", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 2 })
+}
+
+// Follow-ups the local responder marked needs_human (answers, results,
+// messages) are local items and count; received notices do not, and
+// anything short of the exact notice shape is not treated as one.
+func TestReviewNoticeCountsLocalFollowUps(t *testing.T) {
+	w := newWorld(t, "")
+	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	add := func(kind, status, replyTo string) string {
+		id := protocol.NewID()
+		if _, err := w.bob.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, status, state)
+			VALUES(?, ?, 0, ?, 'x', nullif(?, ''), 0, nullif(?, ''), ?)`, id, w.alice.Address, kind, replyTo, status, stateNeedHuman); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	local := []string{
+		add(envelope.KindAnswer, envelope.StatusDone, protocol.NewID()),
+		add(envelope.KindResult, envelope.StatusFailed, protocol.NewID()),
+		add(envelope.KindMessage, "", protocol.NewID()),
+		add(envelope.KindMessage, envelope.StatusReviewNotice, protocol.NewID()), // not the exact shape
+	}
+	received := add(envelope.KindMessage, envelope.StatusReviewNotice, "")
+	w.bob.sendReviewNotice(tctx(t))
+	for _, id := range local {
+		if !reviewSent(t, w.bob, id) {
+			t.Fatalf("local item %s not reported", id)
+		}
+	}
+	if reviewSent(t, w.bob, received) {
+		t.Fatal("received notice reported onward")
+	}
+	var body string
+	if err := w.bob.store.db.QueryRow(`SELECT body FROM outbox WHERE status = ?`, envelope.StatusReviewNotice).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(body, "4 request(s) wait") {
+		t.Fatalf("notice = %q", body)
 	}
 }
