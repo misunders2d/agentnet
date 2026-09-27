@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -289,7 +290,10 @@ func TestAttachmentMemoryIsBounded(t *testing.T) {
 			}
 		}
 	}()
-	_, err := w.alice.Send(tctx(t), w.bob.Address, "large", "", path)
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "large", "", path)
+	if err == nil && res.State != protocol.StateCustody {
+		err = fmt.Errorf("send not in custody: %s (%s)", res.State, res.Detail)
+	}
 	var msg Message
 	if err == nil {
 		msg = receive(t, w)

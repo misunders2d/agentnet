@@ -269,20 +269,23 @@ func TestSessionAddressing(t *testing.T) {
 // Hub's pings on the already-open streams: no requests reach the Hub.
 func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
-	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: 50 * time.Millisecond}, "127.0.0.1:0")}
+	// A ping interval well above one signed request's round trip on slow CI
+	// disks (Windows), so a live daemon's ack is never late.
+	const beat = 250 * time.Millisecond
+	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
 	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
 	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
-	w.alice.heartbeat, w.bob.heartbeat = 50*time.Millisecond, 50*time.Millisecond
+	w.alice.heartbeat, w.bob.heartbeat = beat, beat
 	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
 	runWith(t, w, w.alice, RunOptions{})
 	time.Sleep(200 * time.Millisecond) // let connect-time sync finish
 	stats := w.hub.Hub.Stats()
 	reqs, acks := stats.Requests.Load(), stats.Acks.Load()
-	time.Sleep(time.Second) // ~20 ping intervals
+	time.Sleep(2 * time.Second) // ~8 ping intervals
 	reqs, acks = stats.Requests.Load()-reqs, stats.Acks.Load()-acks
-	// Two connected daemons answer ~20 pings each; nothing else is asked.
-	if reqs != acks || acks > 2*(1000/50+1) {
+	// Two connected daemons answer ~8 pings each; nothing else is asked.
+	if reqs != acks || acks == 0 || acks > 2*(2000/250+1) {
 		t.Fatalf("%d requests (%d ping acks) during idle", reqs, acks)
 	}
 }
@@ -357,7 +360,7 @@ type slowPuts struct{ base http.RoundTripper }
 
 func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Method == "PUT" {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 	return s.base.RoundTrip(r)
 }
@@ -366,14 +369,14 @@ func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
 // incoming messages still arrive while it is in progress.
 func TestQueuedUploadDoesNotBlockStream(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
-	const beat = 50 * time.Millisecond
+	const beat = 250 * time.Millisecond // above a signed ack's round trip on slow CI disks
 	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
 	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
 	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
 	w.alice.heartbeat = beat
 
-	path, _ := writeFile(t, t.TempDir(), "long.bin", 5<<20) // ~11 chunks × 100 ms
+	path, _ := writeFile(t, t.TempDir(), "long.bin", 5<<20) // ~11 chunks × 200 ms
 	if _, err := w.alice.Send(tctx(t), w.bob.Address, "pin keys", ""); err != nil {
 		t.Fatal(err)
 	}
