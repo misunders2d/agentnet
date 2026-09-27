@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,9 +148,12 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	} else {
 		add("membership", true, "active")
 	}
+	var hubErr *HubError
 	switch r, err := a.HubRelease(ctx); {
+	case errors.As(err, &hubErr) && hubErr.Status == http.StatusNotFound:
+		add("update", true, "recommendation endpoint unavailable (an older Hub may not support it)")
 	case err != nil:
-		add("update", true, "the Hub gives no client recommendation (%v)", err)
+		add("update", true, "recommendation unknown or unavailable: %v", err)
 	case r.Version == "":
 		add("update", true, "no client version recommended by the Hub")
 	case r.Version == protocol.Version:

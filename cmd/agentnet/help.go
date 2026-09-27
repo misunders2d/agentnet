@@ -126,7 +126,7 @@ Examples:
   agentnet send bob/desk "build is green"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a question. If the recipient approved you and chose a responder, their
 harness answers automatically in the background; otherwise it waits for them.
@@ -138,7 +138,7 @@ not that it was answered.
 Example:
   agentnet ask --follow-up "tell me if staging needs a migration" bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a task. It never runs by itself: the recipient must accept it, then
 their responder runs it with their normal permissions. The outcome arrives as
@@ -312,7 +312,8 @@ conversation: the next question in the same conversation (same agent), or
 the next accepted task, resumes the session the previous one used, so the
 harness keeps its own context. It only resumes when the harness, mode
 (question or task), directory and flags are the same and the previous job
-there ended cleanly; otherwise it starts a new session. These are never
+there was the session's latest one and ended cleanly; otherwise it starts a
+new session. Continue a conversation with ask --reply-to ID. These are never
 sessions you opened. Their saved context is the harness's own data on disk
 (~/.claude/projects, ~/.codex/sessions), kept by the harness. Pi runs every
 job fresh. Follow-ups stay one-shot summaries.
@@ -613,10 +614,17 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
-	"follow-up": true, "offset": true, "limit": true,
+	"follow-up": true, "offset": true, "limit": true, "reply-to": true,
 }
 
 const followUpHelp = `
+--reply-to ID continues a conversation: ID must be a message you sent to or
+received from ADDRESS (agentnet conversation ID shows it). The recipient's
+background responder can then resume the session it used for that
+conversation (see agentnet help responder); a task still waits for them to
+accept it.
+
+
 --follow-up TEXT stays on this computer. When the recipient's first reply
 arrives, your responder processes it once in the background (in question
 mode; see agentnet help responder) with TEXT, the earlier messages and the

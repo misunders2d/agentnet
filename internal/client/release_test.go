@@ -1,6 +1,8 @@
 package client
 
 import (
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,4 +156,43 @@ func TestLocalReleaseCreatesNothing(t *testing.T) {
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatal("home created")
 	}
+}
+
+// doctor tells a missing endpoint, an unknown answer and a confirmed "none"
+// apart.
+func TestDoctorReleaseLine(t *testing.T) {
+	w := newWorld(t, "")
+	line := func() string {
+		for _, c := range w.bob.Doctor(tctx(t)) {
+			if c.Name == "update" {
+				return c.Result
+			}
+		}
+		return ""
+	}
+	if got := line(); got != "no client version recommended by the Hub" {
+		t.Fatalf("none: %q", got)
+	}
+	base := w.bob.hub.http.Transport
+	w.bob.hub.http.Transport = notFoundRT{base, "/v1/release"}
+	if got := line(); !strings.HasPrefix(got, "recommendation endpoint unavailable (an older Hub may not support it)") {
+		t.Fatalf("404: %q", got)
+	}
+	w.bob.hub.http.Transport = base
+	injectFaults(w.bob).add("GET", "/v1/release", 1, false)
+	if got := line(); !strings.HasPrefix(got, "recommendation unknown or unavailable") {
+		t.Fatalf("error: %q", got)
+	}
+}
+
+type notFoundRT struct {
+	base http.RoundTripper
+	path string
+}
+
+func (rt notFoundRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Path == rt.path {
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("404 page not found")), Request: r, Header: http.Header{}}, nil
+	}
+	return rt.base.RoundTrip(r)
 }

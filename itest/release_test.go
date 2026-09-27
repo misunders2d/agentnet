@@ -1,9 +1,11 @@
 package itest
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -60,4 +62,78 @@ func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
 			return b.String(), nil
 		}
 	}
+}
+
+// TestCLIReplyToResumesSession: `ask --reply-to` continues a conversation
+// from the CLI; the recipient's responder resumes its session after a
+// daemon restart. Unknown ids and ids with another agent are refused.
+func TestCLIReplyToResumesSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stand-in responder is a shell script")
+	}
+	c := buildCLI(t)
+	_, _ = c.setup(t, "hub")
+	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "carol"))
+	stub := filepath.Join(c.dir, "stub")
+	os.MkdirAll(stub, 0o700)
+	os.WriteFile(filepath.Join(stub, "claude"), []byte("#!/bin/sh\necho \"$*\" >> \"$0.args\"\ncat > /dev/null\necho answered\n"), 0o700)
+	work := filepath.Join(c.dir, "work")
+	os.MkdirAll(work, 0o700)
+	c.run("--home", "bob", "responder", "set", "--harness", "claude", "--dir", work)
+	c.run("--home", "bob", "approve", "admin/laptop")
+	c.env = []string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}
+	stopBob := c.start("bob1.log", "--home", "bob", "daemon")
+	c.env = nil
+	c.start("alice.log", "--home", "alice", "daemon")
+	answerTo := func(q string) string {
+		var id string
+		waitFor(t, "answer to "+q, func() bool {
+			for _, m := range c.inbox("alice") {
+				if m.Kind == "answer" && m.replyTo(c, q) {
+					id = m.ID
+					return true
+				}
+			}
+			return false
+		})
+		return id
+	}
+	q1 := strings.Fields(c.run("--home", "alice", "ask", "bob/desk", "first"))[0]
+	a1 := answerTo(q1)
+	stopBob()
+	c.env = []string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}
+	c.start("bob2.log", "--home", "bob", "daemon")
+	c.env = nil
+	if out, err := c.try("--home", "alice", "ask", "--reply-to", "unknown-id", "bob/desk", "x"); err == nil || !strings.Contains(out, "no message unknown-id") {
+		t.Fatalf("unknown id: %v %s", err, out)
+	}
+	if out, err := c.try("--home", "alice", "ask", "--reply-to", a1, "carol/desk", "x"); err == nil || !strings.Contains(out, "not carol/desk") {
+		t.Fatalf("other agent: %v %s", err, out)
+	}
+	q2 := strings.Fields(c.run("--home", "alice", "ask", "--reply-to", a1, "bob/desk", "second"))[0]
+	answerTo(q2)
+	data, _ := os.ReadFile(filepath.Join(stub, "claude.args"))
+	runs := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(runs) != 2 || !strings.Contains(runs[0], "--session-id ") {
+		t.Fatalf("runs: %q", runs)
+	}
+	id := strings.Fields(runs[0][strings.Index(runs[0], "--session-id ")+len("--session-id "):])[0]
+	if !strings.Contains(runs[1], "--resume "+id) {
+		t.Fatalf("second run did not resume %s: %s", id, runs[1])
+	}
+}
+
+// replyTo reports whether inbox entry m replies to id (read from JSON).
+func (m inboxEntry) replyTo(c *cli, id string) bool {
+	var all []struct {
+		ID      string `json:"id"`
+		ReplyTo string `json:"reply_to"`
+	}
+	json.Unmarshal([]byte(c.run("--home", "alice", "inbox", "--json")), &all)
+	for _, x := range all {
+		if x.ID == m.ID {
+			return x.ReplyTo == id
+		}
+	}
+	return false
 }

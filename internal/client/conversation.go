@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // ConversationMessage is one message of a conversation, sent or received,
@@ -139,6 +140,27 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		c.Messages = append(c.Messages, m)
 	}
 	return c, nil
+}
+
+// CheckReplyTo refuses to link a new message to id unless id is a message
+// stored here (sent or received) whose other party is the recipient to, so
+// a reply can only continue a conversation with that same agent.
+func (a *Agent) CheckReplyTo(id, to string) error {
+	addr, _, err := protocol.SplitTarget(to)
+	if err != nil {
+		return err
+	}
+	peer, err := a.store.peerOf(id)
+	if errors.Is(err, ErrNoMessage) {
+		return fmt.Errorf("no message %s here to reply to", id)
+	}
+	if err != nil {
+		return err
+	}
+	if peer != addr {
+		return fmt.Errorf("message %s is with %s, not %s: a reply continues the conversation with the same agent", id, peer, addr)
+	}
+	return nil
 }
 
 // peerOf returns the other party of a stored message.

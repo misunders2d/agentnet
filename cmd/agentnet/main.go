@@ -564,17 +564,23 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
 	followUp := fs.String("follow-up", "", "when the reply arrives, have your responder process it once with these instructions and keep a summary for you (nothing is sent back)")
+	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
+	}
+	if *replyTo != "" {
+		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
+			return err
+		}
 	}
 	msgKind := envelope.KindQuestion
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait, FollowUp: *followUp})
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait, FollowUp: *followUp, ReplyTo: *replyTo})
 	if err != nil {
 		return err
 	}

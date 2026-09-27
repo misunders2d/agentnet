@@ -242,7 +242,7 @@ func TestCodexStyleSession(t *testing.T) {
 	}
 	q2, a2 := ask(t, w, a1)
 	runs := st.runs()
-	if !strings.HasPrefix(runs[0], "run exec --sandbox read-only --color never --disable shell_tool --json -o ") {
+	if !strings.HasPrefix(runs[0], "run exec --sandbox read-only --color never --disable shell_tool --json -o ") || !strings.HasSuffix(runs[0], " -") {
 		t.Fatalf("first run: %s", runs[0])
 	}
 	if !strings.HasPrefix(runs[1], `run exec resume thread-1 -c sandbox_mode="read-only" --disable shell_tool -o `) || !strings.HasSuffix(runs[1], " -") {
@@ -293,5 +293,116 @@ func TestSessionRecordFailure(t *testing.T) {
 		if h == "cstyle" && (ran != 0 || !strings.Contains(m.Detail, "nothing was run")) {
 			t.Fatalf("%s: runs %d, detail %q", h, ran, m.Detail)
 		}
+	}
+}
+
+// Only the latest job in a session can lead to its resume: a branch from an
+// older message of the conversation starts fresh, whether the later job
+// failed, was cancelled or succeeded; and without a recorded head (sessions
+// from before heads were kept) nothing is resumed.
+func TestSessionOnlyLatestJobResumes(t *testing.T) {
+	st := sessionStub(t)
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "cstyle", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	resumed := func() bool { runs := st.runs(); return strings.Contains(runs[len(runs)-1], "--resume") }
+
+	q1, a1 := ask(t, w, "")
+	s := sessionOf(t, w.bob, q1).ID
+	q2, a2 := ask(t, w, a1) // continues the session: q2 is its head now
+	if !resumed() || sessionOf(t, w.bob, q2).ID != s {
+		t.Fatal("q2 did not resume")
+	}
+	q3, _ := ask(t, w, a1) // a branch from q1, after the successful q2
+	if resumed() || sessionOf(t, w.bob, q3).ID == s {
+		t.Fatal("a branch from an older message resumed the session")
+	}
+	if _, _ = ask(t, w, a2); !resumed() {
+		t.Fatal("continuing from the head q2 did not resume")
+	}
+
+	// A failed and a cancelled job each leave their own session unresumable.
+	for _, mode := range []string{"fail", "sleep"} {
+		p, pa := ask(t, w, "")
+		ps := sessionOf(t, w.bob, p).ID
+		os.Setenv("STUB_MODE", mode)
+		os.Remove(st.log + ".child")
+		bad, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: mode, Kind: envelope.KindQuestion, ReplyTo: pa})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode == "sleep" {
+			waitState(t, w.bob, bad.ID, stateRunning)
+			eventually(t, "stub child", func() bool { _, err := os.Stat(st.log + ".child"); return err == nil })
+			w.bob.Cancel(bad.ID)
+			waitState(t, w.bob, bad.ID, stateCancelled)
+		} else {
+			waitState(t, w.bob, bad.ID, stateJobFailed)
+		}
+		os.Setenv("STUB_MODE", "answer")
+		r, _ := ask(t, w, pa) // back to p, whose session a later job used
+		if ref := sessionOf(t, w.bob, r); resumed() || ref.ID == ps {
+			t.Fatalf("after a %s job the older message resumed its session", mode)
+		}
+	}
+
+	// A session recorded without a head is not resumed.
+	h, ha := ask(t, w, "")
+	w.bob.store.db.Exec(`DELETE FROM config WHERE k = ?`, headKey(*sessionOf(t, w.bob, h)))
+	if _, _ = ask(t, w, ha); resumed() {
+		t.Fatal("resumed a session without a recorded head")
+	}
+}
+
+// Execution order, not arrival order, decides the head: of two held
+// questions branching from the same answer, the one accepted first resumes
+// the session and the other, run later, starts fresh.
+func TestSessionHeadFollowsExecutionOrder(t *testing.T) {
+	st := sessionStub(t)
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "cstyle", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q1, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "first", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q1.ID, stateHeld)
+	w.bob.Accept(q1.ID)
+	var a1 Message
+	eventually(t, "answer", func() bool { var ok bool; a1, ok = findReply(w.alice, q1.ID); return ok })
+	s := sessionOf(t, w.bob, q1.ID).ID
+	early, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "arrives first", Kind: envelope.KindQuestion, ReplyTo: a1.ID})
+	late, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "arrives second", Kind: envelope.KindQuestion, ReplyTo: a1.ID})
+	waitState(t, w.bob, early.ID, stateHeld)
+	waitState(t, w.bob, late.ID, stateHeld)
+	w.bob.Accept(late.ID)
+	waitState(t, w.bob, late.ID, stateAnswered)
+	w.bob.Accept(early.ID)
+	waitState(t, w.bob, early.ID, stateAnswered)
+	if sessionOf(t, w.bob, late.ID).ID != s || sessionOf(t, w.bob, early.ID).ID == s {
+		t.Fatalf("heads: late %+v early %+v (session %s)", sessionOf(t, w.bob, late.ID), sessionOf(t, w.bob, early.ID), s)
+	}
+}
+
+// A reply link must name a message with the same agent.
+func TestCheckReplyTo(t *testing.T) {
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	runWith(t, w, w.bob, RunOptions{})
+	m, _ := w.alice.Send(tctx(t), w.bob.Address, "hi", "")
+	if err := w.alice.CheckReplyTo(m.ID, w.bob.Address); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.CheckReplyTo(m.ID, w.bob.Address+"#"+strings.Repeat("a", 32)); err != nil {
+		t.Fatalf("session-addressed: %v", err)
+	}
+	if err := w.alice.CheckReplyTo(m.ID, carol.Address); err == nil || !strings.Contains(err.Error(), "not "+carol.Address) {
+		t.Fatalf("wrong peer: %v", err)
+	}
+	if err := w.alice.CheckReplyTo("nope", w.bob.Address); err == nil || !strings.Contains(err.Error(), "no message nope") {
+		t.Fatalf("unknown id: %v", err)
 	}
 }

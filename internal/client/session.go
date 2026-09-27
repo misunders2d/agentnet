@@ -94,14 +94,16 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		note = "the earlier session of this conversation was not reused: the responder's directory, flags or program changed since"
 	case state != stateAnswered && state != stateSummary:
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: its last job ended as %q, so its state is uncertain", state)
+	case a.store.sessionHead(prev) != at:
+		note = "the earlier session of this conversation was not reused: a later job has run in it since, or its latest job is unknown"
 	default:
 		want.ID = prev.ID
-		return sessionPlan{args: resumeArgs(h, mode, base, prev.ID), tail: resumeTail(h), ref: &want, resume: true}, nil
+		return sessionPlan{args: resumeArgs(h, mode, base, prev.ID), tail: sessionTail(h), ref: &want, resume: true}, nil
 	}
 	if h.sessions == claudeSessions {
 		want.ID = newUUID()
 	}
-	return sessionPlan{args: createArgs(h, base, want.ID), ref: &want, note: note}, nil
+	return sessionPlan{args: createArgs(h, base, want.ID), tail: sessionTail(h), ref: &want, note: note}, nil
 }
 
 // createArgs starts a new saved session.
@@ -144,7 +146,9 @@ func resumeArgs(h harness, mode string, base []string, id string) []string {
 	return slices.Clone(base)
 }
 
-func resumeTail(h harness) []string {
+// sessionTail ends the arguments: codex reads the prompt from stdin when
+// given "-", as the verified create and resume runs did.
+func sessionTail(h harness) []string {
 	if h.sessions == codexSessions {
 		return []string{"-"}
 	}
@@ -238,15 +242,36 @@ func (s *store) sessionAncestor(peer, id string) (ref sessionRef, state, at stri
 	return ref, "", "", nil
 }
 
-// setSessionRef records the job's session while the worker still owns it.
+// setSessionRef records the job's session while the worker still owns it,
+// and, in the same transaction, makes this job the session's head: the
+// latest job that ran (or runs) in it. Only the head may lead to a resume,
+// so a branch from an older message of the conversation, or a job after a
+// later failure, starts fresh. Execution order, not arrival order, decides.
 func (s *store) setSessionRef(id string, ref sessionRef) error {
 	data, _ := json.Marshal(ref)
-	res, err := s.db.Exec(`UPDATE inbox SET session_ref = ? WHERE id = ? AND state IN (?, ?)`, string(data), id, stateRunning, stateCancelReq)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE inbox SET session_ref = ? WHERE id = ? AND state IN (?, ?)`, string(data), id, stateRunning, stateCancelReq)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return errors.New("the job is no longer owned by the worker")
 	}
-	return nil
+	if _, err := tx.Exec(`INSERT INTO config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, headKey(ref), id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func headKey(ref sessionRef) string { return "session_head:" + ref.Harness + ":" + ref.ID }
+
+// sessionHead returns the id of the latest job in ref's session, or "" if
+// none is recorded (e.g. sessions from before heads were kept).
+func (s *store) sessionHead(ref sessionRef) string {
+	v, _ := s.config(headKey(ref))
+	return v
 }
