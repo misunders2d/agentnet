@@ -177,13 +177,17 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 
-	turnFailed := false
-	switch text, ok := events.answer(); {
-	case events != nil && ok:
-		stdout.Write([]byte(text))
-	case events != nil && events.turnFailed:
-		turnFailed = true
-	case outPath != "":
+	// A codex session run's answer is its completed turn's last agent
+	// message; its -o file counts only for a completed turn without one.
+	failure, useFile := "", outPath != ""
+	if events != nil {
+		text, ok, why := events.result()
+		failure, useFile = why, !ok && why == "" && outPath != ""
+		if ok {
+			stdout.Write([]byte(text))
+		}
+	}
+	if useFile {
 		stdout.Reset()
 		stdout.truncated = false
 		if data, err := readCapped(outPath, maxOutput+1); err == nil {
@@ -206,8 +210,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.resume {
 			body = "resuming the background session " + plan.ref.ID + " failed; not retried automatically. " + body
 		}
-	case turnFailed:
-		status, body = envelope.StatusFailed, r.Harness+" reported that its turn failed"
+	case failure != "":
+		status, body = envelope.StatusFailed, failure
 	case body == "":
 		// The peer gets a generic reason; the harness's own words stay in
 		// the local daemon log.

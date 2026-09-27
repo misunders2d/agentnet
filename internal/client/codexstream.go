@@ -18,6 +18,7 @@ type codexStream struct {
 	threadID   string
 	last       string
 	hasLast    bool
+	damaged    bool // a line was dropped or unreadable since the last agent message
 	completed  bool
 	turnFailed bool
 }
@@ -57,10 +58,19 @@ func (c *codexStream) flush() {
 }
 
 func (c *codexStream) endLine() {
-	if !c.skipping {
+	if c.skipping {
+		c.drop() // too long to read: it may have been the final message
+	} else {
 		c.event(c.line)
 	}
 	c.line, c.skipping = c.line[:0], false
+}
+
+// drop records an event that could not be read. An earlier agent message is
+// no longer known to be the last one, so it is discarded; only a later
+// readable agent message can become the answer.
+func (c *codexStream) drop() {
+	c.last, c.hasLast, c.damaged = "", false, true
 }
 
 func (c *codexStream) event(line []byte) {
@@ -72,8 +82,12 @@ func (c *codexStream) event(line []byte) {
 			Text string `json:"text"`
 		} `json:"item"`
 	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		return
+	}
 	if json.Unmarshal(line, &ev) != nil {
-		return // not an event: ignored
+		c.drop()
+		return
 	}
 	switch ev.Type {
 	case "thread.started":
@@ -82,7 +96,7 @@ func (c *codexStream) event(line []byte) {
 		}
 	case "item.completed":
 		if ev.Item.Type == "agent_message" {
-			c.last, c.hasLast = ev.Item.Text, true
+			c.last, c.hasLast, c.damaged = ev.Item.Text, true, false
 		}
 	case "turn.completed":
 		c.completed = true
@@ -91,11 +105,20 @@ func (c *codexStream) event(line []byte) {
 	}
 }
 
-// answer is the final agent message of a turn that completed and did not
-// fail.
-func (c *codexStream) answer() (string, bool) {
-	if c == nil {
-		return "", false
+// result is the answer of a turn that completed and did not fail: its last
+// agent message (ok), or, when the turn carried none and nothing was lost,
+// neither text nor failure (the caller may use Codex's -o file). Otherwise
+// it is a failure reason, safe to show the peer; no partial text is given.
+func (c *codexStream) result() (text string, ok bool, failure string) {
+	switch {
+	case c.turnFailed:
+		return "", false, "codex reported that its turn failed"
+	case !c.completed:
+		return "", false, "codex did not report a completed turn"
+	case c.hasLast:
+		return c.last, true, ""
+	case c.damaged:
+		return "", false, "codex's final message could not be read"
 	}
-	return c.last, c.completed && !c.turnFailed && c.hasLast
+	return "", false, ""
 }

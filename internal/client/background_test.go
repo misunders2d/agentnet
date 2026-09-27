@@ -351,7 +351,7 @@ func TestCodexPresetInPlainDirectory(t *testing.T) {
 	installStub(t, "answer") // skips on Windows
 	bin := t.TempDir()
 	log := filepath.Join(bin, "log")
-	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncat >/dev/null\necho 'codex progress'\n" +
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncat >/dev/null\necho '{\"type\":\"turn.started\"}'\necho '{\"type\":\"turn.completed\"}'\n" +
 		"while [ $# -gt 0 ]; do [ \"$1\" = -o ] && printf 'codex answer' > \"$2\"; shift; done\n"
 	os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
