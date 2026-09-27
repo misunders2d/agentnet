@@ -21,12 +21,15 @@ type Responder struct {
 }
 
 // harness is how one installed coding agent is run headless, one-shot, in
-// its own session. Question mode must hold what it claims: no tools.
+// its own session. Question mode must hold what it claims: no tools, unless
+// limits says precisely what it does instead.
 type harness struct {
 	bin      string
 	question []string // no tools, no MCP servers, no persisted session
 	task     []string // the harness's normal permissions; nothing bypassed
 	stdin    bool     // prompt on stdin; otherwise as the last argument
+	out      string   // flag naming a file for the final answer; otherwise stdout
+	limits   string   // how question mode falls short of "no tools", if it does
 }
 
 // Harnesses lists the supported automatic responders. Flags were checked
@@ -40,12 +43,30 @@ var Harnesses = map[string]harness{
 		task:  []string{"-p", "--output-format", "text", "--no-session-persistence"},
 		stdin: true,
 	},
+	"codex": {
+		bin: "codex",
+		question: []string{"exec", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only",
+			"--skip-git-repo-check", "--color", "never", "-c", `web_search="disabled"`,
+			"--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "browser_use",
+			"--disable", "computer_use", "--disable", "image_generation", "--disable", "multi_agent",
+			"--disable", "memories", "--disable", "hooks", "--disable", "skill_search"},
+		task:  []string{"exec", "--ephemeral", "--color", "never"},
+		stdin: true,
+		out:   "-o",
+		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +
+			"web search, shell, apps, plugins, browser, computer use, image generation, sub-agents, memories, hooks and skill search off; " +
+			"Codex has no switch that removes every built-in tool, so it may still read files",
+	},
 	"pi": {
 		bin:      "pi",
 		question: []string{"-p", "--no-session", "--no-tools"},
 		task:     []string{"-p", "--no-session"},
 	},
 }
+
+// HarnessLimits describes how a responder's question mode differs from
+// "no tools", or is empty when it has no tools.
+func HarnessLimits(name string) string { return Harnesses[name].limits }
 
 // HarnessNames lists supported responders.
 func HarnessNames() []string {

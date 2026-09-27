@@ -19,10 +19,12 @@ import (
 
 // stubScript is a fake harness: it logs each run (cwd, args, stdin) and
 // behaves according to $STUB_MODE: answer, sleep (with a child process
-// whose pid it records), slow (1 s then answer) or fail.
+// whose pid it records), slow (1 s then answer) or fail. With the argument
+// --human it says the local human must decide.
 const stubScript = `#!/bin/sh
 echo "run cwd=$(pwd) args=$*" >> "$STUB_LOG"
 cat > "$STUB_LOG.stdin"
+case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;
@@ -49,7 +51,8 @@ func installStub(t *testing.T, mode string) *stub {
 	t.Setenv("STUB_MODE", mode)
 	Harnesses["stub"] = harness{bin: bin, question: []string{"--question-mode"}, task: []string{"--task-mode"}, stdin: true}
 	Harnesses["stub2"] = harness{bin: bin, question: []string{"--second"}, task: []string{"--second"}, stdin: true}
-	t.Cleanup(func() { delete(Harnesses, "stub"); delete(Harnesses, "stub2") })
+	Harnesses["stubhuman"] = harness{bin: bin, question: []string{"--human"}, task: []string{"--human"}, stdin: true}
+	t.Cleanup(func() { delete(Harnesses, "stub"); delete(Harnesses, "stub2"); delete(Harnesses, "stubhuman") })
 	return s
 }
 
@@ -323,19 +326,32 @@ func TestResponderSwitchOffAndSingleDaemon(t *testing.T) {
 
 // The real harness binaries accept every flag the presets use.
 func TestHarnessFlagsExist(t *testing.T) {
-	for name, h := range map[string]harness{"claude": Harnesses["claude"]} {
+	helpArgs := map[string][]string{"claude": {"--help"}, "codex": {"exec", "--help"}}
+	for name, args := range helpArgs {
+		h := Harnesses[name]
 		path, err := exec.LookPath(h.bin)
 		if err != nil {
 			t.Logf("%s not installed", name)
 			continue
 		}
-		help, err := exec.Command(path, "--help").CombinedOutput()
+		help, err := exec.Command(path, args...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s --help: %v", name, err)
 		}
-		for _, arg := range append(append([]string{}, h.question...), h.task...) {
+		for _, arg := range append(append([]string{h.out}, h.question...), h.task...) {
 			if strings.HasPrefix(arg, "-") && !strings.Contains(string(help), arg) {
 				t.Errorf("%s --help does not list %s", name, arg)
+			}
+		}
+		if name == "codex" { // every feature switched off must exist
+			features, err := exec.Command(path, "features", "list").CombinedOutput()
+			if err != nil {
+				t.Fatalf("codex features list: %v", err)
+			}
+			for i, arg := range h.question {
+				if arg == "--disable" && !strings.Contains(string(features), "\n"+h.question[i+1]+" ") {
+					t.Errorf("codex features list does not list %s", h.question[i+1])
+				}
 			}
 		}
 	}

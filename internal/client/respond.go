@@ -36,8 +36,8 @@ func takeOver(id, kind, newState string) func(*sql.Tx, string) error {
 		return nil
 	}
 	return func(tx *sql.Tx, replyID string) error {
-		res, err := tx.Exec(`UPDATE inbox SET state = ?, responder = 'manual', result_id = ? WHERE id = ? AND state IN (?, ?, ?, ?, ?, ?, ?)`,
-			newState, replyID, id, statePending, stateAccepted, stateHeld, stateAwaiting, stateJobFailed, stateInterrupt, stateCancelled)
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, responder = 'manual', result_id = ? WHERE id = ? AND state IN (?, ?, ?, ?, ?, ?, ?, ?)`,
+			newState, replyID, id, statePending, stateAccepted, stateHeld, stateAwaiting, stateJobFailed, stateInterrupt, stateCancelled, stateNeedHuman)
 		if err != nil {
 			return err
 		}
@@ -104,6 +104,20 @@ func (a *Agent) Accept(id string) error {
 		return ErrNotPending
 	}
 	notifyDaemon(a.home)
+	return nil
+}
+
+// Resolve records that the local human dealt with an item the responder
+// marked as needing their decision. It sends nothing; to answer the sender,
+// use Reply or Decline instead.
+func (a *Agent) Resolve(id string) error {
+	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND state = ?`, stateResolved, id, stateNeedHuman)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return errors.New("nothing to resolve: not marked needs_human")
+	}
 	return nil
 }
 

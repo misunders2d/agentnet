@@ -48,6 +48,7 @@ Questions and tasks sent to you:
   decline    refuse a task or question
   cancel     stop your responder's current work on a message
   approve    answer an agent's questions automatically (unapprove to stop)
+  resolve    close an item your responder marked needs_human
   responder  choose the local harness that answers and runs tasks
 
 Identity and trust:
@@ -117,24 +118,26 @@ Examples:
   agentnet send bob/desk "build is green"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT
 
 Send a question. If the recipient approved you and chose a responder, their
 harness answers automatically in the background; otherwise it waits for them.
 The answer arrives in your inbox as kind "answer" replying to this message.
 Output and --wait as for send: "delivered" means it reached their inbox,
 not that it was answered.
+` + followUpHelp + `
 
 Example:
-  agentnet ask bob/desk "what is the deploy command for staging?"`,
+  agentnet ask --follow-up "tell me if staging needs a migration" bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT
 
 Send a task. It never runs by itself: the recipient must accept it, then
 their responder runs it with their normal permissions. The outcome arrives as
 kind "result" with a status (done, failed, timeout, cancelled, declined).
 Output and --wait as for send: "delivered" means it reached their inbox, not
 that it was accepted or done.
+` + followUpHelp + `
 
 Example:
   agentnet task bob/desk "update CHANGELOG.md for release 1.4"`,
@@ -148,13 +151,28 @@ responder is working on it (use agentnet cancel ID first).
 Example:
   agentnet reply 3f9c... "use make deploy-staging"`,
 
-	"inbox": `Usage: agentnet inbox [--unread] [--json]
+	"inbox": `Usage: agentnet inbox [--unread | --review] [--json]
 
 List received messages (and mark them read). Questions and tasks show their
 state: pending, held, awaiting, accepted, running, answered, manual, declined,
-failed, cancelled, interrupted. Reading never makes anything run.
+failed, cancelled, interrupted, needs_human, resolved. Replies you asked to
+follow up show summarized with the summary. Reading never makes anything run
+and never accepts or clears anything.
+
+Items waiting for your decision (--review):
+  held         a question from an agent you have not approved:
+               accept ID, reply ID TEXT, or decline ID
+  awaiting     a task: accept ID or decline ID (tasks never run by themselves)
+  needs_human  your responder stopped and asked you to decide (reason shown):
+               reply ID TEXT or decline ID answers a question or task;
+               resolve ID closes it without sending anything
+While the daemon runs, a desktop notification with only a count (no content)
+tells you when new items wait (Linux: notify-send; macOS: osascript; Windows:
+not yet; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
+log says so and the items still wait.
 
   --unread   only unread messages
+  --review   only items waiting for your decision; does not mark them read
   --json     machine-readable output`,
 
 	"download": `Usage: agentnet download [--dir DIR] [--force] ID
@@ -195,6 +213,11 @@ Refuse a task or question; the sender receives a result/answer with status
 Stop your responder while it is running ID. On Linux and macOS the harness and
 the processes it started are stopped; on Windows only the harness itself.`,
 
+	"resolve": `Usage: agentnet resolve ID
+
+Close an item your responder marked needs_human after you have dealt with it.
+It sends nothing; to answer the sender, use reply or decline instead.`,
+
 	"approve": `Usage: agentnet approve ADDRESS
        agentnet unapprove ADDRESS
 
@@ -211,9 +234,18 @@ accepted tasks, one at a time, in its own background session (never in a
 conversation you have open). It runs in DIR, where its own instructions and
 settings apply; nothing in its configuration is changed.
 
-Harnesses: claude (tested live), pi (not tested live). Questions run with all
-tools disabled; tasks run with the harness's normal permissions. Codex and
-Antigravity can read and reply by hand but are not automatic responders.
+Harnesses: claude (tested live), pi and codex (not tested live). With claude
+and pi, questions and follow-ups run with all tools disabled. Codex has no
+switch that removes every tool, so codex questions run restricted instead:
+read-only sandbox, no user config (no configured MCP servers), and web
+search, shell, apps, plugins, browser, computer use, image generation,
+sub-agents, memories, hooks and skill search off; it may still read files.
+Tasks run with the harness's normal permissions. Antigravity can read and
+reply by hand but is not an automatic responder.
+
+If the responder's first output line is exactly "AGENTNET: NEEDS-HUMAN",
+nothing is sent: the item becomes needs_human with the rest as the reason
+(see agentnet help inbox).
 
   --context FILE   text given with every question (repeatable)
   --timeout D      limit per question or task (default 5m)
@@ -473,7 +505,17 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
+	"follow-up": true,
 }
+
+const followUpHelp = `
+--follow-up TEXT stays on this computer. When the recipient's first reply
+arrives, your responder processes it once in the background (in question
+mode; see agentnet help responder) with TEXT, the earlier messages and the
+reply, and stores a short summary on that reply in your inbox (state
+summarized), or needs_human if it says you must decide. It sends nothing
+back and never runs anything the reply asks for. Later replies, and replies
+from anyone else, start nothing.`
 
 // guides are help topics that are not commands; running one prints it.
 var guides = map[string]bool{"install": true, "startup": true, "update": true, "uninstall": true}

@@ -16,6 +16,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/lockfile"
+	"github.com/misunders2d/agentnet/internal/notify"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -46,6 +47,9 @@ type Agent struct {
 	adQuery    string // this run's signed session ad, for the push stream
 	kick       func() // wakes the current stream's retry worker
 	wakeWorker func() // wakes the question/task worker; a no-op outside Run
+
+	notify      func(title, body string) error // desktop notification
+	notifyTried map[string]bool                // review items a notification was attempted for, this run
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -134,7 +138,7 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run the same `agentnet join` command again", home)
 	}
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}}
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify}
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
@@ -228,12 +232,28 @@ type Outgoing struct {
 	// after the Hub takes custody (one request, woken by the receipt).
 	Wait   time.Duration
 	Status string // outcome, for answers and results
+	// FollowUp, if set, stays local: when the recipient's first reply
+	// arrives, the worker processes it once with these instructions and
+	// stores a summary (or a needs-human flag) for the local user. It never
+	// sends anything back.
+	FollowUp string
 
 	releaseSpoolLock func()
 
 	// claim runs in the transaction that stores the outgoing message; it
 	// records which received question or task the message answers.
 	claim func(tx *sql.Tx, replyID string) error
+}
+
+const maxFollowUp = 4 << 10
+
+// desktopNotify shows a notification unless AGENTNET_NOTIFY=off (for
+// servers and tests).
+func desktopNotify(title, body string) error {
+	if os.Getenv("AGENTNET_NOTIFY") == "off" {
+		return errors.New("turned off by AGENTNET_NOTIFY=off")
+	}
+	return notify.Show(title, body)
 }
 
 // Send is SendMessage for the common case.
@@ -249,6 +269,9 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
 	if len(m.Files) > envelope.MaxAttachments {
 		return SendResult{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
+	}
+	if len(m.FollowUp) > maxFollowUp {
+		return SendResult{}, fmt.Errorf("follow-up instructions are limited to %d bytes", maxFollowUp)
 	}
 	to, session, err := protocol.SplitTarget(m.To)
 	if err != nil {
@@ -296,7 +319,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err == nil {
 		beforeOutbox()
-		err = a.store.addOutbox(env, m.Body, m.ReplyTo, m.claim)
+		err = a.store.addOutbox(env, m.Body, m.ReplyTo, m.FollowUp, m.claim)
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
@@ -438,6 +461,13 @@ func (a *Agent) Inbox(unreadOnly, markRead bool) ([]Message, error) {
 		ids[i] = m.ID
 	}
 	return msgs, a.store.markRead(ids)
+}
+
+// Review lists received items waiting for the local human's decision: held
+// questions, tasks awaiting acceptance, and items the responder marked
+// needs_human. Listing changes nothing, not even read state.
+func (a *Agent) Review() ([]Message, error) {
+	return a.store.messages(` WHERE `+inReview, reviewStates...)
 }
 
 // Fingerprints returns the pinned fingerprint ("" if none) and the one the

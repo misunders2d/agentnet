@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -307,6 +308,12 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	if err := a.store.interruptRunning(); err != nil {
 		return nil, err
 	}
+	if stale, _ := filepath.Glob(filepath.Join(a.home, outFilePrefix+"*")); len(stale) > 0 {
+		for _, f := range stale {
+			os.Remove(f) // answers of jobs a previous daemon left running
+		}
+	}
+	a.notifyTried = nil
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {

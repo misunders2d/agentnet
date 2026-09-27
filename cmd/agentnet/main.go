@@ -74,7 +74,7 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
 		return runSendKind(ctx, a, cmd, rest)
-	case "accept", "cancel", "approve", "unapprove":
+	case "accept", "cancel", "approve", "unapprove", "resolve":
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: %s ID-or-ADDRESS", cmd)
 		}
@@ -88,6 +88,8 @@ func run(args []string) error {
 			err = a.Approve(rest[0])
 		case "unapprove":
 			err = a.Unapprove(rest[0])
+		case "resolve":
+			err = a.Resolve(rest[0])
 		}
 		if err == nil {
 			fmt.Printf("%s %s\n", cmd, rest[0])
@@ -318,11 +320,18 @@ func runDownload(ctx context.Context, a *client.Agent, args []string) error {
 func runInbox(a *client.Agent, args []string) error {
 	fs := flag.NewFlagSet("inbox", flag.ContinueOnError)
 	unread := fs.Bool("unread", false, "only unread messages")
+	review := fs.Bool("review", false, "only items waiting for your decision (does not mark them read)")
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	msgs, err := a.Inbox(*unread, true)
+	var msgs []client.Message
+	var err error
+	if *review {
+		msgs, err = a.Review()
+	} else {
+		msgs, err = a.Inbox(*unread, true)
+	}
 	if err != nil {
 		return err
 	}
@@ -351,6 +360,9 @@ func runInbox(a *client.Agent, args []string) error {
 			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
 		}
 		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		if m.Detail != "" {
+			fmt.Printf("  [%s] %s\n", detailLabel(m.State), strings.ReplaceAll(m.Detail, "\n", "\n  "))
+		}
 		for _, f := range m.Attachments {
 			fmt.Printf("  [file] %q %d bytes", f.Name, f.Size)
 			if f.SavedPath != "" {
@@ -360,6 +372,17 @@ func runInbox(a *client.Agent, args []string) error {
 		}
 	}
 	return nil
+}
+
+// detailLabel names what an inbox item's detail text is.
+func detailLabel(state string) string {
+	switch state {
+	case "summarized":
+		return "follow-up summary"
+	case "needs_human":
+		return "needs your decision"
+	}
+	return "note"
 }
 
 func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
@@ -412,17 +435,18 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	var files []string
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
+	followUp := fs.String("follow-up", "", "when the reply arrives, have your responder process it once with these instructions and keep a summary for you (nothing is sent back)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] ADDRESS TEXT", kind)
 	}
 	msgKind := envelope.KindQuestion
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait})
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait, FollowUp: *followUp})
 	if err != nil {
 		return err
 	}
@@ -454,6 +478,9 @@ func runResponder(a *client.Agent, args []string) error {
 		for _, c := range r.Context {
 			fmt.Printf("context %s\n", c)
 		}
+		if l := client.HarnessLimits(r.Harness); l != "" {
+			fmt.Printf("note %s\n", l)
+		}
 		return nil
 	case "set":
 		fs := flag.NewFlagSet("responder set", flag.ContinueOnError)
@@ -472,6 +499,9 @@ func runResponder(a *client.Agent, args []string) error {
 			return err
 		}
 		fmt.Printf("responder %s in %s\n", r.Harness, r.Dir)
+		if l := client.HarnessLimits(r.Harness); l != "" {
+			fmt.Printf("note: %s\n", l)
+		}
 		return nil
 	}
 	return fmt.Errorf("unknown responder command %q", args[0])

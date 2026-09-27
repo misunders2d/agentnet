@@ -86,6 +86,10 @@ CREATE TABLE approvals(
   added_at INTEGER NOT NULL);
 `, `
 ALTER TABLE outbox ADD COLUMN reply_to TEXT;
+`, `
+ALTER TABLE outbox ADD COLUMN follow_up TEXT;
+ALTER TABLE outbox ADD COLUMN followed_by TEXT;
+ALTER TABLE inbox ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -168,7 +172,9 @@ func (s *store) setPending(p identity.Public) error {
 
 // addOutbox records a message and its pending uploads in one transaction,
 // together with claim (if any), which marks what the message answers.
-func (s *store) addOutbox(env envelope.Envelope, body, replyTo string, claim func(tx *sql.Tx, replyID string) error) error {
+// followUp, if set, binds the first reply from the recipient to one
+// background follow-up job (see initialState).
+func (s *store) addOutbox(env envelope.Envelope, body, replyTo, followUp string, claim func(tx *sql.Tx, replyID string) error) error {
 	data, _ := json.Marshal(env)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -180,8 +186,8 @@ func (s *store) addOutbox(env envelope.Envelope, body, replyTo string, claim fun
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''))`,
-		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix(), replyTo); err != nil {
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
+		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix(), replyTo, followUp); err != nil {
 		return err
 	}
 	for _, b := range env.Blobs {
@@ -289,7 +295,15 @@ const (
 	stateJobFailed = "failed"    // the worker ran and failed or timed out
 	stateCancelled = "cancelled" // cancelled while running
 	stateInterrupt = "interrupted"
+	stateSummary   = "summarized"  // a follow-up job stored its summary in detail
+	stateNeedHuman = "needs_human" // the responder said the local human must decide
+	stateResolved  = "resolved"    // the local human dealt with a needs_human item
 )
+
+// reviewStates are the states that wait for the local human's decision.
+var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
+
+const inReview = `state IN (?, ?, ?)`
 
 func inboxArgs(in envelope.Inner, state string) []any {
 	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state}
@@ -313,6 +327,32 @@ func initialState(db querier, in envelope.Inner) (string, error) {
 	return "", nil
 }
 
+// bindFollowUp makes a reply to a request sent with a follow-up eligible for
+// the worker. Only a reply from that request's recipient counts, and only the
+// first: the outbox row records which reply it went to, so further replies
+// (or the same reply under another id) start nothing.
+func bindFollowUp(tx *sql.Tx, in envelope.Inner) error {
+	if in.ReplyTo == "" || in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+		return nil
+	}
+	res, err := tx.Exec(`UPDATE outbox SET followed_by = ? WHERE id = ? AND recipient = ? AND follow_up IS NOT NULL AND followed_by IS NULL`,
+		in.ID, in.ReplyTo, in.From)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		_, err = tx.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, statePending, in.ID)
+	}
+	return err
+}
+
+// followUp returns the follow-up instructions bound to reply id.
+func (s *store) followUp(replyID string) (string, error) {
+	var text string
+	err := s.db.QueryRow(`SELECT follow_up FROM outbox WHERE followed_by = ?`, replyID).Scan(&text)
+	return text, err
+}
+
 type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
@@ -323,7 +363,14 @@ func insertInner(tx *sql.Tx, in envelope.Inner) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(insertInbox, inboxArgs(in, state)...); err != nil {
+	res, err := tx.Exec(insertInbox, inboxArgs(in, state)...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // already stored
+	}
+	if err := bindFollowUp(tx, in); err != nil {
 		return err
 	}
 	db := tx
@@ -569,8 +616,14 @@ func (s *store) disposition(id string) (string, error) {
 
 // job is a received question or task the worker has claimed.
 type job struct {
-	ID, From, Kind, Body, ReplyTo string
-	Attachments                   int
+	ID, From, Kind, Body, ReplyTo, Status string
+	Attachments                           int
+}
+
+// followUp reports whether j processes a reply to one of our requests,
+// rather than answering a question or running a task.
+func (j job) followUp() bool {
+	return j.Kind != envelope.KindQuestion && j.Kind != envelope.KindTask
 }
 
 // claimJob gives the oldest eligible question or task to the worker,
@@ -583,8 +636,8 @@ func (s *store) claimJob(responder string) (job, bool, error) {
 		WHERE id = (SELECT id FROM inbox WHERE state = ?
 		              OR (state = ? AND (kind != ? OR sender IN (SELECT address FROM approvals)))
 		            ORDER BY received_at, id LIMIT 1)
-		RETURNING id, sender, kind, body, coalesce(reply_to, '')`,
-		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo)
+		RETURNING id, sender, kind, body, coalesce(reply_to, ''), coalesce(status, '')`,
+		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, false, nil
 	}
@@ -601,11 +654,43 @@ func (s *store) jobState(id string) (string, error) {
 	return state, err
 }
 
-// finishJob records a job's end without a reply.
+// finishJob records a job's end without a reply. A new needs_human
+// outcome is notified afresh.
 func (s *store) finishJob(id, state, detail string) error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, '') WHERE id = ? AND state IN (?, ?)`,
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0 WHERE id = ? AND state IN (?, ?)`,
 		state, detail, id, stateRunning, stateCancelReq)
 	return err
+}
+
+// unnotified returns the ids of items waiting for the human that no desktop
+// notification has covered yet, and how many items wait in all.
+func (s *store) unnotified() (ids []string, total int, err error) {
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inReview, reviewStates...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var notified bool
+		if err := rows.Scan(&id, &notified); err != nil {
+			return nil, 0, err
+		}
+		total++
+		if !notified {
+			ids = append(ids, id)
+		}
+	}
+	return ids, total, rows.Err()
+}
+
+func (s *store) markNotified(ids []string) error {
+	for _, id := range ids {
+		if _, err := s.db.Exec(`UPDATE inbox SET notified = 1 WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // interruptRunning marks jobs a previous daemon left running. They are not
