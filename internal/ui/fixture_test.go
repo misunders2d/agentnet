@@ -32,7 +32,8 @@ func TestFixtureDecisions(t *testing.T) {
 		t.Fatalf("state %q", m.State)
 	}
 	reply := p.msgs[len(p.msgs)-1]
-	if reply.ReplyTo != task || reply.Kind != KindResult || reply.Status != "declined" || reply.Body != "not my repo" {
+	if reply.ReplyTo != task || reply.Kind != KindResult || reply.Status != "declined" || reply.Body != "not my repo" ||
+		reply.State != "delivered" {
 		t.Fatalf("decline reply %+v", reply)
 	}
 	if err := f.Act(Action{ID: task, Do: "accept"}); !errors.Is(err, ErrRefused) {
@@ -60,6 +61,28 @@ func TestFixtureDecisions(t *testing.T) {
 	}
 	if _, err := f.Send(Draft{Peer: "erin/lab", Kind: KindMessage, Body: "welcome back"}); err != nil {
 		t.Fatalf("send after trust: %v", err)
+	}
+}
+
+// Nothing sent to a peer whose computer is not connected shows as delivered.
+func TestFixtureOfflinePeerGetsCustody(t *testing.T) {
+	f := testFixture()
+	var held string
+	for _, it := range f.State().Review {
+		if it.Peer == "dave/srv" {
+			held = it.ID
+		}
+	}
+	if err := f.Act(Action{ID: held, Do: "decline"}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := f.find(held)
+	if got := p.msgs[len(p.msgs)-1]; got.Status != "declined" || got.State != "custody" {
+		t.Fatalf("decline to offline peer: %+v", got)
+	}
+	m, err := f.Send(Draft{Peer: "dave/srv", Kind: KindTask, Body: "check the cert pins"})
+	if err != nil || m.State != "custody" || m.Next != "Waiting on dave/srv" {
+		t.Fatalf("send to offline peer: %+v %v", m, err)
 	}
 }
 
@@ -127,7 +150,7 @@ func TestStateTextAndNext(t *testing.T) {
 	if got := StateText("out", KindQuestion, "delivered", "bob/desk"); got != "Delivered to bob/desk" {
 		t.Fatalf("delivered: %q", got)
 	}
-	if got := StateText("out", KindMessage, "custody", "bob/desk"); got != "Held by the Hub until bob/desk connects" {
+	if got := StateText("out", KindMessage, "custody", "bob/desk"); got != "Waiting on the server until bob/desk connects" {
 		t.Fatalf("custody: %q", got)
 	}
 	if got := Next("out", KindQuestion, "delivered", "bob/desk", true); got != "" {

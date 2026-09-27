@@ -186,11 +186,11 @@ func StateText(dir, kind, state, peer string) string {
 		case "queued":
 			return "Waiting to send; retries automatically"
 		case "custody":
-			return "Held by the Hub until " + peer + " connects"
+			return "Waiting on the server until " + peer + " connects"
 		case "delivered":
 			return "Delivered to " + peer
 		case "expired":
-			return "Not delivered: the session it was sent to ended"
+			return "Not delivered: that session ended first"
 		case "failed":
 			return "Not sent"
 		}

@@ -123,6 +123,15 @@ func (f *Fixture) peer(addr, presence string, approved bool) *fxPeer {
 	return p
 }
 
+// outState is where a new outgoing message ends up: delivered when the
+// peer's computer is connected, otherwise held by the server.
+func (p *fxPeer) outState() string {
+	if p.presence == "Their computer is connected" {
+		return "delivered"
+	}
+	return "custody"
+}
+
 func (f *Fixture) add(p *fxPeer, m *Message) *Message {
 	f.nextID++
 	m.ID = fmt.Sprintf("%08x%024x", 0x7a3f0000+f.nextID, f.nextID)
@@ -185,7 +194,7 @@ func (f *Fixture) State() State {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s := State{Demo: true, Me: f.me, Seq: f.seq, Conversations: []ConvSummary{}, Review: []ReviewItem{},
-		Machine: Machine{Hub: "Connected to the Hub (simulated)", Responder: f.harness, ResponderDir: f.dir}}
+		Machine: Machine{Hub: "Connected (simulated)", Responder: f.harness, ResponderDir: f.dir}}
 	for _, addr := range f.order {
 		p := f.peers[addr]
 		c := ConvSummary{Peer: addr, Presence: p.presence, Paused: p.notice != nil}
@@ -200,8 +209,9 @@ func (f *Fixture) State() State {
 				if m.Detail != "" {
 					why = m.Detail
 				}
+				why = strings.TrimPrefix(why, "Needs you: ")
 				s.Review = append(s.Review, ReviewItem{ID: m.ID, Peer: addr, Kind: m.Kind,
-					Why: strings.TrimPrefix(why, "Needs you: "), Excerpt: excerpt(m.Body)})
+					Why: strings.ToUpper(why[:1]) + why[1:], Excerpt: excerpt(m.Body)})
 			case strings.HasPrefix(v.Next, "Your responder"):
 				responder = true
 			case v.Next != "":
@@ -298,11 +308,7 @@ func (f *Fixture) Send(d Draft) (Message, error) {
 			return Message{}, Refuse("That item is already answered or being worked on.")
 		}
 	}
-	state := "delivered"
-	if !strings.Contains(p.presence, "connected") {
-		state = "custody"
-	}
-	m := &Message{Dir: "out", Kind: kind, At: f.now(), State: state, Path: "relay", Author: authorWindow,
+	m := &Message{Dir: "out", Kind: kind, At: f.now(), State: p.outState(), Path: "relay", Author: authorWindow,
 		Body: body, ReplyTo: d.ReplyTo, Files: d.Files}
 	if kind == KindAnswer || kind == KindResult {
 		m.Status = "done"
@@ -363,7 +369,7 @@ func (f *Fixture) Act(a Action) error {
 			body = "Declined."
 		}
 		f.add(p, &Message{Dir: "out", Kind: kind, At: f.now(), ReplyTo: m.ID, Status: "declined",
-			State: "delivered", Path: "relay", Author: authorWindow, Body: body})
+			State: p.outState(), Path: "relay", Author: authorWindow, Body: body})
 	case "resolve":
 		if !from("needs_human") {
 			return Refuse("Only an item that needs you can be closed.")
@@ -429,7 +435,7 @@ func (f *Fixture) Simulate(what string) error {
 			body = "(Simulated result from the demo responder.) Done; details attached."
 			files = []File{{Name: "result.txt", Size: 2_048}}
 		}
-		f.add(p, &Message{Dir: "out", Kind: kind, At: f.now(), ReplyTo: m.ID, Status: "done", State: "delivered",
+		f.add(p, &Message{Dir: "out", Kind: kind, At: f.now(), ReplyTo: m.ID, Status: "done", State: p.outState(),
 			Path: "relay", Author: authorResponder(f.harness, kind), Body: body, Files: files})
 	default:
 		return Refuse("Unknown simulation.")

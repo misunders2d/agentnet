@@ -2,7 +2,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { current: null, seq: -1, replyTo: null, lastIds: {}, stream: null };
+const state = { current: null, seq: -1, replyTo: null, lastIds: {}, lastPeer: null };
 
 // el builds an element; string children become text nodes.
 function el(tag, attrs, ...kids) {
@@ -14,7 +14,7 @@ function el(tag, attrs, ...kids) {
     else e.setAttribute(k, v === true ? "" : v);
   }
   for (const k of kids.flat()) {
-    if (k === undefined || k === null || k === false) continue;
+    if (k === undefined || k === null || k === false || k === "") continue;
     e.append(typeof k === "string" ? document.createTextNode(k) : k);
   }
   return e;
@@ -29,15 +29,31 @@ async function api(path, body) {
   return r.json();
 }
 
-const time = (s) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const time = (s) => new Date(s).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const when = (s) => {
   const d = new Date(s);
   return d.toDateString() === new Date().toDateString() ? time(s)
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 const size = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? (n / 1024).toFixed(1) + " KB" : (n / (1 << 20)).toFixed(1) + " MB";
-const kindWord = { question: "Question", task: "Task", answer: "Answer", result: "Result" };
+const firstLine = (s, n) => (s || "").split("\n")[0].slice(0, n);
 const announce = (t) => { $("live").textContent = t; };
+const kindTag = { question: "Question", task: "Task" };
+const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted" };
+
+// Addresses are person/agent: the person leads, the agent is secondary.
+function who(addr) {
+  const i = addr.indexOf("/");
+  if (i < 0) return el("span", { class: "who" }, addr);
+  return el("span", { class: "who" }, addr.slice(0, i), el("span", { class: "who-agent" }, addr.slice(i)));
+}
+
+function avatar(addr, cls) {
+  let h = 0;
+  for (const c of addr.split("/")[0]) h = (h * 41 + c.charCodeAt(0)) >>> 0;
+  return el("span", { class: "avatar av" + (h % 6) + (cls ? " " + cls : ""), "aria-hidden": "true" },
+    addr.charAt(0).toUpperCase());
+}
 
 // ---- overview -------------------------------------------------------------
 
@@ -55,17 +71,16 @@ async function loadState() {
 
 function renderReview(items) {
   const btn = $("review-btn");
-  $("review-count").textContent = items.length;
-  $("review-word").textContent = items.length === 1 ? "needs you" : "need you";
-  btn.dataset.n = items.length;
-  btn.setAttribute("aria-label", items.length + " items need your decision");
-  const list = $("review-list");
-  list.replaceChildren(...items.map((it) => el("li", {},
+  const n = items.length;
+  $("review-count").textContent = n;
+  $("review-word").textContent = n ? "Needs you" : "Nothing needs you";
+  btn.dataset.n = n;
+  btn.setAttribute("aria-label", n === 1 ? "1 item needs your decision" : n + " items need your decision");
+  $("review-list").replaceChildren(...(n ? items.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openConv(it.peer, it.id); } },
-      el("span", {}, el("span", { class: "mono" }, it.peer), " · ", kindWord[it.kind] || it.kind),
-      el("span", { class: "why" }, it.why),
-      el("span", { class: "hint" }, it.excerpt)))));
-  if (!items.length) list.replaceChildren(el("li", { class: "hint" }, "Nothing is waiting for you."));
+      el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
+      el("span", { class: "review-why" }, it.why),
+      el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing is waiting for you.")]));
 }
 
 function toggleReview(open) {
@@ -77,18 +92,24 @@ function toggleReview(open) {
 }
 
 function renderConvs(convs) {
-  $("conv-list").replaceChildren(...convs.map((c) => el("li", {},
-    el("button", {
-      type: "button", "aria-current": c.peer === state.current ? "true" : "false",
-      onclick: () => openConv(c.peer),
-    },
-      el("span", { class: "conv-row1" }, el("span", { class: "mono" }, c.peer),
-        el("span", { class: "conv-time" }, c.last_at && !c.last_at.startsWith("0001") ? when(c.last_at) : "")),
-      c.next && el("span", { class: "conv-next" + (c.review ? " you" : "") },
-        c.review ? c.next + " (" + c.review + ")" : c.next),
-      c.paused && el("span", { class: "conv-next you" }, "Key changed: sending paused"),
-      el("span", { class: "conv-last" }, c.last),
-      el("span", { class: "conv-presence" }, c.presence)))));
+  $("conv-list").replaceChildren(...convs.map((c) => {
+    let flag = null;
+    if (c.review) flag = el("span", { class: "badge", title: "Needs your decision" }, String(c.review));
+    else if (c.paused) flag = el("span", { class: "conv-flag danger" }, "Key changed");
+    else if (c.next.startsWith("Your responder")) flag = el("span", { class: "conv-flag calm" }, "Responder working");
+    else if (c.next.startsWith("Waiting on")) flag = el("span", { class: "conv-flag calm" }, "Awaiting reply");
+    const label = c.peer + (c.review ? ", " + c.review + " need your decision" : "") + (c.paused ? ", key changed" : "");
+    return el("li", {},
+      el("button", {
+        type: "button", class: "conv-item", "aria-label": label,
+        "aria-current": c.peer === state.current ? "true" : "false", onclick: () => openConv(c.peer),
+      },
+        avatar(c.peer),
+        el("span", { class: "conv-main" },
+          el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)),
+            el("span", { class: "conv-time" }, c.last_at && !c.last_at.startsWith("0001") ? when(c.last_at) : "")),
+          el("span", { class: "conv-bottom" }, el("span", { class: "conv-last" }, c.last), flag))));
+  }));
 }
 
 // ---- conversation ---------------------------------------------------------
@@ -107,28 +128,31 @@ function flash(id) {
   if (!m) return;
   m.scrollIntoView({ block: "center" });
   m.classList.add("flash");
-  (m.querySelector(".actions button") || m.querySelector(".bubble")).focus();
+  (m.querySelector(".acts button") || m.querySelector(".bubble")).focus();
   setTimeout(() => m.classList.remove("flash"), 1600);
 }
 
 async function loadConv() {
-  if (!state.current) return;
-  const c = await api("/api/conversation?peer=" + encodeURIComponent(state.current));
-  $("conv-peer").textContent = c.peer;
+  const peer = state.current;
+  if (!peer) return;
+  const c = await api("/api/conversation?peer=" + encodeURIComponent(peer));
+  if (state.current !== peer) return; // another conversation was opened meanwhile
+  $("conv-name").replaceChildren(who(c.peer));
+  $("conv-avatar").replaceWith(Object.assign(avatar(c.peer), { id: "conv-avatar" }));
   $("conv-presence").textContent = c.presence;
   renderNotice(c);
   $("composer").hidden = false;
   const byId = Object.fromEntries(c.messages.map((m) => [m.id, m]));
   const tl = $("timeline");
-  const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 40;
-  tl.replaceChildren(...c.messages.map((m) => renderMsg(m, byId)));
+  const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
+  tl.replaceChildren(...c.messages.map((m, i) => renderMsg(m, byId, c.messages[i - 1])));
   if (!c.messages.length) tl.replaceChildren(el("li", { class: "empty" }, "No messages yet."));
   if (atEnd || state.lastPeer !== c.peer) tl.scrollTop = tl.scrollHeight;
   state.lastPeer = c.peer;
   const paused = !!c.notice;
-  for (const id of ["body", "send", "kind", "files"]) $(id).disabled = paused;
-  $("body").placeholder = paused ? "Sending is paused until you confirm the new key"
-    : "Write to " + c.peer + " (Ctrl+Enter sends)";
+  for (const id of ["body", "send", "files"]) $(id).disabled = paused;
+  $("kind").disabled = paused || !!state.replyTo;
+  $("body").placeholder = paused ? "Sending is paused until you confirm the new key" : "Write to " + c.peer;
 }
 
 function renderNotice(c) {
@@ -136,55 +160,89 @@ function renderNotice(c) {
   if (!c.notice) { n.hidden = true; n.replaceChildren(); return; }
   n.hidden = false;
   n.replaceChildren(el("p", {}, c.notice.text),
-    el("button", { type: "button", onclick: () => trustDialog(c) }, "Compare and confirm the new key…"));
+    el("button", { type: "button", class: "btn", onclick: () => trustDialog(c) }, "Compare keys…"));
 }
 
-function renderMsg(m, byId) {
-  const needs = m.next === "Needs you";
+// Messages from the same author within a few minutes form one group.
+function continues(m, prev) {
+  return prev && prev.dir === m.dir && m.dir !== "system" && !kindTag[m.kind] && !m.status && prev.author.label === m.author.label &&
+    !(prev.actions && prev.actions.length) && !prev.note && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
+}
+
+const decisions = ["accept", "decline", "approve", "resolve", "reply"];
+
+function renderMsg(m, byId, prev) {
+  const cont = continues(m, prev);
   const parent = m.reply_to && byId[m.reply_to];
+  const needs = (m.actions || []).some((a) => decisions.includes(a));
+  const working = (m.actions || []).includes("cancel");
+  const refWord = m.kind === "answer" ? "Answer to: " : m.kind === "result" ? "Result for: " : "Reply to: ";
+
   const bubble = el("div", { class: "bubble", tabindex: "-1" },
-    m.reply_to && el("div", { class: "replyref" }, parent
-      ? el("button", { type: "button", class: "link", onclick: () => flash(parent.id) },
-        "Reply to: " + (parent.body || "").split("\n")[0].slice(0, 80))
-      : el("span", { class: "hint" }, "Reply to an earlier message not stored here")),
+    m.reply_to && (parent
+      ? el("button", { type: "button", class: "replyref", onclick: () => flash(parent.id) }, refWord + firstLine(parent.body, 90))
+      : el("span", { class: "replyref" }, "Reply to an earlier message not stored here")),
     m.body && el("p", { class: "body" }, m.body),
-    m.files && m.files.length && el("div", { class: "files" }, m.files.map((f) =>
-      el("span", { class: "file" }, el("span", {}, f.name), el("span", { class: "hint" }, size(f.size)),
-        m.dir === "in" && el("button", { type: "button", class: "link", onclick: () => announce("Demo: nothing downloaded.") }, "Download")))),
+    m.files && m.files.length && el("div", { class: "files" }, m.files.map((f) => {
+      const ext = (f.name.split(".").pop() || "").slice(0, 4).toUpperCase();
+      return el("span", { class: "file" }, el("span", { class: "file-icon", "aria-hidden": "true" }, ext || "FILE"),
+        el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name), el("span", { class: "file-size" }, size(f.size))),
+        m.dir === "in" && el("button", { type: "button", class: "text-btn", onclick: () => announce("Demo: nothing was downloaded.") }, "Download"));
+    })));
+
+  const meta = !cont && m.dir !== "system" && el("div", { class: "meta" },
+    m.dir === "in" && m.author.label === m.peer ? who(m.peer) : el("span", { class: "who" }, m.author.label),
+    m.author.future && el("span", { class: "tag future" }, "Future idea"),
+    kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
+    m.status && m.status !== "done" && el("span", { class: "tag" }, statusWord[m.status] || m.status),
+    el("time", { datetime: m.at }, when(m.at)));
+
+  let panel = null;
+  if (needs) {
+    panel = el("div", { class: "decide" },
+      el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
+      m.detail && el("p", { class: "decide-detail" }, m.detail),
+      el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, i === 0))));
+  } else if (working) {
+    panel = el("div", { class: "working" }, el("span", {}, m.state_text), actionButton("cancel", m, false));
+  }
+
+  const footText = !needs && !working ? m.state_text : "";
+  const waiting = m.next && m.next.startsWith("Waiting on") ? m.next : "";
+  const parts = [waiting && el("span", { class: "waiting" }, waiting), footText && el("span", {}, footText), details(m)]
+    .filter(Boolean).flatMap((p, i) => i ? [el("span", { class: "sep", "aria-hidden": "true" }, "·"), p] : [p]);
+  const foot = el("div", { class: "foot" }, parts);
+
+  const col = el("div", { class: "col" }, meta, bubble,
     m.note && el("div", { class: "note" }, el("p", { class: "note-label" }, m.note.label), el("p", { class: "body" }, m.note.text)),
-    m.detail && el("p", { class: "detail" }, m.detail),
-    m.actions && m.actions.length && el("div", { class: "actions" }, m.actions.map((a) => actionButton(a, m))));
-  return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (needs ? " needs" : "") },
-    el("div", { class: "meta" },
-      el("span", { class: "author" }, m.author.label),
-      m.author.future && el("span", { class: "tag future" }, "Future idea"),
-      kindWord[m.kind] && el("span", { class: "tag" }, kindWord[m.kind]),
-      m.status && m.status !== "done" && el("span", { class: "tag" }, m.status),
-      el("time", { datetime: m.at }, when(m.at))),
-    bubble,
-    (m.state_text || m.next) && el("div", { class: "status" },
-      m.state_text && el("span", {}, m.state_text),
-      m.next && m.next.startsWith("Waiting on") && el("span", { class: "next" }, m.next)),
-    el("details", { class: "tech" }, el("summary", {}, "Details"),
-      el("dl", {},
-        el("dt", {}, "Written by"), el("dd", {}, m.author.about),
-        el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
-        el("dt", {}, "Kind"), el("dd", {}, m.kind),
-        m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
-        m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
-        m.path && [el("dt", {}, "Route"), el("dd", {}, m.path === "direct" ? "Direct to their computer" : "Through the Hub")])));
+    panel, foot);
+  return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (needs ? " needs" : "") },
+    m.dir === "in" && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(m.peer, "sm")),
+    col);
+}
+
+function details(m) {
+  return el("details", { class: "tech" }, el("summary", {}, "Details"),
+    el("dl", {},
+      el("dt", {}, "Written by"), el("dd", {}, m.author.about),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
+      el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
+      m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
+      m.path && [el("dt", {}, "Route"), el("dd", {}, m.path === "direct" ? "Direct to their computer" : "Through the server")]));
 }
 
 const actionLabel = {
   accept: "Accept and run…", decline: "Decline…", approve: "Approve sender…",
-  resolve: "Close without replying…", reply: "Reply", cancel: "Stop your responder…",
+  resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
 
-function actionButton(a, m) {
+function actionButton(a, m, primary) {
   let label = actionLabel[a];
   if (a === "accept" && m.kind === "question") label = "Let your responder answer…";
   if (a === "accept" && m.state === "needs_human") label = "Run your responder again…";
-  return el("button", { type: "button", onclick: () => decide(a, m) }, label);
+  return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m) }, label);
 }
 
 // ---- decisions (simulated in the demo) -------------------------------------
@@ -193,7 +251,7 @@ function decide(a, m) {
   if (a === "reply") { setReply(m); $("body").focus(); return; }
   const machine = $("machine").textContent;
   const quote = el("div", { class: "quote" }, m.body);
-  const from = el("dl", {}, el("dt", {}, "From"), el("dd", { class: "mono" }, m.peer));
+  const from = el("dl", {}, el("dt", {}, "From"), el("dd", {}, m.peer));
   if (a === "accept") {
     const check = el("input", { type: "checkbox", id: "confirm-read" });
     return dialog({
@@ -209,7 +267,7 @@ function decide(a, m) {
     });
   }
   if (a === "decline") {
-    const reason = el("textarea", { id: "decline-reason", "aria-label": "Reason (optional, sent to " + m.peer + ")" });
+    const reason = el("textarea", { id: "decline-reason" });
     return dialog({
       title: "Decline this " + m.kind + "?", body: [from, quote,
         el("label", { for: "decline-reason" }, "Reason, sent to " + m.peer + " (optional)"), reason],
@@ -242,7 +300,7 @@ function trustDialog(c) {
   const check = el("input", { type: "checkbox", id: "confirm-fp" });
   dialog({
     title: "Confirm " + c.peer + "'s new key?", body: [
-      el("p", {}, "Ask " + c.peer + " for their fingerprint through another channel (in person or a call) and compare."),
+      el("p", {}, "Ask " + c.peer + " for their fingerprint through another channel, in person or on a call, and compare."),
       el("dl", {}, el("dt", {}, "Previous"), el("dd", { class: "mono" }, c.notice.old),
         el("dt", {}, "New"), el("dd", { class: "mono" }, c.notice.new)),
       el("label", { class: "check" }, check, el("span", {}, "The new fingerprint matches what they told me.")),
@@ -251,8 +309,8 @@ function trustDialog(c) {
   });
 }
 
-// dialog shows a confirmation. The dangerous button is never the default:
-// focus starts on Cancel and Enter does not submit.
+// dialog shows a confirmation. The consequential button is never the
+// default: focus starts on Cancel and Enter does not submit.
 function dialog({ title, body, ok, act, gate }) {
   const d = $("dialog");
   $("dialog-title").textContent = title;
@@ -275,11 +333,19 @@ function dialog({ title, body, ok, act, gate }) {
 
 // ---- composer --------------------------------------------------------------
 
+const kindValue = () => document.querySelector('input[name="kind"]:checked').value;
+
 function setReply(m) {
   state.replyTo = m;
   $("replying").hidden = !m;
   $("kind").disabled = !!m;
-  if (m) $("replying-text").textContent = (kindWord[m.kind] || "message").toLowerCase() + ": " + (m.body || "").split("\n")[0].slice(0, 60);
+  if (m) $("replying-text").textContent = firstLine(m.body, 70);
+}
+
+function grow() {
+  const t = $("body");
+  t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px";
 }
 
 async function send(ev) {
@@ -288,14 +354,23 @@ async function send(ev) {
   const files = [...$("files").files].map((f) => ({ name: f.name, size: f.size }));
   try {
     await api("/api/send", {
-      peer: state.current, kind: $("kind").value, body: $("body").value,
+      peer: state.current, kind: kindValue(), body: $("body").value,
       reply_to: state.replyTo ? state.replyTo.id : "", files,
     });
     $("body").value = "";
     $("files").value = "";
     $("file-names").textContent = "";
+    grow();
     setReply(null);
   } catch (e) { $("compose-error").textContent = e.message; }
+}
+
+function kindHint() {
+  $("compose-hint").textContent = {
+    message: "A message never runs anything. Ctrl+Enter sends.",
+    question: "Their responder may answer automatically if they approved you.",
+    task: "A task runs only if they accept it.",
+  }[kindValue()];
 }
 
 // ---- push ------------------------------------------------------------------
@@ -304,7 +379,6 @@ async function send(ev) {
 // breaks, say so and wait for the person instead of retrying on a timer.
 function listen() {
   const es = new EventSource("/events");
-  state.stream = es;
   es.addEventListener("change", async (e) => {
     const seq = Number(e.data);
     if (seq === state.seq) return;
@@ -335,19 +409,15 @@ function announceChanges(s) {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("composer").addEventListener("submit", send);
+  $("body").addEventListener("input", grow);
   $("body").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("composer").requestSubmit(); }
   });
-  $("kind").addEventListener("change", () => {
-    $("compose-hint").textContent = {
-      message: "A message never runs anything.",
-      question: "Their responder may answer automatically if they approved you.",
-      task: "A task runs only if they accept it.",
-    }[$("kind").value];
-  });
-  $("kind").dispatchEvent(new Event("change"));
+  $("kind").addEventListener("change", kindHint);
+  kindHint();
   $("files").addEventListener("change", () => {
-    $("file-names").textContent = [...$("files").files].map((f) => f.name).join(", ") + " (demo: names only, not read)";
+    const names = [...$("files").files].map((f) => f.name).join(", ");
+    $("file-names").textContent = names ? names + " (demo: names only, not read)" : "";
   });
   $("replying-cancel").addEventListener("click", () => setReply(null));
   $("review-btn").addEventListener("click", () => toggleReview());
@@ -358,7 +428,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("dialog-form").addEventListener("submit", (e) => { if (e.submitter !== $("dialog-cancel")) e.preventDefault(); });
   for (const [id, what] of [["sim-arrival", "arrival"], ["sim-finish", "finish"]]) {
     $(id).addEventListener("click", async () => {
-      try { await api("/api/simulate", { what }); } catch (e) { announce(e.message); alertOnce(e.message); }
+      try { await api("/api/simulate", { what }); } catch (e) { announce(e.message); demoNote(e.message); }
     });
   }
   $("reconnect").addEventListener("click", async () => {
@@ -367,15 +437,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (state.current) await loadConv();
       $("lost").hidden = true;
       listen();
-    } catch (e) { announce("Still not connected."); }
+    } catch (e) { announce("Still not connected. If agentnet restarted, open the new address it printed."); }
   });
   loadState().then((s) => {
-    if (s.conversations.length && window.matchMedia("(min-width: 761px)").matches) openConv(s.conversations[0].peer);
+    if (!state.current && s.conversations.length && window.matchMedia("(min-width: 761px)").matches) openConv(s.conversations[0].peer);
   }).catch(() => { $("lost").hidden = false; });
   listen();
 });
 
-function alertOnce(msg) {
+function demoNote(msg) {
   const d = $("demo");
   let n = d.querySelector(".hint");
   if (!n) { n = el("span", { class: "hint" }); d.append(n); }

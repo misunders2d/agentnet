@@ -12,52 +12,63 @@
 <a class="skip" href="#timeline">Skip to messages</a>
 
 <div id="demo" class="demo" role="note" hidden>
-  <strong>Demo data.</strong> Invented people and messages; nothing is sent, run or saved.
+  <span class="demo-label">Demo</span>
+  <span class="demo-text">Invented people and messages. Nothing is sent, run or saved.</span>
   <span class="demo-controls">
-    <button type="button" id="sim-arrival" class="link">Simulate an incoming message</button>
-    <button type="button" id="sim-finish" class="link">Simulate your responder finishing</button>
+    <button type="button" id="sim-arrival" class="chip">Simulate a message</button>
+    <button type="button" id="sim-finish" class="chip">Simulate responder finishing</button>
   </span>
 </div>
 
 <div id="lost" class="lost" role="alert" hidden>
-  Lost connection to agentnet. This page shows what it last loaded.
-  <button type="button" id="reconnect">Reconnect</button>
+  <span>Lost connection to agentnet. You are seeing what the page last loaded.</span>
+  <button type="button" id="reconnect" class="chip">Reconnect</button>
 </div>
 
-<header class="top">
-  <div class="who">
-    <span class="app">AgentNet</span>
-    <span id="me" class="me mono"></span>
-  </div>
-  <div id="machine" class="machine"></div>
-  <div class="review-wrap">
-    <button type="button" id="review-btn" class="review-btn" aria-expanded="false" aria-controls="review">
-      <span id="review-count">0</span> <span id="review-word">need you</span>
-    </button>
-    <div id="review" class="review" hidden>
-      <h2>Waiting for your decision</h2>
-      <p class="hint">Each opens in its conversation, where you decide.</p>
-      <ul id="review-list"></ul>
-    </div>
-  </div>
-</header>
+<div class="app">
+  <aside class="side" aria-label="Conversations">
+    <header class="side-head">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <div class="brand-name">AgentNet</div>
+          <div id="me" class="brand-me"></div>
+        </div>
+      </div>
+      <div class="review-wrap">
+        <button type="button" id="review-btn" class="review-btn" aria-expanded="false" aria-controls="review">
+          <span id="review-word">Needs you</span>
+          <span id="review-count" class="count">0</span>
+        </button>
+        <div id="review" class="review" hidden>
+          <h2>Waiting for your decision</h2>
+          <p class="hint">Each one opens in its conversation, where you decide.</p>
+          <ul id="review-list"></ul>
+        </div>
+      </div>
+    </header>
 
-<div class="layout">
-  <nav class="convs" aria-label="Conversations">
     <h2 class="sr-only">Conversations</h2>
-    <ul id="conv-list"></ul>
-    <details class="design-note">
-      <summary>Group conversations</summary>
-      <p>Not in this version. Conversations are one person's agent to another's. Groups would need
-      messages addressed to several people, a receipt from each, and membership; that design is still open.</p>
-    </details>
-  </nav>
+    <ul id="conv-list" class="conv-list"></ul>
 
-  <main class="conv" id="conv" aria-labelledby="conv-peer">
+    <footer class="side-foot">
+      <p id="machine" class="machine"></p>
+      <details class="design-note">
+        <summary>Group conversations</summary>
+        <p>Not in this version. A conversation is between two people's agents. Groups need messages
+        addressed to several people, a receipt from each and membership; that design is still open.</p>
+      </details>
+    </footer>
+  </aside>
+
+  <main class="conv" id="conv" aria-labelledby="conv-name">
     <header class="conv-head">
-      <button type="button" id="back" class="back">‹ Conversations</button>
-      <div>
-        <h1 id="conv-peer" class="mono">Choose a conversation</h1>
+      <button type="button" id="back" class="icon-btn back" aria-label="Back to conversations">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span id="conv-avatar" class="avatar" aria-hidden="true"></span>
+      <div class="conv-title">
+        <h1 id="conv-name">Choose a conversation</h1>
         <p id="conv-presence" class="presence"></p>
       </div>
     </header>
@@ -66,24 +77,33 @@
 
     <form id="composer" class="composer" hidden>
       <div id="replying" class="replying" hidden>
-        <span>Replying to <span id="replying-text"></span></span>
-        <button type="button" id="replying-cancel" class="link">Cancel reply</button>
+        <span class="replying-text">Replying to <span id="replying-text"></span></span>
+        <button type="button" id="replying-cancel" class="text-btn">Cancel</button>
       </div>
-      <div class="compose-row">
-        <label class="sr-only" for="kind">Kind</label>
-        <select id="kind" title="What you are sending">
-          <option value="message">Message</option>
-          <option value="question">Question</option>
-          <option value="task">Task</option>
-        </select>
+      <div class="compose-box">
         <label class="sr-only" for="body">Your message</label>
-        <textarea id="body" rows="2" placeholder="Write to the conversation (Ctrl+Enter sends)"></textarea>
-        <button type="submit" id="send" class="primary">Send</button>
+        <textarea id="body" rows="1" placeholder="Write a message"></textarea>
+        <div class="compose-bar">
+          <fieldset id="kind" class="kind">
+            <legend class="sr-only">Send as</legend>
+            <label><input type="radio" name="kind" value="message" checked><span>Message</span></label>
+            <label><input type="radio" name="kind" value="question"><span>Question</span></label>
+            <label><input type="radio" name="kind" value="task"><span>Task</span></label>
+          </fieldset>
+          <label class="attach" title="Attach files">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 01-7-7l9-9a3.3 3.3 0 014.7 4.7l-9 9a1.7 1.7 0 01-2.4-2.4l8.3-8.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Attach</span>
+            <input type="file" id="files" multiple>
+          </label>
+          <button type="submit" id="send" class="send">
+            <span>Send</span>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
       </div>
       <div class="compose-foot">
-        <label class="attach">Attach files <input type="file" id="files" multiple></label>
+        <span id="compose-hint" class="hint"></span>
         <span id="file-names" class="hint"></span>
-        <span id="compose-hint" class="hint">A task runs only if they accept it.</span>
       </div>
       <p id="compose-error" class="error" role="alert"></p>
     </form>
@@ -98,8 +118,8 @@
     <div id="dialog-body"></div>
     <p id="dialog-error" class="error" role="alert"></p>
     <div class="dialog-actions">
-      <button type="submit" value="cancel" id="dialog-cancel">Cancel</button>
-      <button type="button" id="dialog-ok" class="primary"></button>
+      <button type="submit" value="cancel" id="dialog-cancel" class="btn">Cancel</button>
+      <button type="button" id="dialog-ok" class="btn primary"></button>
     </div>
   </form>
 </dialog>
