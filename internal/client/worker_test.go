@@ -498,3 +498,26 @@ func TestUnapproveWithdrawsQueuedQuestions(t *testing.T) {
 		t.Fatalf("claimed a pending question from an unapproved sender (%v)", err)
 	}
 }
+
+// The harness is told its working directory as configured, even when that
+// path goes through a symlink (as /var does on macOS): PWD must match Dir.
+func TestResponderSeesConfiguredDirectory(t *testing.T) {
+	st := installStub(t, "answer")
+	link := filepath.Join(t.TempDir(), "via-link")
+	if err := os.Symlink(st.dir, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "stub", link, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "where are you?", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q.ID, stateAnswered)
+	log, _ := os.ReadFile(st.log)
+	if !strings.Contains(string(log), "run cwd="+link+" args=") {
+		t.Fatalf("harness saw another directory than %s:\n%s", link, log)
+	}
+}

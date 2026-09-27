@@ -126,7 +126,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	cmd := exec.CommandContext(runCtx, h.bin, args...)
 	cmd.Dir = r.Dir
-	cmd.Env = append(os.Environ(), BackgroundEnv+"=1") // AgentNet's own hooks stay out of this session
+	// cmd.Environ, after Dir, keeps the PWD=Dir that exec sets when Env is
+	// nil; AgentNet's own hooks stay out of this session.
+	cmd.Env = append(cmd.Environ(), BackgroundEnv+"=1")
 	if h.stdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
