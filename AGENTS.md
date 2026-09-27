@@ -23,9 +23,15 @@ tests and honest limits.
 - **No polling.** The daemon holds one push stream; the only periodic
   request is the signed ping acknowledgement.
 - **Questions** are answered automatically only for approved senders, by the
-  recipient's chosen harness in its question mode: no tools for claude and
-  pi; codex runs restricted, not tool-free (read-only sandbox, listed
-  features off; see docs/revival/M4.md). **Tasks** run only after the
+  recipient's chosen harness with the recipient's own setup: their skills,
+  plugins, MCP servers and permissions, minus editing tools and anything
+  needing a new approval (see docs/revival/M4.md). The recipient's own
+  permission grants stay the authority: tools they already allow keep their
+  effects, and AgentNet must not claim otherwise. Never blanket-disable skills
+  or tools, or run questions with an empty or substitute configuration: the
+  point is that a coworker gets the answer this person's agent would give.
+  If an answer needs an action the harness may not take, the result is
+  needs-human, not an invented answer. **Tasks** run only after the
   recipient accepts them, with the harness's normal permissions — nothing is
   auto-approved or bypassed. Workers never touch the user's open sessions.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),

@@ -297,15 +297,26 @@ choice. set selects one; off chooses manual only (no automatic responder).
 show prints the choice, or "not chosen yet". Setup agents: do not pick the
 harness you are running in unless the person says so.
 
-Harnesses: claude (questions and tasks tested live), codex (questions,
-follow-ups and tasks tested live), pi (not tested live). With claude
-and pi, questions and follow-ups run with all tools disabled. Codex has no
-switch that removes every tool, so codex questions run restricted instead:
-read-only sandbox, no user config (no configured MCP servers), and web
-search, shell, apps, plugins, browser, computer use, image generation,
-sub-agents, memories, hooks and skill search off; it may still read files.
-Tasks run with the harness's normal permissions. Antigravity can read and
-reply by hand but is not an automatic responder.
+Harnesses: claude and codex (tasks tested live; the current question mode
+not yet), pi (not tested live). Questions and follow-ups use your own
+setup, so your skills and context shape the answer. Your own permissions
+stay the authority: AgentNet takes away editing and new approvals, and asks
+the harness not to change anything, but it is not a sandbox of its own:
+  claude  your settings, skills, plugins and MCP servers; permission mode
+          dontAsk runs only tools your settings already allow and refuses
+          the rest; Edit, Write and NotebookEdit are off. Bash commands and
+          MCP tools your settings allow keep their effects.
+  codex   your config, skills and MCP servers; shell commands run in a
+          read-only sandbox and anything needing an approval is refused.
+          MCP tools your config auto-approves are outside the sandbox and
+          keep their effects.
+  pi      your skills, with only the read, grep, find and ls tools; skills
+          that need bash, edit or extension tools cannot work there.
+Before approving a sender, check that what your settings already allow is
+what you would let their questions trigger. Tasks run with the harness's
+normal permissions and only after you accept them. If a question needs an
+action the harness may not take, it answers AGENTNET: NEEDS-HUMAN instead.
+Antigravity can read and reply by hand but is not an automatic responder.
 
 With claude and codex, the worker keeps a background session per
 conversation: the next question in the same conversation (same agent), or

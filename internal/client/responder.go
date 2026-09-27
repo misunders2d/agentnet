@@ -21,16 +21,18 @@ type Responder struct {
 	Timeout time.Duration `json:"timeout"`           // wall-clock limit per question or task
 }
 
-// harness is how one installed coding agent is run headless, one-shot, in
-// its own session. Question mode must hold what it claims: no tools, unless
-// limits says precisely what it does instead.
+// harness is how one installed coding agent is run headless, in its own
+// background session. Question mode uses the recipient's own harness setup
+// (skills, plugins, MCP servers, permissions): never blanket-disable skills
+// or swap in an empty configuration. It only takes away what a question does
+// not need (editing, new approvals); limits says exactly what it allows.
 type harness struct {
 	bin      string
-	question []string     // no tools, no MCP servers, no persisted session
+	question []string     // the user's own setup; no editing, no new approvals
 	task     []string     // the harness's normal permissions; nothing bypassed
 	stdin    bool         // prompt on stdin; otherwise as the last argument
 	out      string       // flag naming a file for the final answer; otherwise stdout
-	limits   string       // how question mode falls short of "no tools", if it does
+	limits   string       // what question mode allows, for the person choosing
 	tested   string       // what was run live with the real harness (docs/revival/M4.md); empty: nothing
 	sessions sessionStyle // how the worker keeps a background session per conversation (session.go)
 }
@@ -41,33 +43,39 @@ type harness struct {
 var Harnesses = map[string]harness{
 	"claude": {
 		bin: "claude",
+		// The user's own settings, skills, plugins and MCP servers load as
+		// usual; dontAsk runs only tools those settings already allow and
+		// refuses the rest; file-editing tools are off for questions.
 		question: []string{"-p", "--output-format", "text", "--no-session-persistence",
-			"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"},
+			"--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"},
 		task:     []string{"-p", "--output-format", "text", "--no-session-persistence"},
 		stdin:    true,
-		tested:   "questions and tasks tested live",
+		tested:   "tasks tested live; the current question mode not yet",
 		sessions: claudeSessions,
+		limits: "claude questions use your Claude settings, skills, plugins and MCP servers; only tools your settings already allow run " +
+			"(permission mode dontAsk: anything else is refused, never asked) and Edit, Write and NotebookEdit are off, " +
+			"but Bash commands and MCP tools your settings allow keep whatever effects they have",
 	},
 	"codex": {
 		bin: "codex",
-		question: []string{"exec", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only",
-			"--skip-git-repo-check", "--color", "never", "-c", `web_search="disabled"`,
-			"--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "browser_use",
-			"--disable", "computer_use", "--disable", "image_generation", "--disable", "multi_agent",
-			"--disable", "memories", "--disable", "hooks", "--disable", "skill_search"},
+		// The user's own config (skills, MCP servers with their own approval
+		// modes) in a read-only sandbox; approval "never" refuses anything
+		// that would need an approval.
+		question: []string{"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never",
+			"-c", `approval_policy="never"`},
 		task:     []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
 		stdin:    true,
 		out:      "-o",
-		tested:   "questions, follow-ups and tasks tested live",
+		tested:   "tasks tested live; the current question mode not yet",
 		sessions: codexSessions,
-		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +
-			"web search, shell, apps, plugins, browser, computer use, image generation, sub-agents, memories, hooks and skill search off; " +
-			"Codex has no switch that removes every built-in tool, so it may still read files",
+		limits: "codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox and anything that would need an approval is refused, " +
+			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have",
 	},
 	"pi": {
 		bin:      "pi",
-		question: []string{"-p", "--no-session", "--no-tools"},
+		question: []string{"-p", "--no-session", "--tools", "read,grep,find,ls"},
 		task:     []string{"-p", "--no-session"},
+		limits:   "pi questions load your skills but may use only the read, grep, find and ls tools; skills that need bash, edit or extension tools cannot work there",
 	},
 }
 
@@ -80,9 +88,9 @@ func HarnessLimits(name string) string { return Harnesses[name].limits }
 // so it says nothing about login or whether it works.
 type HarnessInfo struct {
 	Name   string `json:"name"`
-	Path   string `json:"path,omitempty"`                 // empty when not found on PATH
-	Tested string `json:"tested_live,omitempty"`          // empty: not tested live
-	Limits string `json:"question_mode_limits,omitempty"` // empty: questions run with no tools
+	Path   string `json:"path,omitempty"`          // empty when not found on PATH
+	Tested string `json:"tested_live,omitempty"`   // empty: not tested live
+	Limits string `json:"question_mode,omitempty"` // what questions may use
 }
 
 // ListHarnesses reports which supported responders are on PATH.

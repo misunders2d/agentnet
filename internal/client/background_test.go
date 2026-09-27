@@ -384,7 +384,9 @@ func TestCodexPresetInPlainDirectory(t *testing.T) {
 			t.Fatalf("codex argv %q", l)
 		}
 	}
-	if !strings.Contains(lines[0], "--sandbox read-only") || strings.Contains(lines[1], "--sandbox") || strings.Contains(lines[1], "--ignore-user-config") {
+	if !strings.Contains(lines[0], "--sandbox read-only") || !strings.Contains(lines[0], `approval_policy="never"`) ||
+		strings.Contains(lines[0], "--ignore-user-config") || strings.Contains(lines[0], "--disable") ||
+		strings.Contains(lines[1], "--sandbox") || strings.Contains(lines[1], "--ignore-user-config") {
 		t.Fatalf("question/task modes:\n%s", data)
 	}
 }

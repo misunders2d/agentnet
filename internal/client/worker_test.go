@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -328,7 +329,7 @@ func TestResponderSwitchOffAndSingleDaemon(t *testing.T) {
 
 // The real harness binaries accept every flag the presets use.
 func TestHarnessFlagsExist(t *testing.T) {
-	helpArgs := map[string][]string{"claude": {"--help"}, "codex": {"exec", "--help"}}
+	helpArgs := map[string][]string{"claude": {"--help"}, "codex": {"exec", "--help"}, "pi": {"--help"}}
 	for name, args := range helpArgs {
 		h := Harnesses[name]
 		path, err := exec.LookPath(h.bin)
@@ -519,5 +520,44 @@ func TestResponderSeesConfiguredDirectory(t *testing.T) {
 	log, _ := os.ReadFile(st.log)
 	if !strings.Contains(string(log), "run cwd="+link+" args=") {
 		t.Fatalf("harness saw another directory than %s:\n%s", link, log)
+	}
+}
+
+// Questions keep the recipient's own harness setup (skills, plugins, MCP
+// servers, permissions) and only lose editing and new approvals: nothing
+// switches skills or tools off wholesale or swaps in an empty configuration.
+func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
+	blanket := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools"}
+	for name, h := range map[string]harness{"claude": Harnesses["claude"], "codex": Harnesses["codex"], "pi": Harnesses["pi"]} {
+		for _, flag := range blanket {
+			if slices.Contains(h.question, flag) && !(name == "pi" && flag == "--tools") {
+				t.Errorf("%s question mode uses %s", name, flag)
+			}
+		}
+		if h.limits == "" {
+			t.Errorf("%s: question mode undescribed", name)
+		}
+	}
+	claude := strings.Join(Harnesses["claude"].question, " ")
+	if !strings.Contains(claude, "--permission-mode dontAsk") || !strings.Contains(claude, "--disallowedTools Edit,Write,NotebookEdit") {
+		t.Errorf("claude question gates: %s", claude)
+	}
+	codex := Harnesses["codex"]
+	if q := strings.Join(codex.question, " "); !strings.Contains(q, "--sandbox read-only") || !strings.Contains(q, `-c approval_policy="never"`) {
+		t.Errorf("codex question gates: %s", q)
+	}
+	// Resume keeps both gates in the form codex exec resume accepts.
+	if r := strings.Join(resumeArgs(codex, "question", codex.question, "T"), " "); !strings.Contains(r, `sandbox_mode="read-only"`) ||
+		!strings.Contains(r, `approval_policy="never"`) || strings.Contains(r, "--sandbox") {
+		t.Errorf("codex resume: %s", r)
+	}
+	if pi := strings.Join(Harnesses["pi"].question, " "); !strings.Contains(pi, "--tools read,grep,find,ls") {
+		t.Errorf("pi question: %s", pi)
+	}
+	// Sessions started under the earlier no-tools flags are not resumed.
+	old := harness{bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence",
+		"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"}}
+	if presetID(old, "question", old.question) == presetID(Harnesses["claude"], "question", Harnesses["claude"].question) {
+		t.Error("the new question preset has the same identity as the old one")
 	}
 }

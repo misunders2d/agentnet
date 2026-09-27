@@ -662,9 +662,9 @@ func printHarnesses() {
 		if tested == "" {
 			tested = "not tested live"
 		}
-		mode := "questions with no tools"
+		mode := "questions: see agentnet help responder"
 		if h.Limits != "" {
-			mode = "questions restricted, not tool-free (see agentnet help responder)"
+			mode = "questions use your own setup, read-only (see agentnet help responder)"
 		}
 		fmt.Printf("%-7s %s; %s; %s\n", h.Name, where, mode, tested)
 	}
