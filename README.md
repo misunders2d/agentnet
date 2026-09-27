@@ -134,7 +134,7 @@ agentnet reply <QUESTION_ID> "Use port 8080"
 # Download attached files to a local directory
 agentnet download --dir ./incoming <MESSAGE_ID>
 ```
-While `agentnet daemon` runs, a content-free desktop notification with only a count alerts you when review items appear (Linux: `notify-send` with `-r` replace-id and silent hint, verified live on desktop; macOS: `osascript`; Windows: unsupported). Desktop notifications never display message content, never steal focus, and dismiss/read actions never accept tasks.
+While `agentnet daemon` runs, a content-free desktop notification with only a count alerts you when review items appear (Linux: `notify-send` with `-r` replace-id and silent hint, verified live on desktop; macOS: `osascript`; Windows: `Shell_NotifyIconW` notification-area balloon; see [validation status below](#contributing)). OS notification settings, Focus Assist, or quiet hours may suppress banner display. Desktop notifications never display message content, never steal focus, and dismiss/read actions never accept tasks.
 
 ### 7. Administrative Management
 Admins can invite colleagues and revoke compromised agents:
@@ -272,7 +272,7 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M1: Core Identity & Messaging** — Ed25519 enrollment, age encrypted envelopes, offline Hub relay.
 - ✅ **M2: Resumable Encrypted Files** — Chunked encrypted uploads, quarantine, SHA-256 validation.
 - ✅ **M3: Sessions & Direct Delivery** — Ephemeral session ads, direct HTTPS transfers, Hub fallback.
-- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions and follow-ups; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux verified live; macOS unverified; Windows unsupported).
+- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions and follow-ups; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux verified live; macOS and Windows unverified live on desktop).
 - ✅ **M4b: Standard A2A Gateway** — Official `a2a-go/v2` SDK loopback adapter.
 - ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (actual production rollout remains pending).
 
@@ -280,9 +280,9 @@ AgentNet is under active development as a lean, resilient Go product:
 - **Live Harness Qualification**:
   - Claude Code 2.1.283 live-tested on Linux: synthetic questions answered from context, synthetic tasks run after acceptance.
   - Codex CLI 0.157.1 live-tested on Linux (`d6785bd`): synthetic question answered (4 s) and follow-up summary stored (6 s) on isolated localhost Hub with notifications off and no foreground sessions. Tasks not live-tested.
-- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
-- **Desktop Notifications**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). macOS implemented via `osascript` (unverified live); Windows logged as unsupported.
-- **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
+- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
+- **Desktop Notifications**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). macOS (`osascript`) and Windows (`Shell_NotifyIconW`, [run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) are implemented and pass CI API checks, but visible desktop banner display has not been verified live (the author currently has neither desktop environment available).
+- **Containers**: Container qualification passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
 
 ---
 
@@ -291,6 +291,20 @@ AgentNet is under active development as a lean, resilient Go product:
 AgentNet welcomes contributions! Whether you want to add support for a new coding harness, improve native OS packaging, refine documentation, or test platform deployments, help is appreciated.
 
 ### Useful Areas to Contribute
+- **Desktop Notification Testing (macOS & Windows)**: Help verify native desktop notifications! If you run macOS or Windows desktop environments, test `agentnet daemon` with items in `agentnet inbox --review` and report your findings in [GitHub Issues](https://github.com/misunders2d/agentnet/issues) or submit a [Pull Request](https://github.com/misunders2d/agentnet/pulls).
+  <details>
+  <summary><b>Testing Checklist & Guidelines</b></summary>
+
+  - **Information to report**:
+    - Operating system and exact version/build (e.g. Windows 11 23H2, macOS Sonoma 14.5).
+    - Did a visible banner or balloon appear?
+    - Was the notification silent (no sound)?
+    - Did the notification avoid stealing keyboard or window focus?
+    - How did it behave on repeated events (e.g. review count update) and after restarting `agentnet daemon`?
+  - **Important notes**:
+    - OS Focus Assist, Do Not Disturb, or quiet hours settings can suppress banners; delivery display is not guaranteed by the OS.
+    - **Privacy rule**: Never post private messages, tokens, keys, addresses, or raw debug logs in issues or PRs.
+  </details>
 - **Harness Responders**: Add and test CLI presets for additional coding assistants and local models.
 - **Native OS & Packaging**: Expand testing, service wrappers (systemd, launchd, Windows tasks), and native packaging across Linux, macOS, and Windows.
 - **Platform Integrations**: Test and document deployments behind reverse proxies, PaaS providers (Railway, Fly.io, Render, VPS), and custom TLS terminations.
