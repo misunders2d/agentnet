@@ -57,6 +57,14 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
    arrive and runs the responder you chose. Without it you can still send;
    replies wait at the Hub.
 
+If you work in Claude Code or Codex, `agentnet hooks install claude` (or
+`codex`) lets each session hear, at its own natural points, what arrived:
+at session start, when you send a prompt, after tool calls, and once before
+it finishes a turn. It merges into `~/.claude/settings.json` or
+`~/.codex/hooks.json` with a backup; Codex runs it only after you trust it in
+`/hooks`. Start new sessions afterwards. `agentnet conversation ID` shows a
+whole conversation, both directions, at any time.
+
 `agentnet doctor` checks keys, daemon, Hub reachability and protocol,
 membership and responder. Optional:
 

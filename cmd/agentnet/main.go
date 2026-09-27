@@ -57,6 +57,10 @@ func run(args []string) error {
 		return nil
 	case "join":
 		return runJoin(ctx, *home, rest)
+	case "hook":
+		return runHook(*home, rest, os.Stdin, os.Stdout)
+	case "hooks":
+		return runHooks(*home, rest)
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
@@ -138,6 +142,8 @@ func run(args []string) error {
 		return err
 	case "reply":
 		return runSend(ctx, a, rest, true)
+	case "conversation":
+		return runConversation(a, rest)
 	case "inbox":
 		return runInbox(a, rest)
 	case "download":
@@ -386,6 +392,64 @@ func detailLabel(state string) string {
 		return "needs your decision"
 	}
 	return "note"
+}
+
+func runConversation(a *client.Agent, args []string) error {
+	fs := flag.NewFlagSet("conversation", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "JSON output")
+	offset := fs.Int("offset", 0, "skip this many messages from the start")
+	limit := fs.Int("limit", 50, "show at most this many messages (0: all)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: conversation [--json] [--offset N] [--limit N] ID")
+	}
+	c, err := a.Conversation(fs.Arg(0), *offset, *limit)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		if c.Messages == nil {
+			c.Messages = []client.ConversationMessage{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(c)
+	}
+	first, last := c.Offset+1, c.Offset+len(c.Messages)
+	if len(c.Messages) == 0 {
+		first = c.Offset
+	}
+	fmt.Printf("conversation with %s: messages %d-%d of %d\n", c.Peer, first, last, c.Total)
+	for _, m := range c.Messages {
+		arrow := "<"
+		if m.Dir == "out" {
+			arrow = ">"
+		}
+		kind := m.Kind
+		if m.Status != "" {
+			kind += " (" + m.Status + ")"
+		}
+		if m.State != "" {
+			kind += " [" + m.State + "]"
+		}
+		fmt.Printf("%s %s  %s  %s  %s\n", arrow, m.ID, m.From, m.At.Format(time.DateTime), kind)
+		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		if m.Summary != "" {
+			fmt.Printf("  [follow-up summary] %s\n", strings.ReplaceAll(m.Summary, "\n", "\n  "))
+		}
+		if m.Detail != "" {
+			fmt.Printf("  [note] %s\n", strings.ReplaceAll(m.Detail, "\n", "\n  "))
+		}
+		for _, f := range m.Attachments {
+			fmt.Printf("  [file] %q %d bytes sha256 %s\n", f.Name, f.Size, f.SHA256)
+		}
+	}
+	if last < c.Total {
+		fmt.Printf("(%d more: agentnet conversation --offset %d %s)\n", c.Total-last, last, fs.Arg(0))
+	}
+	return nil
 }
 
 func runAdmin(ctx context.Context, a *client.Agent, args []string) error {

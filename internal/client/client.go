@@ -319,7 +319,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err == nil {
 		beforeOutbox()
-		err = a.store.addOutbox(env, m.Body, m.ReplyTo, m.FollowUp, m.claim)
+		err = a.store.addOutbox(env, in, m.FollowUp, m.claim)
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})

@@ -90,6 +90,25 @@ ALTER TABLE outbox ADD COLUMN reply_to TEXT;
 ALTER TABLE outbox ADD COLUMN follow_up TEXT;
 ALTER TABLE outbox ADD COLUMN followed_by TEXT;
 ALTER TABLE inbox ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
+`, `
+ALTER TABLE inbox ADD COLUMN arrival INTEGER;
+UPDATE inbox SET arrival = rowid;
+CREATE UNIQUE INDEX inbox_arrival ON inbox(arrival);
+INSERT INTO config(k, v) SELECT 'arrival', coalesce(max(arrival), 0) FROM inbox;
+ALTER TABLE outbox ADD COLUMN status TEXT;
+CREATE TABLE sent_attachments(
+  message_id TEXT NOT NULL,
+  blob_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY(message_id, blob_id));
+CREATE TABLE attention(
+  harness TEXT NOT NULL,
+  session TEXT NOT NULL,
+  pos INTEGER NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY(harness, session));
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -170,11 +189,11 @@ func (s *store) setPending(p identity.Public) error {
 	return err
 }
 
-// addOutbox records a message and its pending uploads in one transaction,
-// together with claim (if any), which marks what the message answers.
-// followUp, if set, binds the first reply from the recipient to one
-// background follow-up job (see initialState).
-func (s *store) addOutbox(env envelope.Envelope, body, replyTo, followUp string, claim func(tx *sql.Tx, replyID string) error) error {
+// addOutbox records a message, its attachment manifest and its pending
+// uploads in one transaction, together with claim (if any), which marks what
+// the message answers. followUp, if set, binds the first reply from the
+// recipient to one background follow-up job (see initialState).
+func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp string, claim func(tx *sql.Tx, replyID string) error) error {
 	data, _ := json.Marshal(env)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -186,9 +205,16 @@ func (s *store) addOutbox(env envelope.Envelope, body, replyTo, followUp string,
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
-		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix(), replyTo, followUp); err != nil {
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status)
+		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status); err != nil {
 		return err
+	}
+	for _, a := range in.Attachments {
+		if _, err := tx.Exec(`INSERT INTO sent_attachments(message_id, blob_id, name, size, sha256) VALUES(?, ?, ?, ?, ?)`,
+			env.ID, a.Blob.ID, a.Name, a.Size, a.SHA256); err != nil {
+			return err
+		}
 	}
 	for _, b := range env.Blobs {
 		if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
@@ -369,6 +395,15 @@ func insertInner(tx *sql.Tx, in envelope.Inner) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already stored
+	}
+	// Arrival order for attention cursors: a counter, so numbers are never
+	// reused and do not depend on rowid or clocks.
+	var arrival int64
+	if err := tx.QueryRow(`UPDATE config SET v = CAST(v AS INTEGER) + 1 WHERE k = 'arrival' RETURNING CAST(v AS INTEGER)`).Scan(&arrival); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE inbox SET arrival = ? WHERE id = ?`, arrival, in.ID); err != nil {
+		return err
 	}
 	if err := bindFollowUp(tx, in); err != nil {
 		return err

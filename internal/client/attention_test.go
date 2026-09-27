@@ -1,0 +1,274 @@
+package client
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
+)
+
+func attention(t *testing.T, a *Agent, session, event string) Attention {
+	t.Helper()
+	at, err := a.Attention(HookEvent{Harness: "claude", Session: session, Event: event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// shown returns what a hook call tells session and records it as shown.
+func shown(t *testing.T, a *Agent, session, event string) string {
+	t.Helper()
+	at := attention(t, a, session, event)
+	if err := at.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return at.Text
+}
+
+// Two-way conversation with files, stored after the processes restart;
+// foreign links, unrelated messages and cycles stay out; reading it changes
+// nothing.
+func TestConversationBothWays(t *testing.T) {
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	stopAlice, _ := runWith(t, w, w.alice, RunOptions{})
+	runWith(t, w, w.bob, RunOptions{})
+	file := filepath.Join(t.TempDir(), "plan.txt")
+	os.WriteFile(file, []byte("the plan"), 0o600)
+
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "1 question", Kind: envelope.KindQuestion, Files: []string{file}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "question at bob", func() bool { return hasInbox(w.bob, "1 question") })
+	ids := []string{q.ID}
+	last := q.ID
+	for i, who := range []*Agent{w.bob, w.alice, w.bob, w.alice, w.bob} {
+		r, err := who.Reply(tctx(t), last, []string{"2 answer", "3 thanks", "4 more", "5 ok", "6 done"}[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := w.alice
+		if who == w.alice {
+			other = w.bob
+		}
+		eventually(t, "reply stored", func() bool { m, _ := other.store.inboxMessage(r.ID); return m != nil })
+		ids, last = append(ids, r.ID), r.ID
+	}
+	unrelated, _ := w.bob.Send(tctx(t), w.alice.Address, "unrelated", "")
+	foreign, _ := carol.Send(tctx(t), w.alice.Address, "carol names alice's question", q.ID)
+	eventually(t, "other messages", func() bool {
+		return hasInbox(w.alice, "unrelated") && hasInbox(w.alice, "carol names alice's question")
+	})
+	eventually(t, "uploads released after custody", func() bool { return count(t, w.alice, "uploads") == 0 })
+
+	// A peer can make its own messages point at each other.
+	for _, pair := range [][2]string{{"cyc-a", "cyc-b"}, {"cyc-b", "cyc-a"}} {
+		if err := w.alice.store.addInbox(envelope.Inner{ID: pair[0], From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(),
+			Kind: envelope.KindMessage, Body: pair[0], ReplyTo: pair[1]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, _ := w.alice.Inbox(false, false)
+
+	// Stop and reopen from disk: the history is durable.
+	stopAlice()
+	w.alice.Close()
+	alice, err := Open(w.alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	for _, from := range []string{ids[0], ids[3], ids[5]} {
+		c, err := alice.Conversation(from, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, m := range c.Messages {
+			got = append(got, m.ID)
+		}
+		if c.Total != 6 || strings.Join(got, ",") != strings.Join(ids, ",") || c.Peer != w.bob.Address {
+			t.Fatalf("conversation from %s: total %d peer %s\n got %v\nwant %v", from, c.Total, c.Peer, got, ids)
+		}
+		if c.Messages[0].Dir != "out" || c.Messages[1].Dir != "in" || c.Messages[1].Kind != envelope.KindAnswer || c.Messages[0].Kind != envelope.KindQuestion {
+			t.Fatalf("directions/kinds: %+v", c.Messages[:2])
+		}
+	}
+	c, _ := alice.Conversation(q.ID, 0, 0)
+	if f := c.Messages[0].Attachments; len(f) != 1 || f[0].Name != "plan.txt" || f[0].Size != 8 {
+		t.Fatalf("sent file metadata after custody: %+v", f)
+	}
+	page, _ := alice.Conversation(q.ID, 2, 3)
+	if page.Total != 6 || page.Offset != 2 || len(page.Messages) != 3 || page.Messages[0].ID != ids[2] {
+		t.Fatalf("page: %+v", page)
+	}
+	if cyc, err := alice.Conversation("cyc-a", 0, 0); err != nil || cyc.Total != 2 {
+		t.Fatalf("cycle: %v %+v", err, cyc)
+	}
+	for _, id := range []string{unrelated.ID, foreign.ID} {
+		if c, _ := alice.Conversation(id, 0, 0); c.Total != 1 {
+			t.Fatalf("%s pulled in %d messages", id, c.Total)
+		}
+	}
+	if _, err := alice.Conversation("nope", 0, 0); err != ErrNoMessage {
+		t.Fatalf("unknown id: %v", err)
+	}
+	after, _ := alice.Inbox(false, false)
+	for i := range before {
+		if before[i].Read != after[i].Read || before[i].State != after[i].State {
+			t.Fatalf("conversation changed %s", before[i].ID)
+		}
+	}
+}
+
+// Each session has its own cursor: reading, answering or another session
+// never hides an arrival, and an unshown batch is shown again.
+func TestAttentionPerSession(t *testing.T) {
+	w := newWorld(t, "")
+	runWith(t, w, w.alice, RunOptions{})
+	runWith(t, w, w.bob, RunOptions{})
+	early, _ := w.bob.Send(tctx(t), w.alice.Address, "early", "")
+	eventually(t, "early", func() bool { return hasInbox(w.alice, "early") })
+
+	// A new session gets an overview including what arrived before it.
+	a1 := shown(t, w.alice, "A", "SessionStart")
+	if !strings.Contains(a1, "1 received message(s), 1 unread") || !strings.Contains(a1, early.ID) {
+		t.Fatalf("overview: %s", a1)
+	}
+	if got := shown(t, w.alice, "A", "UserPromptSubmit"); got != "" {
+		t.Fatalf("nothing new, got %q", got)
+	}
+
+	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "status?", Kind: envelope.KindQuestion})
+	eventually(t, "q at bob", func() bool { return hasInbox(w.bob, "status?") })
+	r1, _ := w.bob.Reply(tctx(t), q.ID, "SECRET-BODY green")
+	r2, _ := w.bob.Send(tctx(t), w.alice.Address, "and another", q.ID)
+	eventually(t, "replies", func() bool { return hasInbox(w.alice, "SECRET-BODY green") && hasInbox(w.alice, "and another") })
+	w.alice.Inbox(false, true) // the human read everything: sessions must still be told
+
+	// An unshown batch is not consumed.
+	if at := attention(t, w.alice, "A", "PostToolUse"); !strings.Contains(at.Text, r1.ID) {
+		t.Fatalf("first try: %q", at.Text)
+	}
+	got := shown(t, w.alice, "A", "PostToolUse")
+	for _, want := range []string{r1.ID, r2.ID, "replying to your question " + q.ID, "answer from " + w.bob.Address, "agentnet conversation ID"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("A lacks %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "SECRET-BODY") {
+		t.Fatalf("message text in context: %s", got)
+	}
+	if again := shown(t, w.alice, "A", "PostToolUse"); again != "" {
+		t.Fatalf("shown twice: %q", again)
+	}
+	// Session B starts later: overview, then only newer arrivals.
+	if b := shown(t, w.alice, "B", "UserPromptSubmit"); !strings.Contains(b, "3 received message(s), 0 unread") {
+		t.Fatalf("B overview: %s", b)
+	}
+
+	// A burst larger than one batch arrives within a second.
+	var burst []string
+	for range 10 {
+		m, _ := w.bob.Send(tctx(t), w.alice.Address, "burst", "")
+		burst = append(burst, m.ID)
+	}
+	eventually(t, "burst", func() bool { n, _ := w.alice.store.countArrivalsAfter(0); return n == 13 })
+	a2 := shown(t, w.alice, "A", "UserPromptSubmit")
+	if strings.Count(a2, "\n- ") != attentionItems || !strings.Contains(a2, "(2 more arrived") {
+		t.Fatalf("A batch: %s", a2)
+	}
+	a3 := shown(t, w.alice, "A", "UserPromptSubmit")
+	b := shown(t, w.alice, "B", "UserPromptSubmit") + shown(t, w.alice, "B", "PostToolUse")
+	for _, id := range burst {
+		if !strings.Contains(a2+a3, id) || !strings.Contains(b, id) {
+			t.Fatalf("burst item %s lost", id)
+		}
+	}
+}
+
+// Stop asks once to check new arrivals; never while already continued, and
+// the same item does not stop the turn again.
+func TestAttentionStopOnce(t *testing.T) {
+	w := newWorld(t, "")
+	runWith(t, w, w.alice, RunOptions{})
+	if at := attention(t, w.alice, "S", "Stop"); at.Text != "" {
+		t.Fatalf("new session Stop: %q", at.Text)
+	} else {
+		at.Commit()
+	}
+	m, _ := w.bob.Send(tctx(t), w.alice.Address, "news", "")
+	eventually(t, "news", func() bool { return hasInbox(w.alice, "news") })
+	if at, _ := w.alice.Attention(HookEvent{Harness: "claude", Session: "S", Event: "Stop", StopActive: true}); at.Text != "" {
+		t.Fatalf("blocked while already continued: %q", at.Text)
+	}
+	stop := shown(t, w.alice, "S", "Stop")
+	if !strings.Contains(stop, m.ID) || !strings.Contains(stop, "Before finishing") {
+		t.Fatalf("stop: %q", stop)
+	}
+	if again := shown(t, w.alice, "S", "Stop"); again != "" {
+		t.Fatalf("stopped twice for the same item: %q", again)
+	}
+	// Codex sessions are separate even with the same id.
+	at, _ := w.alice.Attention(HookEvent{Harness: "codex", Session: "S", Event: "UserPromptSubmit"})
+	if !strings.Contains(at.Text, "1 received") {
+		t.Fatalf("codex session: %q", at.Text)
+	}
+}
+
+// Arrival numbers keep increasing after the newest row is deleted, and
+// duplicates of a stored message get none.
+func TestArrivalNeverReused(t *testing.T) {
+	w := newWorld(t, "")
+	in := func(id string) envelope.Inner {
+		return envelope.Inner{ID: id, From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: id}
+	}
+	for _, id := range []string{"m1", "m2", "m2"} {
+		if err := w.alice.store.addInbox(in(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if top, _ := w.alice.store.arrivalTop(); top != 2 {
+		t.Fatalf("top %d", top)
+	}
+	w.alice.store.db.Exec(`DELETE FROM inbox WHERE id = 'm2'`)
+	w.alice.store.addInbox(in("m3"))
+	var n int64
+	w.alice.store.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'm3'`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("m3 arrival %d", n)
+	}
+}
+
+// Upgrading a store from the previous schema numbers existing messages in
+// arrival order and continues from there.
+func TestArrivalBackfillOnUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	old, err := sqlitedb.Open(path, schema[:len(schema)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"b", "a"} {
+		if _, err := old.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at) VALUES(?, 'x/y', 1, 'message', '', 1)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+	st, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.db.Close()
+	var b, a int64
+	st.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'b'`).Scan(&b)
+	st.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'a'`).Scan(&a)
+	if top, _ := st.arrivalTop(); b != 1 || a != 2 || top != 2 {
+		t.Fatalf("arrivals b=%d a=%d top=%d", b, a, top)
+	}
+}

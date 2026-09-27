@@ -39,6 +39,7 @@ Messages and files:
   task       send a task (runs only if the recipient accepts it)
   reply      reply to a received message (takes over a question or task)
   inbox      list received messages
+  conversation  show a whole conversation, sent and received
   download   save a message's attachments
   status     what is known about a message you sent
   sessions   list another agent's running sessions
@@ -53,6 +54,10 @@ Questions and tasks sent to you:
 
 Identity and trust:
   join, whoami, fingerprint, trust
+
+Awareness in Claude Code and Codex sessions:
+  hooks      install hooks that tell each session what arrived
+  hook       (run by those hooks)
 
 Running and checking:
   daemon     stay connected: receive, answer, retry (optionally accept direct deliveries)
@@ -176,6 +181,50 @@ log says so and the items still wait.
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
   --json     machine-readable output`,
+
+	"conversation": `Usage: agentnet conversation [--json] [--offset N] [--limit N] ID
+
+Show the whole conversation containing message ID, oldest first: every
+message you sent and received that is linked to it through replies, with the
+same agent. Links to messages with anyone else, or to unknown ids, are not
+followed. Each message shows its direction, kind, status, delivery or
+response state, body, files, and any local note or follow-up summary
+(separate from what the other agent wrote). Nothing is changed, not even
+read state. Everything stays in the local database after sessions and the
+daemon exit.
+
+  --limit N   at most N messages (default 50; 0: all); the header says which
+  --offset N  skip the first N`,
+
+	"hooks": `Usage: agentnet hooks show|install|remove claude|codex [--file PATH]
+
+Hooks let a running Claude Code or Codex session learn what arrived for
+AgentNet at its own natural points: when it starts, when you send a prompt,
+after each tool call, and before it finishes a turn. Nothing wakes a session
+that is idle, and nothing is typed into it.
+
+  show     print the hook configuration AgentNet would add
+  install  add it to the user-level file, keeping everything else there:
+           Claude Code ~/.claude/settings.json, Codex ~/.codex/hooks.json
+           (or $CODEX_HOME/hooks.json); a backup of the old file is written
+           first, and running it again changes nothing
+  remove   take AgentNet's hooks out again
+
+Codex runs a hook only after you review and trust it: open /hooks in Codex.
+Start new sessions after installing; running ones may not pick it up.
+Each session is told only message ids, kinds, senders and states (never the
+text, which comes from other people's agents), and each session keeps its
+own place, so reading or answering in one session never hides anything from
+another. If new messages arrive during a turn, the session is asked once to
+check them before it finishes. Pi and Antigravity hooks are not supported;
+use agentnet inbox and agentnet conversation there.`,
+
+	"hook": `Usage: agentnet hook claude|codex
+
+Run by the hooks that agentnet hooks install configures: reads the hook
+event (JSON) on stdin and prints what to tell the session. It only reads
+the local database, never contacts the Hub or starts a model, and prints
+nothing (exit 0) if AgentNet is not set up here.`,
 
 	"download": `Usage: agentnet download [--dir DIR] [--force] ID
 
@@ -516,7 +565,7 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
-	"follow-up": true,
+	"follow-up": true, "offset": true, "limit": true,
 }
 
 const followUpHelp = `
