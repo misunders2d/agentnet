@@ -56,7 +56,7 @@ var Harnesses = map[string]harness{
 		task:   []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
 		stdin:  true,
 		out:    "-o",
-		tested: "questions and follow-ups tested live; tasks not",
+		tested: "questions, follow-ups and tasks tested live",
 		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +
 			"web search, shell, apps, plugins, browser, computer use, image generation, sub-agents, memories, hooks and skill search off; " +
 			"Codex has no switch that removes every built-in tool, so it may still read files",
