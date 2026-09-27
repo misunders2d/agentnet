@@ -2,7 +2,7 @@
 
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >
-> **Current Version:** Client `v0.2.1` (Binary: `611b633`, Docs baseline: `2395d11`, CI: `36341139910`), compatible with Hub relay `v0.2.0`.
+> **Dated baseline — 2026-09-27:** [Client release v0.2.1](https://github.com/misunders2d/agentnet/releases/tag/v0.2.1) (Binary: `611b633`, prior evidence docs: `2395d11`, CI: `36341139910`), compatible with deployed Hub relay `v0.2.0`. Recheck current state before operations.
 >
 > **Linear Tracking:** Project [Agent Net Revived](https://linear.app/mellanni/project/agent-net-revived-c2f1212b3580) (Tickets `MEL-409` through `MEL-435`; this repository stands completely alone if Linear is inaccessible).
 
@@ -82,6 +82,7 @@ Every change to AgentNet must uphold these fundamental invariants:
    - **Codex Hooks Adoption**: Installed into `~/.codex/hooks.json`; adoption requires manual user trust in `/hooks`.
    - **Windows Hooks Refused**: Hook installation is explicitly refused on Windows (`MEL-414`).
    - **Pi & Antigravity Hooks**: Unsupported.
+   - Parallel hook calls in one session may repeat an arrival. Codex trust/adoption on the operator laptop remains unconfirmed; installation is not live proof. No request-origin routing chooses one foreground session: cursors are independent for each hooked session.
 
 7. **Persistent Background Sessions & Context Retention (MEL-425)**:
    - Claude/Codex store `session_ref` on an inbox job and `session_head` per harness/session ID. Resume requires the first linked ancestor to be the latest job in that native session, to have ended cleanly, and to match peer, mode, canonical directory and preset. Branching from an older job, a changed preset/directory/mode, or interrupted/failed/cancelled/needs_human state starts fresh. Failed resume is not retried automatically. There is no context-exhaustion recovery mechanism in AgentNet. Native context lives in the harness store with harness-controlled retention; AgentNet history is separate. Pi stays one-shot. See M4 for full rules.
@@ -131,7 +132,7 @@ The following capabilities have been tested and verified on live machines:
   - Linux desktop verified live with real `notify-send` (notification ID replacement, silence hint, duplicate suppression across daemon restarts, visual banner confirmed by owner).
   - Headless review notices verified live at `v0.2.1`: awaiting task on headless host never executed; single review notice recorded as `needs_human`/`notified=1` at laptop; owner visually confirmed desktop banner; synthetic item declined and resolved.
 - **Zenbook Host Update Verification**:
-  - Client version recommendation notice verified delivered into custody; follow-up and file roundtrip remain unproven on that host.
+  - Update notice reached relay custody only; recipient delivery and upgrade were not confirmed. Full unattended follow-up and returned-file roundtrip remain unproven on that host.
 
 ### 3.4 Honest Qualification Limits (What is NOT Claimed)
 - **Runtime Tool Refusal**: Models answered `NEEDS-HUMAN` per system prompt; active refusal by the sandbox/harness was not exercised.
@@ -139,6 +140,7 @@ The following capabilities have been tested and verified on live machines:
 - **Pi Broad Qualification & Persistent Sessions**: Pi is qualified **only** for the single diagnostic question and accepted task demonstrated; persistent sessions are not supported for Pi.
 - **macOS & Windows Desktop UI**: macOS `osascript` builds and passes test suites, but has NO live desktop API execution evidence. Windows `Shell_NotifyIconW` passes native API execution in CI, but real physical desktop balloon display has not been verified live.
 - **Platform Deployments**: Hub platform TLS tested with local proxy; not deployed to Railway or cloud PaaS.
+- **Security boundary:** local history is plaintext in owner-only storage, not an encrypted local database. The Hub sees routing metadata and is trusted at first contact; compare fingerprints independently. There is no forward secrecy or retroactive removal of delivered data. Responder plaintext reaches its chosen model provider. See M1 for the full limits.
 
 ---
 
@@ -168,7 +170,7 @@ agentnet/
 │   ├── client/                 # Agent client logic
 │   │   ├── client.go           # High-level client API (send, ask, task, download)
 │   │   ├── daemon.go           # Long-lived push connection, stream listener, ping ACK
-│   │   ├── store.go            # Local SQLite schema (inbox, outbox, config, sessions)
+│   │   ├── store.go            # Local SQLite schema (inbox, outbox, config, attention)
 │   │   ├── worker.go           # Job runner for auto-questions and accepted tasks
 │   │   ├── respond.go          # Manual transitions: accept, decline, resolve, takeOver
 │   │   ├── responder.go        # Responder selection, detection on PATH, configuration
@@ -201,18 +203,18 @@ agentnet/
 ## 5. Standard Operating Procedures & Playbooks
 
 ### 5.1 Local Verification (Hermetic, No Model Calls)
-To verify the codebase without spending model tokens or touching network services:
+For hermetic source verification without model calls or live deployments (tests use local network fixtures; dependency downloads may require network access):
 ```bash
 # 1. Format and code analysis
 go vet ./...
 
 # 2. Run unit and integration tests with race detector
-go test -race -count=1 -timeout 300s ./...
+go test -race -count=1 -timeout 600s ./...
 
-# 3. Test out-of-process CLI journeys
+# Optional focused alternative: out-of-process CLI journeys (already included above)
 go test -count=1 -timeout 300s ./itest/...
 
-# 4. Verify cross-platform compilation
+# Packaging only when required; compilation is not native runtime evidence
 scripts/build.sh
 ```
 
@@ -264,6 +266,14 @@ If a local database or key file is damaged:
 - To test Hub connectivity without sending messages: `agentnet doctor`.
 - **Never paste raw keys, invite codes, or auth tokens into public issues or transcripts.**
 
+### 5.5 Headless Troubleshooting & Operational Continuation
+- A relay and an enrolled server responder are different processes/homes. The relay does not answer questions by itself. On the receiving installation check `doctor`, `responder show`, sender approval and `inbox --review`. A delivered question may be held; approval does not itself run an older held item. Tasks still require explicit local acceptance.
+- Use `conversation ID` for durable two-way history without changing read state. Ordinary `inbox` marks listed messages read; `inbox --review` does not. Read state never proves a model or person understood the message.
+- The daemon's service environment can differ from an interactive shell. Resolve the actual harness on its PATH and its canonical credential bootstrap. In the live Pi task, an AgentNet-only wrapper reused the host's existing secret runner for the child; the daemon received no injected Telegram secret. This was host configuration, not a mandatory Infisical dependency. Preserve the host's non-poller setting and AgentNet background-hook isolation.
+- A timeout does not prove an external effect failed. Before retrying an effectful task, check its provider/ledger evidence and any human confirmation needed to rule out duplicates. The successful Telegram acceptance was independently verified once; it did not prove the person read it.
+- `review-to ADDRESS` forwards count-only attention to a chosen installation; both ends need the feature. It neither grants remote acceptance nor forwards request content. Only review items should notify the human; ordinary replies stay quiet.
+- On an existing host, discover the actual service, home, responder directory, private stopped backups and rollback record locally with authorized access. Never assume another machine has the operator's paths or credentials. The repository deliberately contains no private deployment inventory or recovery secrets.
+
 ---
 
 ## 6. What to Do Next & Active Boundaries
@@ -289,7 +299,7 @@ If a local database or key file is damaged:
 - **Human Owner & Caller**: Sergey (final authority on product scope, security rules, emotion requirements, and release approvals).
 - **Supervisor**: Codex (`p1`) (architecture, Linear project coordination, verification reviews).
 - **Critic & Systems**: Agy (`p4`) (code reviews, documentation audits, system verification, hermetic testing).
-- **Paused Workers**: Core Claude (`p3`) and UI Claude (`p7`) (paused pending scoped assignments).
+- **Stopped Workers**: Core Claude and UI Claude were exited at the owner's request. Pane identifiers above describe this session only; discover current agents before delegation. Do not relaunch them without a new assignment.
 - **Next Slice Design Scope**:
   - **MEL-433**: Human identity, linked devices, and shared conversations for messenger rollout.
   - **MEL-434**: Comic-book conversations, expressive avatars with required facial emotions (`happy`, `sad`, `curious`, etc.) distinct from operational status, and cached predefined reaction sets.

@@ -3,7 +3,7 @@
 One program, `agentnet`, is both the laptop client and the Hub. Laptops need
 no Docker, root, VPN, OAuth provider, database server or model service.
 
-**Release binaries** (from v0.2.1): the
+**Release binaries** (available since v0.2.0; current baseline v0.2.1): the
 [GitHub releases](https://github.com/misunders2d/agentnet/releases) have
 `agentnet-OS-ARCH` for Linux, macOS and Windows (amd64 and arm64) plus
 `SHA256SUMS`. Download yours and `SHA256SUMS` into one folder, check the

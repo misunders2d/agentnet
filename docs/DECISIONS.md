@@ -83,6 +83,17 @@ Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7
    - The owner explicitly directed that human identity and messenger rollout be addressed in a subsequent scoped assignment.
    - Wire metadata field names (e.g. `is_replica`) are illustrative and are not frozen.
 
+### 2.3 Alternatives, Delivery Model & Rollout Gates
+- **Buzz reference, not a dependency:** reuse the dual-screen short authentication string (SAS) confirmation pattern; select and review a maintained pairing mechanism and its exact transcript before implementation. Reject copying Buzz's private master key between devices and importing its application stack.
+- **Roster trust:** pinned, device-signed transitions prevent an admin-only addition to an already-pinned identity. Sequence numbers detect observed rollback, not withheld updates or globally consistent freshness. A compromised authorized device remains a threat. Loss of all devices requires a visible trust reset until the owner decides recovery authority.
+- **Human versus device addressing:** human chat fans out to authorized recipient devices and syncs to the sender's other linked devices. Questions/tasks retain one execution target. Keep per-device receipts and read state; a replica cannot create another execution or summary job. Multi-recipient age is deferred to preserve current delivery accounting, not because the primitive is impossible.
+- **Attribution:** future UI-origin, agent-origin and unspecified fields are signed assertions, not proof of keystrokes or positive permissions. Same-user software can imitate UI-origin. Existing messages must not acquire invented authorship.
+- **UI entitlement:** show locally available authorized conversations; distinguish history not yet synced. Local daemon web UI comes first. A relay-hosted/browser-only client is deferred pending its key-custody and delivery design, not declared inherently impossible.
+- **Migration:** never merge existing installations by matching labels. Explicit linking joins identities; forward-only history is the initial default. Older history requires an explicit authorized transfer, with provenance and entitlement checked before indexing.
+- **Owner decisions still open:** lost-all-devices recovery authority and prior-history entitlement for a newly linked device. Engineering defaults are not owner consent.
+
+Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negotiated wire attribution/logical IDs, fan-out/self-sync and real UI integration; S3 explicit historical transfer. Their implementation order must be scoped at the next design session. Required cases include forged/stale/branched rosters, pairing replay/mismatch, offline removed devices, mixed versions, duplicate deliveries, replicas never executing, recovery and history entitlement.
+
 ---
 
 ## 3. Agentic-First Messenger UI Skeleton (MEL-429 Synthesis)
@@ -107,6 +118,8 @@ Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7
 
 4. **Live Daemon Integration**:
    - Live daemon integration is not blocked on a full multi-device identity implementation; next slice design decides UI integration scope.
+   - The current preview uses simulated actions only. Before a real provider is added, account for writes from other CLI processes waking the UI, stale receipt values, worker ownership of running jobs, and honest unknown presence/authorship. Do not invent a persisted thread root that breaks when a parent arrives late.
+   - Design motivation: reduce notification noise, context recovery and fragmented threads; preserve provenance and distinguish delivery from execution. Incumbent-complaint research supplied hypotheses, not validated market statistics or resource guarantees. Keep plain text, code and files usable alongside the comic presentation.
 
 ---
 
@@ -114,7 +127,7 @@ Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7
 
 ### 4.1 Requirements & Interaction Contract
 1. **Speech Balloons**:
-   - Message turns attach speech balloons to the sending agent's avatar, creating a readable comic-strip style thread.
+   - Message turns attach speech balloons to the sending person's or agent's avatar, creating a readable comic-strip style thread.
 
 2. **Avatar Facial Emotions & Expressions**:
    - Each agent turn requires an agent emotion/expression attribute shown by the avatar's face (e.g. `happy`, `sad`, `curious`, `concerned`, `excited`, `focused`, `confused` as vocabulary proposal).
@@ -127,6 +140,8 @@ Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7
 4. **Accessibility & Density**:
    - Full support for `prefers-reduced-motion` and a static fallback view.
    - Compact view available for dense code diffs and attachment inspection.
+   - These are design requirements, not completed UI features. Preserve selectable/searchable text, keyboard access, long replies, attachments and mobile layouts. Old peers or missing assets use a neutral fallback without blocking delivery.
+   - Explore brief balloon entrances, expression transitions and speaker handoffs. Avoid endless animation, focus stealing, polling, extra services or idle GPU/model work; pause motion offscreen. Measure before claiming a resource budget.
 
 5. **Current Status**:
    - Emotional reaction set requirement accepted by owner; exact emotion vocabulary, art direction, image generation providers, cost, privacy, and licensing remain open design questions.
@@ -143,6 +158,7 @@ Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7
    - Clicking a batched or grouped review notice opens the review list (`agentnet inbox --review`).
 3. **Strict Safety Invariants**:
    - Clicking a notification must **never** auto-accept a task, trigger any side effect, or hijack an unrelated active terminal or interactive session.
+   - Open the selected local agent or future UI with the persisted conversation/review context. Resume an actual recorded model session only where supported; never fabricate continuity. A headless review notice does not grant access or acceptance authority over the remote item.
 4. **Current Status**:
    - Native OS click-through action handlers (via `notify-send` action tokens, macOS notification center callbacks, or Windows balloon click messages) are currently **unimplemented**.
 
