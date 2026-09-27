@@ -202,6 +202,23 @@ generation; a mismatch names the side to update. Downgrading is manual:
 stop, move the `*.vN.bak` file back over the database, and run the older
 build. There is no self-update. (`agentnet help update`.)
 
+Build with the version stamp (`scripts/build.sh`, or `go build -ldflags
+"-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe
+--always --dirty)"`) so `agentnet version` names the revision; a plain `go
+build` reports `dev`.
+
+**Recommending a client version.** A Hub admin runs `agentnet admin release
+set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running
+daemons get it on their open connection at once, others when they next
+connect; nothing polls. Each member whose build differs gets one
+content-free desktop notice per recommendation, each Claude Code or Codex
+session with AgentNet hooks one line (version, the admin's URL, `agentnet
+help update`, and to ask the person unless already authorized), and
+`agentnet version` (on stderr) and `agentnet doctor` show it. Versions are
+compared only for being equal, never ordered. Re-setting the same version
+and URL announces nothing new. It is advice only: AgentNet never downloads
+or installs anything, and the note is shown to people, not to models.
+
 ## Uninstalling
 
 Stop and remove the startup entry, delete the binary. Your home directory

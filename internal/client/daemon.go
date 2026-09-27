@@ -179,6 +179,14 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		if err := a.accept(ctx, env); err != nil {
 			return errors.Join(errors.New("message "+env.ID+" not processed yet"), err)
 		}
+	case "release":
+		// The Hub operator's recommended client version: saved, then the
+		// worker is woken to tell the person (never on this reader).
+		if err := a.saveRelease([]byte(data)); err != nil {
+			a.Logf("release announcement ignored: %v", err)
+		} else {
+			a.wakeWorker()
+		}
 	case "ping":
 		a.wakeWorker()
 		// Prove this connection is alive; the Hub drops unanswered streams.
@@ -314,7 +322,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 			os.Remove(f) // answers of jobs a previous daemon left running
 		}
 	}
-	a.notifyTried = nil
+	a.notifyTried, a.releaseTried = nil, "" // a new run tries failed notices once more
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {

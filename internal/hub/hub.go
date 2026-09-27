@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/lockfile"
@@ -52,20 +53,25 @@ type Config struct {
 
 // Hub serves the AgentNet Hub API.
 type Hub struct {
-	cfg       Config
-	store     *store
-	unlock    func()
-	cert      tls.Certificate
-	certPEM   string
-	streams   streams
-	presence  presence
-	waiters   waiters
-	stats     Stats
-	heartbeat time.Duration
-	blobMu    sync.Mutex // serialises blob file writes, finalisation and reclamation
-	syncDir   func(dir string) error
-	done      chan struct{}
-	closeOnce sync.Once
+	cfg     Config
+	store   *store
+	unlock  func()
+	cert    tls.Certificate
+	certPEM string
+	streams streams
+	// release is the operator's client recommendation; releaseGen changes
+	// with it, under releaseMu.
+	release    atomic.Pointer[protocol.Release]
+	releaseMu  sync.Mutex
+	releaseGen int64
+	presence   presence
+	waiters    waiters
+	stats      Stats
+	heartbeat  time.Duration
+	blobMu     sync.Mutex // serialises blob file writes, finalisation and reclamation
+	syncDir    func(dir string) error
+	done       chan struct{}
+	closeOnce  sync.Once
 }
 
 // Open prepares the data directory, database, TLS certificate, and — for a
@@ -126,6 +132,9 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	if err == nil {
 		err = h.bootstrap()
+	}
+	if err == nil {
+		err = h.loadRelease()
 	}
 	if err == nil {
 		err = h.prepareBlobs()

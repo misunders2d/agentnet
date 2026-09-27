@@ -124,6 +124,8 @@ CREATE INDEX inbox_links ON inbox(sender, id, reply_to, received_at);
 CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at);
 `, `
 ALTER TABLE inbox ADD COLUMN session_ref TEXT;
+`, `
+ALTER TABLE attention ADD COLUMN release_seen TEXT;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

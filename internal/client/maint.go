@@ -147,6 +147,16 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	} else {
 		add("membership", true, "active")
 	}
+	switch r, err := a.HubRelease(ctx); {
+	case err != nil:
+		add("update", true, "the Hub gives no client recommendation (%v)", err)
+	case r.Version == "":
+		add("update", true, "no client version recommended by the Hub")
+	case r.Version == protocol.Version:
+		add("update", true, "this build (%s) is the one the Hub recommends", r.Version)
+	default:
+		add("update", true, "the Hub recommends %s; this is %s: see agentnet help update and %s", r.Version, protocol.Version, r.URL)
+	}
 	switch r, err := a.Responder(); {
 	case err != nil:
 		add("responder", false, "%v", err)

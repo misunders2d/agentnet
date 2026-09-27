@@ -54,6 +54,11 @@ func run(args []string) error {
 		return runHub(ctx, rest)
 	case "version":
 		fmt.Printf("agentnet %s (protocol %d)\n", protocol.Version, protocol.ProtocolVersion)
+		// A saved recommendation goes to stderr, so the line above stays
+		// parseable; nothing is created and the Hub is not contacted.
+		if r, ok := client.LocalRelease(*home); ok && r.Version != protocol.Version {
+			fmt.Fprintf(os.Stderr, "your Hub recommends agentnet %s (this is %s): see agentnet help update and %s\n", r.Version, protocol.Version, r.URL)
+		}
 		return nil
 	case "join":
 		return runJoin(ctx, *home, rest)
@@ -454,9 +459,61 @@ func runConversation(a *client.Agent, args []string) error {
 	return nil
 }
 
+// runAdminRelease shows, sets or clears the client version the Hub
+// recommends to its members.
+func runAdminRelease(ctx context.Context, a *client.Agent, args []string) error {
+	usage := errors.New("usage: admin release show | admin release clear | admin release set --url URL [--note TEXT] VERSION")
+	if len(args) == 0 {
+		return usage
+	}
+	var r protocol.Release
+	switch args[0] {
+	case "show":
+		if len(args) != 1 {
+			return usage
+		}
+		var err error
+		if r, err = a.HubRelease(ctx); err != nil {
+			return err
+		}
+	case "clear":
+		if len(args) != 1 {
+			return usage
+		}
+		if _, err := a.SetRelease(ctx, protocol.Release{}); err != nil {
+			return err
+		}
+	case "set":
+		fs := flag.NewFlagSet("admin release set", flag.ContinueOnError)
+		url := fs.String("url", "", "https page with update instructions (required)")
+		note := fs.String("note", "", "short note for people (not shown to models)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 || *url == "" {
+			return usage
+		}
+		var err error
+		if r, err = a.SetRelease(ctx, protocol.Release{Version: fs.Arg(0), URL: *url, Note: *note}); err != nil {
+			return err
+		}
+	default:
+		return usage
+	}
+	if r.Version == "" {
+		fmt.Println("no client version recommended")
+		return nil
+	}
+	fmt.Printf("recommended client version %s\nurl %s\n", r.Version, r.URL)
+	if r.Note != "" {
+		fmt.Printf("note %s\n", r.Note)
+	}
+	return nil
+}
+
 func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: admin invite|revoke ...")
+		return errors.New("usage: admin invite|revoke|release ...")
 	}
 	switch args[0] {
 	case "invite":
@@ -495,6 +552,8 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		}
 		fmt.Printf("revoked %s\n", args[1])
 		return nil
+	case "release":
+		return runAdminRelease(ctx, a, args[1:])
 	}
 	return fmt.Errorf("unknown admin command %q", args[0])
 }

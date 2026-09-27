@@ -371,6 +371,8 @@ were abandoned, and direct uploads never attached to a message.
 
 	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
        agentnet admin revoke ADDRESS
+       agentnet admin release set --url URL [--note TEXT] VERSION
+       agentnet admin release show | clear
 
 Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
 bob): use the name your person gave for this invitation, or ask them who is
@@ -382,6 +384,14 @@ invite prints a self-contained invitation for the person LABEL (their
 address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,
 install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
 steps, how to confirm back to you, and the private single-use invite code.
+
+release set recommends a client version to every member: running daemons
+get it at once, others when they next connect. Each person gets one
+content-free desktop notice per recommendation and each Claude Code or Codex
+session one line (version, your https URL, agentnet help update); the note is
+shown to people only, never to models. Setting the same version and URL
+again announces nothing new. It is a recommendation: nothing is downloaded
+or installed. Versions are compared only for equality.
 Give the whole text to the coding agent on their computer, privately. The
 label is your statement about who they are. revoke immediately cuts ADDRESS
 off.
@@ -553,9 +563,16 @@ Laptop: stop the daemon (Windows cannot replace a running .exe), rebuild into
 the same place, start it again, then check:
   cd agentnet && git pull
   systemctl --user stop agentnet          # or: launchctl unload ... / schtasks /end /tn agentnet
-  go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet
+  go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe --always --dirty)" -o ~/.local/bin/agentnet ./cmd/agentnet
   systemctl --user start agentnet
-  agentnet doctor
+  agentnet version && agentnet doctor
+The -ldflags part stamps the build with its git revision (scripts/build.sh
+does the same), so agentnet version and the Hub's recommendation can be
+compared; a plain go build reports "dev".
+
+If your Hub's operator recommends a version, agentnet version (on stderr)
+and agentnet doctor show it with the operator's link. Ask your person before
+updating unless they have already authorized it.
 
 Hub: back it up (agentnet help "hub backup"), then
   git pull && docker compose up -d --build        # or rebuild and restart hub serve

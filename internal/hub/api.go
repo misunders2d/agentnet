@@ -36,6 +36,8 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/blobs/{id}/data", h.handleBlobData)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
+	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
+	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
 	return h.countRequests(mux)
 }
 

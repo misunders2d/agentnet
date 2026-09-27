@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -76,6 +77,20 @@ func (s *streams) ack(agent, id string) bool {
 	return false
 }
 
+// notifyAll wakes every stream, e.g. to push a changed release.
+func (s *streams) notifyAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, subs := range s.subs {
+		for sub := range subs {
+			select {
+			case sub.wake <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
 func (s *streams) disconnect(agent string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,7 +161,15 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer ping.Stop()
 	lease := 2 * h.heartbeat
 	var lastSeq int64
+	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	for {
+		if rel, gen := h.currentRelease(); gen != sentRelease {
+			data, _ := json.Marshal(rel)
+			if !write("event: release\ndata: %s\n\n", data) {
+				return
+			}
+			sentRelease = gen
+		}
 		msgs, err := h.store.pendingFor(caller, ad.Session, lastSeq)
 		if err != nil {
 			return

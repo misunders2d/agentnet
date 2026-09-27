@@ -45,8 +45,34 @@ const (
 	attentionKeep   = 90 // days an unused session cursor is kept
 )
 
-// Attention returns what session should be told at event.
+// Attention returns what session should be told at event: new messages,
+// and (never at Stop) a client update the Hub's operator recommends.
 func (a *Agent) Attention(ev HookEvent) (Attention, error) {
+	at, err := a.messageAttention(ev)
+	if err != nil || ev.Harness == "" || ev.Session == "" || ev.Event == "Stop" {
+		return at, err
+	}
+	line, key, err := a.releaseNudge(ev)
+	if err != nil || line == "" {
+		return at, err
+	}
+	if at.Text != "" {
+		at.Text += "\n\n"
+	}
+	at.Text += line
+	messages := at.commit
+	at.commit = func() error {
+		if messages != nil {
+			if err := messages(); err != nil {
+				return err
+			}
+		}
+		return a.store.setReleaseSeen(ev.Harness, ev.Session, key)
+	}
+	return at, nil
+}
+
+func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 	if ev.Harness == "" || ev.Session == "" {
 		return Attention{}, nil
 	}

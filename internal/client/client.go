@@ -48,8 +48,9 @@ type Agent struct {
 	kick       func() // wakes the current stream's retry worker
 	wakeWorker func() // wakes the question/task worker; a no-op outside Run
 
-	notify      func(title, body string) error // desktop notification
-	notifyTried map[string]bool                // review items a notification was attempted for, this run
+	notify       func(title, body string) error // desktop notification
+	notifyTried  map[string]bool                // review items a notification was attempted for, this run
+	releaseTried string                         // release a notification was attempted for, this run
 }
 
 func paths(home string) (identityPath, dbPath string) {

@@ -43,6 +43,7 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 	for {
 		for a.notifyReview(); a.runNext(ctx, wake); a.notifyReview() {
 		}
+		a.notifyRelease()
 		select {
 		case <-ctx.Done():
 			return
@@ -110,6 +111,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				return
 			case <-wake:
 				a.notifyReview() // new items may arrive while a job runs
+				a.notifyRelease()
 				if s, _ := a.store.jobState(j.ID); s == stateCancelReq {
 					cancelled.Store(true)
 					cancel()

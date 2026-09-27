@@ -59,6 +59,14 @@ CREATE INDEX blobs_state ON blobs(state, updated_at);
 `, `
 ALTER TABLE messages ADD COLUMN session TEXT;
 ALTER TABLE messages ADD COLUMN fallback INTEGER NOT NULL DEFAULT 0;
+`, `
+CREATE TABLE release(
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version TEXT NOT NULL,
+  url TEXT NOT NULL,
+  note TEXT NOT NULL,
+  set_by TEXT NOT NULL,
+  set_at INTEGER NOT NULL);
 `}
 
 var (
