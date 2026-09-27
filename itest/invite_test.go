@@ -147,7 +147,7 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 	}
 	list := c.run("--home", "alice", "responder", "list")
 	for _, want := range []string{"codex   found at " + filepath.Join(bin, "codex") + "; questions use your own setup, read-only",
-		"tasks tested live; the current question mode not yet", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
+		"tasks and a skill-backed question tested live", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("list lacks %q:\n%s", want, list)
 		}

@@ -297,8 +297,8 @@ choice. set selects one; off chooses manual only (no automatic responder).
 show prints the choice, or "not chosen yet". Setup agents: do not pick the
 harness you are running in unless the person says so.
 
-Harnesses: claude and codex (tasks tested live; the current question mode
-not yet), pi (not tested live). Questions and follow-ups use your own
+Harnesses: claude and codex (tasks and a skill-backed question tested
+live), pi (not tested live). Questions and follow-ups use your own
 setup, so your skills and context shape the answer. Your own permissions
 stay the authority: AgentNet takes away editing and new approvals, and asks
 the harness not to change anything, but it is not a sandbox of its own:

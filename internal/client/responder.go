@@ -50,7 +50,7 @@ var Harnesses = map[string]harness{
 			"--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"},
 		task:     []string{"-p", "--output-format", "text", "--no-session-persistence"},
 		stdin:    true,
-		tested:   "tasks tested live; the current question mode not yet",
+		tested:   "tasks and a skill-backed question tested live",
 		sessions: claudeSessions,
 		limits: "claude questions use your Claude settings, skills, plugins and MCP servers; only tools your settings already allow run " +
 			"(permission mode dontAsk: anything else is refused, never asked) and Edit, Write and NotebookEdit are off, " +
@@ -66,7 +66,7 @@ var Harnesses = map[string]harness{
 		task:     []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
 		stdin:    true,
 		out:      "-o",
-		tested:   "tasks tested live; the current question mode not yet",
+		tested:   "tasks and a skill-backed question tested live",
 		sessions: codexSessions,
 		limits: "codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox and anything that would need an approval is refused, " +
 			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have",
