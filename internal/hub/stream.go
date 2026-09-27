@@ -85,8 +85,9 @@ func (s *streams) disconnect(agent string) {
 }
 
 // streamWriteTimeout bounds each write to a push stream, so a peer that
-// stopped reading (asleep, half-open) cannot hold a handler forever.
-const streamWriteTimeout = 15 * time.Second
+// stopped reading (asleep, half-open) cannot hold a handler forever. It is a
+// variable only so tests can shorten it.
+var streamWriteTimeout = 15 * time.Second
 
 // handleStream pushes every unacknowledged message, then new ones as they
 // arrive. Unacknowledged messages are pushed again on the next connection.
@@ -128,12 +129,18 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	http.NewResponseController(w).Flush()
 
 	rc := http.NewResponseController(w)
+	// The deadline covers one write and is cleared after it: a deadline left
+	// in place would reset an idle HTTP/2 stream when it expires.
 	write := func(format string, args ...any) bool {
 		rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 		if _, err := fmt.Fprintf(w, format, args...); err != nil {
 			return false
 		}
-		return rc.Flush() == nil
+		if rc.Flush() != nil {
+			return false
+		}
+		rc.SetWriteDeadline(time.Time{})
+		return true
 	}
 	ping := time.NewTicker(h.heartbeat)
 	defer ping.Stop()
