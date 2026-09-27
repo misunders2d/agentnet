@@ -26,27 +26,53 @@ func releaseTag(version string) string {
 
 var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// releaseSteps installs the release binary for this computer after
-// checking it against the release's SHA256SUMS.
+// releaseSteps installs the release binary for this computer, only when
+// agentnet is not installed yet, and only after it matched the release's
+// SHA256SUMS.
 func releaseSteps(w func(string, ...any), tag string) {
-	base := repoURL + "/releases/download/" + tag
-	w("   If not (or older than %s), install release %s. No Go, Docker, root or admin", tag, tag)
-	w("   rights needed. Each file is checked against the release's SHA256SUMS; stop if")
-	w("   the check fails. Use the commands for this computer's OS:")
+	posix, windows := releaseInstall(repoURL + "/releases/download/" + tag)
+	w("   Only if it is not installed: install release %s (no Go, Docker, root or admin", tag)
+	w("   rights). The file is checked against the release's SHA256SUMS before it is")
+	w("   installed; if a command fails, STOP. If agentnet is already installed, do not")
+	w("   replace it from this invitation: keep it and go on (to update it later:")
+	w("   agentnet help update). Use the commands for this computer's OS:")
 	w("   Linux / macOS:")
-	w(`     os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')`)
-	w(`     f=agentnet-$os-$arch; mkdir -p ~/.local/bin && cd "$(mktemp -d)"`)
-	w(`     curl -fsSLO %s/$f && curl -fsSLO %s/SHA256SUMS`, base, base)
-	w(`     grep " $f\$" SHA256SUMS | (sha256sum -c - || shasum -a 256 -c -) && install -m 0755 $f ~/.local/bin/agentnet`)
+	for _, l := range posix {
+		w("     %s", l)
+	}
 	w(`     export PATH="$HOME/.local/bin:$PATH"   # and add this line to ~/.bashrc or ~/.zshrc`)
 	w("   Windows (PowerShell):")
-	w(`     $f = "agentnet-windows-amd64.exe"; $bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null`)
-	w(`     Invoke-WebRequest %s/$f -OutFile "$bin\agentnet.exe"; Invoke-WebRequest %s/SHA256SUMS -OutFile "$env:TEMP\SHA256SUMS"`, base, base)
-	w(`     $want = (Select-String " $f$" "$env:TEMP\SHA256SUMS").Line.Split(" ")[0]; $got = (Get-FileHash "$bin\agentnet.exe" -Algorithm SHA256).Hash.ToLower()`)
-	w(`     if ($want -ne $got) { Remove-Item "$bin\agentnet.exe"; throw "checksum mismatch" }`)
+	for _, l := range windows {
+		w("     %s", l)
+	}
 	w(`     [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User"); $env:Path += ";$bin"`)
-	w("   Then agentnet version must print agentnet %s. (Building from source instead:", tag)
-	w("   git clone --branch %s %s, then follow the install guide.)", tag, repoURL)
+	w("   Then agentnet version must print agentnet %s. To build it from source instead", tag)
+	w("   (git and Go 1.26+):")
+	w("     git clone --branch %s %s && cd agentnet", tag, repoURL)
+	w(`     go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=%s" -o ~/.local/bin/agentnet ./cmd/agentnet`, tag)
+}
+
+// releaseInstall returns the download-check-install commands for base (a
+// release download URL): POSIX shell lines joined by &&, and PowerShell
+// lines that stop at the first error. They install ~/.local/bin/agentnet or
+// %LOCALAPPDATA%\agentnet\bin\agentnet.exe only after the checksum matched.
+func releaseInstall(base string) (posix, windows []string) {
+	posix = []string{
+		`case "$(uname -s)-$(uname -m)" in Linux-x86_64) p=linux-amd64;; Linux-aarch64|Linux-arm64) p=linux-arm64;; Darwin-x86_64) p=darwin-amd64;; Darwin-arm64) p=darwin-arm64;; *) p=;; esac &&`,
+		`test -n "$p" && f=agentnet-$p && d=$(mktemp -d) &&`,
+		`curl -fsSL -o "$d/$f" ` + base + `/$f && curl -fsSL -o "$d/SHA256SUMS" ` + base + `/SHA256SUMS &&`,
+		`(cd "$d" && grep " $f\$" SHA256SUMS | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -)) &&`,
+		`mkdir -p ~/.local/bin && install -m 0755 "$d/$f" ~/.local/bin/agentnet`,
+	}
+	windows = []string{
+		`$ErrorActionPreference = "Stop"; $a = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }; $f = "agentnet-windows-$a.exe"`,
+		`$d = Join-Path $env:TEMP ("agentnet-" + [guid]::NewGuid()); New-Item -ItemType Directory $d | Out-Null`,
+		`Invoke-WebRequest ` + base + `/$f -OutFile "$d\$f"; Invoke-WebRequest ` + base + `/SHA256SUMS -OutFile "$d\SHA256SUMS"`,
+		`$want = ((Get-Content "$d\SHA256SUMS" | Where-Object { $_ -match " $f$" }) -split "\s+")[0]; $got = (Get-FileHash "$d\$f" -Algorithm SHA256).Hash.ToLower()`,
+		`if (-not $want -or $want -ne $got) { throw "checksum mismatch: agentnet was not installed" }`,
+		`$bin = "$env:LOCALAPPDATA\agentnet\bin"; New-Item -ItemType Directory -Force $bin | Out-Null; Copy-Item "$d\$f" "$bin\agentnet.exe"`,
+	}
+	return posix, windows
 }
 
 // sourceSteps builds from the default branch (development inviters).

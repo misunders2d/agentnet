@@ -6,12 +6,20 @@ no Docker, root, VPN, OAuth provider, database server or model service.
 **Release binaries** (from v0.2.0): the
 [GitHub releases](https://github.com/misunders2d/agentnet/releases) have
 `agentnet-OS-ARCH` for Linux, macOS and Windows (amd64 and arm64) plus
-`SHA256SUMS`. Download yours and `SHA256SUMS`, check the file (`grep "
-agentnet-linux-amd64$" SHA256SUMS | sha256sum -c -`, `shasum -a 256 -c` on
-macOS, `Get-FileHash` on Windows) and install it as `agentnet` on your PATH
-(e.g. `~/.local/bin`, or `%LOCALAPPDATA%\agentnet\bin` on Windows). An
-invitation made by a release build prints these steps for that exact
-release; one made by a development build prints the source build below.
+`SHA256SUMS`. Download yours and `SHA256SUMS` into one folder, check the
+file, and only then install it as `agentnet` on your PATH. For example, on
+Linux x86-64:
+
+```sh
+grep " agentnet-linux-amd64$" SHA256SUMS | sha256sum -c -        # macOS: shasum -a 256 -c -
+install -m 0755 agentnet-linux-amd64 ~/.local/bin/agentnet
+```
+
+On Windows compare `(Get-FileHash agentnet-windows-amd64.exe).Hash` with
+its line in `SHA256SUMS`, then copy it to `%LOCALAPPDATA%\agentnet\bin\agentnet.exe`.
+An invitation made by a release build prints these steps for that exact
+release (they install only when agentnet is not installed yet); one made by
+a development build prints the source build below.
 
 **From source**: you need git and Go 1.26 or newer, nothing else (no admin
 rights). `agentnet help install` prints the same steps.
