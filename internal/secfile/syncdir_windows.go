@@ -2,7 +2,6 @@
 
 package secfile
 
-// SyncDir is a no-op on Windows: directory handles cannot be flushed there,
-// and NTFS journals metadata changes such as renames. Durability of the
-// rename itself is not independently verified on Windows.
+// SyncDir does nothing on Windows: flushing directory entries is not
+// implemented here, so the durability of renames on Windows is unverified.
 func SyncDir(dir string) error { return nil }

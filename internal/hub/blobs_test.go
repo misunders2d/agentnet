@@ -306,3 +306,24 @@ func TestFinaliseWaitsForDurableRename(t *testing.T) {
 		t.Fatalf("state after recovery: %s", b.State)
 	}
 }
+
+func TestReclaimKeepsRowUntilDirectorySynced(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	stale := protocol.NewID()
+	alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: stale, Recipient: bob.addr, Size: 10, SHA256: digest(nil)})
+	alice.call(t, h, "PUT", "/v1/blobs/"+stale+"?offset=0", []byte("12345"))
+	h.store.db.Exec(`UPDATE blobs SET updated_at = ?`, time.Now().Add(-25*time.Hour).Unix())
+	reserve := func() {
+		alice.call(t, h, "POST", "/v1/blobs", protocol.BlobReserve{ID: protocol.NewID(), Recipient: bob.addr, Size: 1, SHA256: digest(nil)})
+	}
+	h.syncDir = func(string) error { return fmt.Errorf("injected fsync failure") }
+	reserve()
+	if b, err := h.store.blob(stale); err != nil || b.State != blobReclaiming {
+		t.Fatalf("row dropped before directory sync: %+v %v", b, err)
+	}
+	h.syncDir = func(string) error { return nil }
+	reserve()
+	if _, err := h.store.blob(stale); err != errNotFound {
+		t.Fatalf("row kept after successful reclaim: %v", err)
+	}
+}

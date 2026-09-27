@@ -459,3 +459,41 @@ func TestUploadConflicts(t *testing.T) {
 		t.Fatal("file differs")
 	}
 }
+
+// A released file whose directory sync failed is not recorded as saved
+// until a later run syncs successfully.
+func TestSavedOnlyAfterDirectorySync(t *testing.T) {
+	w := newWorld(t, "")
+	path, data := writeFile(t, t.TempDir(), "s.bin", 5000)
+	if _, err := w.alice.Send(tctx(t), w.bob.Address, "sync", "", path); err != nil {
+		t.Fatal(err)
+	}
+	msg := receive(t, w)
+	out := t.TempDir()
+	defer func(f func(string) error) { syncDir = f }(syncDir)
+	syncDir = func(string) error { return errors.New("injected fsync failure") }
+	// Run 0 fails syncing the ciphertext cache, run 1 releases the final file
+	// but fails its sync, run 2 finds the released file and fails again.
+	for i := 0; i < 3; i++ {
+		if _, err := w.bob.Download(tctx(t), msg.ID, out, false); err == nil {
+			t.Fatalf("run %d: success despite failed directory sync", i)
+		}
+		if files, _ := w.bob.store.attachments(msg.ID); files[0].SavedPath != "" {
+			t.Fatalf("run %d: recorded saved before sync", i)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "s.bin")); err != nil {
+		t.Fatalf("file was not released by the failing runs: %v", err)
+	}
+	syncDir = func(string) error { return nil }
+	paths, err := w.bob.Download(tctx(t), msg.ID, out, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("file differs")
+	}
+	if files, _ := w.bob.store.attachments(msg.ID); files[0].SavedPath != paths[0] {
+		t.Fatalf("saved path = %q", files[0].SavedPath)
+	}
+}

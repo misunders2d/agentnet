@@ -37,7 +37,11 @@ func (h *Hub) reclaim() error {
 	}
 	done := 0
 	for _, id := range ids {
-		if err := removeIfExists(h.blobPath(id, false), h.blobPath(id, true)); err != nil {
+		err := removeIfExists(h.blobPath(id, false), h.blobPath(id, true))
+		if err == nil {
+			err = h.syncDir(filepath.Join(h.cfg.DataDir, "blobs"))
+		}
+		if err != nil {
 			h.cfg.Logf("reclaim %s: %v (will retry)", id, err)
 			continue
 		}

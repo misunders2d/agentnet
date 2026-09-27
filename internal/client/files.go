@@ -27,6 +27,9 @@ import (
 // pieces. No whole file is ever held in memory.
 const downloadRange = 4 << 20
 
+// syncDir makes renames durable; tests replace it to inject failures.
+var syncDir = secfile.SyncDir
+
 // MaxFileSize is the plaintext limit the client enforces before encrypting.
 var MaxFileSize int64 = protocol.DefaultMaxFileSize
 
@@ -111,7 +114,7 @@ func (a *Agent) spoolFile(path string, recipient age.Recipient) (envelope.Attach
 	if err := os.Rename(tmp.Name(), a.spoolPath(att.Blob.ID)); err != nil {
 		return att, err
 	}
-	return att, secfile.SyncDir(dir) // the outbox row will point at this file
+	return att, syncDir(dir) // the outbox row will point at this file
 }
 
 // uploadAll sends every attachment of env the Hub does not hold yet.
@@ -227,6 +230,11 @@ func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final
 		return err
 	}
 	if match {
+		// Possibly released by an earlier run whose directory sync failed;
+		// sync again before recording it as saved.
+		if err := syncDir(filepath.Dir(final)); err != nil {
+			return err
+		}
 		return a.store.setSaved(msgID, f.BlobID, final)
 	}
 	if exists && !overwrite {
@@ -246,7 +254,7 @@ func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final
 		err = ErrExists
 	}
 	if err == nil {
-		err = secfile.SyncDir(filepath.Dir(final))
+		err = syncDir(filepath.Dir(final))
 	}
 	if err != nil {
 		return err
@@ -342,7 +350,7 @@ func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 	if err := os.Rename(part, done); err != nil {
 		return err
 	}
-	return secfile.SyncDir(filepath.Dir(done))
+	return syncDir(filepath.Dir(done))
 }
 
 func (a *Agent) discard(part, why string) error {
