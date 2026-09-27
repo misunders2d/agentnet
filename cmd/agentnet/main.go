@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,65 +25,6 @@ import (
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
-const usage = `usage: agentnet [--home DIR] <command> [flags] [args]
-
-Client:
-  join [--agent NAME] CODE      enroll this agent with an invite code
-  whoami                        show this agent's address and key fingerprint
-  send [--file PATH]... [--fallback] ADDRESS[#SESSION] TEXT
-                                send an end-to-end encrypted message with files,
-                                directly when the recipient is reachable
-  ask [--file PATH]... ADDRESS TEXT
-                                send a question (approved peers may get an automatic answer)
-  task [--file PATH]... ADDRESS TEXT
-                                send a task (runs only if the recipient accepts it)
-  reply [--file PATH]... ID TEXT
-                                reply to an inbox message (takes over a question or task)
-  accept ID                     let the responder run a task, answer a held question,
-                                or retry an interrupted/failed one
-  decline ID [REASON]           decline a task or question
-  cancel ID                     stop the responder working on ID
-  approve ADDRESS / unapprove ADDRESS
-                                allow / stop automatic answers to ADDRESS's questions
-  responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
-  responder show | responder off
-
-A2A (local, for unmodified A2A clients on this machine):
-  a2a serve --peer PERSON/AGENT [--listen 127.0.0.1:0]
-                                serve one peer over A2A HTTP+JSON on loopback;
-                                clients need the bearer token in HOME/a2a-token
-  inbox [--unread] [--json]     list received messages (marks them read)
-  download [--dir DIR] [--force] ID
-                                save a message's attachments (never overwrites
-                                unless --force)
-  status ID                     show what the Hub can prove about a sent message
-  daemon [--listen ADDR] [--advertise URL]
-                                stay connected (one session) and receive messages;
-                                --listen also accepts direct deliveries
-  sessions ADDRESS              list an agent's live sessions
-  fingerprint ADDRESS           compare trusted and directory keys for ADDRESS
-  trust ADDRESS                 trust ADDRESS's current keys after verifying them
-
-Admin:
-  admin invite [--ttl 168h] [--admin] LABEL
-  admin revoke ADDRESS
-
-Hub (see docs/revival/INSTALL.md):
-  hub serve --data DIR [--listen ADDR] [--public-url URL] [--platform-tls]
-            [--max-file 100MiB] [--quota 1GiB] [--upload-ttl 24h]
-  hub bootstrap-invite --data DIR   print the first admin invite
-  hub storage --data DIR            attachment storage by kind (Hub stopped)
-  hub cleanup --data DIR [--delivered-older-than 720h] [--unattached-older-than 24h]
-  hub backup --data DIR --out FILE  consistent backup (Hub stopped)
-  hub restore --from FILE --data NEWDIR
-
-Other:
-  version | doctor | cleanup [--saved]
-
-ADDRESS is person/agent, e.g. alice/laptop. Home defaults to $AGENTNET_HOME or
-the user config directory.
-`
-
 func main() {
 	log.SetFlags(log.LstdFlags)
 	if err := run(os.Args[1:]); err != nil {
@@ -93,15 +35,16 @@ func main() {
 
 func run(args []string) error {
 	global := flag.NewFlagSet("agentnet", flag.ContinueOnError)
-	global.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	global.SetOutput(io.Discard)
 	home := global.String("home", defaultHome(), "agent home directory")
-	if err := global.Parse(args); err != nil {
-		return err
+	if err := global.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return printHelp(os.Stdout, nil)
+	} else if err != nil {
+		return fmt.Errorf("%v (see agentnet --help)", err)
 	}
 	args = global.Args()
-	if len(args) == 0 {
-		global.Usage()
-		return errors.New("missing command")
+	if len(args) == 0 || wantsHelp(args) {
+		return printHelp(os.Stdout, args) // before anything touches the home
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -114,6 +57,9 @@ func run(args []string) error {
 		return nil
 	case "join":
 		return runJoin(ctx, *home, rest)
+	}
+	if _, known := topics[cmd]; !known {
+		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
 	}
 	a, err := client.Open(*home)
 	if err != nil {
@@ -257,8 +203,7 @@ func run(args []string) error {
 	case "admin":
 		return runAdmin(ctx, a, rest)
 	}
-	global.Usage()
-	return fmt.Errorf("unknown command %q", cmd)
+	return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
 }
 
 func defaultHome() string {
