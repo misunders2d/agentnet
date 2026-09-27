@@ -17,6 +17,9 @@ import (
 
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion})
+	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)

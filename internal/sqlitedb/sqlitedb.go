@@ -4,6 +4,7 @@ package sqlitedb
 import (
 	"database/sql"
 	"fmt"
+	"os"
 
 	_ "modernc.org/sqlite"
 
@@ -27,6 +28,10 @@ func Open(path string, steps []string) (*sql.DB, error) {
 	}
 	// One connection serialises writers and keeps SQLite free of lock errors.
 	db.SetMaxOpenConns(1)
+	if err := snapshotBeforeUpgrade(db, path, len(steps)); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := upgrade(db, path, steps); err != nil {
 		db.Close()
 		return nil, err
@@ -59,4 +64,29 @@ func upgrade(db *sql.DB, path string, steps []string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// snapshotBeforeUpgrade copies an existing database to PATH.vN.bak (N = its
+// current version) before this program changes its schema, so an operator
+// can go back to the previous release. The copy is owner-only.
+func snapshotBeforeUpgrade(db *sql.DB, path string, target int) error {
+	var current int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
+		return err
+	}
+	if current == 0 || current >= target {
+		return nil
+	}
+	snap := fmt.Sprintf("%s.v%d.bak", path, current)
+	if _, err := os.Stat(snap); err == nil {
+		return nil // an earlier attempt already saved it
+	}
+	if err := secfile.Touch(snap); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`VACUUM INTO ?`, snap); err != nil {
+		os.Remove(snap)
+		return fmt.Errorf("saving %s before upgrading: %w", snap, err)
+	}
+	return nil
 }

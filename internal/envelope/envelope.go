@@ -118,6 +118,9 @@ func (e Envelope) signed() []byte {
 
 // Seal encrypts in to recipient and signs the envelope with the sender key.
 func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelope, error) {
+	if !validKind(in.Kind) {
+		return Envelope{}, fmt.Errorf("unknown message kind %q", in.Kind)
+	}
 	in.V = Version
 	plain, err := json.Marshal(in)
 	if err != nil {

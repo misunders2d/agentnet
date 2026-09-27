@@ -14,11 +14,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/a2abind"
 	"github.com/misunders2d/agentnet/internal/client"
-	"github.com/misunders2d/agentnet/internal/hub"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -66,8 +67,17 @@ Admin:
   admin invite [--ttl 168h] [--admin] LABEL
   admin revoke ADDRESS
 
-Hub:
-  hub serve --data DIR [--listen ADDR] [--public-url URL] [--admin-label LABEL]
+Hub (see docs/revival/INSTALL.md):
+  hub serve --data DIR [--listen ADDR] [--public-url URL] [--platform-tls]
+            [--max-file 100MiB] [--quota 1GiB] [--upload-ttl 24h]
+  hub bootstrap-invite --data DIR   print the first admin invite
+  hub storage --data DIR            attachment storage by kind (Hub stopped)
+  hub cleanup --data DIR [--delivered-older-than 720h] [--unattached-older-than 24h]
+  hub backup --data DIR --out FILE  consistent backup (Hub stopped)
+  hub restore --from FILE --data NEWDIR
+
+Other:
+  version | doctor | cleanup [--saved]
 
 ADDRESS is person/agent, e.g. alice/laptop. Home defaults to $AGENTNET_HOME or
 the user config directory.
@@ -93,12 +103,15 @@ func run(args []string) error {
 		global.Usage()
 		return errors.New("missing command")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "hub":
 		return runHub(ctx, rest)
+	case "version":
+		fmt.Printf("agentnet %s (protocol %d)\n", protocol.Version, protocol.ProtocolVersion)
+		return nil
 	case "join":
 		return runJoin(ctx, *home, rest)
 	}
@@ -151,6 +164,30 @@ func run(args []string) error {
 		return runResponder(a, rest)
 	case "a2a":
 		return runA2A(ctx, a, *home, rest)
+	case "doctor":
+		failed := false
+		for _, c := range a.Doctor(ctx) {
+			mark := "ok  "
+			if !c.OK {
+				mark, failed = "FAIL", true
+			}
+			fmt.Printf("%s %-10s %s\n", mark, c.Name, c.Result)
+		}
+		if failed {
+			return errors.New("some checks failed")
+		}
+		return nil
+	case "cleanup":
+		fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+		saved := fs.Bool("saved", false, "also remove directly received ciphertext of attachments already saved as files")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		r, err := a.Cleanup(*saved)
+		if err == nil {
+			fmt.Printf("removed %d spooled and %d directly received files\n", r.SpoolFiles, r.DirectFiles)
+		}
+		return err
 	case "reply":
 		return runSend(ctx, a, rest, true)
 	case "inbox":
@@ -233,37 +270,6 @@ func defaultHome() string {
 		return ".agentnet"
 	}
 	return filepath.Join(dir, "agentnet")
-}
-
-func runHub(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: hub serve --data DIR [--listen ADDR] [--public-url URL]")
-	}
-	fs := flag.NewFlagSet("hub serve", flag.ContinueOnError)
-	data := fs.String("data", "", "data directory (required)")
-	listen := fs.String("listen", "127.0.0.1:8443", "listen address")
-	public := fs.String("public-url", "", "URL clients use (default https://LISTEN)")
-	adminLabel := fs.String("admin-label", "admin", "person label for the bootstrap admin invite")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if *data == "" {
-		return errors.New("--data is required")
-	}
-	if *public == "" {
-		*public = "https://" + *listen
-	}
-	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel})
-	if err != nil {
-		return err
-	}
-	defer h.Close()
-	ln, err := net.Listen("tcp", *listen)
-	if err != nil {
-		return err
-	}
-	log.Printf("hub listening on %s (public %s)", ln.Addr(), *public)
-	return h.Serve(ctx, ln)
 }
 
 func runJoin(ctx context.Context, home string, args []string) error {
@@ -444,7 +450,11 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	if fs.NArg() != 2 {
 		return fmt.Errorf("usage: %s [--file PATH]... ADDRESS TEXT", kind)
 	}
-	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: kind})
+	msgKind := envelope.KindQuestion
+	if kind == "task" {
+		msgKind = envelope.KindTask
+	}
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind})
 	if err != nil {
 		return err
 	}

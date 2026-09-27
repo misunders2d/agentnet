@@ -1,7 +1,9 @@
 package hub
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -358,5 +360,20 @@ func TestPresenceKeepsNewerConnection(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if !p.live("bob/x", sid) || len(ended) != 0 {
 		t.Fatal("reconnect within grace ended the session")
+	}
+}
+
+func TestRestoreRejectsUnsafeEntries(t *testing.T) {
+	for _, name := range []string{"../evil", "/abs", "blobs/../../x", "other/dir/file"} {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: 1})
+		tw.Write([]byte("x"))
+		tw.Close()
+		gz.Close()
+		if _, err := Restore(&buf, filepath.Join(t.TempDir(), "d")); err == nil {
+			t.Fatalf("entry %q accepted", name)
+		}
 	}
 }

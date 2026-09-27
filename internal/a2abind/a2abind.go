@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -133,7 +134,11 @@ func localFile(raw string) (string, error) {
 	if err != nil || u.Scheme != "file" || (u.Host != "" && u.Host != "localhost") {
 		return "", errors.New("file parts must be file:// URLs on this machine")
 	}
-	path := filepath.FromSlash(u.Path)
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:] // file:///C:/dir/file
+	}
+	path := filepath.FromSlash(p)
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%s is not a readable regular file", path)

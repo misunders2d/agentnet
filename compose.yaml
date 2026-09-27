@@ -1,0 +1,19 @@
+# AgentNet Hub on a VPS: `docker compose up -d --build`.
+# Set AGENTNET_PUBLIC_URL to the https address laptops use; the Hub makes and
+# keeps its own TLS certificate in the volume and pins it in invites.
+# See docs/revival/INSTALL.md for backup, update and platform-TLS setups.
+services:
+  hub:
+    build: .
+    image: agentnet-hub:local
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      AGENTNET_PUBLIC_URL: "https://hub.example.com:8443"
+      # AGENTNET_MAX_FILE: 100MiB
+      # AGENTNET_QUOTA: 1GiB
+    volumes:
+      - agentnet-data:/data
+volumes:
+  agentnet-data:

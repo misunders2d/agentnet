@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,7 +119,7 @@ func TestA2AStockClientJourney(t *testing.T) {
 	rand.Read(data)
 	os.WriteFile(filepath.Join(c.dir, "input.bin"), data, 0o600)
 	task := sendText(t, cctx, cl, "task", a2a.NewTextPart("process the attached file"),
-		a2a.NewFileURLPart(a2a.URL("file://"+filepath.Join(c.dir, "input.bin")), "application/octet-stream"))
+		a2a.NewFileURLPart(a2a.URL(fileURL(filepath.Join(c.dir, "input.bin"))), "application/octet-stream"))
 	declined := sendText(t, cctx, cl, "task", a2a.NewTextPart("delete everything"))
 	for _, tk := range []*a2a.Task{q, task, declined} {
 		if tk.Status.State != a2a.TaskStateSubmitted {
@@ -191,4 +192,13 @@ func TestA2AStockClientJourney(t *testing.T) {
 	if _, err := cl.SendMessage(cctx, &a2a.SendMessageRequest{Message: remote}); !errors.Is(err, a2a.ErrUnsupportedContentType) {
 		t.Fatalf("remote URL part: %v", err)
 	}
+}
+
+// fileURL builds a file:// URL for a local path (file:///C:/x on Windows).
+func fileURL(path string) string {
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
 }

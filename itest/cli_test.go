@@ -19,31 +19,49 @@ type cli struct {
 	t   *testing.T
 	bin string
 	dir string
+	env []string // extra environment for every process
 }
 
 func buildCLI(t *testing.T) *cli {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("uses POSIX signals to stop processes")
-	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "agentnet")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", bin, "../cmd/agentnet")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	return &cli{t, bin, dir}
+	c := &cli{t: t, bin: bin, dir: dir}
+	t.Cleanup(func() { // registered first, so it runs after the processes stop
+		if t.Failed() {
+			logs, _ := filepath.Glob(filepath.Join(dir, "*.log"))
+			for _, l := range logs {
+				data, _ := os.ReadFile(l)
+				t.Logf("--- %s\n%s", filepath.Base(l), data)
+			}
+		}
+	})
+	return c
 }
 
 func (c *cli) run(args ...string) string {
 	c.t.Helper()
-	cmd := exec.Command(c.bin, args...)
-	cmd.Dir = c.dir
-	out, err := cmd.CombinedOutput()
+	out, err := c.try(args...)
 	if err != nil {
 		c.t.Fatalf("agentnet %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return out
+}
+
+// try runs a command that may fail and returns its output and error.
+func (c *cli) try(args ...string) (string, error) {
+	cmd := exec.Command(c.bin, args...)
+	cmd.Dir = c.dir
+	cmd.Env = append(os.Environ(), c.env...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 // start runs a long-lived process; the returned func interrupts and reaps it.
@@ -55,6 +73,7 @@ func (c *cli) start(logName string, args ...string) func() {
 	}
 	cmd := exec.Command(c.bin, args...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = c.dir, log, log
+	cmd.Env = append(os.Environ(), c.env...)
 	if err := cmd.Start(); err != nil {
 		c.t.Fatal(err)
 	}
@@ -64,7 +83,11 @@ func (c *cli) start(logName string, args ...string) func() {
 			return
 		}
 		stopped = true
-		cmd.Process.Signal(os.Interrupt)
+		if runtime.GOOS == "windows" {
+			cmd.Process.Kill() // no console interrupt for child processes; SQLite recovers
+		} else {
+			cmd.Process.Signal(os.Interrupt)
+		}
 		done := make(chan struct{})
 		go func() { cmd.Wait(); close(done) }()
 		select {

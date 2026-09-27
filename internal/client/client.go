@@ -93,6 +93,13 @@ func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	var v protocol.VersionInfo
+	if err := conn.do(ctx, "GET", "/v1/version", nil, &v); err != nil {
+		return nil, fmt.Errorf("cannot reach the Hub at %s: %w", inv.Hub, err)
+	}
+	if v.Protocol != protocol.ProtocolVersion {
+		return nil, fmt.Errorf("the Hub speaks protocol %d and this agentnet %d; update the older one", v.Protocol, protocol.ProtocolVersion)
+	}
 	req := protocol.JoinRequest{Secret: inv.Secret, Public: id.Public(address)}
 	protocol.SignJoin(&req, id.Sign)
 	if err := conn.do(ctx, "POST", "/v1/join", req, nil); err != nil {

@@ -76,3 +76,26 @@ func TestLooseExistingDatabaseRefused(t *testing.T) {
 		t.Fatal("world-readable database accepted")
 	}
 }
+
+func TestSnapshotBeforeUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	db, err := Open(path, v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO a(x) VALUES(7)`)
+	db.Close()
+	if db, err = Open(path, v2); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	old, err := Open(path+".v1.bak", v1) // the previous release can open it
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	defer old.Close()
+	var x int
+	if err := old.QueryRow(`SELECT x FROM a`).Scan(&x); err != nil || x != 7 {
+		t.Fatalf("snapshot data %d, %v", x, err)
+	}
+}

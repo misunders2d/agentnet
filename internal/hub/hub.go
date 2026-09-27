@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 	"github.com/misunders2d/agentnet/internal/tlscert"
@@ -40,12 +41,20 @@ type Config struct {
 
 	Heartbeat    time.Duration // ping interval on idle push streams (default protocol.HeartbeatInterval)
 	SessionGrace time.Duration // how long a disconnected session may reconnect before it ends (default 30s)
+
+	// PlatformTLS serves plain HTTP for a platform (Railway, a load balancer)
+	// that terminates HTTPS for PublicURL with a publicly trusted
+	// certificate. Invites then carry no certificate pin and clients verify
+	// the platform's certificate with their system CAs. The listener must be
+	// reachable only through that platform.
+	PlatformTLS bool
 }
 
 // Hub serves the AgentNet Hub API.
 type Hub struct {
 	cfg       Config
 	store     *store
+	unlock    func()
 	cert      tls.Certificate
 	certPEM   string
 	streams   streams
@@ -94,26 +103,33 @@ func Open(cfg Config) (*Hub, error) {
 	if err := secfile.EnsureDir(cfg.DataDir); err != nil {
 		return nil, err
 	}
-	st, err := openStore(filepath.Join(cfg.DataDir, "hub.db"))
+	unlock, err := lockData(cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
-	h := &Hub{cfg: cfg, store: st, heartbeat: cfg.Heartbeat, syncDir: secfile.SyncDir, done: make(chan struct{})}
+	st, err := openStore(filepath.Join(cfg.DataDir, "hub.db"))
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	h := &Hub{cfg: cfg, store: st, unlock: unlock, heartbeat: cfg.Heartbeat, syncDir: secfile.SyncDir, done: make(chan struct{})}
 	h.presence = presence{grace: cfg.SessionGrace, onEnd: func(agent, session string) {
 		if err := st.expireSession(agent, session); err != nil {
 			cfg.Logf("expire session %s#%s: %v", agent, session, err)
 		}
 	}}
-	if err := h.loadOrCreateCert(u.Hostname()); err != nil {
-		st.db.Close()
-		return nil, err
+	err = nil
+	if !cfg.PlatformTLS {
+		err = h.loadOrCreateCert(u.Hostname())
 	}
-	if err := h.bootstrap(); err != nil {
-		st.db.Close()
-		return nil, err
+	if err == nil {
+		err = h.bootstrap()
 	}
-	if err := h.prepareBlobs(); err != nil {
-		st.db.Close()
+	if err == nil {
+		err = h.prepareBlobs()
+	}
+	if err != nil {
+		h.Close()
 		return nil, err
 	}
 	return h, nil
@@ -190,7 +206,13 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	defer ln.Close()
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ServeTLS(ln, "", "") }()
+	go func() {
+		if h.cfg.PlatformTLS {
+			errc <- srv.Serve(ln)
+		} else {
+			errc <- srv.ServeTLS(ln, "", "")
+		}
+	}()
 	select {
 	case err := <-errc:
 		return err
@@ -207,7 +229,19 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 // Close releases the database. Call after Serve returns.
 func (h *Hub) Close() error {
 	h.presence.close()
-	return h.store.db.Close()
+	err := h.store.db.Close()
+	h.unlock()
+	return err
+}
+
+// lockData ensures only one process (a running Hub or a maintenance command)
+// uses a data directory at a time.
+func lockData(dir string) (func(), error) {
+	unlock, err := lockfile.Acquire(filepath.Join(dir, "hub.lock"))
+	if errors.Is(err, lockfile.ErrLocked) {
+		return nil, fmt.Errorf("%s is in use by a running Hub or maintenance command; stop it first", dir)
+	}
+	return unlock, err
 }
 
 type logWriter struct{ logf func(string, ...any) }

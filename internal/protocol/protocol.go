@@ -23,6 +23,20 @@ import (
 	"github.com/misunders2d/agentnet/internal/identity"
 )
 
+// Version is the program version, set at build time with
+// -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=...".
+var Version = "dev"
+
+// ProtocolVersion is the Hub API generation. Clients and Hubs with the same
+// value interoperate; a different value means one of them must be updated.
+const ProtocolVersion = 1
+
+// VersionInfo is the Hub's unauthenticated GET /v1/version answer.
+type VersionInfo struct {
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+}
+
 // MaxBody bounds every request body the Hub reads.
 const MaxBody = 1 << 20
 

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"github.com/misunders2d/agentnet/internal/testhub"
@@ -495,5 +496,33 @@ func TestSavedOnlyAfterDirectorySync(t *testing.T) {
 	}
 	if files, _ := w.bob.store.attachments(msg.ID); files[0].SavedPath != paths[0] {
 		t.Fatalf("saved path = %q", files[0].SavedPath)
+	}
+}
+
+func TestLocalCleanupKeepsQueuedSpool(t *testing.T) {
+	w := newWorld(t, "")
+	path, _ := writeFile(t, t.TempDir(), "q.bin", 1000)
+	f := injectFaults(w.alice)
+	f.add("POST", "/v1/blobs", 1, false)
+	queued, err := w.alice.Send(tctx(t), w.bob.Address, "queued", "", path)
+	if err != nil || queued.State != stateQueued {
+		t.Fatalf("queued: %+v %v", queued, err)
+	}
+	stray := filepath.Join(w.alice.home, "spool", protocol.NewID()+".age") // abandoned by a crash
+	os.WriteFile(stray, []byte("x"), 0o600)
+	release, err := lockfile.Acquire(filepath.Join(w.alice.home, "daemon.lock")) // as a running daemon does
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.Cleanup(false); err == nil {
+		t.Fatal("cleanup ran beside the daemon")
+	}
+	release()
+	r, err := w.alice.Cleanup(false)
+	if err != nil || r.SpoolFiles != 1 {
+		t.Fatalf("cleanup = %+v, %v", r, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 1 {
+		t.Fatalf("queued message's spool removed: %d left", len(entries))
 	}
 }
