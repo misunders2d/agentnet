@@ -22,7 +22,7 @@ import (
 // whose pid it records), slow (1 s then answer) or fail. With the argument
 // --human it says the local human must decide.
 const stubScript = `#!/bin/sh
-echo "run cwd=$(pwd) args=$*" >> "$STUB_LOG"
+echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND" >> "$STUB_LOG"
 cat > "$STUB_LOG.stdin"
 case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
@@ -136,7 +136,7 @@ func TestQuestionsNeedApprovalAndAnswersDoNotTrigger(t *testing.T) {
 		t.Fatalf("harness ran %d times, want 1 (answers must not trigger)", n)
 	}
 	log, _ := os.ReadFile(st.log)
-	if !strings.Contains(string(log), "cwd="+st.dir+" args=--question-mode") {
+	if !strings.Contains(string(log), "cwd="+st.dir+" args=--question-mode bg=1") {
 		t.Fatalf("stub run: %s", log)
 	}
 	stdin, _ := os.ReadFile(st.log + ".stdin")

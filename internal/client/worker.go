@@ -126,6 +126,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	cmd := exec.CommandContext(runCtx, h.bin, args...)
 	cmd.Dir = r.Dir
+	cmd.Env = append(os.Environ(), BackgroundEnv+"=1") // AgentNet's own hooks stay out of this session
 	if h.stdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
@@ -191,6 +192,11 @@ func (a *Agent) finishFollowUp(j job, status, body string) {
 	a.store.finishJob(j.ID, state, body)
 	a.Logf("follow-up of %s: %s", j.ID, state)
 }
+
+// BackgroundEnv is set to "1" for harness sessions the worker starts, so
+// `agentnet hook` stays silent there: they are not the user's sessions. All
+// other hooks the user configured still run.
+const BackgroundEnv = "AGENTNET_BACKGROUND"
 
 // outFilePrefix names the private files harnesses write answers to.
 const outFilePrefix = "answer-"

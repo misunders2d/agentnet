@@ -109,4 +109,13 @@ func TestCLIConversationAndHooks(t *testing.T) {
 	if out := c.hook("alice", "claude", session("S1", "Stop")); out != "" {
 		t.Fatalf("stop with nothing new: %s", out)
 	}
+	// A session the worker started is not told anything and not recorded.
+	c.env = []string{"AGENTNET_BACKGROUND=1"}
+	if out := c.hook("alice", "claude", session("S3", "SessionStart")); out != "" {
+		t.Fatalf("background session told: %s", out)
+	}
+	c.env = nil
+	if out := c.hook("alice", "claude", session("S3", "SessionStart")); !strings.Contains(out, "received message(s)") {
+		t.Fatalf("S3 was recorded by the background call: %s", out)
+	}
 }

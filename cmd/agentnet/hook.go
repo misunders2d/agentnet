@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -29,6 +31,9 @@ var hookEvents = []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "St
 func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) != 1 || !slices.Contains(hookHarnesses, args[0]) {
 		return fmt.Errorf("usage: hook %s (reads the hook event on stdin)", strings.Join(hookHarnesses, "|"))
+	}
+	if os.Getenv(client.BackgroundEnv) == "1" {
+		return nil // a session the AgentNet worker started: not the user's
 	}
 	var in struct {
 		SessionID      string `json:"session_id"`
@@ -85,8 +90,13 @@ func hookConfigPath(harness string) (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-// hookCommand is the command line a harness runs for AgentNet's hook.
+// hookCommand is the command line a harness runs for AgentNet's hook. Both
+// harnesses run it with a POSIX shell on Linux and macOS, so the paths are
+// single-quoted; on Windows the shell is not verified, so it is refused.
 func hookCommand(home, harness string) (string, error) {
+	if runtime.GOOS == "windows" {
+		return "", errors.New("hooks are not supported on Windows yet: how the harnesses run hook commands there is not verified")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -97,21 +107,36 @@ func hookCommand(home, harness string) (string, error) {
 	if home, err = filepath.Abs(home); err != nil {
 		return "", err
 	}
-	if strings.ContainsRune(exe+home, '"') {
-		return "", errors.New(`paths with '"' are not supported in hook commands`)
+	if strings.ContainsAny(exe+home, "'\n") {
+		return "", errors.New("paths containing a single quote or newline are not supported in hook commands")
 	}
-	return `"` + exe + `" --home "` + home + `" hook ` + harness, nil
+	return "'" + exe + "' --home '" + home + "' hook " + harness, nil
 }
 
-// isAgentNetHook recognizes a handler this command installed.
+// ownHookCommand matches exactly the commands hookCommand writes.
+var ownHookCommand = regexp.MustCompile(`^'([^'\n]+)' --home '[^'\n]+' hook (claude|codex)$`)
+
+// isAgentNetHook recognizes exactly a handler this command installed: the
+// same keys, type and command shape, naming this or another agentnet
+// executable.
 func isAgentNetHook(handler any, harness string) bool {
 	h, ok := handler.(map[string]any)
-	if !ok {
+	if !ok || len(h) != 3 || h["type"] != "command" || h["timeout"] != float64(hookTimeout) {
 		return false
 	}
 	cmd, _ := h["command"].(string)
-	return strings.Contains(cmd, "agentnet") && strings.HasSuffix(cmd, " hook "+harness)
+	m := ownHookCommand.FindStringSubmatch(cmd)
+	if m == nil || m[2] != harness {
+		return false
+	}
+	if exe, err := os.Executable(); err == nil && m[1] == exe {
+		return true
+	}
+	base := filepath.Base(m[1])
+	return base == "agentnet" || base == "agentnet.exe"
 }
+
+const hookTimeout = 10 // seconds
 
 // mergeHooks returns config with every AgentNet handler for harness removed
 // and, if command is set, one AgentNet handler per event added. Everything
@@ -126,6 +151,13 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 	}
 	if hooks == nil {
 		hooks = map[string]any{}
+	}
+	for _, event := range hookEvents {
+		if v, ok := hooks[event]; ok {
+			if _, isList := v.([]any); !isList {
+				return nil, fmt.Errorf("hooks.%s is not a list", event)
+			}
+		}
 	}
 	for event, v := range hooks {
 		groups, ok := v.([]any)
@@ -167,7 +199,7 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 		for _, event := range hookEvents {
 			groups, _ := hooks[event].([]any)
 			hooks[event] = append(groups, map[string]any{
-				"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 10}},
+				"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": float64(hookTimeout)}},
 			})
 		}
 	}
@@ -239,8 +271,8 @@ func runHooks(home string, args []string) error {
 		return nil
 	}
 	if len(old) > 0 {
-		backup := file + ".agentnet-backup-" + time.Now().UTC().Format("20060102T150405Z")
-		if err := os.WriteFile(backup, old, 0o600); err != nil {
+		backup, err := writeBackup(file, old)
+		if err != nil {
 			return err
 		}
 		fmt.Printf("backup %s\n", backup)
@@ -257,6 +289,19 @@ func runHooks(home string, args []string) error {
 		}
 	}
 	return nil
+}
+
+// writeBackup saves data next to file under a new, never reused name.
+func writeBackup(file string, data []byte) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(file), filepath.Base(file)+".agentnet-backup-"+time.Now().UTC().Format("20060102T150405Z")+"-*")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return "", err
+	}
+	return f.Name(), f.Close()
 }
 
 // writeFileAtomic replaces path with data, keeping an existing file's mode.

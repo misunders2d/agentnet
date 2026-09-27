@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -41,7 +43,7 @@ func TestHooksInstallMerge(t *testing.T) {
 	for _, event := range hookEvents {
 		groups := hooks[event].([]any)
 		last := groups[len(groups)-1].(map[string]any)["hooks"].([]any)[0].(map[string]any)
-		if cmd := last["command"].(string); !strings.HasSuffix(cmd, "hook claude") || !strings.Contains(cmd, `--home "`+home+`"`) {
+		if cmd := last["command"].(string); !strings.HasSuffix(cmd, "hook claude") || !strings.Contains(cmd, `--home '`+home+`'`) {
 			t.Fatalf("%s handler %q", event, cmd)
 		}
 	}
@@ -117,5 +119,82 @@ func TestHookWithoutAgentIsSilent(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("home created: %v", err)
+	}
+}
+
+// Only handlers exactly like the ones AgentNet writes are AgentNet's; a
+// malformed known event is refused untouched; quick successive changes keep
+// every backup.
+func TestHooksOwnershipAndBackups(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "settings.json")
+	orig := `{"hooks": {"Stop": [{"hooks": [
+  {"type": "command", "command": "'/opt/agentnet/custom_guard.sh' --home '/x' hook claude", "timeout": 10},
+  {"type": "command", "command": "\"/usr/bin/agentnet\" --home \"/x\" hook claude", "timeout": 10},
+  {"type": "command", "command": "'/usr/bin/agentnet' --home '/x' hook claude", "timeout": 10, "note": "mine"}
+]}]}}`
+	os.WriteFile(file, []byte(orig), 0o600)
+	home := t.TempDir()
+	if err := runHooks(home, []string{"install", "claude", "--file", file}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHooks(home, []string{"remove", "claude", "--file", file}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(file)
+	for _, keep := range []string{"custom_guard.sh", `\"/usr/bin/agentnet\"`, `"note": "mine"`} {
+		if !strings.Contains(string(after), keep) {
+			t.Fatalf("removed a handler that is not AgentNet's (%s):\n%s", keep, after)
+		}
+	}
+	backups, _ := filepath.Glob(file + ".agentnet-backup-*")
+	if len(backups) != 2 {
+		t.Fatalf("backups %v", backups)
+	}
+	found := false
+	for _, b := range backups {
+		if data, _ := os.ReadFile(b); string(data) == orig {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the original is no longer in any backup")
+	}
+
+	for _, bad := range []string{`{"hooks": {"Stop": {"hooks": []}}}`, `{"hooks": {"SessionStart": "x"}}`} {
+		os.WriteFile(file, []byte(bad), 0o600)
+		if err := runHooks(home, []string{"install", "claude", "--file", file}); err == nil {
+			t.Fatalf("installed into %s", bad)
+		}
+		if b, _ := os.ReadFile(file); string(b) != bad {
+			t.Fatalf("malformed file changed: %s", b)
+		}
+	}
+}
+
+// The hook command survives a POSIX shell unchanged, whatever the paths
+// contain apart from a quote.
+func TestHookCommandQuoting(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := hookCommand(t.TempDir(), "claude"); err == nil {
+			t.Fatal("Windows hook command not refused")
+		}
+		return
+	}
+	home := filepath.Join(t.TempDir(), "a $HOME `id` \\x \" b")
+	cmd, err := hookCommand(home, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("sh", "-c", "set -- "+cmd+`; printf '%s\n' "$@"`).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, _ := os.Executable()
+	want := strings.Join([]string{exe, "--home", home, "hook", "codex"}, "\n") + "\n"
+	if string(out) != want {
+		t.Fatalf("shell saw\n%s\nwant\n%s", out, want)
+	}
+	if _, err := hookCommand(filepath.Join(t.TempDir(), "it's"), "claude"); err == nil {
+		t.Fatal("single quote accepted")
 	}
 }

@@ -216,8 +216,9 @@ Each session is told only message ids, kinds, senders and states (never the
 text, which comes from other people's agents), and each session keeps its
 own place, so reading or answering in one session never hides anything from
 another. If new messages arrive during a turn, the session is asked once to
-check them before it finishes. Pi and Antigravity hooks are not supported;
-use agentnet inbox and agentnet conversation there.`,
+check them before it finishes. Pi and Antigravity hooks, and hooks on
+Windows, are not supported; use agentnet inbox and agentnet conversation
+there. Sessions the background worker starts are not told anything.`,
 
 	"hook": `Usage: agentnet hook claude|codex
 
