@@ -248,6 +248,9 @@ func runJoin(ctx context.Context, home string, args []string) error {
 	}
 	defer a.Close()
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
+	if chosen, err := a.ResponderChosen(); err == nil && !chosen {
+		fmt.Fprintln(os.Stderr, "next: ask the person how questions and tasks should be handled (agentnet responder list)")
+	}
 	return nil
 }
 
@@ -456,14 +459,17 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 
 func runResponder(a *client.Agent, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: responder set|show|off")
+		return errors.New("usage: responder list|set|show|off")
 	}
 	switch args[0] {
+	case "list":
+		printHarnesses()
+		return nil
 	case "off":
 		if err := a.SetResponder(nil); err != nil {
 			return err
 		}
-		fmt.Println("automatic responder off; questions and tasks wait for you")
+		fmt.Println("manual only: no automatic responder; questions and tasks wait for you")
 		return nil
 	case "show":
 		r, err := a.Responder()
@@ -471,7 +477,13 @@ func runResponder(a *client.Agent, args []string) error {
 			return err
 		}
 		if r == nil {
-			fmt.Println("no responder selected")
+			if chosen, err := a.ResponderChosen(); err != nil {
+				return err
+			} else if chosen {
+				fmt.Println("manual only (chosen): questions and tasks wait for you")
+			} else {
+				fmt.Println("not chosen yet: ask the person, starting from agentnet responder list")
+			}
 			return nil
 		}
 		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, r.Timeout)
@@ -505,6 +517,31 @@ func runResponder(a *client.Agent, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown responder command %q", args[0])
+}
+
+// printHarnesses lists the choices for the default responder. It only
+// looks executables up on PATH; it runs nothing.
+func printHarnesses() {
+	for _, h := range client.ListHarnesses() {
+		where := "not found on PATH"
+		if h.Path != "" {
+			where = "found at " + h.Path
+		}
+		tested := "not tested live"
+		if h.Tested {
+			tested = "tested live"
+		}
+		mode := "questions with no tools"
+		if h.Limits != "" {
+			mode = "questions restricted, not tool-free (see agentnet help responder)"
+		}
+		fmt.Printf("%-7s %s; %s; %s\n", h.Name, where, mode, tested)
+	}
+	fmt.Println("manual  no automatic responder: questions and tasks wait for you (agentnet responder off)")
+	fmt.Println()
+	fmt.Println("Found only means the program is on PATH; it was not run, so login and setup are unchecked.")
+	fmt.Println("Other coding agents (e.g. Antigravity) can read and reply by hand but cannot be the responder.")
+	fmt.Println("Choose with the person: agentnet responder set --harness NAME --dir DIR, or agentnet responder off.")
 }
 
 func runA2A(ctx context.Context, a *client.Agent, home string, args []string) error {

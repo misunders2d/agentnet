@@ -227,7 +227,8 @@ Approve: questions from ADDRESS are answered automatically by your responder.
 Unapprove: stop that; their questions still waiting go back to "held".
 Approval never covers tasks.`,
 
-	"responder": `Usage: agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
+	"responder": `Usage: agentnet responder list
+       agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
        agentnet responder show
        agentnet responder off
 
@@ -235,6 +236,12 @@ Choose the local coding agent that answers approved questions and runs
 accepted tasks, one at a time, in its own background session (never in a
 conversation you have open). It runs in DIR, where its own instructions and
 settings apply; nothing in its configuration is changed.
+
+The person chooses: list shows the supported harnesses found on PATH (it
+runs none of them, so login and setup are unchecked) and the manual-only
+choice. set selects one; off chooses manual only (no automatic responder).
+show prints the choice, or "not chosen yet". Setup agents: do not pick the
+harness you are running in unless the person says so.
 
 Harnesses: claude (tested live), pi and codex (not tested live). With claude
 and pi, questions and follow-ups run with all tools disabled. Codex has no
@@ -495,7 +502,7 @@ func init() {
 	for _, sub := range []string{"invite", "revoke"} {
 		topics["admin "+sub] = topics["admin"]
 	}
-	for _, sub := range []string{"set", "show", "off"} {
+	for _, sub := range []string{"list", "set", "show", "off"} {
 		topics["responder "+sub] = topics["responder"]
 	}
 }

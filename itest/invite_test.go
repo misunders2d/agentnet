@@ -3,6 +3,7 @@ package itest
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -51,7 +52,10 @@ func TestInvitationPacket(t *testing.T) {
 		"Unless the person already confirmed it", "Do not choose or infer it yourself",
 		"fine only if the person picks them", "address bob/NAME", "get their OK",
 		`agentnet send admin/laptop "bob/NAME joined AgentNet"`,
-		"Do not set up an automatic responder",
+		"agentnet responder show", "keep that choice", "agentnet responder list",
+		"found\n   is not proof it is logged in or working", "Do not choose for them or assume it is you",
+		"agentnet responder set --harness NAME --dir DIR   or   agentnet responder off",
+		"Do not approve anyone for automatic answers unless the person asks",
 		"Hub: https://" + addr, "ask\nthe person who invited you for a new invitation",
 	} {
 		if !strings.Contains(packet, want) {
@@ -115,5 +119,55 @@ func TestAdminInviteNeedsLabel(t *testing.T) {
 	out, err := c.try("--home", "alice", "admin", "invite")
 	if err == nil || !strings.Contains(out, "if they have not, ask them who is being invited") || !strings.Contains(out, "unless your person chose it") {
 		t.Fatalf("invite without label: %v\n%s", err, out)
+	}
+}
+
+// TestResponderChoiceAtSetup: after joining, setup is told to ask the
+// person; list shows what is on PATH without running it; manual only and a
+// chosen responder are both remembered choices.
+func TestResponderChoiceAtSetup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stand-in codex is a shell script")
+	}
+	c := buildCLI(t)
+	c.start("hub.log", "hub", "serve", "--data", "hub", "--listen", freeAddr(t))
+	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
+	bin := filepath.Join(c.dir, "bin")
+	os.MkdirAll(bin, 0o700)
+	ran := filepath.Join(bin, "ran")
+	os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o700)
+	c.env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	out, err := c.try("--home", "alice", "join", "--agent", "laptop", c.run("hub", "bootstrap-invite", "--raw", "--data", "hub"))
+	if err != nil || !strings.Contains(out, "next: ask the person how questions and tasks should be handled (agentnet responder list)") {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "not chosen yet") {
+		t.Fatalf("show before choosing: %s", out)
+	}
+	list := c.run("--home", "alice", "responder", "list")
+	for _, want := range []string{"codex   found at " + filepath.Join(bin, "codex") + "; questions restricted, not tool-free",
+		"not tested live", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("list lacks %q:\n%s", want, list)
+		}
+	}
+	c.run("--home", "alice", "responder", "off")
+	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "manual only (chosen)") {
+		t.Fatalf("show after off: %s", out)
+	}
+	if out, _ := c.try("--home", "alice", "doctor"); !strings.Contains(out, "manual only (chosen)") {
+		t.Fatalf("doctor: %s", out)
+	}
+	work := filepath.Join(c.dir, "work")
+	os.MkdirAll(work, 0o700)
+	if out := c.run("--home", "alice", "responder", "set", "--harness", "codex", "--dir", work); !strings.Contains(out, "note: codex questions run restricted, not tool-free") {
+		t.Fatalf("set: %s", out)
+	}
+	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "harness codex") {
+		t.Fatalf("show after set: %s", out)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("choosing a responder ran it")
 	}
 }

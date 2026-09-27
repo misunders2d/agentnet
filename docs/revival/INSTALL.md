@@ -33,7 +33,7 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
 
 `scripts/build.sh` cross-builds all platforms into `dist/` (POSIX shell).
 
-## A laptop, in three commands
+## A laptop, in four steps
 
 1. Install it as above (on your `PATH`).
 2. `agentnet join --agent NAME 'agentnet-invite-v1:…'` with the invite your
@@ -45,16 +45,23 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
    default home (`agentnet` under your user config directory: `~/.config/agentnet` on Linux,
    `~/Library/Application Support/agentnet` on macOS, `%AppData%\agentnet` on
    Windows) or to `--home DIR` / `AGENTNET_HOME`.
-3. `agentnet daemon` and leave it running. It receives messages as they
-   arrive and runs the responder you choose. Without it you can still send;
+3. Choose how questions and tasks sent to you are handled.
+   `agentnet responder list` shows the supported coding agents found on
+   `PATH` (claude, codex, pi) plus manual only. It runs none of them, so
+   login is unchecked. Pick one with
+   `agentnet responder set --harness NAME --dir DIR`, or choose manual only
+   with `agentnet responder off`. A coding agent doing this for you asks
+   you; it does not pick itself. Once chosen, `agentnet responder show`
+   reports the choice and setup does not ask again.
+4. `agentnet daemon` and leave it running. It receives messages as they
+   arrive and runs the responder you chose. Without it you can still send;
    replies wait at the Hub.
 
 `agentnet doctor` checks keys, daemon, Hub reachability and protocol,
 membership and responder. Optional:
 
 ```sh
-agentnet responder set --harness claude --dir ~/work/project   # answer approved questions
-agentnet approve alice/laptop
+agentnet approve alice/laptop   # answer alice/laptop's questions automatically
 agentnet daemon --listen :7443 --advertise https://192.168.1.20:7443   # accept direct deliveries
 ```
 

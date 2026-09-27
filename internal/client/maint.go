@@ -151,7 +151,11 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	case err != nil:
 		add("responder", false, "%v", err)
 	case r == nil:
-		add("responder", true, "none: questions and tasks wait for you")
+		if chosen, _ := a.ResponderChosen(); chosen {
+			add("responder", true, "manual only (chosen): questions and tasks wait for you")
+		} else {
+			add("responder", true, "not chosen yet: questions and tasks wait for you; see agentnet responder list")
+		}
 	default:
 		if _, err := exec.LookPath(Harnesses[r.Harness].bin); err != nil {
 			add("responder", false, "%s selected but %q is not on PATH", r.Harness, Harnesses[r.Harness].bin)

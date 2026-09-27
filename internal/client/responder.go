@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"time"
@@ -30,6 +31,7 @@ type harness struct {
 	stdin    bool     // prompt on stdin; otherwise as the last argument
 	out      string   // flag naming a file for the final answer; otherwise stdout
 	limits   string   // how question mode falls short of "no tools", if it does
+	tested   bool     // run live against the real harness (see docs/revival/M4.md)
 }
 
 // Harnesses lists the supported automatic responders. Flags were checked
@@ -40,8 +42,9 @@ var Harnesses = map[string]harness{
 		bin: "claude",
 		question: []string{"-p", "--output-format", "text", "--no-session-persistence",
 			"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"},
-		task:  []string{"-p", "--output-format", "text", "--no-session-persistence"},
-		stdin: true,
+		task:   []string{"-p", "--output-format", "text", "--no-session-persistence"},
+		stdin:  true,
+		tested: true,
 	},
 	"codex": {
 		bin: "codex",
@@ -68,6 +71,27 @@ var Harnesses = map[string]harness{
 // "no tools", or is empty when it has no tools.
 func HarnessLimits(name string) string { return Harnesses[name].limits }
 
+// HarnessInfo describes a supported responder as installed here. Found
+// means only that its executable is on PATH: nothing is run to find out,
+// so it says nothing about login or whether it works.
+type HarnessInfo struct {
+	Name   string `json:"name"`
+	Path   string `json:"path,omitempty"` // empty when not found on PATH
+	Tested bool   `json:"tested_live"`
+	Limits string `json:"question_mode_limits,omitempty"` // empty: questions run with no tools
+}
+
+// ListHarnesses reports which supported responders are on PATH.
+func ListHarnesses() []HarnessInfo {
+	var out []HarnessInfo
+	for _, name := range HarnessNames() {
+		h := Harnesses[name]
+		path, _ := exec.LookPath(h.bin)
+		out = append(out, HarnessInfo{Name: name, Path: path, Tested: h.tested, Limits: h.limits})
+	}
+	return out
+}
+
 // HarnessNames lists supported responders.
 func HarnessNames() []string {
 	var out []string
@@ -78,12 +102,16 @@ func HarnessNames() []string {
 	return out
 }
 
-// SetResponder selects the default responder, or turns automatic handling
-// off with nil. The change applies to the next job; a running job keeps the
-// responder it started with.
+// SetResponder selects the default responder, or chooses manual handling
+// (no automatic responder) with nil. Either way the choice is recorded, so
+// setup does not ask again. The change applies to the next job; a running
+// job keeps the responder it started with.
 func (a *Agent) SetResponder(r *Responder) error {
 	if r == nil {
 		if err := a.store.deleteConfig("responder"); err != nil {
+			return err
+		}
+		if err := a.store.setConfig(map[string]string{"responder_manual": "1"}); err != nil {
 			return err
 		}
 		notifyDaemon(a.home)
@@ -115,8 +143,21 @@ func (a *Agent) SetResponder(r *Responder) error {
 	if err := a.store.setConfig(map[string]string{"responder": string(data)}); err != nil {
 		return err
 	}
+	if err := a.store.deleteConfig("responder_manual"); err != nil {
+		return err
+	}
 	notifyDaemon(a.home)
 	return nil
+}
+
+// ResponderChosen reports whether the local person has chosen how questions
+// and tasks are handled: a responder, or manual handling.
+func (a *Agent) ResponderChosen() (bool, error) {
+	if r, err := a.Responder(); r != nil || err != nil {
+		return r != nil, err
+	}
+	_, err := a.store.config("responder_manual")
+	return err == nil, nil
 }
 
 // Responder returns the selected responder, or nil when none is selected.
