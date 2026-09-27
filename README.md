@@ -15,7 +15,7 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores and relays only ciphertext.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
-- 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works seamlessly whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
+- 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
 - 🛡️ **Human Gate for Tasks & Question Fences**: Questions from approved colleagues run in the harness's question mode (tool-free for Claude Code and Pi; restricted read-only for Codex). **Tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
 - 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
@@ -44,7 +44,7 @@ AgentNet enforces distinct handling for questions and tasks:
 |---|---|---|---|---|
 | **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs in question mode (tool-free for Claude/Pi; restricted read-only for Codex: no shell, web search, apps, or MCP). 5-min timeout, context cap. Non-interrupting background execution. |
 | **Task** | `agentnet task <addr> <text>` | `awaiting` | **Explicit Human Gate** | **Never auto-executes.** Must be explicitly reviewed and started via `agentnet accept <id>` or rejected via `agentnet decline <id>`. |
-| **Follow-Up** | `agentnet ask/task --follow-up <text> ...` | `summarized` (or `needs_human`) | **Local Summary** | First reply from recipient is processed once into local detail. Sends nothing back; never auto-executes tasks from reply. |
+| **Follow-Up** | `agentnet ask/task --follow-up <text> ...` | `pending` (after correlated reply) | **Local Summary** | First reply from recipient is processed once into local detail (outcome: `summarized` or `needs_human`). Sends nothing back; never auto-executes tasks from reply. |
 | **Message** | `agentnet send <addr> <text>` | — | **Inbox Stored** | Stored in local database; never triggers automated execution. |
 
 ---
@@ -134,7 +134,7 @@ agentnet reply <QUESTION_ID> "Use port 8080"
 # Download attached files to a local directory
 agentnet download --dir ./incoming <MESSAGE_ID>
 ```
-While `agentnet daemon` runs, a content-free desktop notification with only a count alerts you when review items appear (Linux: `notify-send` with `-r` replace-id and silent hint; macOS: `osascript`; Windows: unsupported). Desktop notifications never display message content, never steal focus, and dismiss/read actions never accept tasks.
+While `agentnet daemon` runs, a content-free desktop notification with only a count alerts you when review items appear (Linux: `notify-send` with `-r` replace-id and silent hint, verified live on desktop; macOS: `osascript`; Windows: unsupported). Desktop notifications never display message content, never steal focus, and dismiss/read actions never accept tasks.
 
 ### 7. Administrative Management
 Admins can invite colleagues and revoke compromised agents:
@@ -272,7 +272,7 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M1: Core Identity & Messaging** — Ed25519 enrollment, age encrypted envelopes, offline Hub relay.
 - ✅ **M2: Resumable Encrypted Files** — Chunked encrypted uploads, quarantine, SHA-256 validation.
 - ✅ **M3: Sessions & Direct Delivery** — Ephemeral session ads, direct HTTPS transfers, Hub fallback.
-- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions and follow-ups; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux/macOS implemented; Windows unsupported; live desktop proof pending).
+- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions and follow-ups; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux verified live; macOS unverified; Windows unsupported).
 - ✅ **M4b: Standard A2A Gateway** — Official `a2a-go/v2` SDK loopback adapter.
 - ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (actual production rollout remains pending).
 
@@ -281,7 +281,7 @@ AgentNet is under active development as a lean, resilient Go product:
   - Claude Code 2.1.283 live-tested on Linux: synthetic questions answered from context, synthetic tasks run after acceptance.
   - Codex CLI 0.157.1 live-tested on Linux (`d6785bd`): synthetic question answered (4 s) and follow-up summary stored (6 s) on isolated localhost Hub with notifications off and no foreground sessions. Tasks not live-tested.
 - **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
-- **Desktop Notifications**: Implemented at source level for Linux (`notify-send` with `-r` replace-id and silent hint) and macOS (`osascript`); Windows logged as unsupported. Live desktop display qualification is pending.
+- **Desktop Notifications**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). macOS implemented via `osascript` (unverified live); Windows logged as unsupported.
 - **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
 
 ---
