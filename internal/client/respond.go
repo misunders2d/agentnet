@@ -36,8 +36,8 @@ func takeOver(id, kind, newState string) func(*sql.Tx, string) error {
 		return nil
 	}
 	return func(tx *sql.Tx, replyID string) error {
-		res, err := tx.Exec(`UPDATE inbox SET state = ?, responder = 'manual', result_id = ? WHERE id = ? AND state IN (?, ?, ?, ?, ?, ?)`,
-			newState, replyID, id, statePending, stateHeld, stateAwaiting, stateJobFailed, stateInterrupt, stateCancelled)
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, responder = 'manual', result_id = ? WHERE id = ? AND state IN (?, ?, ?, ?, ?, ?, ?)`,
+			newState, replyID, id, statePending, stateAccepted, stateHeld, stateAwaiting, stateJobFailed, stateInterrupt, stateCancelled)
 		if err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 func (a *Agent) Accept(id string) error {
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND
 		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?)))`,
-		statePending, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
+		stateAccepted, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
 		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled)
 	if err != nil {
 		return err
@@ -120,8 +120,22 @@ func (a *Agent) Approve(address string) error {
 	return err
 }
 
-// Unapprove stops automatic answers for address.
+// Unapprove stops automatic answers for address. Its questions still
+// waiting for the worker go back to held (the worker also re-checks approval
+// when it claims); ones you accepted explicitly stay accepted, and one
+// already running may finish unless cancelled.
 func (a *Agent) Unapprove(address string) error {
-	_, err := a.store.db.Exec(`DELETE FROM approvals WHERE address = ?`, address)
-	return err
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM approvals WHERE address = ?`, address); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE inbox SET state = ? WHERE sender = ? AND kind = ? AND state = ?`,
+		stateHeld, address, envelope.KindQuestion, statePending); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

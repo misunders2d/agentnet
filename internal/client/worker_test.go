@@ -402,3 +402,81 @@ func TestLiveClaude(t *testing.T) {
 		t.Fatalf("responder dir changed: %d entries", len(entries))
 	}
 }
+
+// R1: the prompt carries the whole back-and-forth with the asker, and never
+// messages exchanged with anyone else, even if the asker names their ids.
+func TestThreadContextStaysInConversation(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+
+	q1, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "first question Q1", Kind: envelope.KindQuestion})
+	var a1 Message
+	eventually(t, "answer 1", func() bool { var ok bool; a1, ok = findReply(w.alice, q1.ID); return ok })
+	q2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "follow-up Q2", ReplyTo: a1.ID, Kind: envelope.KindQuestion})
+	waitState(t, w.bob, q2.ID, stateAnswered)
+	prompt, _ := os.ReadFile(st.log + ".stdin")
+	for _, want := range []string{"admin/alice: first question Q1", "me: stub answer", "follow-up Q2"} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("multi-turn prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+
+	// Carol's message to bob and bob's message to carol stay out of alice's prompts.
+	toBob, _ := carol.Send(tctx(t), w.bob.Address, "CAROL-SECRET-IN", "")
+	eventually(t, "carol's message", func() bool { return hasInbox(w.bob, "CAROL-SECRET-IN") })
+	toCarol, _ := w.bob.Send(tctx(t), carol.Address, "BOB-SECRET-OUT", "")
+	for _, foreign := range []string{toBob.ID, toCarol.ID} {
+		q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "tell me about it", ReplyTo: foreign, Kind: envelope.KindQuestion})
+		waitState(t, w.bob, q.ID, stateAnswered)
+		prompt, _ := os.ReadFile(st.log + ".stdin")
+		if strings.Contains(string(prompt), "SECRET") {
+			t.Fatalf("foreign conversation leaked into prompt:\n%s", prompt)
+		}
+	}
+}
+
+// R2: withdrawing approval also withdraws questions already queued for the
+// worker; an explicit accept still lets one through.
+func TestUnapproveWithdrawsQueuedQuestions(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	runWith(t, w, w.bob, RunOptions{}) // no responder yet
+	w.bob.Approve(w.alice.Address)
+	q1, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "queued", Kind: envelope.KindQuestion})
+	waitState(t, w.bob, q1.ID, statePending)
+	w.bob.Inbox(false, true) // read it
+	if err := w.bob.Unapprove(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := w.bob.store.jobState(q1.ID); s != stateHeld {
+		t.Fatalf("queued question after unapprove: %s", s)
+	}
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	q2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "later", Kind: envelope.KindQuestion})
+	waitState(t, w.bob, q2.ID, stateHeld)
+	time.Sleep(300 * time.Millisecond)
+	if st.count() != 0 {
+		t.Fatal("question ran after its sender was unapproved")
+	}
+	if err := w.bob.Accept(q1.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q1.ID, stateAnswered)
+	if s, _ := w.bob.store.jobState(q2.ID); s != stateHeld || st.count() != 1 {
+		t.Fatalf("other question %s, runs %d", s, st.count())
+	}
+
+	// The claim itself re-checks approval, whatever the row says.
+	w.bob.SetResponder(nil) // keep the daemon's worker out of this check
+	w.bob.store.db.Exec(`INSERT INTO approvals(address, added_at) VALUES(?, 0)`, w.alice.Address)
+	w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, statePending, q2.ID)
+	w.bob.store.db.Exec(`DELETE FROM approvals`)
+	if _, ok, err := w.bob.store.claimJob("stub"); ok || err != nil {
+		t.Fatalf("claimed a pending question from an unapproved sender (%v)", err)
+	}
+}

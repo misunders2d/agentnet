@@ -84,6 +84,8 @@ CREATE INDEX inbox_state ON inbox(state, received_at);
 CREATE TABLE approvals(
   address TEXT PRIMARY KEY,
   added_at INTEGER NOT NULL);
+`, `
+ALTER TABLE outbox ADD COLUMN reply_to TEXT;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -166,7 +168,7 @@ func (s *store) setPending(p identity.Public) error {
 
 // addOutbox records a message and its pending uploads in one transaction,
 // together with claim (if any), which marks what the message answers.
-func (s *store) addOutbox(env envelope.Envelope, body string, claim func(tx *sql.Tx, replyID string) error) error {
+func (s *store) addOutbox(env envelope.Envelope, body, replyTo string, claim func(tx *sql.Tx, replyID string) error) error {
 	data, _ := json.Marshal(env)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -178,8 +180,8 @@ func (s *store) addOutbox(env envelope.Envelope, body string, claim func(tx *sql
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
-		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''))`,
+		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix(), replyTo); err != nil {
 		return err
 	}
 	for _, b := range env.Blobs {
@@ -275,7 +277,8 @@ const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, rep
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
 const (
-	statePending   = "pending"  // eligible for the worker
+	statePending   = "pending"  // eligible for the worker because the sender is approved
+	stateAccepted  = "accepted" // eligible for the worker because the local user accepted it
 	stateHeld      = "held"     // question from a sender not approved for automatic answers
 	stateAwaiting  = "awaiting" // task waiting for the local human to accept
 	stateRunning   = "running"  // the worker owns it
@@ -556,14 +559,18 @@ type job struct {
 	Attachments                   int
 }
 
-// claimJob gives the oldest pending question or task to the worker,
-// recording which responder took it. Only one caller can win a row.
+// claimJob gives the oldest eligible question or task to the worker,
+// recording which responder took it. Only one caller can win a row. A
+// question is eligible if the local user accepted it, or if it is pending
+// and its sender is still approved at claim time.
 func (s *store) claimJob(responder string) (job, bool, error) {
 	var j job
 	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL
-		WHERE id = (SELECT id FROM inbox WHERE state = ? ORDER BY received_at, id LIMIT 1) AND state = ?
+		WHERE id = (SELECT id FROM inbox WHERE state = ?
+		              OR (state = ? AND (kind != ? OR sender IN (SELECT address FROM approvals)))
+		            ORDER BY received_at, id LIMIT 1)
 		RETURNING id, sender, kind, body, coalesce(reply_to, '')`,
-		stateRunning, responder, statePending, statePending).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo)
+		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, false, nil
 	}
@@ -595,20 +602,24 @@ func (s *store) interruptRunning() error {
 	return err
 }
 
-// threadText returns up to max earlier messages of the conversation ending
-// at id (oldest first), following reply_to through inbox and outbox.
-func (s *store) threadText(replyTo string, max int) ([]string, error) {
+// threadText returns up to max earlier messages of the conversation with
+// peer that ends at replyTo (oldest first), following reply_to links through
+// the inbox (messages from peer) and the outbox (messages to peer). It stops
+// at any message that is not between this installation and peer, or whose
+// earlier link is unknown, so a sender cannot pull in other conversations by
+// naming their ids.
+func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
 	var out []string
 	for id := replyTo; id != "" && len(out) < max; {
 		var who, body, next string
-		err := s.db.QueryRow(`SELECT sender, body, coalesce(reply_to, '') FROM inbox WHERE id = ?`, id).Scan(&who, &body, &next)
+		err := s.db.QueryRow(`SELECT body, coalesce(reply_to, '') FROM inbox WHERE id = ? AND sender = ?`, id, peer).Scan(&body, &next)
+		who = peer
 		if errors.Is(err, sql.ErrNoRows) {
-			var env string
-			err = s.db.QueryRow(`SELECT body, envelope FROM outbox WHERE id = ?`, id).Scan(&body, &env)
-			if errors.Is(err, sql.ErrNoRows) {
-				break
-			}
-			who, next = "me", ""
+			err = s.db.QueryRow(`SELECT body, coalesce(reply_to, '') FROM outbox WHERE id = ? AND recipient = ?`, id, peer).Scan(&body, &next)
+			who = "me"
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			break
 		}
 		if err != nil {
 			return nil, err
