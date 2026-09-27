@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -277,17 +278,59 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
 	w.bob = mustJoin(t, filepath.Join(t.TempDir(), "bob"), code, "laptop")
 	w.alice.heartbeat, w.bob.heartbeat = beat, beat
+	// Record every request each daemon makes to the Hub, by path.
+	rec := &requestLog{}
+	for _, a := range []*Agent{w.alice, w.bob} {
+		a.hub.http.Transport = recordingRT{a.hub.http.Transport, rec}
+	}
 	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
 	runWith(t, w, w.alice, RunOptions{})
-	time.Sleep(200 * time.Millisecond) // let connect-time sync finish
-	stats := w.hub.Hub.Stats()
-	reqs, acks := stats.Requests.Load(), stats.Acks.Load()
-	time.Sleep(2 * time.Second) // ~8 ping intervals
-	reqs, acks = stats.Requests.Load()-reqs, stats.Acks.Load()-acks
-	// Two connected daemons answer ~8 pings each; nothing else is asked.
-	if reqs != acks || acks == 0 || acks > 2*(2000/250+1) {
-		t.Fatalf("%d requests (%d ping acks) during idle", reqs, acks)
+
+	rec.reset()
+	time.Sleep(2 * time.Second) // ~8 ping intervals with both daemons connected and nothing to do
+	acks, others := rec.snapshot()
+	if len(others) != 0 {
+		t.Fatalf("idle daemons made %d non-ping request(s): %v", len(others), others)
 	}
+	// Each daemon answers each ping; nothing else is asked.
+	if acks == 0 || acks > 2*(2000/250+1) {
+		t.Fatalf("%d ping acks in 2s with a %s ping interval", acks, beat)
+	}
+}
+
+// requestLog counts ping acks and records any other request path.
+type requestLog struct {
+	mu     sync.Mutex
+	acks   int
+	others []string
+}
+
+func (l *requestLog) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.acks, l.others = 0, nil
+}
+
+func (l *requestLog) snapshot() (int, []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.acks, append([]string(nil), l.others...)
+}
+
+type recordingRT struct {
+	base http.RoundTripper
+	log  *requestLog
+}
+
+func (r recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.log.mu.Lock()
+	if req.Method == "POST" && req.URL.Path == "/v1/stream/ack" {
+		r.log.acks++
+	} else {
+		r.log.others = append(r.log.others, req.Method+" "+req.URL.Path)
+	}
+	r.log.mu.Unlock()
+	return r.base.RoundTrip(req)
 }
 
 // A peer that keeps its TCP connection open but stops answering pings (a
