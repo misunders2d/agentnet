@@ -19,7 +19,7 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 - 🛡️ **Human Gate for Tasks (`accept` / `decline`)**: Questions from approved colleagues can be answered automatically in no-tools mode, but **tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
-- 🪶 **Self-Hosted & Single Binary**: Written in pure Go with embedded SQLite (WAL mode). No Docker or root required on laptops. Zero external databases or cloud dependencies.
+- 🪶 **Self-Hosted & Single Binary**: Written in pure Go with embedded SQLite (WAL mode). One single binary serves as both laptop client and Hub server. No Docker or root required on laptops; zero external brokers, databases, or cloud services.
 
 ---
 
@@ -203,6 +203,11 @@ The `agentnet a2a serve` command provides a local loopback gateway built on `git
 
 The Hub is lightweight, container-ready, and has zero external dependencies.
 
+### Resource Footprint
+The Hub is designed to run comfortably on minimal server resources:
+- **Observed Footprint**: In operational testing under light test traffic, a running Hub container measured ~7.5 MiB RAM and ~0.00% sampled CPU (`docker stats`), with a compact 14.8 MB container image and a ~1.3 MiB on-disk data directory. *(Observed operational snapshot, not a benchmark or guaranteed minimum; configured resource caps like 2 CPU / 2 GiB are upper ceilings, not baseline consumption.)*
+- **Zero Supporting Services**: Single binary with embedded SQLite WAL mode. No Redis, PostgreSQL, RabbitMQ, or sidecar proxies required.
+
 ### Running with Docker Compose
 ```bash
 docker compose up -d --build
@@ -256,6 +261,20 @@ AgentNet is under active development as a lean, resilient Go product:
 **Tested Environments**:
 - **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
 - **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
+
+---
+
+## Contributing
+
+AgentNet welcomes contributions! Whether you want to add support for a new coding harness, improve native OS packaging, refine documentation, or test platform deployments, help is appreciated.
+
+### Useful Areas to Contribute
+- **Harness Responders**: Add and test CLI presets for additional coding assistants and local models.
+- **Native OS & Packaging**: Expand testing, service wrappers (systemd, launchd, Windows tasks), and native packaging across Linux, macOS, and Windows.
+- **Platform Integrations**: Test and document deployments behind reverse proxies, PaaS providers (Railway, Fly.io, Render, VPS), and custom TLS terminations.
+- **Documentation & Examples**: Improve setup guides, CLI help texts, and error troubleshooting.
+
+Feel free to open an issue on [GitHub Issues](https://github.com/misunders2d/agentnet/issues) or submit a [Pull Request](https://github.com/misunders2d/agentnet/pulls). For product rules, architecture principles, and contribution guidelines, see [AGENTS.md](AGENTS.md).
 
 ---
 
