@@ -31,7 +31,7 @@ type harness struct {
 	stdin    bool     // prompt on stdin; otherwise as the last argument
 	out      string   // flag naming a file for the final answer; otherwise stdout
 	limits   string   // how question mode falls short of "no tools", if it does
-	tested   bool     // run live against the real harness (see docs/revival/M4.md)
+	tested   string   // what was run live with the real harness (docs/revival/M4.md); empty: nothing
 }
 
 // Harnesses lists the supported automatic responders. Flags were checked
@@ -44,7 +44,7 @@ var Harnesses = map[string]harness{
 			"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"},
 		task:   []string{"-p", "--output-format", "text", "--no-session-persistence"},
 		stdin:  true,
-		tested: true,
+		tested: "questions and tasks tested live",
 	},
 	"codex": {
 		bin: "codex",
@@ -53,9 +53,10 @@ var Harnesses = map[string]harness{
 			"--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "browser_use",
 			"--disable", "computer_use", "--disable", "image_generation", "--disable", "multi_agent",
 			"--disable", "memories", "--disable", "hooks", "--disable", "skill_search"},
-		task:  []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
-		stdin: true,
-		out:   "-o",
+		task:   []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
+		stdin:  true,
+		out:    "-o",
+		tested: "questions and follow-ups tested live; tasks not",
 		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +
 			"web search, shell, apps, plugins, browser, computer use, image generation, sub-agents, memories, hooks and skill search off; " +
 			"Codex has no switch that removes every built-in tool, so it may still read files",
@@ -76,8 +77,8 @@ func HarnessLimits(name string) string { return Harnesses[name].limits }
 // so it says nothing about login or whether it works.
 type HarnessInfo struct {
 	Name   string `json:"name"`
-	Path   string `json:"path,omitempty"` // empty when not found on PATH
-	Tested bool   `json:"tested_live"`
+	Path   string `json:"path,omitempty"`                 // empty when not found on PATH
+	Tested string `json:"tested_live,omitempty"`          // empty: not tested live
 	Limits string `json:"question_mode_limits,omitempty"` // empty: questions run with no tools
 }
 

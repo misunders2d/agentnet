@@ -243,7 +243,8 @@ choice. set selects one; off chooses manual only (no automatic responder).
 show prints the choice, or "not chosen yet". Setup agents: do not pick the
 harness you are running in unless the person says so.
 
-Harnesses: claude (tested live), pi and codex (not tested live). With claude
+Harnesses: claude (questions and tasks tested live), codex (questions and
+follow-ups tested live; tasks not), pi (not tested live). With claude
 and pi, questions and follow-ups run with all tools disabled. Codex has no
 switch that removes every tool, so codex questions run restricted instead:
 read-only sandbox, no user config (no configured MCP servers), and web

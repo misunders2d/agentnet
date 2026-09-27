@@ -527,9 +527,9 @@ func printHarnesses() {
 		if h.Path != "" {
 			where = "found at " + h.Path
 		}
-		tested := "not tested live"
-		if h.Tested {
-			tested = "tested live"
+		tested := h.Tested
+		if tested == "" {
+			tested = "not tested live"
 		}
 		mode := "questions with no tools"
 		if h.Limits != "" {
