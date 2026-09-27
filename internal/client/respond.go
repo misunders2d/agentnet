@@ -90,13 +90,14 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 }
 
 // Accept lets the worker run a task awaiting acceptance, answer a held
-// question, or explicitly retry one that was interrupted, failed or
-// cancelled. Only the local user can do this; nothing received can.
+// question, or explicitly rerun one that was interrupted, failed, cancelled
+// or marked needs_human. A rerun starts afresh; it does not resume the
+// earlier run. Only the local user can do this; nothing received can.
 func (a *Agent) Accept(id string) error {
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND
-		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?)))`,
+		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))`,
 		stateAccepted, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
-		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled)
+		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)
 	if err != nil {
 		return err
 	}

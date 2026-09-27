@@ -50,7 +50,7 @@ var Harnesses = map[string]harness{
 			"--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "browser_use",
 			"--disable", "computer_use", "--disable", "image_generation", "--disable", "multi_agent",
 			"--disable", "memories", "--disable", "hooks", "--disable", "skill_search"},
-		task:  []string{"exec", "--ephemeral", "--color", "never"},
+		task:  []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
 		stdin: true,
 		out:   "-o",
 		limits: "codex questions run restricted, not tool-free: read-only sandbox, no user config (so no configured MCP servers), " +

@@ -165,6 +165,7 @@ Items waiting for your decision (--review):
   awaiting     a task: accept ID or decline ID (tasks never run by themselves)
   needs_human  your responder stopped and asked you to decide (reason shown):
                reply ID TEXT or decline ID answers a question or task;
+               accept ID reruns it afresh (e.g. after you add context);
                resolve ID closes it without sending anything
 While the daemon runs, a desktop notification with only a count (no content)
 tells you when new items wait (Linux: notify-send; macOS: osascript; Windows:
@@ -200,8 +201,9 @@ with ADDRESS#SESSION.`,
 	"accept": `Usage: agentnet accept ID
 
 Let your responder run a task that awaits acceptance, answer a held question,
-or retry one that was interrupted, failed or cancelled. Only you can do this;
-nothing a sender does can.`,
+or rerun one that was interrupted, failed, cancelled or marked needs_human.
+A rerun starts afresh; it does not resume the earlier run. Only you can do
+this; nothing a sender does can.`,
 
 	"decline": `Usage: agentnet decline ID [REASON]
 

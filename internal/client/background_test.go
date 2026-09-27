@@ -342,3 +342,80 @@ func TestReturnToReviewNotifiedAgain(t *testing.T) {
 	eventually(t, "needs-human notification", func() bool { return n.count() == 2 })
 	quiet(t, w.bob, n, 2)
 }
+
+// The codex preset, with a stand-in codex on PATH: a question and an
+// accepted task both run in a directory that is not a git repository, the
+// task with --skip-git-repo-check, and answers come from the -o file.
+func TestCodexPresetInPlainDirectory(t *testing.T) {
+	installStub(t, "answer") // skips on Windows
+	bin := t.TempDir()
+	log := filepath.Join(bin, "log")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncat >/dev/null\necho 'codex progress'\n" +
+		"while [ $# -gt 0 ]; do [ \"$1\" = -o ] && printf 'codex answer' > \"$2\"; shift; done\n"
+	os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	w := newWorld(t, "")
+	plain := t.TempDir()
+	setResponder(t, w.bob, "codex", plain, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
+	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "t", Kind: envelope.KindTask})
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	if err := w.bob.Accept(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{q.ID, task.ID} {
+		var r Message
+		eventually(t, "reply to "+id, func() bool { var ok bool; r, ok = findReply(w.alice, id); return ok })
+		if r.Body != "codex answer" || r.Status != envelope.StatusDone {
+			t.Fatalf("reply %+v", r)
+		}
+	}
+	data, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("codex runs:\n%s", data)
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "exec --ephemeral") || !strings.Contains(l, "--skip-git-repo-check") || !strings.Contains(l, " -o "+w.bobHome) {
+			t.Fatalf("codex argv %q", l)
+		}
+	}
+	if !strings.Contains(lines[0], "--sandbox read-only") || strings.Contains(lines[1], "--sandbox") || strings.Contains(lines[1], "--ignore-user-config") {
+		t.Fatalf("question/task modes:\n%s", data)
+	}
+}
+
+// After the responder marks an item needs_human, the person can rerun it
+// explicitly; follow-up summaries cannot be rerun that way.
+func TestNeedsHumanRerunOnAccept(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	fakeNotify(w.bob)
+	setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "which?", Kind: envelope.KindQuestion})
+	waitState(t, w.bob, q.ID, stateNeedHuman)
+	setResponder(t, w.bob, "stub", st.dir, time.Minute) // the person added what was missing
+	if err := w.bob.Accept(q.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q.ID, stateAnswered)
+	if n := st.count(); n != 2 {
+		t.Fatalf("runs %d", n)
+	}
+
+	// A follow-up marked needs_human stays out of Accept.
+	setResponder(t, w.alice, "stubhuman", st.dir, time.Minute)
+	f, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "again", Kind: envelope.KindQuestion, FollowUp: "check"})
+	var ans Message
+	eventually(t, "answer", func() bool { var ok bool; ans, ok = findReply(w.alice, f.ID); return ok })
+	waitState(t, w.alice, ans.ID, stateNeedHuman)
+	if err := w.alice.Accept(ans.ID); err == nil {
+		t.Fatal("accepted a follow-up for rerun")
+	}
+}
