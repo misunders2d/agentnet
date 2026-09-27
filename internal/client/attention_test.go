@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,16 +247,22 @@ func TestArrivalNeverReused(t *testing.T) {
 	}
 }
 
-// Upgrading a store from the previous schema numbers existing messages in
-// arrival order and continues from there.
+// oldInsertInbox is the inbox insert of the release before arrival numbers:
+// a daemon started from it keeps using it after a newer CLI or hook upgraded
+// the database under it.
+const oldInsertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state)
+	VALUES(?, ?, ?, 'message', 'old writer', NULL, ?, NULL, NULL, '')`
+
+// Upgrading a store from before arrival numbers numbers existing messages
+// in order and continues from there.
 func TestArrivalBackfillOnUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
-	old, err := sqlitedb.Open(path, schema[:len(schema)-1])
+	old, err := sqlitedb.Open(path, schema[:6])
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"b", "a"} {
-		if _, err := old.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at) VALUES(?, 'x/y', 1, 'message', '', 1)`, id); err != nil {
+		if _, err := old.Exec(oldInsertInbox, id, "x/y", 1, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -270,5 +277,99 @@ func TestArrivalBackfillOnUpgrade(t *testing.T) {
 	st.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'a'`).Scan(&a)
 	if top, _ := st.arrivalTop(); b != 1 || a != 2 || top != 2 {
 		t.Fatalf("arrivals b=%d a=%d top=%d", b, a, top)
+	}
+}
+
+// Rows an older writer stored without a number after the step that added
+// numbers are repaired once, in order, after the existing ones.
+func TestArrivalRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	db, err := sqlitedb.Open(path, schema[:7])
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, arrival) VALUES('n1', 'x/y', 1, 'message', '', 1, 1)`)
+	db.Exec(`UPDATE config SET v = '1' WHERE k = 'arrival'`)
+	for _, id := range []string{"z", "y"} {
+		if _, err := db.Exec(oldInsertInbox, id, "x/y", 1, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	st, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.db.Close()
+	var z, y int64
+	st.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'z'`).Scan(&z)
+	st.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'y'`).Scan(&y)
+	if top, _ := st.arrivalTop(); z != 2 || y != 3 || top != 3 {
+		t.Fatalf("repaired z=%d y=%d top=%d", z, y, top)
+	}
+}
+
+// A daemon still running the older release inserts without a number after
+// the upgrade: the trigger numbers the row, sessions are told about it, and
+// a duplicate id is neither stored nor numbered again.
+func TestOldWriterAfterUpgradeIsSeen(t *testing.T) {
+	w := newWorld(t, "")
+	shown(t, w.alice, "S", "SessionStart")
+	for range 2 {
+		if _, err := w.alice.store.db.Exec(oldInsertInbox, "from-old-daemon", w.bob.Address, time.Now().Unix(), time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if top, _ := w.alice.store.arrivalTop(); top != 1 {
+		t.Fatalf("counter %d after one new row and a duplicate", top)
+	}
+	if got := shown(t, w.alice, "S", "PostToolUse"); !strings.Contains(got, "from-old-daemon") {
+		t.Fatalf("hook missed the old writer's row: %q", got)
+	}
+}
+
+// A conversation page is found from the link indexes alone and loads only
+// its own messages, however much else was exchanged with the peer.
+func TestConversationPageIsBounded(t *testing.T) {
+	w := newWorld(t, "")
+	add := func(id, replyTo string, body string) {
+		t.Helper()
+		if err := w.alice.store.addInbox(envelope.Inner{ID: id, From: w.bob.Address, To: w.alice.Address, TS: 1,
+			Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	big := strings.Repeat("x", 64<<10)
+	for i := range 200 {
+		add(fmt.Sprintf("unrelated-%03d", i), "", big)
+	}
+	prev := ""
+	for i := range 120 {
+		id := fmt.Sprintf("chain-%03d", i)
+		add(id, prev, "small")
+		prev = id
+	}
+	c, err := w.alice.Conversation("chain-060", 100, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Total != 120 || len(c.Messages) != 3 || c.Messages[0].ID != "chain-100" || c.Messages[2].ID != "chain-102" {
+		t.Fatalf("page: total %d, %d messages, first %v", c.Total, len(c.Messages), c.Messages)
+	}
+	rows, err := w.alice.store.db.Query(`EXPLAIN QUERY PLAN `+peerLinksQuery, w.bob.Address, w.bob.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		rows.Scan(&id, &parent, &unused, &detail)
+		plan = append(plan, detail)
+	}
+	joined := strings.Join(plan, "; ")
+	if !strings.Contains(joined, "COVERING INDEX inbox_links") || !strings.Contains(joined, "COVERING INDEX outbox_links") {
+		t.Fatalf("link query reads message rows: %s", joined)
 	}
 }

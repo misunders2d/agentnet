@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -56,66 +57,76 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 	if err != nil {
 		return Conversation{}, err
 	}
-	all, err := a.store.peerMessages(peer)
+	// Find the conversation from ids and links alone (covering indexes, no
+	// bodies), then load full messages only for the requested page.
+	links, err := a.store.peerLinks(peer)
 	if err != nil {
 		return Conversation{}, err
 	}
-	byID := map[string]*ConversationMessage{}
+	byID := map[string]link{}
 	children := map[string][]string{}
-	for i := range all {
-		m := &all[i]
-		byID[m.ID] = m
-		if m.ReplyTo != "" {
-			children[m.ReplyTo] = append(children[m.ReplyTo], m.ID)
+	for _, l := range links {
+		byID[l.id] = l
+		if l.replyTo != "" {
+			children[l.replyTo] = append(children[l.replyTo], l.id)
 		}
 	}
 	// Walk links both ways from id; the visited set ends cycles.
 	seen := map[string]bool{id: true}
-	for queue := []string{id}; len(queue) > 0; queue = queue[1:] {
-		m := byID[queue[0]]
-		next := children[m.ID]
-		if _, ok := byID[m.ReplyTo]; ok {
-			next = append(next, m.ReplyTo)
+	order := []string{id}
+	for i := 0; i < len(order); i++ {
+		l := byID[order[i]]
+		next := children[l.id]
+		if _, ok := byID[l.replyTo]; ok {
+			next = append(next, l.replyTo)
 		}
 		for _, n := range next {
 			if !seen[n] {
 				seen[n] = true
-				queue = append(queue, n)
+				order = append(order, n)
 			}
 		}
 	}
-	depth := func(m *ConversationMessage) int {
-		d := 0
-		for p, ok := byID[m.ReplyTo]; ok && seen[p.ID] && d <= len(seen); p, ok = byID[p.ReplyTo] {
-			d++
+	depth := map[string]int{}
+	var depthOf func(id string, guard int) int
+	depthOf = func(id string, guard int) int {
+		if d, ok := depth[id]; ok {
+			return d
 		}
+		d := 0
+		if p := byID[id].replyTo; seen[p] && guard > 0 {
+			d = depthOf(p, guard-1) + 1
+		}
+		depth[id] = d
 		return d
 	}
-	var msgs []ConversationMessage
-	depths := map[string]int{}
-	for i := range all {
-		if seen[all[i].ID] {
-			msgs = append(msgs, all[i])
-			depths[all[i].ID] = depth(&all[i])
-		}
+	for _, id := range order {
+		depthOf(id, len(order))
 	}
-	sort.SliceStable(msgs, func(i, j int) bool {
-		if !msgs[i].At.Equal(msgs[j].At) {
-			return msgs[i].At.Before(msgs[j].At)
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := byID[order[i]], byID[order[j]]
+		if a.at != b.at {
+			return a.at < b.at
 		}
-		if depths[msgs[i].ID] != depths[msgs[j].ID] {
-			return depths[msgs[i].ID] < depths[msgs[j].ID]
+		if depth[a.id] != depth[b.id] {
+			return depth[a.id] < depth[b.id]
 		}
-		return msgs[i].ID < msgs[j].ID
+		return a.id < b.id
 	})
-	c := Conversation{Peer: peer, Total: len(msgs), Offset: min(max(offset, 0), len(msgs))}
-	msgs = msgs[c.Offset:]
-	if limit > 0 && len(msgs) > limit {
-		msgs = msgs[:limit]
+	c := Conversation{Peer: peer, Total: len(order), Offset: min(max(offset, 0), len(order))}
+	page := order[c.Offset:]
+	if limit > 0 && len(page) > limit {
+		page = page[:limit]
 	}
-	c.Messages = msgs
-	for i := range c.Messages {
-		m := &c.Messages[i]
+	full, err := a.store.peerMessages(peer, page)
+	if err != nil {
+		return Conversation{}, err
+	}
+	for _, id := range page {
+		m, ok := full[id]
+		if !ok {
+			continue // removed meanwhile
+		}
 		if m.Dir == "in" {
 			m.To = a.Address
 			m.Attachments, err = a.store.attachments(m.ID)
@@ -125,6 +136,7 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		if err != nil {
 			return Conversation{}, err
 		}
+		c.Messages = append(c.Messages, m)
 	}
 	return c, nil
 }
@@ -139,56 +151,99 @@ func (s *store) peerOf(id string) (string, error) {
 	return peer, err
 }
 
-// peerMessages loads every message exchanged with peer, both directions.
-func (s *store) peerMessages(peer string) ([]ConversationMessage, error) {
-	var out []ConversationMessage
-	rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-		state, coalesce(responder, ''), coalesce(detail, '') FROM inbox WHERE sender = ?`, peer)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		m := ConversationMessage{Dir: "in", From: peer}
-		var ts, recv int64
-		var read bool
-		var detail string
-		if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		m.SentAt, m.At, m.Read = time.Unix(ts, 0), time.Unix(recv, 0), &read
-		if m.State == stateSummary {
-			m.Summary = detail
-		} else {
-			m.Detail = detail
-		}
-		out = append(out, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, '')
-		FROM outbox WHERE recipient = ?`, peer)
+// link is a message's place in the reply graph.
+type link struct {
+	id, replyTo string
+	at          int64
+}
+
+// peerLinksQuery reads only the link indexes (schema step 8), never
+// message bodies.
+const peerLinksQuery = `SELECT id, coalesce(reply_to, ''), received_at FROM inbox INDEXED BY inbox_links WHERE sender = ?
+	UNION ALL SELECT id, coalesce(reply_to, ''), created_at FROM outbox INDEXED BY outbox_links WHERE recipient = ?`
+
+// peerLinks returns the reply links of every message exchanged with peer.
+func (s *store) peerLinks(peer string) ([]link, error) {
+	rows, err := s.db.Query(peerLinksQuery, peer, peer)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	var out []link
 	for rows.Next() {
-		m := ConversationMessage{Dir: "out", To: peer}
-		var data string
-		var created int64
-		if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail); err != nil {
+		var l link
+		if err := rows.Scan(&l.id, &l.replyTo, &l.at); err != nil {
 			return nil, err
 		}
-		var env envelope.Envelope
-		if err := json.Unmarshal([]byte(data), &env); err != nil {
-			return nil, fmt.Errorf("sent message %s: %w", m.ID, err)
-		}
-		m.From, m.Kind, m.At = env.From, env.Kind, time.Unix(created, 0)
-		out = append(out, m)
+		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// peerMessages loads the messages ids exchanged with peer, both directions.
+func (s *store) peerMessages(peer string, ids []string) (map[string]ConversationMessage, error) {
+	out := map[string]ConversationMessage{}
+	for len(ids) > 0 {
+		chunk := ids[:min(len(ids), 500)]
+		ids = ids[len(chunk):]
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := []any{peer}
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
+			state, coalesce(responder, ''), coalesce(detail, '') FROM inbox WHERE sender = ? AND id IN (`+marks+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			m := ConversationMessage{Dir: "in", From: peer}
+			var ts, recv int64
+			var read bool
+			var detail string
+			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			m.SentAt, m.At, m.Read = time.Unix(ts, 0), time.Unix(recv, 0), &read
+			if m.State == stateSummary {
+				m.Summary = detail
+			} else {
+				m.Detail = detail
+			}
+			out[m.ID] = m
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, '')
+			FROM outbox WHERE recipient = ? AND id IN (`+marks+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			m := ConversationMessage{Dir: "out", To: peer}
+			var data string
+			var created int64
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var env envelope.Envelope
+			if err := json.Unmarshal([]byte(data), &env); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("sent message %s: %w", m.ID, err)
+			}
+			m.From, m.Kind, m.At = env.From, env.Kind, time.Unix(created, 0)
+			out[m.ID] = m
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // sentAttachments returns the manifest recorded when a message was sent.

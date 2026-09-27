@@ -109,6 +109,19 @@ CREATE TABLE attention(
   pos INTEGER NOT NULL,
   seen_at INTEGER NOT NULL,
   PRIMARY KEY(harness, session));
+`, `
+CREATE TRIGGER inbox_arrival AFTER INSERT ON inbox WHEN NEW.arrival IS NULL
+BEGIN
+  UPDATE config SET v = CAST(v AS INTEGER) + 1 WHERE k = 'arrival';
+  UPDATE inbox SET arrival = (SELECT CAST(v AS INTEGER) FROM config WHERE k = 'arrival') WHERE rowid = NEW.rowid;
+END;
+UPDATE inbox SET arrival = (SELECT CAST(v AS INTEGER) FROM config WHERE k = 'arrival') + r.n
+  FROM (SELECT rowid AS rid, row_number() OVER (ORDER BY rowid) AS n FROM inbox WHERE arrival IS NULL) AS r
+  WHERE inbox.rowid = r.rid;
+UPDATE config SET v = (SELECT max(arrival) FROM inbox)
+  WHERE k = 'arrival' AND (SELECT max(arrival) FROM inbox) > CAST(v AS INTEGER);
+CREATE INDEX inbox_links ON inbox(sender, id, reply_to, received_at);
+CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -396,15 +409,8 @@ func insertInner(tx *sql.Tx, in envelope.Inner) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already stored
 	}
-	// Arrival order for attention cursors: a counter, so numbers are never
-	// reused and do not depend on rowid or clocks.
-	var arrival int64
-	if err := tx.QueryRow(`UPDATE config SET v = CAST(v AS INTEGER) + 1 WHERE k = 'arrival' RETURNING CAST(v AS INTEGER)`).Scan(&arrival); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE inbox SET arrival = ? WHERE id = ?`, arrival, in.ID); err != nil {
-		return err
-	}
+	// The inbox_arrival trigger numbers the row (see schema step 8), for
+	// this and any older writer alike.
 	if err := bindFollowUp(tx, in); err != nil {
 		return err
 	}
