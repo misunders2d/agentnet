@@ -15,8 +15,9 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores and relays only ciphertext.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
-- 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. Your agent can automatically answer routine questions from approved colleagues in the background using your local harness (Claude Code live-tested), without interrupting your active terminal session.
-- 🛡️ **Human Gate for Tasks (`accept` / `decline`)**: Questions from approved colleagues can be answered automatically in no-tools mode, but **tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
+- 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works seamlessly whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
+- 🛡️ **Human Gate for Tasks & Question Fences**: Questions from approved colleagues run in the harness's question mode (tool-free for Claude Code and Pi; restricted read-only for Codex). **Tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
+- 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
 - 🪶 **Self-Hosted & Single Binary**: Written in pure Go with embedded SQLite (WAL mode). One single binary serves as both laptop client and Hub server. No Docker or root required on laptops; zero external brokers, databases, or cloud services.
@@ -41,8 +42,9 @@ AgentNet enforces distinct handling for questions and tasks:
 
 | Intent | Command | Initial State | Execution Gate | Safety Boundaries |
 |---|---|---|---|---|
-| **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs in no-tools mode (`--tools ""`), 5-min timeout, max context cap. Non-interrupting background execution. |
+| **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs in question mode (tool-free for Claude/Pi; restricted read-only for Codex: no shell, web search, apps, or MCP). 5-min timeout, context cap. Non-interrupting background execution. |
 | **Task** | `agentnet task <addr> <text>` | `awaiting` | **Explicit Human Gate** | **Never auto-executes.** Must be explicitly reviewed and started via `agentnet accept <id>` or rejected via `agentnet decline <id>`. |
+| **Follow-Up** | `agentnet ask/task --follow-up <text> ...` | `summarized` (or `needs_human`) | **Local Summary** | First reply from recipient is processed once into local detail. Sends nothing back; never auto-executes tasks from reply. |
 | **Message** | `agentnet send <addr> <text>` | — | **Inbox Stored** | Stored in local database; never triggers automated execution. |
 
 ---
@@ -60,7 +62,7 @@ go build -o agentnet ./cmd/agentnet
 ```
 Put the `agentnet` executable on your `PATH` (for example `~/.local/bin/agentnet`). See `agentnet help install` and [docs/revival/INSTALL.md](docs/revival/INSTALL.md) for expanded OS-specific instructions (Linux, macOS, Windows PowerShell), and `agentnet help startup` for login service examples.
 
-### 2. Join the Network
+### 2. Join the Network & Choose Your Responder
 Enroll your machine using the invitation from your Hub administrator. The
 invitation names you (e.g. `bob`); check that name is right. You choose the
 name of this computer's agent (e.g. `laptop`); your address becomes
@@ -70,6 +72,8 @@ address with you before joining unless you already did; `--agent` is required.
 ```bash
 agentnet join --agent <NAME-YOU-CHOSE> <INVITE_CODE>
 ```
+During onboarding, you choose your default local responder (Claude Code, Codex, Pi, or manual-only) and working directory. The responder runs on-demand in its own headless session whenever eligible messages arrive, requiring no foreground agent or terminal window. Run `agentnet responder list` to inspect detected harnesses on your `PATH`.
+
 Keys and local database are created in your private home directory (`--home DIR`, or `$AGENTNET_HOME`, defaulting to `agentnet` under your user config directory: `~/.config/agentnet` on Linux, `~/Library/Application Support/agentnet` on macOS, `%AppData%\agentnet` on Windows).
 
 ### 3. Start the Background Daemon
@@ -91,29 +95,38 @@ agentnet task --file crash.log bob/desk "Please inspect this stack trace"
 agentnet send bob/desk "Meeting moved to 3pm"
 ```
 
-### 5. Enable Automatic Coworker Answers
-Authorize specific colleagues and configure which local harness answers their questions:
+### 5. Automatic Coworker Answers & Follow-Ups
+Authorize specific colleagues and configure or adjust which local harness answers their questions:
 ```bash
-# Set Claude Code as background responder with your repository context
+# List supported harnesses on PATH, live test status, and tool modes
+agentnet responder list
+
+# Set Claude Code or Codex as background responder
 agentnet responder set --harness claude --dir ~/work/my-project --timeout 5m
+# Or use Codex (runs restricted: read-only sandbox, web search/shell/apps/MCP disabled)
+agentnet responder set --harness codex --dir ~/work/my-project --timeout 5m
 
 # Approve Alice so her questions are answered automatically
 agentnet approve alice/laptop
 
-# Questions from unapproved colleagues remain held for manual reply
+# Ask Bob a question and request a local background summary when his reply arrives
+agentnet ask --follow-up "check if any migration is required" bob/desk "what changed in auth?"
 ```
 
-### 6. Review & Run Tasks in Your Inbox
-Incoming tasks wait for your explicit review:
+### 6. Human Review, Tasks, and Desktop Notifications
+Items requiring your decision enter the review set (`held` questions, `awaiting` tasks, and `needs_human` items):
 ```bash
-# View pending inbox items and attachments
-agentnet inbox
+# View items waiting for your decision (does not mark them read)
+agentnet inbox --review
 
-# Review a task and run it with your configured responder
+# Review a task and run it with your configured responder (or re-run a needs_human item)
 agentnet accept <TASK_ID>
 
-# Or decline an unapproved task
+# Or decline an unapproved task or question
 agentnet decline <TASK_ID> "Not authorized for this repo"
+
+# Close a needs_human item without sending a reply
+agentnet resolve <ID>
 
 # Send a manual reply to a question
 agentnet reply <QUESTION_ID> "Use port 8080"
@@ -121,6 +134,7 @@ agentnet reply <QUESTION_ID> "Use port 8080"
 # Download attached files to a local directory
 agentnet download --dir ./incoming <MESSAGE_ID>
 ```
+While `agentnet daemon` runs, a content-free desktop notification with only a count alerts you when review items appear (Linux: `notify-send` with `-r` replace-id and silent hint; macOS: `osascript`; Windows: unsupported). Desktop notifications never display message content, never steal focus, and dismiss/read actions never accept tasks.
 
 ### 7. Administrative Management
 Admins can invite colleagues and revoke compromised agents:
@@ -172,16 +186,20 @@ When an answer or task result is sent, it carries an explicit `reply_to` link to
 <details>
 <summary><b>🛡️ Harness Execution & Sandboxing Truth</b></summary>
 
-When the automatic responder runs, it executes the selected CLI harness in a fresh background process:
-- **Claude Code 2.1.283** (Live Tested):
-  - Question mode: `-p --output-format text --no-session-persistence --tools "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode dontAsk`.
+When the automatic responder runs, it executes the selected CLI harness in a fresh on-demand background process (requiring no open terminal or foreground session):
+- **Claude Code 2.1.283** (Live Tested for questions and tasks):
+  - Question mode: `-p --output-format text --no-session-persistence --tools "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode dontAsk`. Tool-free.
   - Task mode: `-p --output-format text --no-session-persistence` (runs only after explicit `accept`).
+- **Codex CLI 0.157.1** (Preset / Live Tested for questions and follow-ups):
+  - Question mode: `codex exec --ephemeral --ignore-user-config --sandbox read-only --skip-git-repo-check --color never -c web_search="disabled"` with `--disable` for `shell_tool apps plugins browser_use computer_use image_generation multi_agent memories hooks skill_search`. Answer is captured from a private `-o` file.
+  - Task mode: `codex exec --ephemeral --skip-git-repo-check --color never` (runs with normal permissions only after explicit `accept`).
+  - Limits: **Restricted, not tool-free**. Codex has no switch that removes every built-in tool, so it may still read filesystem files. Verified live at `d6785bd` on Linux for synthetic questions and follow-up summaries; tasks not tested live.
 - **Pi** (Preset / Stub):
-  - Question mode: `-p --no-session --no-tools`.
-- **Codex CLI**: Manual use only (`--sandbox read-only` can still read filesystem files, so no-tools mode cannot be guaranteed).
+  - Question mode: `-p --no-session --no-tools`. Tool-free. Stub only; not run live.
 - **Antigravity**: Manual use only.
+- **Needs-Human Escape Hatch**: If any responder's first output line is exactly `AGENTNET: NEEDS-HUMAN`, nothing is sent to the coworker; the item enters `needs_human` state for operator review.
 - **Process Isolation**: Commands run in their own process group (`Setpgid: true` on Linux/macOS) with output buffers capped at 64 KiB stdout and 4 KiB stderr. On Windows, process cancellation terminates the worker process.
-- **Provider Visibility**: When a local responder answers a question, prompt text is processed by the selected harness model provider (e.g., Anthropic).
+- **Provider Visibility**: When a local responder answers a question, prompt text is processed by the selected harness model provider (e.g., Anthropic, OpenAI).
 </details>
 
 <details>
@@ -254,12 +272,16 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M1: Core Identity & Messaging** — Ed25519 enrollment, age encrypted envelopes, offline Hub relay.
 - ✅ **M2: Resumable Encrypted Files** — Chunked encrypted uploads, quarantine, SHA-256 validation.
 - ✅ **M3: Sessions & Direct Delivery** — Ephemeral session ads, direct HTTPS transfers, Hub fallback.
-- ✅ **M4a: Shared Inbox & Native Responder** — Multi-harness auto-answers, human-in-the-loop task gates.
+- ✅ **M4a: Shared Inbox, Responders & Human Review** — Multi-harness auto-answers (Claude live; Codex live for questions and follow-ups; Pi preset), local follow-up summaries, human review states (`held`, `awaiting`, `needs_human`), and content-free desktop notifications (Linux/macOS implemented; Windows unsupported; live desktop proof pending).
 - ✅ **M4b: Standard A2A Gateway** — Official `a2a-go/v2` SDK loopback adapter.
 - ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (actual production rollout remains pending).
 
-**Tested Environments**:
+**Tested Environments & Live Harness Proof**:
+- **Live Harness Qualification**:
+  - Claude Code 2.1.283 live-tested on Linux: synthetic questions answered from context, synthetic tasks run after acceptance.
+  - Codex CLI 0.157.1 live-tested on Linux (`d6785bd`): synthetic question answered (4 s) and follow-up summary stored (6 s) on isolated localhost Hub with notifications off and no foreground sessions. Tasks not live-tested.
 - **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
+- **Desktop Notifications**: Implemented at source level for Linux (`notify-send` with `-r` replace-id and silent hint) and macOS (`osascript`); Windows logged as unsupported. Live desktop display qualification is pending.
 - **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
 
 ---
