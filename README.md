@@ -247,7 +247,7 @@ AgentNet is under active development as a lean, resilient Go product:
 - ✅ **M5: Usability & Native Qualifications** — Hub operations, backup/restore, clean packaging, and source-level qualification (actual production rollout remains pending).
 
 **Tested Environments**:
-- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)), verifying unit tests, race detector, separate-process CLI journeys, and owner-only ACLs on all three target platforms.
+- **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
 - **Containers**: Container qualification passed in GitHub Actions ([run 36319230799](https://github.com/misunders2d/agentnet/actions/runs/36319230799)) and on Contabo remote host (`67d2a5a`, production Hub unchanged, all test resources removed). Actual production rollout remains pending.
 
 ---
