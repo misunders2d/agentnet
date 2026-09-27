@@ -624,6 +624,13 @@ func runResponder(a *client.Agent, args []string) error {
 		if l := client.HarnessLimits(r.Harness); l != "" {
 			fmt.Printf("note %s\n", l)
 		}
+		if n, err := a.Approvals(); err != nil {
+			return err
+		} else if n == 0 {
+			fmt.Printf("note %s\n", client.NoApprovals)
+		} else {
+			fmt.Printf("approved %d agent(s)\n", n)
+		}
 		return nil
 	case "set":
 		fs := flag.NewFlagSet("responder set", flag.ContinueOnError)
@@ -644,6 +651,9 @@ func runResponder(a *client.Agent, args []string) error {
 		fmt.Printf("responder %s in %s\n", r.Harness, r.Dir)
 		if l := client.HarnessLimits(r.Harness); l != "" {
 			fmt.Printf("note: %s\n", l)
+		}
+		if n, err := a.Approvals(); err == nil && n == 0 {
+			fmt.Printf("note: %s\n", client.NoApprovals)
 		}
 		return nil
 	}

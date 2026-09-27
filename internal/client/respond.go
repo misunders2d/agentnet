@@ -141,6 +141,16 @@ func (a *Agent) Approve(address string) error {
 	return err
 }
 
+// Approvals counts the agents whose questions are answered automatically.
+func (a *Agent) Approvals() (int, error) {
+	var n int
+	err := a.store.db.QueryRow(`SELECT count(*) FROM approvals`).Scan(&n)
+	return n, err
+}
+
+// NoApprovals is what a responder does with no agent approved.
+const NoApprovals = "no agent approved yet, so every question waits for you (agentnet inbox --review); approve one with agentnet approve ADDRESS only if the person asks"
+
 // Unapprove stops automatic answers for address. Its questions still
 // waiting for the worker go back to held (the worker also re-checks approval
 // when it claims); ones you accepted explicitly stay accepted, and one

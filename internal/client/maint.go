@@ -173,9 +173,23 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	default:
 		if _, err := exec.LookPath(Harnesses[r.Harness].bin); err != nil {
 			add("responder", false, "%s selected but %q is not on PATH", r.Harness, Harnesses[r.Harness].bin)
+		} else if n, err := a.Approvals(); err != nil {
+			add("responder", false, "%v", err)
+		} else if n == 0 {
+			add("responder", true, "%s in %s; %s", r.Harness, r.Dir, NoApprovals)
 		} else {
-			add("responder", true, "%s in %s", r.Harness, r.Dir)
+			add("responder", true, "%s in %s; answers questions from %d approved agent(s)", r.Harness, r.Dir, n)
 		}
+	}
+	// Held questions, tasks awaiting acceptance and needs_human items wait
+	// for a person; where no desktop notification can be shown (a server),
+	// this line is how they come to light.
+	if items, err := a.Review(); err != nil {
+		add("review", false, "%v", err)
+	} else if len(items) > 0 {
+		add("review", true, "%d item(s) wait for your decision: agentnet inbox --review", len(items))
+	} else {
+		add("review", true, "nothing waits for your decision")
 	}
 	return out
 }

@@ -367,9 +367,12 @@ Start it at login: agentnet help startup.`,
 	"doctor": `Usage: agentnet doctor
 
 Check version, keys and their permissions, whether the daemon runs, whether
-the Hub is reachable and speaks the same protocol, membership, and the
-responder. Prints one line per check with what to do; exits non-zero if a
-check fails.`,
+the Hub is reachable and speaks the same protocol, membership, the
+responder (and how many agents are approved for automatic answers), and how
+many items wait for your decision. Prints one line per check with what to
+do; exits non-zero if a check fails (waiting items are not a failure). On a
+server, where no desktop notification can be shown, this is where waiting
+items show up.`,
 
 	"version": `Usage: agentnet version
 

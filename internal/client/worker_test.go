@@ -561,3 +561,50 @@ func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
 		t.Error("the new question preset has the same identity as the old one")
 	}
 }
+
+// A question from an agent that is not approved waits for a person. On a
+// server no desktop notification reaches anyone, so doctor must say that
+// the responder answers nobody yet and that an item waits, without its text
+// and without calling waiting a failure.
+func TestDoctorShowsApprovalsAndWaitingItems(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	check := func(name string) Check {
+		for _, c := range w.bob.Doctor(tctx(t)) {
+			if c.Name == name {
+				return c
+			}
+		}
+		t.Fatalf("no %s check", name)
+		return Check{}
+	}
+	if c := check("responder"); !c.OK || !strings.Contains(c.Result, NoApprovals) {
+		t.Fatalf("responder with no approvals: %+v", c)
+	}
+	if c := check("review"); !c.OK || c.Result != "nothing waits for your decision" {
+		t.Fatalf("empty review: %+v", c)
+	}
+
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "secret greeting", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "held question", func() bool { s, _ := w.bob.store.jobState(q.ID); return s == stateHeld })
+	c := check("review")
+	if !c.OK || c.Result != "1 item(s) wait for your decision: agentnet inbox --review" {
+		t.Fatalf("waiting review: %+v", c)
+	}
+	if s, _ := w.bob.store.jobState(q.ID); s != stateHeld || st.count() != 0 {
+		t.Fatalf("doctor changed the held question: state %s, runs %d", s, st.count())
+	}
+
+	w.bob.Approve(w.alice.Address)
+	if c := check("responder"); !strings.HasSuffix(c.Result, "answers questions from 1 approved agent(s)") {
+		t.Fatalf("responder with one approval: %+v", c)
+	}
+	if s, _ := w.bob.store.jobState(q.ID); s != stateHeld {
+		t.Fatalf("approving later released the held question: %s", s)
+	}
+}
