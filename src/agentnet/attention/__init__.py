@@ -1,2 +1,0 @@
-"""Exceptional notification policy."""
-
