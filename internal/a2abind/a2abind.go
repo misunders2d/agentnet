@@ -203,29 +203,9 @@ func project(s client.Sent) *a2a.Task {
 	return t
 }
 
-// ListTasks lists messages sent to this peer, newest first.
-func (ad *Adapter) ListTasks(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
-	size := req.PageSize
-	if size <= 0 || size > 100 {
-		size = 50
-	}
-	ids, err := ad.agent.SentTo(ad.peer, size)
-	if err != nil {
-		return nil, a2a.NewError(a2a.ErrInternalError, err.Error())
-	}
-	out := &a2a.ListTasksResponse{Tasks: []*a2a.Task{}, PageSize: size}
-	for _, id := range ids {
-		t, err := ad.task(id)
-		if err != nil {
-			continue
-		}
-		if req.Status != "" && t.Status.State != req.Status {
-			continue
-		}
-		out.Tasks = append(out.Tasks, t)
-	}
-	out.TotalSize = len(out.Tasks)
-	return out, nil
+// ListTasks is not supported; look tasks up by id.
+func (ad *Adapter) ListTasks(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+	return nil, a2a.NewError(a2a.ErrUnsupportedOperation, "listing tasks is not supported; use GetTask with the task id")
 }
 
 // CancelTask is refused: AgentNet has no way to stop work on the peer, and

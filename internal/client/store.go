@@ -666,28 +666,12 @@ func (s *store) sent(id string) (sentRow, error) {
 	return r, err
 }
 
-func (s *store) sentTo(peer string, limit int) ([]string, error) {
-	rows, err := s.db.Query(`SELECT id FROM outbox WHERE recipient = ? ORDER BY created_at DESC, id LIMIT ?`, peer, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
-// replyTo returns the first answer or result that replies to id.
-func (s *store) replyTo(id string) (string, error) {
+// replyTo returns the first answer, result or message from peer that replies
+// to id. Replies naming id from anyone else are ignored.
+func (s *store) replyTo(id, peer string) (string, error) {
 	var reply string
-	err := s.db.QueryRow(`SELECT id FROM inbox WHERE reply_to = ? AND kind IN (?, ?, ?) ORDER BY received_at, id LIMIT 1`,
-		id, envelope.KindAnswer, envelope.KindResult, envelope.KindMessage).Scan(&reply)
+	err := s.db.QueryRow(`SELECT id FROM inbox WHERE reply_to = ? AND sender = ? AND kind IN (?, ?, ?) ORDER BY received_at, id LIMIT 1`,
+		id, peer, envelope.KindAnswer, envelope.KindResult, envelope.KindMessage).Scan(&reply)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
