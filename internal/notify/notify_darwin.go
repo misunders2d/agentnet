@@ -11,3 +11,6 @@ func Show(title, body string) error {
 		title, body)
 	return err
 }
+
+// Close has nothing to release here.
+func Close() {}

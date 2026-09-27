@@ -44,3 +44,6 @@ func Show(title, body string) error {
 	}
 	return nil
 }
+
+// Close has nothing to release here.
+func Close() {}

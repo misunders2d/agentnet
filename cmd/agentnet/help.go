@@ -168,8 +168,9 @@ Items waiting for your decision (--review):
                accept ID reruns it afresh (e.g. after you add context);
                resolve ID closes it without sending anything
 While the daemon runs, a desktop notification with only a count (no content)
-tells you when new items wait (Linux: notify-send; macOS: osascript; Windows:
-not yet; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
+tells you when new items wait (Linux: notify-send; macOS: osascript;
+Windows: a notification-area balloon, whose icon stays while the daemon
+runs; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
 log says so and the items still wait.
 
   --unread   only unread messages

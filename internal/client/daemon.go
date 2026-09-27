@@ -16,6 +16,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/lockfile"
+	"github.com/misunders2d/agentnet/internal/notify"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -331,5 +332,5 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	done := make(chan struct{})
 	go func() { defer close(done); a.worker(ctx, wake) }()
 	a.wakeWorker()
-	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {} }, nil
+	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {}; notify.Close() }, nil
 }
