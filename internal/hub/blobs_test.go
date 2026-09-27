@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -364,7 +365,8 @@ func TestPresenceKeepsNewerConnection(t *testing.T) {
 }
 
 func TestRestoreRejectsUnsafeEntries(t *testing.T) {
-	for _, name := range []string{"../evil", "/abs", "blobs/../../x", "other/dir/file"} {
+	for _, name := range []string{"../evil", "/abs", "blobs/../../x", "other/dir/file", `..\outside`,
+		`blobs\..\..\x`, `C:\x`, "c:/x", `blobs\0123456789abcdef0123456789abcdef.blob`, "blobs/NOTHEX.blob", "hub.db/.."} {
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
 		tw := tar.NewWriter(gz)
@@ -375,5 +377,28 @@ func TestRestoreRejectsUnsafeEntries(t *testing.T) {
 		if _, err := Restore(&buf, filepath.Join(t.TempDir(), "d")); err == nil {
 			t.Fatalf("entry %q accepted", name)
 		}
+	}
+}
+
+func TestRestoreDetectsSameSizeCorruption(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	id := alice.upload(t, h, bob.addr, []byte("original ciphertext"))
+	dir := h.cfg.DataDir
+	h.Close()
+	path := h.blobPath(id, true)
+	data, _ := os.ReadFile(path)
+	data[0] ^= 1 // same size, different bytes
+	os.WriteFile(path, data, 0o600)
+	m, err := OpenMaintenance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := m.Backup(&buf); err != nil {
+		t.Fatal(err)
+	}
+	m.Close()
+	if _, err := Restore(&buf, filepath.Join(t.TempDir(), "r")); err == nil || !strings.Contains(err.Error(), "damaged") {
+		t.Fatalf("corrupted attachment restored: %v", err)
 	}
 }

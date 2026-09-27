@@ -28,4 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: scripts/hub-container-test.sh
+      - name: build the product image from the repository Dockerfile
+        run: docker build --build-arg VERSION=ci-${{ github.sha }} --tag agentnet-hub:ci .
+      - name: container journey against that image
+        run: scripts/hub-container-test.sh
+        env:
+          AGENTNET_TEST_IMAGE: agentnet-hub:ci

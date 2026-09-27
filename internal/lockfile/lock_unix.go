@@ -8,8 +8,12 @@ import (
 	"syscall"
 )
 
-func lock(f *os.File) error {
-	err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+func lock(f *os.File, wait bool) error {
+	how := syscall.LOCK_EX | syscall.LOCK_NB
+	if wait {
+		how = syscall.LOCK_EX
+	}
+	err := syscall.Flock(int(f.Fd()), how)
 	if errors.Is(err, syscall.EWOULDBLOCK) {
 		return ErrLocked
 	}

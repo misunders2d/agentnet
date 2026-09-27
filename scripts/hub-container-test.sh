@@ -7,16 +7,18 @@
 # volume, and check the restored Hub serves the old clients.
 #
 # Everything it creates is named agentnet-mvp-<id>-* and removed on exit
-# (only those exact names: never prune). The Go build runs in a named
-# builder container with CPU/memory/process limits, like every other
-# container here; the image itself is only assembled (a file copy onto the
-# distroless base). Base images pulled (golang, distroless) are left in
+# (only those exact names: never prune). With AGENTNET_TEST_IMAGE set, it
+# tests that already-built image (CI builds it from the repository
+# Dockerfile) and leaves it in place. Otherwise the Go build runs in a named
+# builder container with CPU/memory/process limits and the repository
+# Dockerfile assembles the same runtime image from that binary
+# (BUILD_STAGE=prebuilt). Base images pulled (golang, distroless) are left in
 # place. Needs docker and sha256sum. Usage: scripts/hub-container-test.sh
 set -euo pipefail
 
 id=${AGENTNET_TEST_ID:-$(date +%s)-$$}
 p=agentnet-mvp-$id
-img=$p-img
+img=${AGENTNET_TEST_IMAGE:-$p-img}
 net=$p-net
 limits=(--cpus 1 --memory 512m --pids-limit 256)
 build_limits=(--cpus 2 --memory 1g --pids-limit 512)
@@ -28,7 +30,7 @@ cleanup() {
 	for c in "${containers[@]}"; do docker rm -f "$c" >/dev/null 2>&1 || true; done
 	for v in "${volumes[@]}"; do docker volume rm "$v" >/dev/null 2>&1 || true; done
 	docker network rm "$net" >/dev/null 2>&1 || true
-	docker image rm "$img" >/dev/null 2>&1 || true
+	[ -n "${AGENTNET_TEST_IMAGE:-}" ] || docker image rm "$img" >/dev/null 2>&1 || true
 	rm -rf "$tmp"
 	echo "cleanup done for $p (exit $status)"
 }
@@ -58,31 +60,24 @@ wait_for() { # wait_for DESCRIPTION COMMAND...
 }
 copy_out() { # copy_out VOLUME PATH DEST: read a file out of a volume
 	local c=$p-copy-$RANDOM
+	containers+=("$c") # tracked before creation, so a failed copy is still cleaned up
 	docker create --name "$c" -v "$p-$1:/data" "$img" >/dev/null
 	docker cp "$c:$2" "$3"
 	docker rm "$c" >/dev/null
 }
 
-step "build agentnet in a limited builder container"
-mkdir -p "$tmp/ctx/data"
-containers+=("$p-build")
-docker run --rm --name "$p-build" "${build_limits[@]}" --user "$(id -u):$(id -g)" \
-	-v "$PWD:/src:ro" -v "$tmp/ctx:/out" -w /src \
-	-e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod -e GOFLAGS=-mod=readonly -e CGO_ENABLED=0 \
-	golang:1.26 go build -trimpath -ldflags "-s -w -X github.com/misunders2d/agentnet/internal/protocol.Version=container-test" \
-	-o /out/agentnet ./cmd/agentnet
-step "assemble image $img"
-cat >"$tmp/ctx/Dockerfile" <<'DOCKERFILE'
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY agentnet /usr/local/bin/agentnet
-COPY --chown=65532:65532 data /data
-USER 65532:65532
-ENV AGENTNET_DATA=/data AGENTNET_LISTEN=:8443
-VOLUME /data
-ENTRYPOINT ["/usr/local/bin/agentnet"]
-CMD ["hub", "serve"]
-DOCKERFILE
-docker build --quiet --tag "$img" "$tmp/ctx" >/dev/null
+if [ -z "${AGENTNET_TEST_IMAGE:-}" ]; then
+	step "build agentnet in a limited builder container"
+	mkdir -p "$tmp/ctx"
+	containers+=("$p-build")
+	docker run --rm --name "$p-build" "${build_limits[@]}" --user "$(id -u):$(id -g)" \
+		-v "$PWD:/src:ro" -v "$tmp/ctx:/out" -w /src \
+		-e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod -e GOFLAGS=-mod=readonly -e CGO_ENABLED=0 \
+		golang:1.26 go build -trimpath -ldflags "-s -w -X github.com/misunders2d/agentnet/internal/protocol.Version=container-test" \
+		-o /out/agentnet ./cmd/agentnet
+	step "assemble $img with the repository Dockerfile"
+	docker build --quiet --build-arg BUILD_STAGE=prebuilt -f Dockerfile --tag "$img" "$tmp/ctx" >/dev/null
+fi
 docker network create --internal "$net" >/dev/null
 vol hubdata; vol alice; vol bob; vol restored
 

@@ -1,5 +1,12 @@
 # AgentNet Hub image: the same agentnet program as the laptop client, run as
 # `agentnet hub serve` with all state in the /data volume.
+#
+# Normally the binary is compiled in the `build` stage. With
+# --build-arg BUILD_STAGE=prebuilt the image is assembled from an `agentnet`
+# binary placed next to this Dockerfile in the build context instead (used to
+# compile under explicit resource limits); the runtime image is identical.
+ARG BUILD_STAGE=build
+
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -12,9 +19,15 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -o /out/agentnet ./cmd/agentnet \
  && mkdir -p /out/data
 
+FROM scratch AS prebuilt
+COPY agentnet /out/agentnet
+WORKDIR /out/data
+
+FROM ${BUILD_STAGE} AS binary
+
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/agentnet /usr/local/bin/agentnet
-COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=binary /out/agentnet /usr/local/bin/agentnet
+COPY --from=binary --chown=65532:65532 /out/data /data
 USER 65532:65532
 ENV AGENTNET_DATA=/data AGENTNET_LISTEN=:8443
 VOLUME /data

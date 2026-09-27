@@ -526,3 +526,42 @@ func TestLocalCleanupKeepsQueuedSpool(t *testing.T) {
 		t.Fatalf("queued message's spool removed: %d left", len(entries))
 	}
 }
+
+// R2: a send that has spooled its file but not yet written its outbox row
+// holds the spool lock, so cleanup cannot delete its only encrypted copy.
+func TestCleanupWaitsForInFlightSpool(t *testing.T) {
+	w := newWorld(t, "")
+	path, data := writeFile(t, t.TempDir(), "f.bin", 50000)
+	paused, resume := make(chan struct{}), make(chan struct{})
+	beforeOutbox = func() { close(paused); <-resume }
+	defer func() { beforeOutbox = func() {} }()
+	done := make(chan error, 1)
+	var res SendResult
+	go func() {
+		var err error
+		res, err = w.alice.Send(tctx(t), w.bob.Address, "racing cleanup", "", path)
+		done <- err
+	}()
+	<-paused
+	if _, err := w.alice.Cleanup(false); err == nil {
+		t.Fatal("cleanup ran while a send was between spooling and its outbox write")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 1 {
+		t.Fatalf("spool changed during the send: %d files", len(entries))
+	}
+	close(resume)
+	if err := <-done; err != nil || res.State != protocol.StateCustody {
+		t.Fatalf("send = %+v, %v", res, err)
+	}
+	if r, err := w.alice.Cleanup(false); err != nil || r.SpoolFiles != 0 {
+		t.Fatalf("cleanup after send = %+v, %v", r, err)
+	}
+	msg := receive(t, w)
+	paths, err := w.bob.Download(tctx(t), msg.ID, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
+		t.Fatal("file differs")
+	}
+}

@@ -37,6 +37,14 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 		return res, err
 	}
 	defer release()
+	releaseSpool, err := lockfile.Acquire(a.spoolLockPath())
+	if errors.Is(err, lockfile.ErrLocked) {
+		return res, errors.New("a message with attachments is being sent; try again when it is queued")
+	}
+	if err != nil {
+		return res, err
+	}
+	defer releaseSpool()
 
 	keep := map[string]bool{}
 	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state = ?`, stateQueued)

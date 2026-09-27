@@ -15,6 +15,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -225,6 +226,8 @@ type Outgoing struct {
 	Kind     string // envelope.KindMessage (default), KindQuestion or KindTask
 	Status   string // outcome, for answers and results
 
+	releaseSpoolLock func()
+
 	// claim runs in the transaction that stores the outgoing message; it
 	// records which received question or task the message answers.
 	claim func(tx *sql.Tx, replyID string) error
@@ -270,6 +273,15 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
 	}
+	if len(m.Files) > 0 {
+		// Cleanup must not see spooled files before the outbox refers to them.
+		release, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return SendResult{}, err
+		}
+		defer release() // idempotent; released early below, before delivery
+		m.releaseSpoolLock = release
+	}
 	for _, path := range m.Files {
 		att, err := a.spoolFile(path, recipient)
 		if err != nil {
@@ -280,11 +292,15 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err == nil {
+		beforeOutbox()
 		err = a.store.addOutbox(env, m.Body, m.ReplyTo, m.claim)
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 		return SendResult{}, err
+	}
+	if m.releaseSpoolLock != nil {
+		m.releaseSpoolLock()
 	}
 	return a.deliver(ctx, env, route)
 }
@@ -325,6 +341,11 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		return SendResult{ID: env.ID, State: stateFailed}, err
 	}
 }
+
+// beforeOutbox lets tests pause a send between spooling and the outbox write.
+var beforeOutbox = func() {}
+
+func (a *Agent) spoolLockPath() string { return filepath.Join(a.home, "spool.lock") }
 
 // handedOver records who now holds the message, then frees the spool: the
 // receipt is persisted before the sender's own copy of the files goes.

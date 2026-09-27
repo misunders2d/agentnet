@@ -8,8 +8,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -193,6 +193,10 @@ func (m *Maintenance) Backup(w io.Writer) error {
 	return err
 }
 
+// backupEntry is the exact set of names a backup may contain, so nothing
+// can be written outside the restore directory on any platform.
+var backupEntry = regexp.MustCompile(`^(hub\.db|tls\.crt|tls\.key|` + regexp.QuoteMeta(BootstrapFile) + `|blobs/[0-9a-f]{32}\.(blob|part))$`)
+
 // RestoreSummary describes a restored data directory.
 type RestoreSummary struct {
 	Agents, Messages, Blobs int
@@ -225,12 +229,10 @@ func Restore(r io.Reader, dir string) (RestoreSummary, error) {
 		if err != nil {
 			return sum, fmt.Errorf("reading backup: %w", err)
 		}
-		name := path.Clean(hdr.Name)
-		if hdr.Typeflag != tar.TypeReg || path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") ||
-			(strings.Contains(name, "/") && path.Dir(name) != "blobs") {
+		if hdr.Typeflag != tar.TypeReg || !backupEntry.MatchString(hdr.Name) {
 			return sum, fmt.Errorf("backup entry %q is not allowed", hdr.Name)
 		}
-		dst := filepath.Join(dir, filepath.FromSlash(name))
+		dst := filepath.Join(dir, filepath.FromSlash(hdr.Name))
 		f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return sum, err
@@ -269,20 +271,19 @@ func (m *Maintenance) verify() (RestoreSummary, error) {
 	if err := db.QueryRow(`SELECT count(*) FROM messages`).Scan(&sum.Messages); err != nil {
 		return sum, err
 	}
-	rows, err := db.Query(`SELECT id, size FROM blobs WHERE state = ?`, protocol.BlobStored)
+	rows, err := db.Query(`SELECT id, size, sha256 FROM blobs WHERE state = ?`, protocol.BlobStored)
 	if err != nil {
 		return sum, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id string
+		var id, sha string
 		var size int64
-		if err := rows.Scan(&id, &size); err != nil {
+		if err := rows.Scan(&id, &size, &sha); err != nil {
 			return sum, err
 		}
-		info, err := os.Stat(filepath.Join(m.dir, "blobs", id+".blob"))
-		if err != nil || info.Size() != size {
-			return sum, fmt.Errorf("attachment %s missing or damaged in the backup", id)
+		if err := blobfile.Check(filepath.Join(m.dir, "blobs", id+".blob"), size, sha); err != nil {
+			return sum, fmt.Errorf("attachment %s missing or damaged in the backup: %w", id, err)
 		}
 		sum.Blobs++
 	}
