@@ -232,7 +232,7 @@ func runJoin(ctx context.Context, home string, args []string) error {
 		if inv, err := protocol.DecodeInvite(fs.Arg(0)); err == nil {
 			label = inv.Label
 		}
-		return fmt.Errorf("--agent NAME is required: ask the person what to call this agent on this computer "+
+		return fmt.Errorf("--agent NAME is required: use the name the person gave for this agent on this computer, or ask them "+
 			"(lowercase letters, digits, hyphens, e.g. laptop); the address becomes %s/NAME and cannot be changed later", label)
 	}
 	a, err := client.Join(ctx, home, fs.Arg(0), *name)
@@ -355,8 +355,8 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		}
 		if fs.NArg() != 1 {
 			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL\n" +
-				"LABEL is the invited person's AgentNet name (e.g. bob): ask your person who is being invited and what name to use. " +
-				"Do not reuse your own label, \"admin\", a user or host name, or a model name. It grants no rights; --admin does")
+				"LABEL is the invited person's AgentNet name (e.g. bob). Use the name your person gave for this invitation; if they have not, ask them who is being invited and what name to use. " +
+				"Do not infer it or reuse your own label, \"admin\", a user, host or model name unless your person chose it. It grants no rights; --admin does")
 		}
 		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
 		if err != nil {

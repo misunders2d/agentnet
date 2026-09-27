@@ -64,8 +64,9 @@ Put the `agentnet` executable on your `PATH` (for example `~/.local/bin/agentnet
 Enroll your machine using the invitation from your Hub administrator. The
 invitation names you (e.g. `bob`); check that name is right. You choose the
 name of this computer's agent (e.g. `laptop`); your address becomes
-`bob/laptop`. If a coding agent sets this up for you, it should ask you both
-and confirm the full address before joining; `--agent` is required.
+`bob/laptop`. If a coding agent sets this up for you, it uses the names you
+give it (asking only for what you have not said) and confirms the full
+address with you before joining unless you already did; `--agent` is required.
 ```bash
 agentnet join --agent <NAME-YOU-CHOSE> <INVITE_CODE>
 ```
