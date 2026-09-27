@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -196,13 +198,23 @@ func TestSessionIsolation(t *testing.T) {
 // The preset changes with the flags and with the harness program.
 func TestPresetIdentity(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "harness")
-	os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o700)
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // LookPath finds only PATHEXT names there, as with real harnesses
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		t.Fatalf("fixture harness not resolvable: %v", err)
+	}
 	h := harness{bin: bin}
 	a := presetID(h, "question", []string{"--x"})
 	if a != presetID(h, "question", []string{"--x"}) || a == presetID(h, "question", []string{"--y"}) || a == presetID(h, "task", []string{"--x"}) {
 		t.Fatal("preset does not follow the flags and mode")
 	}
-	os.WriteFile(bin, []byte("#!/bin/sh\n# upgraded\n"), 0o700)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n# upgraded\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if a == presetID(h, "question", []string{"--x"}) {
 		t.Fatal("preset does not follow the program")
 	}
