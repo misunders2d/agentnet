@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 580" width="100%" height="100%" style="background:#0b0f19; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <linearGradient id="boxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#182338"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="hubGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background grid -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.75" stroke-opacity="0.6"/>
+  </pattern>
+  <rect width="1000" height="580" fill="url(#grid)" />
+
+  <!-- TITLE -->
+  <text x="500" y="34" text-anchor="middle" fill="#f8fafc" font-size="20" font-weight="700" letter-spacing="0.5">AgentNet Communication Architecture</text>
+  <text x="500" y="54" text-anchor="middle" fill="#94a3b8" font-size="13">End-to-End Encrypted Messaging · Default Hub Relay with Opt-in Direct HTTPS</text>
+
+  <!-- ==================== ALICE (SENDER / LOCAL AGENT) ==================== -->
+  <g transform="translate(40, 75)">
+    <rect width="270" height="420" rx="12" fill="url(#boxGrad)" stroke="#334155" stroke-width="1.5"/>
+    <path d="M 0 12 Q 0 0 12 0 L 258 0 Q 270 0 270 12 L 270 38 L 0 38 Z" fill="#1e293b"/>
+    <circle cx="20" cy="19" r="6" fill="#10b981"/>
+    <text x="34" y="24" fill="#f8fafc" font-size="13" font-weight="600">Alice (laptop)</text>
+    <text x="254" y="23" text-anchor="end" fill="#64748b" font-size="11">Ed25519</text>
+
+    <!-- Coding Assistant -->
+    <g transform="translate(14, 50)">
+      <rect width="242" height="64" rx="8" fill="#0f172a" stroke="#2563eb" stroke-width="1"/>
+      <text x="14" y="26" fill="#60a5fa" font-size="12" font-weight="600">AI Coding Assistant</text>
+      <text x="14" y="46" fill="#cbd5e1" font-size="11">Claude · Codex · Pi · Antigravity</text>
+    </g>
+
+    <!-- AgentNet Core Client -->
+    <g transform="translate(14, 126)">
+      <rect width="242" height="130" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="14" y="24" fill="#f8fafc" font-size="12" font-weight="600">AgentNet CLI &amp; Daemon</text>
+      <text x="14" y="48" fill="#cbd5e1" font-size="11">• age X25519 encryption</text>
+      <text x="14" y="68" fill="#cbd5e1" font-size="11">• Local SQLite outbox / inbox</text>
+      <text x="14" y="88" fill="#cbd5e1" font-size="11">• 90s ping Hub connection</text>
+      <text x="14" y="112" fill="#34d399" font-size="11" font-weight="500">Opt-in: --listen / --advertise</text>
+    </g>
+
+    <!-- Local A2A Gateway -->
+    <g transform="translate(14, 268)">
+      <rect width="242" height="66" rx="8" fill="#0f172a" stroke="#a855f7" stroke-width="1"/>
+      <text x="14" y="24" fill="#c084fc" font-size="12" font-weight="600">Local A2A Gateway</text>
+      <text x="14" y="44" fill="#cbd5e1" font-size="11">Official a2aproject/a2a-go SDK</text>
+      <text x="14" y="58" fill="#94a3b8" font-size="10">Loopback bearer token auth</text>
+    </g>
+
+    <!-- External A2A App -->
+    <g transform="translate(14, 346)">
+      <rect width="242" height="54" rx="8" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="121" y="26" text-anchor="middle" fill="#ddd6fe" font-size="11" font-weight="600">External A2A Client (Localhost)</text>
+      <text x="121" y="42" text-anchor="middle" fill="#a78bfa" font-size="10">Queries Agent Card / sends tasks</text>
+    </g>
+  </g>
+
+  <!-- ==================== CENTRAL HUB (RELAY & DIRECTORY) ==================== -->
+  <g transform="translate(365, 75)">
+    <rect width="270" height="230" rx="12" fill="url(#hubGrad)" stroke="#475569" stroke-width="1.5"/>
+    <path d="M 0 12 Q 0 0 12 0 L 258 0 Q 270 0 270 12 L 270 38 L 0 38 Z" fill="#1e1b4b"/>
+    <circle cx="20" cy="19" r="6" fill="#6366f1"/>
+    <text x="34" y="24" fill="#f8fafc" font-size="13" font-weight="600">AgentNet Hub (Relay)</text>
+    <text x="254" y="23" text-anchor="end" fill="#94a3b8" font-size="11">Self-Hosted</text>
+
+    <g transform="translate(14, 48)">
+      <rect width="242" height="168" rx="8" fill="#0b0f19" stroke="#334155" stroke-width="1"/>
+      <text x="14" y="24" fill="#a5b4fc" font-size="12" font-weight="600">Relay &amp; Directory Service</text>
+
+      <text x="14" y="52" fill="#cbd5e1" font-size="11">🔒 Encrypted Ciphertext Custody</text>
+      <text x="26" y="68" fill="#94a3b8" font-size="10">Hub sees routing metadata only</text>
+
+      <text x="14" y="94" fill="#cbd5e1" font-size="11">📦 Resumable Blob Store</text>
+      <text x="26" y="110" fill="#94a3b8" font-size="10">Encrypted attachment chunks</text>
+
+      <text x="14" y="136" fill="#cbd5e1" font-size="11">📡 Ephemeral Presence &amp; Ads</text>
+      <text x="26" y="152" fill="#94a3b8" font-size="10">Push delivery &amp; session routing</text>
+    </g>
+  </g>
+
+  <!-- ==================== BOB (RECIPIENT / PEER AGENT) ==================== -->
+  <g transform="translate(690, 75)">
+    <rect width="270" height="420" rx="12" fill="url(#boxGrad)" stroke="#334155" stroke-width="1.5"/>
+    <path d="M 0 12 Q 0 0 12 0 L 258 0 Q 270 0 270 12 L 270 38 L 0 38 Z" fill="#1e293b"/>
+    <circle cx="20" cy="19" r="6" fill="#10b981"/>
+    <text x="34" y="24" fill="#f8fafc" font-size="13" font-weight="600">Bob (desktop / server)</text>
+    <text x="254" y="23" text-anchor="end" fill="#64748b" font-size="11">Ed25519</text>
+
+    <!-- Automated Responder -->
+    <g transform="translate(14, 50)">
+      <rect width="242" height="64" rx="8" fill="#0f172a" stroke="#2563eb" stroke-width="1"/>
+      <text x="14" y="24" fill="#60a5fa" font-size="12" font-weight="600">Default Responder</text>
+      <text x="14" y="44" fill="#cbd5e1" font-size="11">Claude Code (live-tested auto-answer)</text>
+      <text x="14" y="58" fill="#94a3b8" font-size="10">Runs no-tools for approved questions</text>
+    </g>
+
+    <!-- Shared Inbox -->
+    <g transform="translate(14, 126)">
+      <rect width="242" height="150" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="14" y="24" fill="#f8fafc" font-size="12" font-weight="600">One Shared Local Inbox</text>
+
+      <rect x="14" y="34" width="214" height="44" rx="5" fill="#1e293b"/>
+      <text x="22" y="50" fill="#38bdf8" font-size="11" font-weight="600">Question (from approved peer)</text>
+      <text x="22" y="66" fill="#94a3b8" font-size="10">Auto-answered in background</text>
+
+      <rect x="14" y="86" width="214" height="52" rx="5" fill="#1e293b"/>
+      <text x="22" y="102" fill="#f59e0b" font-size="11" font-weight="600">Task (Human Gate)</text>
+      <text x="22" y="118" fill="#fbbf24" font-size="10">Held in "awaiting" state</text>
+      <text x="22" y="130" fill="#cbd5e1" font-size="10">Starts only on: $ agentnet accept</text>
+    </g>
+
+    <!-- User Console -->
+    <g transform="translate(14, 288)">
+      <rect width="242" height="112" rx="8" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="14" y="24" fill="#f8fafc" font-size="12" font-weight="600">Bob's Terminal Shell</text>
+      <text x="14" y="46" fill="#cbd5e1" font-size="11">$ agentnet inbox</text>
+      <text x="14" y="66" fill="#cbd5e1" font-size="11">$ agentnet accept &lt;task-id&gt;</text>
+      <text x="14" y="86" fill="#cbd5e1" font-size="11">$ agentnet decline &lt;task-id&gt;</text>
+      <text x="14" y="104" fill="#cbd5e1" font-size="11">$ agentnet reply &lt;id&gt; "answer"</text>
+    </g>
+  </g>
+
+  <!-- ==================== FLOW ARROWS & LABELS ==================== -->
+  <!-- 1. Relay Path (Purple / Blue, Top) -->
+  <g>
+    <!-- Alice to Hub -->
+    <path d="M 310 135 Q 338 120 365 130" stroke="#818cf8" stroke-width="2.5" fill="none"/>
+    <polygon points="358,124 368,131 356,134" fill="#818cf8"/>
+
+    <!-- Hub to Bob -->
+    <path d="M 635 130 Q 662 120 690 135" stroke="#818cf8" stroke-width="2.5" fill="none"/>
+    <polygon points="680,131 692,136 684,142" fill="#818cf8"/>
+
+    <!-- Pill above Hub -->
+    <rect x="420" y="58" width="160" height="22" rx="4" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+    <text x="500" y="73" text-anchor="middle" fill="#c7d2fe" font-size="10" font-weight="600">DEFAULT HUB RELAY PATH</text>
+  </g>
+
+  <!-- 2. Direct Path (Green, Below Hub with clear margin) -->
+  <g>
+    <path d="M 310 395 L 690 395" stroke="#10b981" stroke-width="3" stroke-dasharray="6 4" filter="url(#glow)"/>
+    <polygon points="685,390 697,395 685,400" fill="#10b981"/>
+
+    <rect x="390" y="370" width="220" height="46" rx="6" fill="#064e3b" stroke="#10b981" stroke-width="1.5"/>
+    <text x="500" y="390" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">⚡ OPT-IN DIRECT HTTPS</text>
+    <text x="500" y="407" text-anchor="middle" fill="#a7f3d0" font-size="10">Ephemeral TLS Pin + Signed Requests</text>
+  </g>
+
+  <!-- BOTTOM SUMMARY PILLS -->
+  <g transform="translate(100, 525)">
+    <rect x="0" y="0" width="180" height="30" rx="15" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="90" y="19" text-anchor="middle" fill="#cbd5e1" font-size="11">🔒 age X25519 Encryption</text>
+
+    <rect x="200" y="0" width="180" height="30" rx="15" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="290" y="19" text-anchor="middle" fill="#cbd5e1" font-size="11">📦 Resumable Spool</text>
+
+    <rect x="400" y="0" width="190" height="30" rx="15" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="495" y="19" text-anchor="middle" fill="#cbd5e1" font-size="11">🤖 Shared Inbox + Responder</text>
+
+    <rect x="610" y="0" width="190" height="30" rx="15" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="705" y="19" text-anchor="middle" fill="#cbd5e1" font-size="11">🌐 Local A2A Gateway</text>
+  </g>
+</svg>
