@@ -16,7 +16,7 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores and relays only ciphertext.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
 - 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
-- 🛡️ **Human Gate for Tasks & Read-Only Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions), read-only, without editing tools or new approvals (`dontAsk` for Claude Code; read-only sandbox and `approval_policy="never"` for Codex; read-only tool subset for Pi). The recipient's existing permission grants remain the authority; allowed Bash or MCP tools keep their effects. **Tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
+- 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; read-only tool subset for Pi). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks never run automatically**. Tasks wait in your inbox in an `awaiting` state until you explicitly review and run them with `agentnet accept <id>` or reject them with `agentnet decline <id>`.
 - 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
@@ -42,7 +42,7 @@ AgentNet enforces distinct handling for questions and tasks:
 
 | Intent | Command | Initial State | Execution Gate | Safety Boundaries |
 |---|---|---|---|---|
-| **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs with recipient's own setup (skills, plugins, MCP servers, permissions) in read-only question mode without editing tools or new approvals. 5-min timeout, context cap. Non-interrupting background execution. |
+| **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs with recipient's own setup (skills, plugins, MCP servers, permissions) without editing tools or new approvals. Allowed tools/Bash keep effects; not a blanket sandbox. 5-min timeout, context cap. Non-interrupting background execution. |
 | **Task** | `agentnet task <addr> <text>` | `awaiting` | **Explicit Human Gate** | **Never auto-executes.** Must be explicitly reviewed and started via `agentnet accept <id>` or rejected via `agentnet decline <id>`. |
 | **Follow-Up** | `agentnet ask/task --follow-up <text> ...` | `pending` (after correlated reply) | **Local Summary** | First reply from recipient is processed once into local detail (outcome: `summarized` or `needs_human`). Sends nothing back; never auto-executes tasks from reply. |
 | **Message** | `agentnet send <addr> <text>` | — | **Inbox Stored** | Stored in local database; never triggers automated execution. |
@@ -103,7 +103,7 @@ agentnet responder list
 
 # Set Claude Code or Codex as background responder
 agentnet responder set --harness claude --dir ~/work/my-project --timeout 5m
-# Or use Codex (runs read-only sandbox with your config, skills, and MCP servers)
+# Or use Codex (read-only shell sandbox, approval never; auto-approved MCP tools keep effects)
 agentnet responder set --harness codex --dir ~/work/my-project --timeout 5m
 
 # Approve Alice so her questions are answered automatically
@@ -187,19 +187,21 @@ When an answer or task result is sent, it carries an explicit `reply_to` link to
 <summary><b>🛡️ Harness Execution & Sandboxing Truth</b></summary>
 
 When the automatic responder runs, it executes the selected CLI harness in a fresh on-demand background process (requiring no open terminal or foreground session):
-- **Claude Code 2.1.283** (Live Tested for tasks and skills-on questions):
-  - Question mode: the user's own settings, skills, plugins, and MCP servers: `-p --output-format text --no-session-persistence --permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit` (`dontAsk`: only tools settings already allow run, rest refused; allowed Bash and MCP tools keep effects; editing tools removed).
-  - Task mode: `-p --output-format text --no-session-persistence` (runs with normal permissions only after explicit `accept`).
-  - Limits & Live Proof: Verified live at `8ce73cc` / `8ed75da` on Linux for tasks and skill-backed question lookup (secret retrieved from code file via project skill; write request answered `AGENTNET: NEEDS-HUMAN` with Write tool removed by flags; no refusal exercised).
-- **Codex CLI 0.157.1** (Live Tested for tasks, background sessions, and skills-on questions):
-  - Question mode: the user's own config, skills, and MCP servers: `codex exec --ephemeral --sandbox read-only --skip-git-repo-check --color never -c approval_policy="never"` (shell in a read-only sandbox, anything needing approval refused; MCP tools user's config auto-approves are outside sandbox and keep effects; answer captured from private `-o` file).
-  - Task mode: `codex exec --ephemeral --skip-git-repo-check --color never` (runs with normal permissions only after explicit `accept`).
-  - Limits & Live Proof: Verified live at `8ce73cc` / `8ed75da` on Linux for tasks, background sessions, and skill-backed question lookup (secret retrieved via project skill in read-only sandbox; change request answered `AGENTNET: NEEDS-HUMAN`, command not attempted so sandbox refusal was not exercised).
+- **Claude Code 2.1.283**:
+  - Question mode: Loads recipient's own settings, skills, plugins, and MCP servers with `--permission-mode dontAsk` and editing tools removed (`--disallowedTools Edit,Write,NotebookEdit`). Tools and Bash commands already permitted by user settings keep their effects.
+  - Task mode: Runs with normal permissions only after explicit operator `accept`.
+  - Background Sessions: Conversational follow-ups resume native sessions via `--session-id` (removing `--no-session-persistence`).
+  - Evidence: Tasks verified live after accept in earlier milestone testing; skills-on question lookup verified live at `8ce73cc` / `8ed75da` (skill read delivered secret; write request answered `AGENTNET: NEEDS-HUMAN`; no refusal exercised).
+- **Codex CLI 0.157.1**:
+  - Question mode: Loads user's own config, skills, and MCP servers with a read-only shell sandbox (`--sandbox read-only`) and `-c approval_policy="never"`. Auto-approved MCP tools run outside the shell sandbox and keep effects. Answers are captured via streaming JSON events (`turn.completed`) with bounded, validated fallback to `-o`.
+  - Task mode: Runs with normal permissions only after explicit operator `accept`.
+  - Background Sessions: Conversational follow-ups resume native sessions (removing `--ephemeral`), maintaining read-only and approval gates.
+  - Evidence: Tasks (`9575b2a`), follow-up summaries, and background sessions verified live in earlier milestone testing; skills-on question lookup verified live at `8ce73cc` / `8ed75da` (read-only shell sandbox active; change request answered `AGENTNET: NEEDS-HUMAN`).
 - **Pi** (Preset / Stub):
-  - Question mode: `-p --no-session --tools read,grep,find,ls` (pi's read-only tool set; skills load, but skills needing bash, edit, or extension tools cannot work). Stub only; not run live (local wrapper injects secrets).
-  - Task mode: `-p --no-session`.
-- **Antigravity**: Manual use only.
-- **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime, effects of Bash or MCP tools the user's own settings already allow (they keep effects and are not fenced), or Pi live execution.
+  - Question mode: Runs with read-only tool subset (`--tools read,grep,find,ls`); skills load, but skills requiring bash, edit, or extension tools cannot work. Stub only; not run live (local wrapper injects secrets).
+  - Task mode: Runs with standard preset after accept.
+- **Antigravity**: Manual use only (can read and reply via CLI; not an automated responder).
+- **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime (models answered `NEEDS-HUMAN` per instructions), effects of Bash or MCP tools the user's settings already allow (they keep effects and are not fenced), or Pi live execution. Full flag matrices and qualification logs are maintained in [docs/revival/M4.md](docs/revival/M4.md).
 - **Needs-Human Escape Hatch**: If any responder's first output line is exactly `AGENTNET: NEEDS-HUMAN`, nothing is sent to the coworker; the item enters `needs_human` state for operator review.
 - **Process Isolation**: Commands run in their own process group (`Setpgid: true` on Linux/macOS) with output buffers capped at 64 KiB stdout and 4 KiB stderr. On Windows, process cancellation terminates the worker process.
 - **Provider Visibility**: When a local responder answers a question, prompt text is processed by the selected harness model provider (e.g., Anthropic, OpenAI).
@@ -281,8 +283,8 @@ AgentNet is under active development as a lean, resilient Go product:
 
 **Tested Environments & Live Harness Proof**:
 - **Live Harness Qualification**:
-  - Claude Code 2.1.283 live-tested on Linux: tasks run after acceptance; skills-on question mode live-tested (`8ce73cc` / `8ed75da`) for skill-backed question lookup (delivered code) and write request answered `NEEDS-HUMAN` (Write tool removed).
-  - Codex CLI 0.157.1 live-tested on Linux: tasks, background sessions, and follow-up summaries live-tested; skills-on question mode live-tested (`8ce73cc` / `8ed75da`) for skill-backed question lookup (delivered code) and change request answered `NEEDS-HUMAN` (read-only sandbox active).
+  - Claude Code 2.1.283: Synthetic tasks verified live after operator accept in earlier milestone tests; skills-on question mode verified live on Linux at `8ce73cc` / `8ed75da` for skill-backed lookup (delivered secret) and write request (answered `NEEDS-HUMAN`).
+  - Codex CLI 0.157.1: Synthetic questions (`4 s`, `d6785bd`), follow-up summaries (`6 s`, `d6785bd`), tasks (`9575b2a`, `35 s`), and background sessions verified live on Linux in earlier milestone runs; skills-on question mode verified live on Linux at `8ce73cc` / `8ed75da` for skill-backed lookup (delivered secret) and change request (answered `NEEDS-HUMAN`).
 - **Native CI Matrix (Linux, macOS, Windows)**: All native source qualification jobs passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)). Unit and separate-process CLI tests passed natively on Linux, macOS and Windows; Linux race checks and Windows owner-only ACL tests also passed.
 - **Desktop Notifications**: Linux verified live on desktop (supervisor tested with real `notify-send`: returned notification ID 46 across count updates, silence hint and banner replacement verified, daemon restart produced no third duplicate notification, and pending review rows persisted; operator visually confirmed desktop notification). Windows (`Shell_NotifyIconW`, [run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) passed native API execution in CI, but real desktop balloon display has not been verified live. macOS (`osascript`) builds and passes native suite tests, but has no live notification execution evidence (the author currently has neither macOS nor Windows desktop environment available).
 - **Containers**: Container qualification passed in GitHub Actions ([run 36328539634](https://github.com/misunders2d/agentnet/actions/runs/36328539634)) and remote host container verification; self-hosted Hub relay is deployed and healthy.
