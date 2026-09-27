@@ -94,21 +94,21 @@ function toggleReview(open) {
 function renderConvs(convs) {
   $("conv-list").replaceChildren(...convs.map((c) => {
     let flag = null;
-    if (c.review) flag = el("span", { class: "badge", title: "Needs your decision" }, String(c.review));
+    if (c.review) flag = el("span", { class: "badge", title: "Needs your decision" }, String(c.review),
+      el("span", { class: "sr-only" }, c.review === 1 ? " item needs your decision" : " items need your decision"));
     else if (c.paused) flag = el("span", { class: "conv-flag danger" }, "Key changed");
     else if (c.next.startsWith("Your responder")) flag = el("span", { class: "conv-flag calm" }, "Responder working");
     else if (c.next.startsWith("Waiting on")) flag = el("span", { class: "conv-flag calm" }, "Awaiting reply");
-    const label = c.peer + (c.review ? ", " + c.review + " need your decision" : "") + (c.paused ? ", key changed" : "");
     return el("li", {},
       el("button", {
-        type: "button", class: "conv-item", "aria-label": label,
+        type: "button", class: "conv-item",
         "aria-current": c.peer === state.current ? "true" : "false", onclick: () => openConv(c.peer),
       },
         avatar(c.peer),
         el("span", { class: "conv-main" },
           el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)),
             el("span", { class: "conv-time" }, c.last_at && !c.last_at.startsWith("0001") ? when(c.last_at) : "")),
-          el("span", { class: "conv-bottom" }, el("span", { class: "conv-last" }, c.last), flag))));
+          el("span", { class: "conv-bottom" }, el("span", { class: "conv-last", title: c.last }, c.last), flag))));
   }));
 }
 
@@ -234,7 +234,7 @@ function details(m) {
 }
 
 const actionLabel = {
-  accept: "Accept and run…", decline: "Decline…", approve: "Approve sender…",
+  accept: "Accept and run…", decline: "Decline…", approve: "Answer them automatically from now on…",
   resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
 
@@ -277,8 +277,9 @@ function decide(a, m) {
   if (a === "approve") {
     return dialog({
       title: "Answer " + m.peer + "'s questions automatically?", body: [
-        el("p", {}, "From now on your responder answers questions from " + m.peer + " without asking you, in question mode (no tools). Tasks still wait for you."),
-        el("p", {}, "This question is answered now."), el("p", { class: "hint" }, "In a terminal: agentnet approve " + m.peer)],
+        el("p", {}, "Future questions from " + m.peer + " are answered by your responder without asking you, in question mode (no tools). Tasks still wait for you."),
+        el("p", {}, "This question stays waiting: answer it yourself or let your responder answer it."),
+        el("p", { class: "hint" }, "In a terminal: agentnet approve " + m.peer)],
       ok: "Approve (simulated)", act: { id: m.id, do: "approve" },
     });
   }

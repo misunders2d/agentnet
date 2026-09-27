@@ -46,11 +46,26 @@ func TestFixtureDecisions(t *testing.T) {
 			held = it.ID
 		}
 	}
+	// Approving the sender covers future questions only, as agentnet approve
+	// does: the held question waits for a separate accept.
 	if err := f.Act(Action{ID: held, Do: "approve"}); err != nil {
 		t.Fatal(err)
 	}
-	if p, m := f.find(held); !p.approved || m.State != "running" {
+	p, m = f.find(held)
+	if !p.approved || m.State != "held" {
 		t.Fatalf("approve: approved %v state %q", p.approved, m.State)
+	}
+	if v := f.view(p, m); len(v.Actions) != 3 || v.Actions[1] != "accept" || v.StateText != "Needs you: it arrived before you approved dave/srv" {
+		t.Fatalf("held actions after approve: %v", v.Actions)
+	}
+	if err := f.Act(Action{ID: held, Do: "approve"}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("second approve: %v", err)
+	}
+	if err := f.Act(Action{ID: held, Do: "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, m := f.find(held); m.State != "running" {
+		t.Fatalf("accept after approve: %q", m.State)
 	}
 
 	if err := f.Act(Action{ID: "erin/lab", Do: "trust"}); err != nil {

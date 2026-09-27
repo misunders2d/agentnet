@@ -159,6 +159,9 @@ func (f *Fixture) view(p *fxPeer, m *Message) Message {
 	v := *m
 	v.Files = append([]File(nil), m.Files...)
 	v.StateText = StateText(m.Dir, m.Kind, m.State, p.addr)
+	if m.State == "held" && p.approved {
+		v.StateText = "Needs you: it arrived before you approved " + p.addr
+	}
 	answered := false
 	for _, o := range p.msgs {
 		if o.ReplyTo == m.ID && o.Dir == "in" {
@@ -177,7 +180,10 @@ func (f *Fixture) view(p *fxPeer, m *Message) Message {
 	if m.Dir == "in" {
 		switch m.State {
 		case "held":
-			v.Actions = []string{"reply", "approve", "decline"}
+			v.Actions = []string{"reply", "accept", "decline"}
+			if !p.approved {
+				v.Actions = []string{"reply", "accept", "approve", "decline"}
+			}
 		case "awaiting":
 			v.Actions = []string{"accept", "decline"}
 		case "needs_human":
@@ -350,11 +356,12 @@ func (f *Fixture) Act(a Action) error {
 		}
 		m.State, m.Detail = "running", ""
 	case "approve":
-		if !from("held") {
-			return Refuse("Only a held question can be approved from here.")
+		// As agentnet approve: future questions are answered automatically;
+		// this one stays held until accepted or answered by hand.
+		if !from("held") || p.approved {
+			return Refuse("Only the sender of a held question can be approved from here.")
 		}
 		p.approved = true
-		m.State = "running"
 	case "decline":
 		if !from("held", "awaiting") {
 			return Refuse("Only a held question or a waiting task can be declined.")
