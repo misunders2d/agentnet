@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -31,6 +34,20 @@ const (
 // Each Run is one session: a fresh session id announced to the Hub, and,
 // with opts.Listen, an HTTPS listener for direct deliveries.
 func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
+	release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
+	if errors.Is(err, lockfile.ErrLocked) {
+		return fmt.Errorf("another agentnet daemon is already running for %s", a.home)
+	}
+	if err != nil {
+		return err
+	}
+	defer release()
+	stopWorker, err := a.startWorker(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopWorker()
+
 	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
 	if opts.Listen != "" {
 		endpoint, cert, stop, err := a.startDirect(opts, ad.Session)
@@ -161,6 +178,7 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 			return errors.Join(errors.New("message "+env.ID+" not processed yet"), err)
 		}
 	case "ping":
+		a.wakeWorker()
 		// Prove this connection is alive; the Hub drops unanswered streams.
 		var ping protocol.PingAck
 		if err := json.Unmarshal([]byte(data), &ping); err == nil && ping.Conn != "" {
@@ -253,7 +271,11 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 	}
 	in, err := envelope.Open(env, a.id, a.Address, sender)
 	if err == nil {
-		return a.store.addInbox(in)
+		if err := a.store.addInbox(in); err != nil {
+			return err
+		}
+		a.wakeWorker()
+		return nil
 	}
 	// A failure may mean the sender's keys changed; hold the message until
 	// the user decides to trust the new keys. If the directory cannot be
@@ -276,4 +298,31 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 func (a *Agent) hold(env envelope.Envelope, reason string) error {
 	raw, _ := json.Marshal(env)
 	return a.store.quarantine(env.ID, env.From, reason, raw)
+}
+
+// startWorker marks jobs a previous daemon left running as interrupted and
+// starts the single worker for this home. The returned function stops it and
+// waits, killing any harness it is running.
+func (a *Agent) startWorker(ctx context.Context) (func(), error) {
+	if err := a.store.interruptRunning(); err != nil {
+		return nil, err
+	}
+	wake := make(chan struct{}, 1)
+	a.wakeWorker = func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	stopKicks, err := listenKicks(a.home, a.wakeWorker)
+	if err != nil {
+		// Still works: new messages and Hub pings wake the worker.
+		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)
+		stopKicks = func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); a.worker(ctx, wake) }()
+	a.wakeWorker()
+	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {} }, nil
 }

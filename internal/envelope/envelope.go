@@ -76,10 +76,36 @@ type Inner struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 	Session     string       `json:"session,omitempty"`
 	Fallback    bool         `json:"fallback,omitempty"`
+	Status      string       `json:"status,omitempty"` // for answers and results
 }
 
-// Kinds of messages.
-const KindMessage = "message"
+// Kinds of messages. The kind is signed and encrypted; it states intent,
+// it never grants the sender any authority on the recipient's machine.
+const (
+	KindMessage  = "message"
+	KindQuestion = "question" // may be answered automatically for approved senders
+	KindAnswer   = "answer"   // reply to a question
+	KindTask     = "task"     // runs only after the recipient accepts it
+	KindResult   = "result"   // outcome of a task
+)
+
+func validKind(k string) bool {
+	switch k {
+	case KindMessage, KindQuestion, KindAnswer, KindTask, KindResult:
+		return true
+	}
+	return false
+}
+
+// Outcome statuses carried by answers and results.
+const (
+	StatusDone        = "done"
+	StatusFailed      = "failed"
+	StatusTimeout     = "timeout"
+	StatusCancelled   = "cancelled"
+	StatusDeclined    = "declined"
+	StatusInterrupted = "interrupted"
+)
 
 // ErrNotForMe means the envelope is addressed to another agent.
 var ErrNotForMe = errors.New("envelope addressed to another agent")
@@ -127,6 +153,9 @@ func (e Envelope) VerifySig(senderKey ed25519.PublicKey) error {
 	}
 	if e.ID == "" || e.From == "" || e.To == "" || e.Kind == "" || len(e.CT) == 0 {
 		return errors.New("incomplete envelope")
+	}
+	if !validKind(e.Kind) {
+		return fmt.Errorf("unknown message kind %q", e.Kind)
 	}
 	if len(e.CT) > MaxCiphertext {
 		return errors.New("envelope too large")

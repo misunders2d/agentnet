@@ -18,6 +18,7 @@ type presence struct {
 	grace    time.Duration
 	sessions map[string]map[string]*session // agent -> session id
 	onEnd    func(agent, session string)
+	closed   bool
 }
 
 type session struct {
@@ -65,7 +66,7 @@ func (p *presence) disconnect(agent, id string) {
 
 func (p *presence) end(agent, id string, s *session) {
 	p.mu.Lock()
-	if p.sessions[agent][id] != s || s.conns > 0 {
+	if p.closed || p.sessions[agent][id] != s || s.conns > 0 {
 		p.mu.Unlock()
 		return // reconnected, or already replaced
 	}
@@ -73,8 +74,8 @@ func (p *presence) end(agent, id string, s *session) {
 	if len(p.sessions[agent]) == 0 {
 		delete(p.sessions, agent)
 	}
-	p.mu.Unlock()
-	p.onEnd(agent, id)
+	defer p.mu.Unlock()
+	p.onEnd(agent, id) // under the lock, so close() waits for it
 }
 
 // drop ends every session of agent at once (revocation).
@@ -111,4 +112,19 @@ func (p *presence) list(agent string) []protocol.SessionInfo {
 		out = append(out, protocol.SessionInfo{Ad: s.ad, Connected: s.conns > 0})
 	}
 	return out
+}
+
+// close stops pending session ends; used when the Hub shuts down (sessions
+// are not persisted anyway).
+func (p *presence) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	for _, byID := range p.sessions {
+		for _, s := range byID {
+			if s.timer != nil {
+				s.timer.Stop()
+			}
+		}
+	}
 }

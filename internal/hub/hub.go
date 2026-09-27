@@ -205,7 +205,10 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 // Close releases the database. Call after Serve returns.
-func (h *Hub) Close() error { return h.store.db.Close() }
+func (h *Hub) Close() error {
+	h.presence.close()
+	return h.store.db.Close()
+}
 
 type logWriter struct{ logf func(string, ...any) }
 

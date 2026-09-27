@@ -74,6 +74,16 @@ CREATE TABLE direct_blobs(
   received INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
   updated_at INTEGER NOT NULL);
+`, `
+ALTER TABLE inbox ADD COLUMN state TEXT NOT NULL DEFAULT '';
+ALTER TABLE inbox ADD COLUMN status TEXT;
+ALTER TABLE inbox ADD COLUMN responder TEXT;
+ALTER TABLE inbox ADD COLUMN result_id TEXT;
+ALTER TABLE inbox ADD COLUMN detail TEXT;
+CREATE INDEX inbox_state ON inbox(state, received_at);
+CREATE TABLE approvals(
+  address TEXT PRIMARY KEY,
+  added_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -154,14 +164,20 @@ func (s *store) setPending(p identity.Public) error {
 	return err
 }
 
-// addOutbox records a message and its pending uploads in one transaction.
-func (s *store) addOutbox(env envelope.Envelope, body string) error {
+// addOutbox records a message and its pending uploads in one transaction,
+// together with claim (if any), which marks what the message answers.
+func (s *store) addOutbox(env envelope.Envelope, body string, claim func(tx *sql.Tx, replyID string) error) error {
 	data, _ := json.Marshal(env)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if claim != nil {
+		if err := claim(tx, env.ID); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
 		env.ID, env.To, body, string(data), stateQueued, time.Now().Unix()); err != nil {
 		return err
@@ -253,21 +269,61 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session) VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''))`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?)`
 
-func inboxArgs(in envelope.Inner) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session}
+// Response states of received questions and tasks. They are independent of
+// read/unread: reading never makes anything run.
+const (
+	statePending   = "pending"  // eligible for the worker
+	stateHeld      = "held"     // question from a sender not approved for automatic answers
+	stateAwaiting  = "awaiting" // task waiting for the local human to accept
+	stateRunning   = "running"  // the worker owns it
+	stateCancelReq = "cancel_requested"
+	stateAnswered  = "answered"  // the worker replied
+	stateManual    = "manual"    // someone replied by hand
+	stateDeclined  = "declined"  // the local human declined the task
+	stateJobFailed = "failed"    // the worker ran and failed or timed out
+	stateCancelled = "cancelled" // cancelled while running
+	stateInterrupt = "interrupted"
+)
+
+func inboxArgs(in envelope.Inner, state string) []any {
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state}
 }
 
-type execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
+// initialState decides whether a new message waits for anything.
+func initialState(db querier, in envelope.Inner) (string, error) {
+	switch in.Kind {
+	case envelope.KindQuestion:
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM approvals WHERE address = ?`, in.From).Scan(&n); err != nil {
+			return "", err
+		}
+		if n > 0 {
+			return statePending, nil
+		}
+		return stateHeld, nil
+	case envelope.KindTask:
+		return stateAwaiting, nil
+	}
+	return "", nil
+}
+
+type querier interface {
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 // insertInner stores a verified message and its attachment manifest.
-func insertInner(db execer, in envelope.Inner) error {
-	if _, err := db.Exec(insertInbox, inboxArgs(in)...); err != nil {
+func insertInner(tx *sql.Tx, in envelope.Inner) error {
+	state, err := initialState(tx, in)
+	if err != nil {
 		return err
 	}
+	if _, err := tx.Exec(insertInbox, inboxArgs(in, state)...); err != nil {
+		return err
+	}
+	db := tx
 	for _, a := range in.Attachments {
 		if _, err := db.Exec(`INSERT OR IGNORE INTO attachments(message_id, blob_id, name, size, sha256, ct_size, ct_sha256) VALUES(?, ?, ?, ?, ?, ?, ?)`,
 			in.ID, a.Blob.ID, a.Name, a.Size, a.SHA256, a.Blob.Size, a.Blob.SHA256); err != nil {
@@ -381,6 +437,10 @@ type Message struct {
 	ID          string     `json:"id"`
 	From        string     `json:"from"`
 	Kind        string     `json:"kind"`
+	State       string     `json:"state,omitempty"`  // response state of a question or task
+	Status      string     `json:"status,omitempty"` // outcome carried by an answer or result
+	Responder   string     `json:"responder,omitempty"`
+	Detail      string     `json:"detail,omitempty"`
 	Body        string     `json:"body"`
 	ReplyTo     string     `json:"reply_to,omitempty"`
 	SentAt      time.Time  `json:"sent_at"`
@@ -402,7 +462,8 @@ type FileInfo struct {
 }
 
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
-	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL FROM inbox`
+	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
+		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, '') FROM inbox`
 	if unreadOnly {
 		q += ` WHERE read_at IS NULL`
 	}
@@ -414,7 +475,8 @@ func (s *store) inbox(unreadOnly bool) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var ts, recv int64
-		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read); err != nil {
+		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read,
+			&m.State, &m.Status, &m.Responder, &m.Detail); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -465,10 +527,9 @@ func (s *store) markRead(ids []string) error {
 	return nil
 }
 
-func (s *store) inboxSender(id string) (string, error) {
-	var sender string
-	err := s.db.QueryRow(`SELECT sender FROM inbox WHERE id = ?`, id).Scan(&sender)
-	return sender, err
+func (s *store) inboxKind(id string) (sender, kind string, err error) {
+	err = s.db.QueryRow(`SELECT sender, kind FROM inbox WHERE id = ?`, id).Scan(&sender, &kind)
+	return
 }
 
 // disposition reports how a received message was filed.
@@ -487,4 +548,82 @@ func (s *store) disposition(id string) (string, error) {
 		return protocol.StateQuarantined, nil
 	}
 	return "", errors.New("message not stored")
+}
+
+// job is a received question or task the worker has claimed.
+type job struct {
+	ID, From, Kind, Body, ReplyTo string
+	Attachments                   int
+}
+
+// claimJob gives the oldest pending question or task to the worker,
+// recording which responder took it. Only one caller can win a row.
+func (s *store) claimJob(responder string) (job, bool, error) {
+	var j job
+	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL
+		WHERE id = (SELECT id FROM inbox WHERE state = ? ORDER BY received_at, id LIMIT 1) AND state = ?
+		RETURNING id, sender, kind, body, coalesce(reply_to, '')`,
+		stateRunning, responder, statePending, statePending).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return j, false, nil
+	}
+	if err != nil {
+		return j, false, err
+	}
+	err = s.db.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, j.ID).Scan(&j.Attachments)
+	return j, true, err
+}
+
+func (s *store) jobState(id string) (string, error) {
+	var state string
+	err := s.db.QueryRow(`SELECT state FROM inbox WHERE id = ?`, id).Scan(&state)
+	return state, err
+}
+
+// finishJob records a job's end without a reply.
+func (s *store) finishJob(id, state, detail string) error {
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, '') WHERE id = ? AND state IN (?, ?)`,
+		state, detail, id, stateRunning, stateCancelReq)
+	return err
+}
+
+// interruptRunning marks jobs a previous daemon left running. They are not
+// rerun automatically: a task may already have had effects.
+func (s *store) interruptRunning() error {
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running'
+		WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
+	return err
+}
+
+// threadText returns up to max earlier messages of the conversation ending
+// at id (oldest first), following reply_to through inbox and outbox.
+func (s *store) threadText(replyTo string, max int) ([]string, error) {
+	var out []string
+	for id := replyTo; id != "" && len(out) < max; {
+		var who, body, next string
+		err := s.db.QueryRow(`SELECT sender, body, coalesce(reply_to, '') FROM inbox WHERE id = ?`, id).Scan(&who, &body, &next)
+		if errors.Is(err, sql.ErrNoRows) {
+			var env string
+			err = s.db.QueryRow(`SELECT body, envelope FROM outbox WHERE id = ?`, id).Scan(&body, &env)
+			if errors.Is(err, sql.ErrNoRows) {
+				break
+			}
+			who, next = "me", ""
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append([]string{who + ": " + body}, out...)
+		id = next
+	}
+	return out, nil
+}
+
+func (s *store) outboxEnvelope(id string) (envelope.Envelope, error) {
+	var data string
+	var env envelope.Envelope
+	if err := s.db.QueryRow(`SELECT envelope FROM outbox WHERE id = ?`, id).Scan(&data); err != nil {
+		return env, err
+	}
+	return env, json.Unmarshal([]byte(data), &env)
 }

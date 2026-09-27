@@ -5,6 +5,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -36,13 +37,14 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
-	home      string
-	id        *identity.Identity
-	store     *store
-	hub       *hubConn
-	heartbeat time.Duration
-	adQuery   string // this run's signed session ad, for the push stream
-	kick      func() // wakes the current stream's retry worker
+	home       string
+	id         *identity.Identity
+	store      *store
+	hub        *hubConn
+	heartbeat  time.Duration
+	adQuery    string // this run's signed session ad, for the push stream
+	kick       func() // wakes the current stream's retry worker
+	wakeWorker func() // wakes the question/task worker; a no-op outside Run
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -124,7 +126,7 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run the same `agentnet join` command again", home)
 	}
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}}
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}}
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
@@ -212,7 +214,13 @@ type Outgoing struct {
 	Body     string
 	ReplyTo  string
 	Files    []string
-	Fallback bool // if the addressed session has ended, deliver to the agent's inbox
+	Fallback bool   // if the addressed session has ended, deliver to the agent's inbox
+	Kind     string // envelope.KindMessage (default), KindQuestion or KindTask
+	Status   string // outcome, for answers and results
+
+	// claim runs in the transaction that stores the outgoing message; it
+	// records which received question or task the message answers.
+	claim func(tx *sql.Tx, replyID string) error
 }
 
 // Send is SendMessage for the common case.
@@ -248,9 +256,12 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		}
 		route = a.directRoute(infos, to, session, peer)
 	}
+	if m.Kind == "" {
+		m.Kind = envelope.KindMessage
+	}
 	in := envelope.Inner{
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
-		Kind: envelope.KindMessage, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback,
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
 	}
 	for _, path := range m.Files {
 		att, err := a.spoolFile(path, recipient)
@@ -262,7 +273,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err == nil {
-		err = a.store.addOutbox(env, m.Body)
+		err = a.store.addOutbox(env, m.Body, m.claim)
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
@@ -277,15 +288,6 @@ func blobsOf(atts []envelope.Attachment) []envelope.Blob {
 		out = append(out, a.Blob)
 	}
 	return out
-}
-
-// Reply sends body (and files) to the sender of inbox message id.
-func (a *Agent) Reply(ctx context.Context, id, body string, files ...string) (SendResult, error) {
-	sender, err := a.store.inboxSender(id)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("no inbox message %s", id)
-	}
-	return a.SendMessage(ctx, Outgoing{To: sender, Body: body, ReplyTo: id, Files: files})
 }
 
 // deliver tries the direct route (if any) and then the Hub. The spool is
@@ -404,6 +406,7 @@ func (a *Agent) Trust(ctx context.Context, address string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer notifyDaemon(a.home) // promoted questions may be for the worker
 	for _, env := range held {
 		in, err := envelope.Open(env, a.id, a.Address, e.Public)
 		if err != nil {

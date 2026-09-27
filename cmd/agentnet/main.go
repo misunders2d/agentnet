@@ -27,8 +27,20 @@ Client:
   send [--file PATH]... [--fallback] ADDRESS[#SESSION] TEXT
                                 send an end-to-end encrypted message with files,
                                 directly when the recipient is reachable
+  ask [--file PATH]... ADDRESS TEXT
+                                send a question (approved peers may get an automatic answer)
+  task [--file PATH]... ADDRESS TEXT
+                                send a task (runs only if the recipient accepts it)
   reply [--file PATH]... ID TEXT
-                                reply to an inbox message
+                                reply to an inbox message (takes over a question or task)
+  accept ID                     let the responder run a task, answer a held question,
+                                or retry an interrupted/failed one
+  decline ID [REASON]           decline a task or question
+  cancel ID                     stop the responder working on ID
+  approve ADDRESS / unapprove ADDRESS
+                                allow / stop automatic answers to ADDRESS's questions
+  responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
+  responder show | responder off
   inbox [--unread] [--json]     list received messages (marks them read)
   download [--dir DIR] [--force] ID
                                 save a message's attachments (never overwrites
@@ -92,6 +104,42 @@ func run(args []string) error {
 		return nil
 	case "send":
 		return runSend(ctx, a, rest, false)
+	case "ask", "task":
+		return runSendKind(ctx, a, cmd, rest)
+	case "accept", "cancel", "approve", "unapprove":
+		if len(rest) != 1 {
+			return fmt.Errorf("usage: %s ID-or-ADDRESS", cmd)
+		}
+		var err error
+		switch cmd {
+		case "accept":
+			err = a.Accept(rest[0])
+		case "cancel":
+			err = a.Cancel(rest[0])
+		case "approve":
+			err = a.Approve(rest[0])
+		case "unapprove":
+			err = a.Unapprove(rest[0])
+		}
+		if err == nil {
+			fmt.Printf("%s %s\n", cmd, rest[0])
+		}
+		return err
+	case "decline":
+		if len(rest) < 1 || len(rest) > 2 {
+			return errors.New("usage: decline ID [REASON]")
+		}
+		reason := "declined"
+		if len(rest) == 2 {
+			reason = rest[1]
+		}
+		r, err := a.Decline(ctx, rest[0], reason)
+		if err == nil {
+			fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
+		}
+		return err
+	case "responder":
+		return runResponder(a, rest)
 	case "reply":
 		return runSend(ctx, a, rest, true)
 	case "inbox":
@@ -318,7 +366,14 @@ func runInbox(a *client.Agent, args []string) error {
 		if !m.Read {
 			mark = "*"
 		}
-		fmt.Printf("%s %s  %s  %s\n", mark, m.ID, m.From, m.SentAt.Format(time.DateTime))
+		kind := m.Kind
+		if m.State != "" {
+			kind += " [" + m.State + "]"
+		}
+		if m.Status != "" {
+			kind += " (" + m.Status + ")"
+		}
+		fmt.Printf("%s %s  %s  %s  %s\n", mark, m.ID, m.From, m.SentAt.Format(time.DateTime), kind)
 		if m.ReplyTo != "" {
 			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
 		}
@@ -366,4 +421,69 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown admin command %q", args[0])
+}
+
+func runSendKind(ctx context.Context, a *client.Agent, kind string, args []string) error {
+	fs := flag.NewFlagSet(kind, flag.ContinueOnError)
+	var files []string
+	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("usage: %s [--file PATH]... ADDRESS TEXT", kind)
+	}
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: kind})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
+	return nil
+}
+
+func runResponder(a *client.Agent, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: responder set|show|off")
+	}
+	switch args[0] {
+	case "off":
+		if err := a.SetResponder(nil); err != nil {
+			return err
+		}
+		fmt.Println("automatic responder off; questions and tasks wait for you")
+		return nil
+	case "show":
+		r, err := a.Responder()
+		if err != nil {
+			return err
+		}
+		if r == nil {
+			fmt.Println("no responder selected")
+			return nil
+		}
+		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, r.Timeout)
+		for _, c := range r.Context {
+			fmt.Printf("context %s\n", c)
+		}
+		return nil
+	case "set":
+		fs := flag.NewFlagSet("responder set", flag.ContinueOnError)
+		var r client.Responder
+		fs.StringVar(&r.Harness, "harness", "", "responder: "+strings.Join(client.HarnessNames(), ", "))
+		fs.StringVar(&r.Dir, "dir", "", "working directory (its agent instructions apply)")
+		fs.DurationVar(&r.Timeout, "timeout", 5*time.Minute, "limit per question or task")
+		fs.Func("context", "file given with every question (repeatable)", func(p string) error { r.Context = append(r.Context, p); return nil })
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if r.Harness == "" || r.Dir == "" {
+			return errors.New("usage: responder set --harness NAME --dir DIR [--context FILE]... [--timeout D]")
+		}
+		if err := a.SetResponder(&r); err != nil {
+			return err
+		}
+		fmt.Printf("responder %s in %s\n", r.Harness, r.Dir)
+		return nil
+	}
+	return fmt.Errorf("unknown responder command %q", args[0])
 }
