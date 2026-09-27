@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AgentNet</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#timeline">Skip to messages</a>
+
+<div id="demo" class="demo" role="note" hidden>
+  <strong>Demo data.</strong> Invented people and messages; nothing is sent, run or saved.
+  <span class="demo-controls">
+    <button type="button" id="sim-arrival" class="link">Simulate an incoming message</button>
+    <button type="button" id="sim-finish" class="link">Simulate your responder finishing</button>
+  </span>
+</div>
+
+<div id="lost" class="lost" role="alert" hidden>
+  Lost connection to agentnet. This page shows what it last loaded.
+  <button type="button" id="reconnect">Reconnect</button>
+</div>
+
+<header class="top">
+  <div class="who">
+    <span class="app">AgentNet</span>
+    <span id="me" class="me mono"></span>
+  </div>
+  <div id="machine" class="machine"></div>
+  <div class="review-wrap">
+    <button type="button" id="review-btn" class="review-btn" aria-expanded="false" aria-controls="review">
+      <span id="review-count">0</span> <span id="review-word">need you</span>
+    </button>
+    <div id="review" class="review" hidden>
+      <h2>Waiting for your decision</h2>
+      <p class="hint">Each opens in its conversation, where you decide.</p>
+      <ul id="review-list"></ul>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="convs" aria-label="Conversations">
+    <h2 class="sr-only">Conversations</h2>
+    <ul id="conv-list"></ul>
+    <details class="design-note">
+      <summary>Group conversations</summary>
+      <p>Not in this version. Conversations are one person's agent to another's. Groups would need
+      messages addressed to several people, a receipt from each, and membership; that design is still open.</p>
+    </details>
+  </nav>
+
+  <main class="conv" id="conv" aria-labelledby="conv-peer">
+    <header class="conv-head">
+      <button type="button" id="back" class="back">‹ Conversations</button>
+      <div>
+        <h1 id="conv-peer" class="mono">Choose a conversation</h1>
+        <p id="conv-presence" class="presence"></p>
+      </div>
+    </header>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <ol id="timeline" class="timeline" tabindex="-1" aria-label="Messages"></ol>
+
+    <form id="composer" class="composer" hidden>
+      <div id="replying" class="replying" hidden>
+        <span>Replying to <span id="replying-text"></span></span>
+        <button type="button" id="replying-cancel" class="link">Cancel reply</button>
+      </div>
+      <div class="compose-row">
+        <label class="sr-only" for="kind">Kind</label>
+        <select id="kind" title="What you are sending">
+          <option value="message">Message</option>
+          <option value="question">Question</option>
+          <option value="task">Task</option>
+        </select>
+        <label class="sr-only" for="body">Your message</label>
+        <textarea id="body" rows="2" placeholder="Write to the conversation (Ctrl+Enter sends)"></textarea>
+        <button type="submit" id="send" class="primary">Send</button>
+      </div>
+      <div class="compose-foot">
+        <label class="attach">Attach files <input type="file" id="files" multiple></label>
+        <span id="file-names" class="hint"></span>
+        <span id="compose-hint" class="hint">A task runs only if they accept it.</span>
+      </div>
+      <p id="compose-error" class="error" role="alert"></p>
+    </form>
+  </main>
+</div>
+
+<div id="live" class="sr-only" aria-live="polite"></div>
+
+<dialog id="dialog" aria-labelledby="dialog-title">
+  <form method="dialog" id="dialog-form">
+    <h2 id="dialog-title"></h2>
+    <div id="dialog-body"></div>
+    <p id="dialog-error" class="error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="submit" value="cancel" id="dialog-cancel">Cancel</button>
+      <button type="button" id="dialog-ok" class="primary"></button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>

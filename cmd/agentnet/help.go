@@ -75,6 +75,9 @@ Hub (on the server):
 Local A2A clients:
   a2a serve  let an A2A client on this machine talk to one peer
 
+Messenger page (preview):
+  ui --demo  try the messenger page in a browser with invented data
+
 Home directory: --home DIR, or AGENTNET_HOME, or "agentnet" in your user
 config directory. It holds your keys, inbox and history; keep it private.
 Something wrong? Run: agentnet doctor
@@ -453,6 +456,23 @@ HOME/a2a-token. A2A messages become encrypted AgentNet questions, tasks
 (metadata agentnet.kind=task) or messages; file:// parts become attachments.
 Tasks show SUBMITTED until the peer replies. Cancel, streaming, push and task
 listing are not supported. Keep agentnet daemon running for replies.`,
+
+	"ui": `Usage: agentnet ui --demo [--listen 127.0.0.1:0]
+
+Serve a preview of the messenger page on this computer and print the address
+to open in a browser. Only the demo exists so far: invented people and
+messages kept in memory. Nothing is sent, run or saved, and your home
+directory, Hub and inbox are not touched. Decisions (accept, decline,
+approve, trust) are simulated; buttons in the demo banner stand in for a peer
+writing and your responder finishing.
+
+The page is served on a loopback address only. The printed address carries a
+one-time token that becomes a browser cookie; other pages and other hosts are
+refused. Updates are pushed to the page (no polling). Without --demo the
+command refuses to start until the page is connected to your inbox.
+
+  --demo        serve the invented demo data (required for now)
+  --listen A    loopback address (default 127.0.0.1:0, a free port)`,
 
 	"install": `Install agentnet from source (no release binaries yet)
 

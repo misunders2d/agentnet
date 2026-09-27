@@ -61,6 +61,8 @@ func run(args []string) error {
 		return runHook(*home, rest, os.Stdin, os.Stdout)
 	case "hooks":
 		return runHooks(*home, rest)
+	case "ui":
+		return runUI(ctx, rest, os.Stdout)
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
