@@ -9,14 +9,18 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/a2abind"
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/hub"
+	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 const usage = `usage: agentnet [--home DIR] <command> [flags] [args]
@@ -41,6 +45,11 @@ Client:
                                 allow / stop automatic answers to ADDRESS's questions
   responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
   responder show | responder off
+
+A2A (local, for unmodified A2A clients on this machine):
+  a2a serve --peer PERSON/AGENT [--listen 127.0.0.1:0]
+                                serve one peer over A2A HTTP+JSON on loopback;
+                                clients need the bearer token in HOME/a2a-token
   inbox [--unread] [--json]     list received messages (marks them read)
   download [--dir DIR] [--force] ID
                                 save a message's attachments (never overwrites
@@ -140,6 +149,8 @@ func run(args []string) error {
 		return err
 	case "responder":
 		return runResponder(a, rest)
+	case "a2a":
+		return runA2A(ctx, a, *home, rest)
 	case "reply":
 		return runSend(ctx, a, rest, true)
 	case "inbox":
@@ -486,4 +497,52 @@ func runResponder(a *client.Agent, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown responder command %q", args[0])
+}
+
+func runA2A(ctx context.Context, a *client.Agent, home string, args []string) error {
+	if len(args) == 0 || args[0] != "serve" {
+		return errors.New("usage: a2a serve --peer PERSON/AGENT [--listen 127.0.0.1:0]")
+	}
+	fs := flag.NewFlagSet("a2a serve", flag.ContinueOnError)
+	peer := fs.String("peer", "", "the enrolled agent this adapter talks to")
+	listen := fs.String("listen", "127.0.0.1:0", "loopback address to serve on")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if _, _, err := protocol.SplitAddress(*peer); err != nil {
+		return fmt.Errorf("--peer: %w", err)
+	}
+	host, _, err := net.SplitHostPort(*listen)
+	if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
+		return errors.New("--listen must be a loopback address such as 127.0.0.1:0")
+	}
+	tokenPath := filepath.Join(home, "a2a-token")
+	token, err := a2aToken(tokenPath)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return err
+	}
+	base := "http://" + ln.Addr().String()
+	srv := &http.Server{Handler: a2abind.New(a, *peer, base, token).Handler(), ReadHeaderTimeout: 10 * time.Second}
+	go func() { <-ctx.Done(); srv.Close() }()
+	fmt.Printf("A2A adapter for %s at %s (bearer token in %s)\n", *peer, base, tokenPath)
+	log.Printf("replies arrive through `agentnet daemon`; keep it running")
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// a2aToken returns the owner-only local A2A bearer token, creating it once.
+func a2aToken(path string) (string, error) {
+	if data, err := secfile.Read(path); err == nil {
+		return strings.TrimSpace(string(data)), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	token := protocol.NewID() + protocol.NewID()
+	return token, secfile.Write(path, []byte(token+"\n"))
 }

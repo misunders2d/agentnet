@@ -465,12 +465,26 @@ type FileInfo struct {
 }
 
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
+	where := ""
+	if unreadOnly {
+		where = ` WHERE read_at IS NULL`
+	}
+	return s.messages(where)
+}
+
+// inboxMessage returns one received message, or nil if there is none.
+func (s *store) inboxMessage(id string) (*Message, error) {
+	msgs, err := s.messages(` WHERE id = ?`, id)
+	if err != nil || len(msgs) == 0 {
+		return nil, err
+	}
+	return &msgs[0], nil
+}
+
+func (s *store) messages(where string, args ...any) ([]Message, error) {
 	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
 		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, '') FROM inbox`
-	if unreadOnly {
-		q += ` WHERE read_at IS NULL`
-	}
-	rows, err := s.db.Query(q + ` ORDER BY received_at, id`)
+	rows, err := s.db.Query(q+where+` ORDER BY received_at, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -637,4 +651,45 @@ func (s *store) outboxEnvelope(id string) (envelope.Envelope, error) {
 		return env, err
 	}
 	return env, json.Unmarshal([]byte(data), &env)
+}
+
+// sentRow is one message this agent sent, for projections such as A2A tasks.
+type sentRow struct {
+	ID, To, Body, State, Path, Envelope string
+	Created                             int64
+}
+
+func (s *store) sent(id string) (sentRow, error) {
+	var r sentRow
+	err := s.db.QueryRow(`SELECT id, recipient, body, state, coalesce(path, ''), envelope, created_at FROM outbox WHERE id = ?`, id).
+		Scan(&r.ID, &r.To, &r.Body, &r.State, &r.Path, &r.Envelope, &r.Created)
+	return r, err
+}
+
+func (s *store) sentTo(peer string, limit int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM outbox WHERE recipient = ? ORDER BY created_at DESC, id LIMIT ?`, peer, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// replyTo returns the first answer or result that replies to id.
+func (s *store) replyTo(id string) (string, error) {
+	var reply string
+	err := s.db.QueryRow(`SELECT id FROM inbox WHERE reply_to = ? AND kind IN (?, ?, ?) ORDER BY received_at, id LIMIT 1`,
+		id, envelope.KindAnswer, envelope.KindResult, envelope.KindMessage).Scan(&reply)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return reply, err
 }
