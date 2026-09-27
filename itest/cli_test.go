@@ -46,13 +46,20 @@ func buildCLI(t *testing.T) *cli {
 	return c
 }
 
+// run returns a successful command's stdout, which is what scripts read;
+// explanations on stderr are left out.
 func (c *cli) run(args ...string) string {
 	c.t.Helper()
-	out, err := c.try(args...)
+	cmd := exec.Command(c.bin, args...)
+	cmd.Dir = c.dir
+	cmd.Env = append(os.Environ(), c.env...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		c.t.Fatalf("agentnet %s: %v\n%s", strings.Join(args, " "), err, out)
+		c.t.Fatalf("agentnet %s: %v\n%s%s", strings.Join(args, " "), err, out, stderr.Bytes())
 	}
-	return out
+	return strings.TrimSpace(string(out))
 }
 
 // try runs a command that may fail and returns its output and error.
@@ -198,5 +205,40 @@ func TestCLIDirectFile(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(c.dir, "hub", "blobs")); len(entries) != 0 {
 		t.Fatalf("Hub stored %d blob files for a direct transfer", len(entries))
+	}
+}
+
+// TestCLISendReportsDelivery: with the recipient's daemon running, send
+// reports "delivered" (first field stays the message id); --wait 0 returns
+// at once with custody; with the recipient offline it says the Hub holds it.
+func TestCLISendReportsDelivery(t *testing.T) {
+	c := buildCLI(t)
+	c.start("hub.log", "hub", "serve", "--data", "hub", "--listen", freeAddr(t))
+	waitFile(t, filepath.Join(c.dir, "hub", "bootstrap-invite.txt"))
+	c.run("--home", "alice", "join", "--agent", "laptop", c.run("hub", "bootstrap-invite", "--raw", "--data", "hub"))
+	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
+	stopBob := c.start("bob.log", "--home", "bob", "daemon")
+	waitFor(t, "bob online", func() bool {
+		return strings.Contains(c.run("--home", "alice", "sessions", "bob/desk"), "connected")
+	})
+
+	out := c.run("--home", "alice", "send", "bob/desk", "hello")
+	if f := strings.Fields(out); len(f) != 3 || f[1] != "delivered" || f[2] != "relay" {
+		t.Fatalf("online send stdout: %q", out)
+	}
+	if both, _ := c.try("--home", "alice", "send", "bob/desk", "again"); !strings.Contains(both, "not necessarily read or answered") {
+		t.Fatalf("online send explanation:\n%s", both)
+	}
+	if f := strings.Fields(c.run("--home", "alice", "ask", "--wait", "0", "bob/desk", "q?")); f[1] != "custody" {
+		t.Fatalf("--wait 0: %v", f)
+	}
+	stopBob()
+	out, err := c.try("--home", "alice", "send", "--wait", "1s", "bob/desk", "while away")
+	if f := strings.Fields(out); err != nil || f[1] != "custody" || !strings.Contains(out, "held by the Hub") {
+		t.Fatalf("offline send: %v\n%s", err, out)
+	}
+	id := strings.Fields(out)[0]
+	if st := c.run("--home", "alice", "status", "--wait", "500ms", id); st != id+" custody relay" {
+		t.Fatalf("status --wait: %s", st)
 	}
 }

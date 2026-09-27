@@ -148,7 +148,7 @@ func runAgent(t *testing.T, a *Agent) func() {
 }
 
 func state(t *testing.T, a *Agent, id string) string {
-	r, err := a.Status(tctx(t), id)
+	r, err := a.Status(tctx(t), id, 0)
 	if err != nil {
 		return err.Error()
 	}

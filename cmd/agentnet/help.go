@@ -96,13 +96,19 @@ Example (after the person chose "laptop"):
 Print this agent's address and key fingerprint. Give the fingerprint to
 coworkers who want to confirm they trust the right key.`,
 
-	"send": `Usage: agentnet send [--file PATH]... [--fallback] ADDRESS[#SESSION] TEXT
+	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] ADDRESS[#SESSION] TEXT
 
 Send an end-to-end encrypted message. It goes straight to the recipient when
 they advertise a reachable address, otherwise through the Hub, which keeps it
-until they are online. Prints: ID STATE PATH (custody/delivered, relay/direct).
-If the Hub is unreachable the message is queued and the daemon retries it.
+until they are online. Prints: ID STATE PATH, and on stderr what that means:
+  delivered   stored in the recipient's inbox (not necessarily read or answered)
+  custody     the Hub holds it; it is delivered when the recipient connects
+  queued      the Hub was unreachable; the daemon retries it
+If the Hub has it, send waits up to --wait for the recipient's receipt, woken
+by the receipt itself (one request, no polling). Answers and task results
+arrive later in your inbox.
 
+  --wait D      how long to wait for the receipt (default 5s; 0 returns at once)
   --file PATH   attach a file (repeatable, up to 8, 100 MiB each by default)
   --fallback    for ADDRESS#SESSION: if that session has ended, deliver to
                 the agent's inbox instead of failing
@@ -111,25 +117,29 @@ Examples:
   agentnet send bob/desk "build is green"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] ADDRESS TEXT
 
 Send a question. If the recipient approved you and chose a responder, their
 harness answers automatically in the background; otherwise it waits for them.
 The answer arrives in your inbox as kind "answer" replying to this message.
+Output and --wait as for send: "delivered" means it reached their inbox,
+not that it was answered.
 
 Example:
   agentnet ask bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] ADDRESS TEXT
 
 Send a task. It never runs by itself: the recipient must accept it, then
 their responder runs it with their normal permissions. The outcome arrives as
 kind "result" with a status (done, failed, timeout, cancelled, declined).
+Output and --wait as for send: "delivered" means it reached their inbox, not
+that it was accepted or done.
 
 Example:
   agentnet task bob/desk "update CHANGELOG.md for release 1.4"`,
 
-	"reply": `Usage: agentnet reply [--file PATH]... ID TEXT
+	"reply": `Usage: agentnet reply [--file PATH]... [--wait 5s] ID TEXT
 
 Reply to a received message. Replying to a question or task by hand takes it
 over, so your responder will not also answer it; this is refused while the
@@ -154,9 +164,11 @@ Each file is checked against the sender's signature before it gets its name.
 Existing files are kept unless --force; names are made safe and unique.
 Running it again after an interruption continues where it stopped.`,
 
-	"status": `Usage: agentnet status ID
+	"status": `Usage: agentnet status [--wait D] ID
 
-Show what is known about a message you sent: queued (not yet at the Hub),
+With --wait, a message the Hub still holds is waited on for up to D (one
+request, woken by the recipient's receipt). Show what is known about a
+message you sent: queued (not yet at the Hub),
 custody (the Hub has it), delivered (the recipient stored it), quarantined
 (the recipient could not verify it), expired (its session ended), and the
 path (relay or direct).`,
@@ -460,7 +472,7 @@ var valueFlags = map[string]bool{
 	"file": true, "dir": true, "agent": true, "listen": true, "advertise": true, "peer": true,
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
-	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true,
+	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
 }
 
 // guides are help topics that are not commands; running one prints it.

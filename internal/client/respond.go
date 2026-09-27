@@ -59,11 +59,17 @@ func takeOver(id, kind, newState string) func(*sql.Tx, string) error {
 // to a question or task takes it over: the worker will not also answer it,
 // and a reply is refused while the worker is running it.
 func (a *Agent) Reply(ctx context.Context, id, body string, files ...string) (SendResult, error) {
+	return a.ReplyWait(ctx, id, body, 0, files...)
+}
+
+// ReplyWait is Reply that waits up to wait for the recipient's receipt, as
+// Outgoing.Wait does.
+func (a *Agent) ReplyWait(ctx context.Context, id, body string, wait time.Duration, files ...string) (SendResult, error) {
 	sender, kind, err := a.store.inboxKind(id)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
 	}
-	m := Outgoing{To: sender, Body: body, ReplyTo: id, Files: files, Kind: replyKind(kind), claim: takeOver(id, kind, stateManual)}
+	m := Outgoing{To: sender, Body: body, ReplyTo: id, Files: files, Kind: replyKind(kind), claim: takeOver(id, kind, stateManual), Wait: wait}
 	if kind == envelope.KindTask {
 		m.Status = envelope.StatusDone
 	}

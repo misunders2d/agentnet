@@ -224,7 +224,10 @@ type Outgoing struct {
 	Files    []string
 	Fallback bool   // if the addressed session has ended, deliver to the agent's inbox
 	Kind     string // envelope.KindMessage (default), KindQuestion or KindTask
-	Status   string // outcome, for answers and results
+	// Wait, if positive, waits up to this long for the recipient's receipt
+	// after the Hub takes custody (one request, woken by the receipt).
+	Wait   time.Duration
+	Status string // outcome, for answers and results
 
 	releaseSpoolLock func()
 
@@ -302,7 +305,17 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
 	}
-	return a.deliver(ctx, env, route)
+	res, err := a.deliver(ctx, env, route)
+	if err != nil || m.Wait <= 0 || res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
+		return res, err // direct delivery already has the recipient's receipt
+	}
+	if r, werr := a.waitReceipt(ctx, env.ID, m.Wait); werr == nil && r.State != "" {
+		res.State = r.State
+		if r.State != protocol.StateCustody {
+			a.store.setOutboxState(env.ID, r.State, "", "")
+		}
+	}
+	return res, nil // custody stays true even if the wait was cut short
 }
 
 func blobsOf(atts []envelope.Attachment) []envelope.Blob {
@@ -371,9 +384,22 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 	return nil
 }
 
+// waitReceipt asks the Hub to answer as soon as message id leaves custody,
+// or with its current state after wait. A Hub without this endpoint answers
+// 404 and the caller keeps what it knew.
+func (a *Agent) waitReceipt(ctx context.Context, id string, wait time.Duration) (protocol.Receipt, error) {
+	var r protocol.Receipt
+	path := "/v1/messages/" + url.PathEscape(id) + "/wait?timeout=" + url.QueryEscape(wait.String())
+	c := *a.hub
+	c.timeout = wait + requestTimeout
+	err := c.do(ctx, "GET", path, nil, &r)
+	return r, err
+}
+
 // Status reports what is known about message id: for a direct delivery,
-// the recipient's own receipt; otherwise what the Hub can prove.
-func (a *Agent) Status(ctx context.Context, id string) (protocol.Receipt, error) {
+// the recipient's own receipt; otherwise what the Hub can prove. With wait,
+// a message still in the Hub's custody is waited on for up to that long.
+func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (protocol.Receipt, error) {
 	state, path, found, err := a.store.outboxState(id)
 	if err != nil {
 		return protocol.Receipt{}, err
@@ -382,9 +408,21 @@ func (a *Agent) Status(ctx context.Context, id string) (protocol.Receipt, error)
 		return protocol.Receipt{ID: id, State: state, Path: path}, nil
 	}
 	var r protocol.Receipt
-	err = a.hub.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id), nil, &r)
+	if wait > 0 {
+		r, err = a.waitReceipt(ctx, id, wait)
+		var he *HubError
+		if errors.As(err, &he) && he.Status == 404 && he.Msg != "unknown message" {
+			wait = 0 // an older Hub without receipt waits
+		}
+	}
+	if wait <= 0 {
+		err = a.hub.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id), nil, &r)
+	}
 	if found {
 		r.Path = protocol.PathRelay
+		if err == nil && r.State != protocol.StateCustody && r.State != state {
+			a.store.setOutboxState(id, r.State, "", "")
+		}
 	}
 	return r, err
 }

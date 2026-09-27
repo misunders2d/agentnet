@@ -59,6 +59,7 @@ type Hub struct {
 	certPEM   string
 	streams   streams
 	presence  presence
+	waiters   waiters
 	stats     Stats
 	heartbeat time.Duration
 	blobMu    sync.Mutex // serialises blob file writes, finalisation and reclamation
@@ -117,6 +118,7 @@ func Open(cfg Config) (*Hub, error) {
 		if err := st.expireSession(agent, session); err != nil {
 			cfg.Logf("expire session %s#%s: %v", agent, session, err)
 		}
+		h.waiters.notifyAll() // some waited-for messages may have expired
 	}}
 	err = nil
 	if !cfg.PlatformTLS {

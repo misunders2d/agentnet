@@ -26,6 +26,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
 	mux.HandleFunc("POST /v1/messages/{id}/ack", h.handleAck)
+	mux.HandleFunc("GET /v1/messages/{id}/wait", h.handleReceiptWait)
 	mux.HandleFunc("GET /v1/stream", h.handleStream)
 	mux.HandleFunc("POST /v1/stream/ack", h.handleStreamAck)
 	mux.HandleFunc("POST /v1/blobs", h.handleBlobReserve)
@@ -239,6 +240,7 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
+	h.waiters.notify(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, protocol.Receipt{ID: r.PathValue("id"), State: state})
 }
 

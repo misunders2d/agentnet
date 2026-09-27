@@ -142,7 +142,7 @@ func TestM1Journey(t *testing.T) {
 	}
 	waitFor(t, "bob to receive", func() bool { return hasBody(t, bob, secret) })
 	waitFor(t, "delivered receipt", func() bool {
-		r, err := alice.Status(ctx(t), res.ID)
+		r, err := alice.Status(ctx(t), res.ID, 0)
 		return err == nil && r.State == "delivered"
 	})
 	msgs, _ := bob.Inbox(false, false)
@@ -192,7 +192,7 @@ func TestM1Journey(t *testing.T) {
 	mustExec(t, hubDB, `UPDATE messages SET state = 'custody' WHERE id = ?`, dupID)
 	bobD = runDaemon(t, bob)
 	waitFor(t, "redelivered ack", func() bool {
-		r, err := alice.Status(ctx(t), dupID)
+		r, err := alice.Status(ctx(t), dupID, 0)
 		return err == nil && r.State == "delivered"
 	})
 	count := 0
@@ -233,7 +233,7 @@ func TestM1Journey(t *testing.T) {
 		t.Fatal("tampered message reached inbox")
 	}
 	waitFor(t, "quarantined receipt", func() bool {
-		r, err := alice.Status(ctx(t), res.ID)
+		r, err := alice.Status(ctx(t), res.ID, 0)
 		return err == nil && r.State == "quarantined"
 	})
 

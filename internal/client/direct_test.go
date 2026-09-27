@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestDirectMessageAndFileBypassHub(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 0 {
 		t.Fatal("spool kept after direct custody")
 	}
-	if r, err := w.alice.Status(tctx(t), res.ID); err != nil || r.State != protocol.StateDelivered || r.Path != protocol.PathDirect {
+	if r, err := w.alice.Status(tctx(t), res.ID, 0); err != nil || r.State != protocol.StateDelivered || r.Path != protocol.PathDirect {
 		t.Fatalf("status = %+v, %v", r, err)
 	}
 	msgs, _ := w.bob.Inbox(false, false)
@@ -455,4 +456,54 @@ func hasInbox(a *Agent, body string) bool {
 		}
 	}
 	return false
+}
+
+// A relayed send waits for the recipient's receipt with one request that
+// the receipt answers; with the recipient offline it returns custody after
+// the wait, without retrying.
+func TestSendWaitsForReceipt(t *testing.T) {
+	w := newWorld(t, "")
+	rec := &requestLog{}
+	w.alice.hub.http.Transport = recordingRT{w.alice.hub.http.Transport, rec}
+	stopBob, _ := runWith(t, w, w.bob, RunOptions{})
+
+	rec.reset()
+	res, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "are you there?", Wait: 5 * time.Second})
+	if err != nil || res.State != protocol.StateDelivered || res.Path != protocol.PathRelay {
+		t.Fatalf("online send = %+v, %v", res, err)
+	}
+	if st, _, _, _ := w.alice.store.outboxState(res.ID); st != protocol.StateDelivered {
+		t.Fatalf("outbox state %s", st)
+	}
+	if n := countPaths(rec, "/wait"); n != 1 {
+		t.Fatalf("%d receipt-wait requests, want 1", n)
+	}
+
+	stopBob()
+	rec.reset()
+	start := time.Now()
+	res, err = w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "later", Wait: 300 * time.Millisecond})
+	if err != nil || res.State != protocol.StateCustody || time.Since(start) > 5*time.Second {
+		t.Fatalf("offline send = %+v, %v after %s", res, err, time.Since(start))
+	}
+	if n := countPaths(rec, "/wait"); n != 1 {
+		t.Fatalf("%d receipt-wait requests, want 1", n)
+	}
+	if n := countPaths(rec, "POST /v1/messages"); n != 1 {
+		t.Fatalf("message posted %d times", n)
+	}
+	if r, err := w.alice.Status(tctx(t), res.ID, 200*time.Millisecond); err != nil || r.State != protocol.StateCustody {
+		t.Fatalf("status --wait while offline: %+v %v", r, err)
+	}
+}
+
+func countPaths(l *requestLog, part string) int {
+	_, others := l.snapshot()
+	n := 0
+	for _, o := range others {
+		if strings.Contains(o, part) {
+			n++
+		}
+	}
+	return n
 }

@@ -141,10 +141,15 @@ func run(args []string) error {
 	case "download":
 		return runDownload(ctx, a, rest)
 	case "status":
-		if len(rest) != 1 {
-			return errors.New("usage: status ID")
+		fs := flag.NewFlagSet("status", flag.ContinueOnError)
+		wait := fs.Duration("wait", 0, "wait up to this long for a message still held by the Hub to be delivered")
+		if err := fs.Parse(rest); err != nil {
+			return err
 		}
-		r, err := a.Status(ctx, rest[0])
+		if fs.NArg() != 1 {
+			return errors.New("usage: status [--wait D] ID")
+		}
+		r, err := a.Status(ctx, fs.Arg(0), *wait)
 		if err != nil {
 			return err
 		}
@@ -253,27 +258,44 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	var files []string
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
+	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... %s TEXT", name, target)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] %s TEXT", name, target)
 	}
 	var r client.SendResult
 	var err error
 	if reply {
-		r, err = a.Reply(ctx, fs.Arg(0), fs.Arg(1), files...)
+		r, err = a.ReplyWait(ctx, fs.Arg(0), fs.Arg(1), *wait, files...)
 	} else {
-		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Fallback: *fallback})
+		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Fallback: *fallback, Wait: *wait})
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
-	if r.Detail != "" {
-		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
-	}
+	printResult(r, *wait)
 	return nil
+}
+
+// defaultWait is how long send/ask/task/reply wait for the delivery receipt.
+const defaultWait = 5 * time.Second
+
+// printResult prints "ID STATE PATH" on stdout (scripts read the first
+// field) and what it means on stderr, for the agent reading it.
+func printResult(r client.SendResult, wait time.Duration) {
+	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
+	switch {
+	case r.Detail != "":
+		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
+	case r.State == protocol.StateDelivered:
+		fmt.Fprintln(os.Stderr, "delivered: stored in the recipient's inbox (not necessarily read or answered yet)")
+	case r.State == protocol.StateCustody && wait > 0:
+		fmt.Fprintf(os.Stderr, "held by the Hub, not delivered within %s (recipient offline or busy); it will be delivered when they connect. Check: agentnet status --wait 30s %s\n", wait, r.ID)
+	case r.State == protocol.StateQuarantined:
+		fmt.Fprintln(os.Stderr, "the recipient received it but could not verify it (e.g. your key changed for them)")
+	}
 }
 
 func runDownload(ctx context.Context, a *client.Agent, args []string) error {
@@ -389,21 +411,22 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	fs := flag.NewFlagSet(kind, flag.ContinueOnError)
 	var files []string
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
+	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] ADDRESS TEXT", kind)
 	}
 	msgKind := envelope.KindQuestion
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind})
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
+	printResult(r, *wait)
 	return nil
 }
 
