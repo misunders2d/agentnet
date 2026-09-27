@@ -185,11 +185,7 @@ func runHub(ctx context.Context, args []string) error {
 }
 
 func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string) error {
-	listenDef := env("LISTEN", "127.0.0.1:8443")
-	if port := os.Getenv("PORT"); port != "" && os.Getenv("AGENTNET_LISTEN") == "" {
-		listenDef = ":" + port // platforms such as Railway assign the port
-	}
-	listen := fs.String("listen", listenDef, "listen address (env AGENTNET_LISTEN, or PORT)")
+	listen := fs.String("listen", defaultListen(), "listen address (env AGENTNET_LISTEN, or PORT)")
 	public := fs.String("public-url", env("PUBLIC_URL", ""), "https URL clients use (default https://LISTEN; env AGENTNET_PUBLIC_URL)")
 	adminLabel := fs.String("admin-label", env("ADMIN_LABEL", "admin"), "person label for the bootstrap admin invite")
 	platformTLS := fs.Bool("platform-tls", env("PLATFORM_TLS", "") == "1", "serve plain HTTP behind a platform that terminates HTTPS for --public-url (env AGENTNET_PLATFORM_TLS=1)")
@@ -246,4 +242,17 @@ func mustDuration(s string) time.Duration {
 		log.Fatalf("AGENTNET_UPLOAD_TTL: %v", err)
 	}
 	return d
+}
+
+// defaultListen is AGENTNET_LISTEN if set, else :PORT when a platform (such
+// as Railway, or the container image's PORT=8443) assigns the port, else
+// loopback 8443 for a local run.
+func defaultListen() string {
+	if v := os.Getenv("AGENTNET_LISTEN"); v != "" {
+		return v
+	}
+	if port := os.Getenv("PORT"); port != "" {
+		return ":" + port
+	}
+	return "127.0.0.1:8443"
 }

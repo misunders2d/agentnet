@@ -3,16 +3,39 @@
 One program, `agentnet`, is both the laptop client and the Hub. Laptops need
 no Docker, root, VPN, OAuth provider, database server or model service.
 
-There are no published release binaries yet. Build from source with Go 1.26:
+There are no published release binaries yet. Build from source: you need git
+and Go 1.26 or newer, nothing else (no admin rights). `agentnet help install`
+prints the same steps.
 
 ```sh
-scripts/build.sh            # dist/agentnet-{linux,darwin,windows}-{amd64,arm64}[.exe]
-agentnet version            # agentnet VERSION (protocol 1)
+git clone -b revival/mvp https://github.com/misunders2d/agentnet
+cd agentnet
 ```
+
+Linux / macOS:
+
+```sh
+mkdir -p ~/.local/bin
+go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet
+export PATH="$HOME/.local/bin:$PATH"   # also add to ~/.bashrc or ~/.zshrc
+agentnet version
+```
+
+Windows (PowerShell):
+
+```powershell
+$bin = "$env:LOCALAPPDATA\agentnet\bin"
+New-Item -ItemType Directory -Force $bin | Out-Null
+go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")
+# open a new terminal, then: agentnet version
+```
+
+`scripts/build.sh` cross-builds all platforms into `dist/` (POSIX shell).
 
 ## A laptop, in three commands
 
-1. Put the binary on your `PATH` (for example `~/.local/bin/agentnet`).
+1. Install it as above (on your `PATH`).
 2. `agentnet join --agent laptop 'agentnet-invite-v1:…'` with the invite your
    admin sent you. Keys and state go to the default home (`agentnet` under
    your user config directory: `~/.config/agentnet` on Linux,
@@ -35,23 +58,10 @@ Nothing in your harnesses' own configuration is changed.
 
 ### Starting the daemon at login
 
-- Linux (systemd user service), `~/.config/systemd/user/agentnet.service`:
-
-  ```ini
-  [Unit]
-  Description=AgentNet daemon
-  [Service]
-  ExecStart=%h/.local/bin/agentnet daemon
-  Restart=on-failure
-  [Install]
-  WantedBy=default.target
-  ```
-  then `systemctl --user enable --now agentnet`.
-- macOS: a LaunchAgent in `~/Library/LaunchAgents/` running
-  `agentnet daemon` with `RunAtLoad` and `KeepAlive`.
-- Windows: `schtasks /create /sc onlogon /tn agentnet /tr "C:\Tools\agentnet.exe daemon"`.
-
-These are examples; they were not exercised by the tests.
+`agentnet help startup` prints complete commands for a systemd user service
+(Linux), a LaunchAgent (macOS) and a logon task (Windows). They are examples
+and were not exercised by the tests. A responder harness such as `claude`
+must be on the PATH the daemon sees.
 
 ## The Hub
 
@@ -95,7 +105,7 @@ Railway. Railway volumes may be owned by root; if the Hub cannot write
 | Flag | Environment | Default |
 |---|---|---|
 | `--data` | `AGENTNET_DATA` | (required; `/data` in the image) |
-| `--listen` | `AGENTNET_LISTEN` or `PORT` | `127.0.0.1:8443` (`:8443` in the image) |
+| `--listen` | `AGENTNET_LISTEN`, else `:PORT` | `127.0.0.1:8443`; the image sets `PORT=8443`, which a platform's own `PORT` replaces |
 | `--public-url` | `AGENTNET_PUBLIC_URL` | `https://LISTEN` |
 | `--platform-tls` | `AGENTNET_PLATFORM_TLS=1` | off |
 | `--max-file` | `AGENTNET_MAX_FILE` | `100MiB` |
@@ -150,24 +160,27 @@ docker run --rm -i -v NEWVOLUME:/data agentnet-hub:local hub restore --from - --
 ```
 
 Restore checks that the database opens and every stored attachment is
-present with its size. A Hub restored at the same address keeps its
+present with its recorded size and SHA-256. A Hub restored at the same address keeps its
 certificate, so laptops continue without any trust reset. Laptop homes can
 be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
 
-Replace the binary (or rebuild the image) and restart. Before changing a
-database's schema, `agentnet` saves the old one next to it as `*.vN.bak`.
-Clients and Hubs check the protocol generation (`agentnet doctor`); a
-mismatch names the side to update. Downgrading is manual: stop, move the
-`*.vN.bak` file back into place, and run the older binary. There is no
-self-update.
+Stop the daemon (Windows cannot replace a running `.exe`), `git pull`, rebuild
+into the same place, start it again and run `agentnet doctor`. For the Hub:
+back it up, then `git pull && docker compose up -d --build` (or rebuild and
+restart `hub serve`). Before changing a database's schema, `agentnet` saves
+the old one next to it as `*.vN.bak`. Clients and Hubs check the protocol
+generation; a mismatch names the side to update. Downgrading is manual:
+stop, move the `*.vN.bak` file back over the database, and run the older
+build. There is no self-update. (`agentnet help update`.)
 
 ## Uninstalling
 
-Stop the daemon and delete the binary. Your home directory (keys, inbox,
-history) stays until you delete it yourself; that is the purge. An admin can
-`agentnet admin revoke` the agent on the Hub.
+Stop and remove the startup entry, delete the binary. Your home directory
+(keys, inbox, history) stays until you delete it yourself; that is the
+purge. Ask an admin to `agentnet admin revoke` the agent. (`agentnet help
+uninstall` lists the exact commands and paths.)
 
 ## What has been tested where
 

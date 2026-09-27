@@ -21,10 +21,16 @@ One program is both the laptop client and the Hub (server). Laptops need no
 Docker, root, VPN, OAuth provider, database or model service.
 
 Get started on a laptop:
-  1. Put agentnet on your PATH (build: scripts/build.sh; no release binaries yet).
+  1. Install agentnet on your PATH: agentnet help install (Go 1.26 build; no release binaries yet)
   2. agentnet join --agent laptop 'agentnet-invite-v1:...'   use the invite your admin sent
   3. agentnet daemon                                         leave running; it receives messages
   Then: agentnet send bob/desk "hello"   (addresses are person/agent)
+
+Setup and upkeep (help topics):
+  install    build from source and put agentnet on your PATH (Linux, macOS, Windows)
+  startup    start the daemon at login (systemd, launchd, Windows task)
+  update     update the binary or the Hub; downgrade
+  uninstall  remove agentnet, keeping or deleting your history
 
 Messages and files:
   send       send an encrypted message, with --file attachments
@@ -64,7 +70,7 @@ Local A2A clients:
 Home directory: --home DIR, or AGENTNET_HOME, or "agentnet" in your user
 config directory. It holds your keys, inbox and history; keep it private.
 Something wrong? Run: agentnet doctor
-Tested on Linux; macOS and Windows run in CI. More: docs/revival/INSTALL.md
+Tested on Linux; macOS and Windows run in CI. Also: docs/revival/INSTALL.md
 `
 
 // topics maps a command (or "command subcommand") to its help text.
@@ -220,8 +226,7 @@ runs per home.
   --advertise URL     the https://host:port peers can reach (nothing is guessed;
                       no NAT traversal). Defaults to https://LISTEN.
 
-Start it at login with a systemd user service, a macOS LaunchAgent or a
-Windows logon task (see docs/revival/INSTALL.md).`,
+Start it at login: agentnet help startup.`,
 
 	"doctor": `Usage: agentnet doctor
 
@@ -253,8 +258,14 @@ your statement about who they are. revoke immediately cuts ADDRESS off.
 	"hub": `Usage: agentnet hub serve|bootstrap-invite|storage|cleanup|backup|restore [flags]
 
 Run and maintain a Hub. See agentnet help "hub serve" etc. Maintenance
-commands need the Hub stopped. Every flag can also come from an AGENTNET_*
-variable (e.g. AGENTNET_DATA), which is how the container image is configured.`,
+commands need the Hub stopped.
+
+Environment variables (how the container image is configured):
+  all hub commands:  AGENTNET_DATA (--data)
+  hub serve only:    AGENTNET_LISTEN or PORT (--listen), AGENTNET_PUBLIC_URL,
+                     AGENTNET_ADMIN_LABEL, AGENTNET_PLATFORM_TLS=1,
+                     AGENTNET_MAX_FILE, AGENTNET_QUOTA, AGENTNET_UPLOAD_TTL
+Other flags (--out, --from, cleanup ages) have no variable.`,
 
 	"hub serve": `Usage: agentnet hub serve --data DIR [--listen ADDR] [--public-url URL]
                          [--platform-tls] [--max-file 100MiB] [--quota 1GiB]
@@ -306,8 +317,9 @@ Examples:
 
 	"hub restore": `Usage: agentnet hub restore --from FILE|- --data NEWDIR
 
-Unpack a backup into an empty directory and check every attachment. A Hub
-restored at the same address keeps its certificate, so laptops just continue.`,
+Unpack a backup into an empty directory and check every attachment's size
+and SHA-256. A Hub restored at the same address keeps its certificate, so
+laptops just continue.`,
 
 	"a2a": `Usage: agentnet a2a serve --peer PERSON/AGENT [--listen 127.0.0.1:0]
 
@@ -317,6 +329,99 @@ HOME/a2a-token. A2A messages become encrypted AgentNet questions, tasks
 (metadata agentnet.kind=task) or messages; file:// parts become attachments.
 Tasks show SUBMITTED until the peer replies. Cancel, streaming, push and task
 listing are not supported. Keep agentnet daemon running for replies.`,
+
+	"install": `Install agentnet from source (no release binaries yet)
+
+Needs git and Go 1.26 or newer (https://go.dev/dl). No Docker, root or admin
+rights. The same commands build the Hub on a server.
+
+  git clone -b revival/mvp https://github.com/misunders2d/agentnet
+  cd agentnet
+
+Linux / macOS:
+  mkdir -p ~/.local/bin
+  go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet
+  export PATH="$HOME/.local/bin:$PATH"      # also add this line to ~/.bashrc or ~/.zshrc
+
+Windows (PowerShell):
+  $bin = "$env:LOCALAPPDATA\agentnet\bin"
+  New-Item -ItemType Directory -Force $bin | Out-Null
+  go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
+  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")
+  # open a new terminal so PATH updates
+
+Check: agentnet version
+Next:  agentnet join --agent laptop 'agentnet-invite-v1:...'  then  agentnet help startup
+Cross-building for other systems: scripts/build.sh (POSIX shell).`,
+
+	"startup": `Start agentnet daemon at login
+
+The commands assume agentnet is installed as in agentnet help install and
+uses the default home. These are examples; the tests do not exercise them.
+
+Linux (systemd user service):
+  mkdir -p ~/.config/systemd/user
+  cat > ~/.config/systemd/user/agentnet.service <<'UNIT'
+  [Unit]
+  Description=AgentNet daemon
+  [Service]
+  ExecStart=%h/.local/bin/agentnet daemon
+  Restart=on-failure
+  [Install]
+  WantedBy=default.target
+  UNIT
+  systemctl --user daemon-reload && systemctl --user enable --now agentnet
+  journalctl --user -u agentnet        # logs
+
+macOS (LaunchAgent):
+  cat > ~/Library/LaunchAgents/net.agentnet.daemon.plist <<PLIST
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0"><dict>
+    <key>Label</key><string>net.agentnet.daemon</string>
+    <key>ProgramArguments</key><array><string>$HOME/.local/bin/agentnet</string><string>daemon</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardErrorPath</key><string>$HOME/Library/Logs/agentnet.log</string>
+  </dict></plist>
+  PLIST
+  launchctl load ~/Library/LaunchAgents/net.agentnet.daemon.plist
+
+Windows (runs at logon, PowerShell):
+  schtasks /create /sc onlogon /tn agentnet /tr "$env:LOCALAPPDATA\agentnet\bin\agentnet.exe daemon"
+  schtasks /run /tn agentnet
+
+A responder harness (e.g. claude) must be on the PATH the daemon sees.`,
+
+	"update": `Update agentnet
+
+Laptop: stop the daemon (Windows cannot replace a running .exe), rebuild into
+the same place, start it again, then check:
+  cd agentnet && git pull
+  systemctl --user stop agentnet          # or: launchctl unload ... / schtasks /end /tn agentnet
+  go build -trimpath -o ~/.local/bin/agentnet ./cmd/agentnet
+  systemctl --user start agentnet
+  agentnet doctor
+
+Hub: back it up (agentnet help "hub backup"), then
+  git pull && docker compose up -d --build        # or rebuild and restart hub serve
+
+Before changing a database's schema, agentnet saves the old one next to it
+as *.vN.bak. Clients and Hubs compare protocol generations; doctor names the
+side to update. Downgrade: stop, move the *.vN.bak file back over the
+database, run the older build. There is no self-update.`,
+
+	"uninstall": `Uninstall agentnet
+
+1. Stop and remove the startup entry:
+     systemctl --user disable --now agentnet && rm ~/.config/systemd/user/agentnet.service
+     launchctl unload ~/Library/LaunchAgents/net.agentnet.daemon.plist && rm ~/Library/LaunchAgents/net.agentnet.daemon.plist
+     schtasks /delete /tn agentnet /f
+2. Delete the binary (~/.local/bin/agentnet or %LOCALAPPDATA%\agentnet\bin\agentnet.exe).
+3. Your home directory (keys, inbox, history) is kept. To erase it too,
+   delete it: ~/.config/agentnet (Linux), ~/Library/Application Support/agentnet
+   (macOS), %AppData%\agentnet (Windows), or your --home / AGENTNET_HOME.
+4. Ask your admin to run agentnet admin revoke YOUR/ADDRESS.`,
 }
 
 func init() {
@@ -330,14 +435,46 @@ func init() {
 	}
 }
 
-// wantsHelp reports whether args ask for help anywhere: help, -h, --help.
+// valueFlags are the flags that take a separate value, so the help scan
+// can follow Go's flag rules without each command's flag set.
+var valueFlags = map[string]bool{
+	"file": true, "dir": true, "agent": true, "listen": true, "advertise": true, "peer": true,
+	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
+	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
+	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true,
+}
+
+// guides are help topics that are not commands; running one prints it.
+var guides = map[string]bool{"install": true, "startup": true, "update": true, "uninstall": true}
+
+// wantsHelp reports whether args ask for help: "help", or -h/--help among
+// a command's flags. Like Go's flag parsing, it stops at the first
+// positional argument or "--", so message text such as "--help" after the
+// recipient is just text.
 func wantsHelp(args []string) bool {
-	if len(args) > 0 && args[0] == "help" {
+	if len(args) == 0 || args[0] == "help" || guides[args[0]] {
 		return true
 	}
-	for _, a := range args {
-		if a == "-h" || a == "-help" || a == "--help" {
+	rest := args[1:]
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		if _, ok := topics[args[0]+" "+rest[0]]; ok {
+			rest = rest[1:] // subcommand, e.g. hub serve
+		}
+	}
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case a == "--":
+			return false
+		case a == "-h" || a == "-help" || a == "--help":
 			return true
+		case strings.HasPrefix(a, "-"):
+			name := strings.TrimLeft(a, "-")
+			if valueFlags[name] { // "--flag=value" is not in the table, so it takes no extra token
+				i++ // its value
+			}
+		default:
+			return false
 		}
 	}
 	return false

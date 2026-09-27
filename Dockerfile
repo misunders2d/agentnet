@@ -29,7 +29,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=binary /out/agentnet /usr/local/bin/agentnet
 COPY --from=binary --chown=65532:65532 /out/data /data
 USER 65532:65532
-ENV AGENTNET_DATA=/data AGENTNET_LISTEN=:8443
+# PORT (not AGENTNET_LISTEN) so a platform's own PORT replaces it.
+ENV AGENTNET_DATA=/data PORT=8443
 VOLUME /data
 EXPOSE 8443
 ENTRYPOINT ["/usr/local/bin/agentnet"]

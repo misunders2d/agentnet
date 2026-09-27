@@ -43,6 +43,27 @@ func TestHelpBeforeEnrollment(t *testing.T) {
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("help created the home directory (%v)", err)
 	}
+	for g, title := range map[string]string{"install": "Install agentnet", "startup": "Start agentnet daemon at login",
+		"update": "Update agentnet", "uninstall": "Uninstall agentnet"} {
+		for _, args := range [][]string{{g}, {"help", g}, {g, "--help"}} {
+			if out := c.run(append([]string{"--home", home}, args...)...); !strings.HasPrefix(out, title) {
+				t.Fatalf("guide %v:\n%s", args, out)
+			}
+		}
+	}
+	if out := c.run("--home", home, "hub", "--help"); !strings.Contains(out, "AGENTNET_UPLOAD_TTL") || strings.Contains(out, "Every flag") {
+		t.Fatalf("hub help env list:\n%s", out)
+	}
+	// "--help" as message text after the recipient, or after --, is text.
+	for _, args := range [][]string{{"send", "bob/desk", "--help"}, {"send", "--", "--help"}, {"send", "--file", "x", "bob/desk", "-h"}} {
+		out, err := c.try(append([]string{"--home", home}, args...)...)
+		if err == nil || strings.Contains(out, "Usage:") || !strings.Contains(out, "no enrolled agent") {
+			t.Fatalf("%v treated as help: %v\n%s", args, err, out)
+		}
+	}
+	if out := c.run("--home", home, "send", "--file", "x", "--help"); !strings.Contains(out, "Usage: agentnet send") {
+		t.Fatalf("flag-position help:\n%s", out)
+	}
 	if out, err := c.try("help", "no-such-command"); err == nil || !strings.Contains(out, "commands:") {
 		t.Fatalf("unknown topic: %v %s", err, out)
 	}
