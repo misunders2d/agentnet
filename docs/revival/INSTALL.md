@@ -266,12 +266,20 @@ Install it where your agent looks for skills, without replacing an existing
 file, for example a shared skills folder, if your agents are set up to read one:
 
 ```sh
-d=~/.agents/skills/agentnet-ops; mkdir -p "$d" && t=$(mktemp "$d/.SKILL.md.XXXXXX") && { agentnet skill > "$t" && ln "$t" "$d/SKILL.md"; }; rm -f "$t"
+(
+  d=~/.agents/skills/agentnet-ops
+  mkdir -p "$d" || exit
+  [ ! -d "$d/SKILL.md" ] || { echo "$d/SKILL.md is a directory" >&2; exit 1; }
+  tmp=$(mktemp "$d/.SKILL.md.XXXXXX") || exit
+  trap 'rm -f "$tmp"' EXIT
+  agentnet skill > "$tmp" && ln "$tmp" "$d/SKILL.md"
+)
 ```
 
 The export goes to a temporary file next to the target, which is then linked
-into place: an existing `SKILL.md` (even a broken link) is never replaced, and
-a failed export leaves nothing behind. Claude Code reads
+into place: an existing `SKILL.md` (a file or a broken link) is never
+replaced, a directory there is refused, a failed export leaves nothing
+behind, and the exit status says whether it worked. Claude Code reads
 `~/.claude/skills/agentnet-ops/SKILL.md`; for other agents check where they
 load skills from. If a `SKILL.md` is already there, compare before replacing
 it. Start a new session and confirm the agent lists the skill.

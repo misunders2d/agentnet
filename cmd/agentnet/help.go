@@ -724,10 +724,18 @@ needs no enrollment and contacts nothing.
 
 Install it for your coding agent without replacing one already there, e.g.
 into a shared skills folder, if your agents are set up to read one:
-  d=~/.agents/skills/agentnet-ops; mkdir -p "$d" && t=$(mktemp "$d/.SKILL.md.XXXXXX") && { agentnet skill > "$t" && ln "$t" "$d/SKILL.md"; }; rm -f "$t"
-It writes a temporary file next to the target and links it into place, so it
-never replaces an existing SKILL.md (not even a broken link) and a failed
-export leaves nothing behind; ln then reports "File exists". Claude Code
+  (
+    d=~/.agents/skills/agentnet-ops
+    mkdir -p "$d" || exit
+    [ ! -d "$d/SKILL.md" ] || { echo "$d/SKILL.md is a directory" >&2; exit 1; }
+    tmp=$(mktemp "$d/.SKILL.md.XXXXXX") || exit
+    trap 'rm -f "$tmp"' EXIT
+    agentnet skill > "$tmp" && ln "$tmp" "$d/SKILL.md"
+  )
+It exports to a temporary file next to the target and links it into place:
+an existing SKILL.md (a file or a broken link) is never replaced (ln reports
+"File exists"), a directory there is refused, a failed export leaves
+nothing behind, and the exit status says whether it worked. Claude Code
 reads ~/.claude/skills/agentnet-ops/SKILL.md; for other agents see where they
 look for skills. If a SKILL.md is already there, compare before replacing it.
 Start a new session and check that the agent lists the skill.`,
