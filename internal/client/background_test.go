@@ -16,18 +16,29 @@ import (
 type notes struct {
 	mu     sync.Mutex
 	bodies []string
+	clicks []func() // the click handler of each notification (may be nil)
 	fail   error
 }
 
 func fakeNotify(a *Agent) *notes {
 	n := &notes{}
-	a.notify = func(title, body string) error {
+	a.notify = func(title, body string, onClick func()) error {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		n.bodies = append(n.bodies, title+": "+body)
+		n.clicks = append(n.clicks, onClick)
 		return n.fail
 	}
 	return n
+}
+
+func (n *notes) lastClick() func() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.clicks) == 0 {
+		return nil
+	}
+	return n.clicks[len(n.clicks)-1]
 }
 
 func (n *notes) count() int {

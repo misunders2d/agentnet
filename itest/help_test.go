@@ -13,7 +13,7 @@ func TestHelpBeforeEnrollment(t *testing.T) {
 	c := buildCLI(t)
 	home := filepath.Join(c.dir, "no-home-yet")
 	commands := []string{"join", "whoami", "send", "ask", "task", "reply", "inbox", "download", "status",
-		"sessions", "accept", "decline", "cancel", "approve", "unapprove", "approvals", "responder", "fingerprint", "trust",
+		"sessions", "accept", "decline", "cancel", "approve", "unapprove", "approvals", "open", "responder", "fingerprint", "trust",
 		"daemon", "doctor", "version", "cleanup", "admin", "hub", "a2a"}
 	forms := [][]string{{"--help"}, {"-h"}, {"help"}, {}}
 	for _, f := range forms {

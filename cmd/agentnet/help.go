@@ -53,6 +53,7 @@ Questions and tasks sent to you:
              approve --tasks: run its tasks without asking, for its exact key
   approvals  list who is approved, with task keys and whether they still hold
   resolve    close an item your responder marked needs_human
+  open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
 
@@ -195,7 +196,9 @@ While the daemon runs, a desktop notification with only a count (no content)
 tells you when new items wait (Linux: notify-send; macOS: osascript;
 Windows: a notification-area balloon, whose icon stays while the daemon
 runs; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
-log says so and the items still wait.
+log says so and the items still wait. On Linux with xdg-terminal-exec,
+clicking the notification opens a review in a new terminal (agentnet help
+open); clicks are not handled on macOS or Windows yet.
 
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
@@ -290,6 +293,19 @@ Refuse a task or question; the sender receives a result/answer with status
 
 Stop your responder while it is running ID. On Linux and macOS the harness and
 the processes it started are stopped; on Windows only the harness itself.`,
+
+	"open": `Usage: agentnet open ID
+       agentnet open --review
+
+What clicking an AgentNet review notification runs, in a new terminal (Linux,
+with xdg-terminal-exec). It starts your chosen coding agent (agentnet
+responder show) interactively, in a new session in the responder directory,
+with a prompt to show and summarize item ID (its whole conversation) or
+everything waiting for your decision. For a review notice from another
+machine it explains that the requests can only be decided there. Without a
+coding agent it prints the conversation or list. Opening never accepts,
+declines, replies or runs anything; the prompt asks the agent not to act
+unless you ask, but in that session your own tool permissions still apply.`,
 
 	"resolve": `Usage: agentnet resolve ID
 

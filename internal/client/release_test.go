@@ -109,7 +109,7 @@ func TestReleaseNoticeRetriedAfterRestart(t *testing.T) {
 func TestSlowReleaseNoticeDoesNotBlockDelivery(t *testing.T) {
 	w := newWorld(t, "")
 	var showing atomic.Bool
-	w.bob.notify = func(title, body string) error {
+	w.bob.notify = func(title, body string, _ func()) error {
 		showing.Store(true)
 		time.Sleep(3 * time.Second) // a notifier that hangs for a while
 		showing.Store(false)

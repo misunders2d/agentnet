@@ -259,7 +259,8 @@ not a substitute. No archive policy, schema, endpoint or new service is approved
    - Clicking a notification must **never** auto-accept a task, trigger any side effect, or hijack an unrelated active terminal or interactive session.
    - Open the selected local agent or future UI with the persisted conversation/review context. Resume an actual recorded model session only where supported; never fabricate continuity. A headless review notice does not grant access or acceptance authority over the remote item.
 4. **Current Status**:
-   - Native OS click-through action handlers (via `notify-send` action tokens, macOS notification center callbacks, or Windows balloon click messages) are currently **unimplemented**.
+   - Linux: implemented with a `notify-send` default action and `xdg-terminal-exec`; a click runs `agentnet open ID` (or `--review`), which starts the chosen coding agent interactively in a new session with a review prompt (see docs/revival/M4.md). Live click evidence is recorded there once taken.
+   - macOS notification center callbacks and Windows balloon click messages remain **unimplemented**; those notifications have no click action.
 
 ---
 

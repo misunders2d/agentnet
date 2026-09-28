@@ -49,11 +49,11 @@ type Agent struct {
 	kick       func() // wakes the current stream's retry worker
 	wakeWorker func() // wakes the question/task worker; a no-op outside Run
 
-	notify       func(title, body string) error // desktop notification
-	notifyTried  map[string]bool                // review items a notification was attempted for, this run
-	reviewTried  map[string]bool                // review items a review notice was attempted for, this run
-	reviewGen    string                         // review_to_gen those attempts were made under
-	releaseTried string                         // release a notification was attempted for, this run
+	notify       func(title, body string, onClick func()) error // desktop notification; onClick may be nil
+	notifyTried  map[string]bool                                // review items a notification was attempted for, this run
+	reviewTried  map[string]bool                                // review items a review notice was attempted for, this run
+	reviewGen    string                                         // review_to_gen those attempts were made under
+	releaseTried string                                         // release a notification was attempted for, this run
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -265,12 +265,13 @@ type Outgoing struct {
 const maxFollowUp = 4 << 10
 
 // desktopNotify shows a notification unless AGENTNET_NOTIFY=off (for
-// servers and tests).
-func desktopNotify(title, body string) error {
+// servers and tests). onClick, if set, runs when the person clicks it
+// (Linux only for now).
+func desktopNotify(title, body string, onClick func()) error {
 	if os.Getenv("AGENTNET_NOTIFY") == "off" {
 		return errors.New("turned off by AGENTNET_NOTIFY=off")
 	}
-	return notify.Show(title, body)
+	return notify.ShowAction(title, body, onClick)
 }
 
 // Send is SendMessage for the common case.

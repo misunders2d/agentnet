@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -183,6 +185,8 @@ func run(args []string) error {
 		return err
 	case "reply":
 		return runSend(ctx, a, rest, true)
+	case "open":
+		return runOpen(a, rest)
 	case "conversation":
 		return runConversation(a, rest)
 	case "inbox":
@@ -433,6 +437,45 @@ func detailLabel(state string) string {
 		return "needs your decision"
 	}
 	return "note"
+}
+
+// runOpen is what clicking a review notification runs in a new terminal:
+// the chosen coding agent, interactively, with a review prompt; or, without
+// one, the item or review list printed here.
+func runOpen(a *client.Agent, args []string) error {
+	target := ""
+	switch {
+	case len(args) == 1 && args[0] == "--review":
+	case len(args) == 1 && !strings.HasPrefix(args[0], "-"):
+		target = args[0]
+	default:
+		return errors.New("usage: open --review | open ID")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	o, err := a.ReviewOpening(target, self)
+	if err != nil {
+		return err
+	}
+	if o.Argv != nil {
+		fmt.Printf("Opening %s to review this with you (a new session; nothing has been accepted or run).\n", filepath.Base(o.Argv[0]))
+		cmd := exec.Command(o.Argv[0], o.Argv[1:]...)
+		cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = o.Dir, os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
+	}
+	fmt.Printf("No coding agent opened: %s. Showing it here.\n\n", o.Why)
+	if target != "" {
+		err = runConversation(a, []string{target})
+	} else {
+		err = runInbox(a, []string{"--review"})
+	}
+	if st, serr := os.Stdin.Stat(); serr == nil && st.Mode()&os.ModeCharDevice != 0 {
+		fmt.Print("\nPress Enter to close.")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	return err
 }
 
 func runConversation(a *client.Agent, args []string) error {

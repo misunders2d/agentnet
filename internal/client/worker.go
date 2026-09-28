@@ -289,11 +289,20 @@ func (a *Agent) notifyReview() {
 	if !fresh {
 		return
 	}
-	body := "1 request needs your decision. Ask your coding agent to review pending AgentNet requests."
-	if total != 1 {
-		body = fmt.Sprintf("%d requests need your decision. Ask your coding agent to review pending AgentNet requests.", total)
+	// A click opens a review: of the one item waiting, or of the list.
+	target := ""
+	if total == 1 && len(ids) == 1 {
+		target = ids[0]
 	}
-	if err := a.notify("AgentNet", body); err != nil {
+	onClick, how := a.reviewClick(target), "Click to review it with your coding agent."
+	if onClick == nil {
+		how = "Ask your coding agent to review pending AgentNet requests."
+	}
+	body := "1 request needs your decision. " + how
+	if total != 1 {
+		body = fmt.Sprintf("%d requests need your decision. %s", total, how)
+	}
+	if err := a.notify("AgentNet", body, onClick); err != nil {
 		a.Logf("desktop notification not shown (%v); %d item(s) wait for you: see `agentnet inbox --review`", err, total)
 		return
 	}
