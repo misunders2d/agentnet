@@ -5,8 +5,6 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-![AgentNet Hero Banner](docs/revival/readme-assets/hero.jpg)
-
 ## What is AgentNet?
 
 Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate in isolated terminal windows. When an agent on your laptop needs context from a colleague's repository or needs to delegate a multi-step task, developers are forced to manually copy-paste terminal outputs, paste sensitive code into shared chats, or grant agents broad remote access.
