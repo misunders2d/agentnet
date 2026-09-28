@@ -14,9 +14,14 @@ package itest
 //     space, daemon, --ui), as stored and as each started program sees them;
 //   - the running instance's EnginePID (RegisteredTask.GetInstances) is the
 //     started program's own process id, seen from outside and from inside;
-//   - the task instance's job, and whether a helper started by the instance
-//     (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, no breakaway flag) is
-//     outside that job and still runs after the instance has ended;
+//   - that a helper started by the instance (DETACHED_PROCESS |
+//     CREATE_NEW_PROCESS_GROUP, no breakaway flag) still runs after Task
+//     Scheduler reports the instance ended. The instance's immediate job is
+//     only logged: a child joins every job in its parent's chain unless the
+//     immediate job allows breakaway (MS "Nested Jobs"), and on a runner that
+//     job also holds unrelated processes, so membership says nothing about
+//     the task. Only a kill-on-close immediate job holding the helper would
+//     end it with the job, and that fails the probe;
 //   - the helper's schtasks /run starts a new instance of the same task, with
 //     the same arguments, which schtasks /end then stops.
 // The task's default settings (batteries, time limit, instances policy) and
@@ -544,10 +549,17 @@ func TestWindowsTaskSwitchProbe(t *testing.T) {
 	pids = append(pids, done.HelperPID)
 	helperH := winOpen(t, done.HelperPID)
 	if old.InJob {
-		if done.JobErr != "" {
-			t.Errorf("instance could not list its job: %s", done.JobErr)
-		} else if slices.Contains(done.JobPIDs, done.HelperPID) {
-			t.Errorf("helper %d is in the task instance's job %v", done.HelperPID, done.JobPIDs)
+		shared := slices.Contains(done.JobPIDs, done.HelperPID)
+		others := 0
+		for _, p := range done.JobPIDs {
+			if p != old.PID && p != done.HelperPID {
+				others++
+			}
+		}
+		t.Logf("instance's immediate job: %d processes (%d neither instance nor helper), limit flags %#x, helper in it: %v %s",
+			len(done.JobPIDs), others, old.JobFlags, shared, done.JobErr)
+		if shared && old.JobFlags&windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0 {
+			t.Errorf("helper %d is in the instance's kill-on-close job: it would end with that job", done.HelperPID)
 		}
 	}
 	if ev, _ := windows.WaitForSingleObject(oldH, 20_000); ev != windows.WAIT_OBJECT_0 {
