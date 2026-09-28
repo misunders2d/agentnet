@@ -32,6 +32,29 @@
   roster, the agent's host installation and participation), never from a label
   or an address. There is no device-as-human shortcut in the meantime. It is
   part of the human-DM acceptance and of the final Zoom view.
+- **First human-DM core: a candidate with corrections pending (2026-09-28).**
+  Core Claude's `1d97945` adds, from the command line only (`agentnet person
+  create NAME`, `agentnet dm new|list|show|send`):
+  - explicit person creation, one signed single-device roster per
+    installation, pinned by peers, with a conflicting record frozen, never a
+    replacement;
+  - signed DM roots (E0) between two persons, each a separate conversation;
+  - envelope v2 (conversation, logical id, origin as an assertion, emotion,
+    explicit target) and capability records;
+  - admission once per verifying key and logical id;
+  - every conversation question or task held for the person: nothing runs
+    it.
+
+  Root review found two defects that core Claude is correcting: a signed
+  person conflict ignored on the cached and event path (R1), and the
+  missing-proof queue starving past its oldest 50 items (R2). Its tests are
+  core Claude's and root's evidence. Not built yet:
+  - agent participation (invite, allowed context, follow-ups, dismissal) and
+    execution;
+  - the page's person, DM and Zoom-link views;
+  - linking devices, groups, browser devices.
+
+  Human DMs are **not** complete.
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and

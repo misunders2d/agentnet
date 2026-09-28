@@ -308,6 +308,12 @@ If a local database or key file is damaged:
   must show each human with visible links to their own agents (ownership, not presence or invitation;
   from the reviewed identity/agent relationship, never labels or addresses; no device-as-human shortcut).
   See [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
+- **First human-DM core (candidate, corrections pending)**: `1d97945` (core Claude) adds, CLI only
+  (`agentnet person create`, `agentnet dm`), explicit single-device persons, signed DM roots, envelope v2,
+  capability records, admission dedupe, and holds every conversation question/task (nothing runs). Root
+  review found R1 (signed person conflict ignored on the cache/event path) and R2 (missing-proof queue
+  starvation), being corrected. Not built: agent participation/execution, page person/DM/Zoom views,
+  device linking, groups, browser devices. Human DMs are not complete.
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon
