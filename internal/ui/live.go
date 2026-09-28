@@ -194,13 +194,14 @@ func (l *Live) Refresh(threadID string) (Presence, error) {
 			live++
 		}
 	}
+	now := time.Now()
 	switch {
 	case live > 0:
-		return Presence{Text: "Their computer is connected"}, nil
+		return Presence{Text: "Their computer is connected", At: now}, nil
 	case len(sessions) > 0:
-		return Presence{Text: "Their computer is reconnecting"}, nil
+		return Presence{Text: "Their computer is reconnecting", At: now}, nil
 	}
-	return Presence{Text: "Their computer is offline"}, nil
+	return Presence{Text: "Their computer is offline", At: now}, nil
 }
 
 // Send implements Provider.

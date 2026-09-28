@@ -351,7 +351,7 @@ const Zoom = {
     if (!c) return el("p", { class: "hint" }, "No conversations with " + this.peer + ".");
     return el("div", { class: "zoom-person" },
       el("header", { class: "zoom-head" }, avatar(this.peer), el("div", {}, el("h2", {}, who(this.peer)),
-        el("p", { class: "hint" }, state.presence[this.peer] || plural(c.conversations.length, "conversation", "conversations")),
+        el("p", { class: "hint" }, peerPresence(this.peer) || plural(c.conversations.length, "conversation", "conversations")),
         el("div", { class: "zoom-counts" }, counts(c)))),
       el("div", { class: "zoom-contact" }, contactBody(c, (id, from) => this.go(2, { thread: id }, from))));
   },

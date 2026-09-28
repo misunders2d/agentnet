@@ -91,6 +91,7 @@ const overview = { demo: false, me: { address: "me/laptop", fingerprint: "SHA256
 // release(path) so a test can act while a request is on its way. While
 // down is set, every request fails as if the daemon were gone.
 let down = false;
+let refreshReply = { text: "Connection unknown" }; // the one check made when a thread opens
 const calls = [];
 const hold = {};
 const held = {};
@@ -104,7 +105,7 @@ function fetch(url, opts) {
   if (u.pathname === "/api/thread") data = threads[u.searchParams.get("id")];
   else if (u.pathname === "/api/overview") data = Object.assign({ version: serving }, overview);
   else if (u.pathname === "/api/send") data = { id: "new", state: "delivered" };
-  else if (u.pathname === "/api/refresh") data = { text: "Connection unknown" };
+  else if (u.pathname === "/api/refresh") data = refreshReply;
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
   if (hold[u.pathname]) return new Promise((res) => { (held[u.pathname] ||= []).push(() => res(resp)); });
   return Promise.resolve(resp);
@@ -451,10 +452,45 @@ const ev = { preventDefault() {} };
   check(run("presenceOf")("vitalii/laptop") === null, "no presence without the server");
   const note = run("directoryNote")(run("directory")());
   check(note.includes("not known") && !/\bonline\b(?! is not known)/.test(note.replace("who is online is not known", "")), "not current is said plainly: " + note);
+  check(!/connected/i.test(note), "not current does not claim a disconnection (the stream may be open): " + note);
   check(run("directoryNote")({ status: "not_listed", members: [] }).includes("older AgentNet"), "an older server is explained");
-  check(run("directoryNote")({ status: "listed", current: true, truncated: true, members: [] }).includes("1,000"), "a truncated list is said");
-  check(run("directoryNote")({ status: "unknown", members: [] }).includes("Not connected"), "unknown before the first connection");
+  check(run("directoryNote")({ status: "listed", current: true, at: "2026-09-28T12:00:00Z", truncated: true, members: [] }).includes("1,000"), "a truncated list is said");
+  check(run("directoryNote")({ status: "unknown", members: [] }).includes("not known yet"), "unknown before the first list");
+  check(run("directoryNote")({ status: "listed", current: false, members: [] }).includes("not known yet"), "listed but no list yet: no time is made up");
   check(run("zoomDirectory")(overview.threads) !== null, "Zoom shows the same directory");
+
+  // The open conversation's header says what the list says: the check made
+  // on opening (connected) never outlives a pushed change or a list that is
+  // no longer current.
+  const listed = (presence, current) => ({ status: "listed", current, at: "2026-09-28T12:00:00Z", truncated: false,
+    members: [{ address: "bob/desk", presence: current ? presence : "", joined: "2026-09-01T00:00:00Z" }] });
+  overview.threads = [sum("b1", "bob/desk")];
+  overview.directory = listed("connected", true);
+  refreshReply = { text: "Their computer is connected", at: "2026-09-28T12:00:00Z" };
+  await run("loadOverview()");
+  await run('openThread("b1")');
+  await new Promise((r) => setTimeout(r, 0));
+  check($("conv-presence").textContent === "Their computer is connected" && run("presenceOf")("bob/desk") === "online",
+    "connected in header and list: " + $("conv-presence").textContent);
+  overview.directory = listed("offline", true);
+  await run("refetch()");
+  check($("conv-presence").textContent === "Their computer is offline" && run("presenceOf")("bob/desk") === "offline",
+    "a pushed offline reaches header and list: " + $("conv-presence").textContent);
+  overview.directory = listed("", false);
+  await run("refetch()");
+  check($("conv-presence").textContent === "Connection not known now" && run("presenceOf")("bob/desk") === null,
+    "a list that is not current: header and list say nothing live: " + $("conv-presence").textContent);
+  // An older server lists no one: only the check, with its time.
+  overview.directory = { status: "not_listed", current: false, members: [] };
+  await run("refetch()");
+  const checked = $("conv-presence").textContent;
+  check(checked.startsWith("Checked ") && checked.endsWith(": their computer is connected"), "an older server: the check, with its time: " + checked);
+  refreshReply = { text: "Connection unknown" };
+  run("state.presence = {}");
+  await run('openThread("a1")');
+  await run('openThread("b1")');
+  await new Promise((r) => setTimeout(r, 0));
+  check($("conv-presence").textContent === "Connection unknown", "no answer: unknown, no time: " + $("conv-presence").textContent);
   delete overview.directory;
 
   if (failed) process.exit(1);

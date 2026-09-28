@@ -300,7 +300,11 @@ func (f *Fixture) Refresh(threadID string) (Presence, error) {
 	if t == nil {
 		return Presence{}, NotFound("no message with that id")
 	}
-	return Presence{Text: f.peers[t.peer].presence}, nil
+	p := Presence{Text: f.peers[t.peer].presence}
+	if p.Text != "Connection unknown" {
+		p.At = time.Now()
+	}
+	return p, nil
 }
 
 const maxText = 8000

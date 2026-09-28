@@ -203,10 +203,10 @@ func TestSendAndDecideThroughTheAPI(t *testing.T) {
 	if resp := do(t, ts, "POST", "/api/act", `{"id":"`+task+`","do":"accept"}`, post(ts)); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("second accept: %d", resp.StatusCode)
 	}
-	// Presence is asked for once per opened thread.
+	// Presence is asked for once per opened thread, and says when.
 	resp = do(t, ts, "POST", "/api/refresh", `{"id":"`+task+`"}`, post(ts))
 	var p Presence
-	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&p) != nil || p.Text != "Their computer is connected" {
+	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&p) != nil || p.Text != "Their computer is connected" || p.At.IsZero() {
 		t.Fatalf("refresh: %d %+v", resp.StatusCode, p)
 	}
 }

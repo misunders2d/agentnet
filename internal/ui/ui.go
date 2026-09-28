@@ -167,10 +167,12 @@ type PeerKey struct {
 	Pending string `json:"pending,omitempty"` // a changed key waiting for trust; sending is blocked
 }
 
-// Presence is what the Hub says about the peer's running daemons. It
-// describes computers, never whether a person is there.
+// Presence is what the Hub said about the peer's running daemons when
+// asked once, and when: an observation, not a live state. It describes
+// computers, never whether a person is there.
 type Presence struct {
-	Text string `json:"text"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at,omitzero"` // when the Hub answered; zero when it did not
 }
 
 // Message is one row of a thread.

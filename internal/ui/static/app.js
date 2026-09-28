@@ -150,19 +150,42 @@ function searchKnown(q, threads, dir) {
 // conversation to them; nothing is sent, trusted or approved by choosing.
 
 const presenceWord = { connected: "online", reconnecting: "reconnecting", offline: "offline" };
+const presenceLine = { connected: "Their computer is connected", reconnecting: "Their computer is reconnecting",
+  offline: "Their computer is offline" };
 const presenceTitle = "Whether the server sees their AgentNet running now; it does not mean a person is there.";
 
 function directory() {
   return (state.overview && state.overview.directory) || { status: "unknown", members: [] };
 }
 
-// presenceOf is an address's presence, only while the server's view is
-// current; otherwise nothing is said.
-function presenceOf(addr) {
+// memberPresence is the server's word on an address, only while its view
+// is current and lists them; otherwise null: nothing is said.
+function memberPresence(addr) {
   const d = directory();
   if (!d.current) return null;
   const m = d.members.find((x) => x.address === addr);
-  return m && m.presence ? presenceWord[m.presence] || null : null;
+  return m && presenceWord[m.presence] ? m.presence : null;
+}
+
+function presenceOf(addr) {
+  const p = memberPresence(addr);
+  return p && presenceWord[p];
+}
+
+// peerPresence is what a conversation's header says about the peer's
+// computer: the server's pushed view while it is current and lists them;
+// "not known now" once that view is not current. Only where the server
+// lists no one (an older server) or does not list this peer does it show
+// the one check made when the conversation was opened, with its time,
+// never as live.
+function peerPresence(peer) {
+  const d = directory();
+  if (d.status === "listed" && !d.current) return "Connection not known now";
+  const p = memberPresence(peer);
+  if (p) return presenceLine[p];
+  const c = state.presence[peer];
+  if (!c) return "";
+  return c.at ? "Checked " + when(c.at) + ": " + c.text.charAt(0).toLowerCase() + c.text.slice(1) : c.text;
 }
 
 function presenceBadge(addr) {
@@ -173,9 +196,9 @@ function presenceBadge(addr) {
 // directoryNote says plainly what the list is and what it is not.
 function directoryNote(d) {
   if (d.status === "not_listed") return "Your server does not list its members: it runs an older AgentNet, which its operator can update.";
-  if (d.status !== "listed") return "Not connected to your server yet, so who is on it is not known.";
+  if (d.status !== "listed" || !d.at) return "Who is on your server is not known yet.";
   const notes = [];
-  if (!d.current) notes.push("Not connected to your server now: this list is from " + when(d.at) + ", and who is online is not known.");
+  if (!d.current) notes.push("Your server's current list is not available: this one is as of " + when(d.at) + ", and who is online is not known.");
   if (d.truncated) notes.push("The server lists only the 1,000 most recently joined agents; others are not shown.");
   return notes.join(" ");
 }
@@ -480,8 +503,8 @@ async function refreshThread() {
   try {
     const p = await api("/api/refresh", { id });
     if (state.thread !== id || !state.data) return;
-    state.presence[state.data.peer] = p.text;
-    $("conv-presence").textContent = p.text;
+    state.presence[state.data.peer] = { text: p.text, at: p.at };
+    $("conv-presence").textContent = peerPresence(state.data.peer);
   } catch (e) { /* presence stays unknown */ }
 }
 
@@ -500,7 +523,7 @@ async function loadThread(scrollToEnd) {
   fill($("conv-name"), who(t.peer));
   $("conv-topic").textContent = firstLine(t.messages[0].body, 90);
   $("conv-avatar").replaceWith(Object.assign(avatar(t.peer), { id: "conv-avatar" }));
-  $("conv-presence").textContent = state.presence[t.peer] || "";
+  $("conv-presence").textContent = peerPresence(t.peer);
   renderPeerChips(t);
   renderNotice(t);
   $("composer").hidden = false;
