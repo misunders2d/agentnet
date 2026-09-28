@@ -23,12 +23,19 @@ import (
 
 // TestMain lets a copy of this test binary stand in for a release build of
 // agentnet (on every OS, Windows included): with AGENTNET_FAKE_BINARY set,
-// "version" prints AGENTNET_FAKE_VERSION and "sleep" waits.
+// "version" prints the version in <its file>.fakeversion if present, else
+// AGENTNET_FAKE_VERSION, and "sleep" waits.
 func TestMain(m *testing.M) {
 	if os.Getenv("AGENTNET_FAKE_BINARY") != "" && len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version":
-			fmt.Printf("agentnet %s (protocol %d)\n", os.Getenv("AGENTNET_FAKE_VERSION"), protocol.ProtocolVersion)
+			v := os.Getenv("AGENTNET_FAKE_VERSION")
+			if self, err := os.Executable(); err == nil {
+				if data, err := os.ReadFile(self + ".fakeversion"); err == nil {
+					v = strings.TrimSpace(string(data))
+				}
+			}
+			fmt.Printf("agentnet %s (protocol %d)\n", v, protocol.ProtocolVersion)
 		case "sleep":
 			time.Sleep(30 * time.Second)
 		}
@@ -83,22 +90,31 @@ func fakeReleaseServer(t *testing.T, r *releaseStub) {
 	t.Cleanup(func() { releaseBase, updateClient = oldBase, oldClient })
 }
 
-// installed is a temporary "installed agentnet" (not the test binary) that
-// the update replaces; the current version is set to current.
-func installed(t *testing.T, current string) (exe string) {
+// installed is a temporary "installed agentnet" (a copy of the fake that
+// reports current) that the update replaces, with this invocation's version
+// set to current. It returns the file and its identity before the update.
+func installed(t *testing.T, current string) (exe string, before os.FileInfo) {
 	t.Helper()
 	dir := t.TempDir()
 	exe = filepath.Join(dir, "agentnet")
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
-	os.WriteFile(exe, []byte("previous build"), 0o755)
+	os.WriteFile(exe, selfBytes(t), 0o755)
+	os.WriteFile(exe+".fakeversion", []byte(current), 0o600)
+	before, _ = os.Stat(exe)
 	oldExe, oldVersion := executable, protocol.Version
 	executable = func() (string, error) { return exe, nil }
 	protocol.Version = current
 	t.Cleanup(func() { executable, protocol.Version = oldExe, oldVersion })
 	t.Setenv("AGENTNET_FAKE_BINARY", "1")
-	return exe
+	return exe, before
+}
+
+// unchanged reports whether exe is still the file before was.
+func unchanged(exe string, before os.FileInfo) bool {
+	now, err := os.Stat(exe)
+	return err == nil && os.SameFile(now, before)
 }
 
 func selfBytes(t *testing.T) []byte {
@@ -127,23 +143,24 @@ func update(t *testing.T, args ...string) error {
 func TestUpdateInstallsRelease(t *testing.T) {
 	asset := selfBytes(t)
 	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: asset})
-	exe := installed(t, "v9.9.8")
+	exe, before := installed(t, "v9.9.8")
 	t.Setenv("AGENTNET_FAKE_VERSION", "v9.9.9")
 	if err := update(t, "--check"); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(exe); string(data) != "previous build" {
+	if !unchanged(exe, before) {
 		t.Fatal("--check changed the file")
 	}
 	if err := update(t); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(exe); len(data) != len(asset) {
+	if unchanged(exe, before) {
 		t.Fatal("the release was not installed")
 	}
-	if data, _ := os.ReadFile(exe + ".old"); string(data) != "previous build" {
-		t.Fatalf("previous file not kept: %q", data)
+	if old, err := os.Stat(exe + ".old"); err != nil || !os.SameFile(old, before) {
+		t.Fatalf("previous file not kept: %v", err)
 	}
+	os.Remove(exe + ".fakeversion") // the new file reports the release's version
 	out, err := exec.Command(exe, "version").Output()
 	if err != nil || !strings.HasPrefix(string(out), "agentnet v9.9.9 (protocol ") {
 		t.Fatalf("installed program: %q %v", out, err)
@@ -162,7 +179,7 @@ func TestUpdateInstallsRelease(t *testing.T) {
 // named release, a malformed version, and more than one argument.
 func TestUpdateRefusals(t *testing.T) {
 	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
-	exe := installed(t, "v9.9.8")
+	exe, before := installed(t, "v9.9.8")
 	for _, c := range []struct {
 		version string
 		args    []string
@@ -179,7 +196,7 @@ func TestUpdateRefusals(t *testing.T) {
 			t.Errorf("%s %v: %v", c.version, c.args, err)
 		}
 	}
-	if data, _ := os.ReadFile(exe); string(data) != "previous build" {
+	if !unchanged(exe, before) {
 		t.Fatal("a refusal changed the file")
 	}
 }
@@ -204,13 +221,13 @@ func TestUpdateRejectsBadDownloads(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := c.r
 			fakeReleaseServer(t, &r)
-			exe := installed(t, "v9.9.8")
+			exe, before := installed(t, "v9.9.8")
 			t.Setenv("AGENTNET_FAKE_VERSION", c.version)
 			err := update(t)
 			if err == nil || (c.want != "" && !strings.Contains(err.Error(), c.want)) {
 				t.Fatalf("error: %v", err)
 			}
-			if data, _ := os.ReadFile(exe); string(data) != "previous build" {
+			if !unchanged(exe, before) {
 				t.Fatal("the installed file changed")
 			}
 			if _, err := os.Stat(exe + ".old"); !errors.Is(err, os.ErrNotExist) {
@@ -226,7 +243,7 @@ func TestUpdateRejectsBadDownloads(t *testing.T) {
 // Only one update of a file runs at a time.
 func TestUpdateSerialized(t *testing.T) {
 	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
-	exe := installed(t, "v9.9.8")
+	exe, _ := installed(t, "v9.9.8")
 	release, err := lockfile.Acquire(updateLockPath(exe))
 	if err != nil {
 		t.Fatal(err)
@@ -318,5 +335,30 @@ func TestUpdateReportsRunning(t *testing.T) {
 	}
 	if cmd.ProcessState != nil {
 		t.Fatal("a process was stopped")
+	}
+}
+
+// Another update replaced the file after this one decided what to install
+// (from its own, now stale, version) and before it took the lock: it must
+// not install over the newer file.
+func TestUpdateRefusesFileChangedBeforeLock(t *testing.T) {
+	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
+	exe, before := installed(t, "v9.9.8")
+	t.Setenv("AGENTNET_FAKE_VERSION", "v9.9.9")
+	// The concurrent update's result: the same file now reports v10.0.0,
+	// while this invocation still runs v9.9.8.
+	os.WriteFile(exe+".fakeversion", []byte("v10.0.0"), 0o600)
+	err := update(t)
+	if err == nil || !strings.Contains(err.Error(), "changed since this update started") || !strings.Contains(err.Error(), "v10.0.0") {
+		t.Fatalf("error: %v", err)
+	}
+	if !unchanged(exe, before) {
+		t.Fatal("installed over a newer file")
+	}
+	if _, err := os.Stat(exe + ".old"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("moved the newer file aside")
+	}
+	if l := leftovers(t, exe); len(l) != 0 {
+		t.Fatalf("staged files left: %v", l)
 	}
 }

@@ -680,7 +680,8 @@ the release's HTTPS and checksum; there is no separate signature.
   move forward. A development build (not vX.Y.Z) must name the release.
 - The file replaced is the real file behind a symlink. The directory must be
   writable; a copy inside a container is refused (update the image). One
-  update of a file runs at a time.
+  update of a file runs at a time, and it stops without changes if the file
+  no longer reports this program's version (another update got there first).
 - Nothing running is stopped: a daemon (of any home) or Hub keeps the program
   it started with until you restart it, preferably when no job is running.
   The command says whether this home's daemon is running and, on Linux,

@@ -152,6 +152,12 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 		return fmt.Errorf("another update of %s is running (or its directory is not writable): %w", exe, err)
 	}
 	defer release()
+	// Decisions above used this program's own version. Another update may
+	// have replaced the file before the lock was taken, so check, under the
+	// lock, that the file still is this version before replacing it.
+	if now, err := fileVersion(ctx, exe); err != nil || now != versionLine(current) {
+		return fmt.Errorf("%s changed since this update started (it reports %q; this is agentnet %s); nothing was changed: run agentnet update again", exe, now, current)
+	}
 	staged, protoLine, err := stageRelease(ctx, filepath.Dir(exe), target)
 	if err != nil {
 		return err
@@ -166,6 +172,20 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	}
 	reportRunning(home, exe)
 	return nil
+}
+
+// versionLine is what `agentnet version` prints for version v.
+func versionLine(v string) string {
+	return fmt.Sprintf("agentnet %s (protocol %d)", v, protocol.ProtocolVersion)
+}
+
+// fileVersion runs path's `version` (bounded) and returns its first line.
+func fileVersion(ctx context.Context, path string) (string, error) {
+	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(vctx, path, "version").Output()
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return line, err
 }
 
 // updateLockPath is the lock that serializes updates of exe: a hidden
@@ -230,7 +250,7 @@ func fetch(ctx context.Context, url string, max int64, w io.Writer) error {
 // directory, so the replacement is a rename on one filesystem), checks it
 // against SHA256SUMS and runs it to confirm its version. It returns the
 // staged path and the version line; on any failure nothing is left behind.
-func stageRelease(ctx context.Context, dir, tag string) (path, versionLine string, err error) {
+func stageRelease(ctx context.Context, dir, tag string) (path, staged string, err error) {
 	base := releaseBase + "/download/" + tag + "/"
 	var sums bytes.Buffer
 	if err := fetch(ctx, base+"SHA256SUMS", maxSums, &sums); err != nil {
@@ -275,15 +295,12 @@ func stageRelease(ctx context.Context, dir, tag string) (path, versionLine strin
 	if err = os.Chmod(path, 0o755); err != nil {
 		return "", "", err
 	}
-	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	out, runErr := exec.CommandContext(vctx, path, "version").Output()
-	versionLine = strings.TrimSpace(string(out))
-	if runErr != nil || !strings.HasPrefix(versionLine, "agentnet "+tag+" (protocol ") {
-		err = fmt.Errorf("the downloaded %s reports %q, not %s; nothing was changed", assetName(), versionLine, tag)
+	line, runErr := fileVersion(ctx, path)
+	if runErr != nil || !strings.HasPrefix(line, "agentnet "+tag+" (protocol ") {
+		err = fmt.Errorf("the downloaded %s reports %q, not %s; nothing was changed", assetName(), line, tag)
 		return "", "", err
 	}
-	return path, versionLine, nil
+	return path, line, nil
 }
 
 // replaceExecutable puts staged in place of exe and keeps the previous
