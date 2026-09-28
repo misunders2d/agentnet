@@ -291,3 +291,29 @@ func TestUpdatePrepareFailureKeepsServing(t *testing.T) {
 	default:
 	}
 }
+
+// The request names the program file however the updater spelled its path
+// (Windows short names, "." steps): the same file switches, another does
+// not (TestUpdateSwitchRefusedKeepsServing).
+func TestUpdateSwitchSameFileSpelledDifferently(t *testing.T) {
+	setVersion(t, "v9.9.8")
+	w := newWorld(t, "")
+	exe := fakeProgram(t, "v9.9.9")
+	res, _ := runUntilStop(t, w.bob, RunOptions{Executable: exe})
+	eventually(t, "session", func() bool {
+		infos, err := w.alice.sessions(tctx(t), w.bob.Address)
+		return err == nil && len(infos) > 0 && infos[0].Connected
+	})
+	spelled := filepath.Dir(exe) + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(exe) // not cleaned
+	RequestUpdateSwitch(w.bobHome, UpdateRequest{ID: "s", Exe: spelled, To: "v9.9.9"})
+	var rs *RestartForUpdate
+	select {
+	case err := <-res:
+		if !errors.As(err, &rs) || rs.Request.ID != "s" {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		act, _, _ := ReadUpdateActivation(w.bobHome)
+		t.Fatalf("the daemon did not switch; recorded %+v", act)
+	}
+}

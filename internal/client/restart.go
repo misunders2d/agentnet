@@ -71,6 +71,21 @@ func (e *RestartForUpdate) Error() string {
 	return "stopped to switch to agentnet " + e.Request.To
 }
 
+// sameProgramFile reports whether two paths name the same file on disk now,
+// however each is spelled (on Windows a short 8.3 name and its long form, a
+// symlink, "." steps). Another file, or one that cannot be found, is not.
+func sameProgramFile(a, b string) bool {
+	if a == b {
+		return true
+	}
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
 // RequestUpdateSwitch asks home's running daemon to switch to r.Exe, which
 // now reports r.To.
 func RequestUpdateSwitch(home string, r UpdateRequest) error {
@@ -198,7 +213,7 @@ func (a *Agent) checkUpdateRequest() {
 	case !found:
 	case err != nil:
 		a.finishUpdateRequest(UpdateActivation{ID: r.ID, To: r.To, Result: ActivationNotApplied, Detail: "unreadable request: " + err.Error()})
-	case r.Exe != a.exe:
+	case !sameProgramFile(r.Exe, a.exe):
 		a.finishUpdateRequest(UpdateActivation{ID: r.ID, To: r.To, Result: ActivationNotApplied,
 			Detail: "this daemon runs " + a.exe + ", not the updated " + r.Exe})
 	case r.To == protocol.Version:
