@@ -359,6 +359,15 @@ func winAlive(h windows.Handle) bool {
 	return windows.GetExitCodeProcess(h, &code) == nil && code == stillActive
 }
 
+func winSameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
 func winImage(pid int) string {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
@@ -413,23 +422,38 @@ func TestWindowsTaskSwitchProbe(t *testing.T) {
 		t.Fatalf("/tr is %d characters (limit 262): %s", len(tr), tr)
 	}
 
-	// Cleanup touches only this task and processes running this copy.
+	// Cleanup touches only this task and the recorded processes still
+	// running this copy (checked by file identity: TEMP may be a short path).
 	var pids []int
 	t.Cleanup(func() {
-		winSchtasks("/end", "/tn", name)
+		winSchtasks("/end", "/tn", name) // fails when no instance runs
 		if out, err := winSchtasks("/delete", "/tn", name, "/f"); err != nil {
 			t.Errorf("delete task %s: %v: %s", name, err, out)
 		}
 		for _, pid := range pids {
-			if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid)); err == nil {
-				if winAlive(h) && strings.EqualFold(winImage(pid), exe) {
-					windows.TerminateProcess(h, 1)
-					windows.WaitForSingleObject(h, 5000)
-				}
-				windows.CloseHandle(h)
+			h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+			if err != nil {
+				continue // exited
 			}
+			if winAlive(h) && winSameFile(winImage(pid), exe) {
+				if err := windows.TerminateProcess(h, 1); err != nil {
+					t.Errorf("stop fixture process %d: %v", pid, err)
+				} else if ev, _ := windows.WaitForSingleObject(h, 5000); ev != windows.WAIT_OBJECT_0 {
+					t.Errorf("fixture process %d still runs", pid)
+				}
+			}
+			windows.CloseHandle(h)
 		}
-		os.RemoveAll(root)
+		for i := 0; ; i++ { // a just-ended program's file can stay busy briefly
+			err := os.RemoveAll(root)
+			if err == nil || i == 20 {
+				if err != nil {
+					t.Logf("temporary files left in %s: %v", root, err)
+				}
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
 	})
 
 	// The task as documented (agentnet help daemon), with the full daemon
@@ -477,8 +501,8 @@ func TestWindowsTaskSwitchProbe(t *testing.T) {
 		t.Fatalf("task has %d exec actions", len(def.Exec))
 	}
 	t.Logf("stored action: Command %q Arguments %q", def.Exec[0].Command, def.Exec[0].Arguments)
-	if a, b := filepath.Clean(strings.Trim(def.Exec[0].Command, `"`)), exe; !strings.EqualFold(a, b) {
-		t.Errorf("stored Command %q, want %q", a, b)
+	if c := strings.Trim(def.Exec[0].Command, `"`); !winSameFile(c, exe) {
+		t.Errorf("stored Command %q is not %q", c, exe)
 	}
 	// The first word of a command line follows program-name rules, so a
 	// placeholder takes its place when splitting the stored arguments.
@@ -510,7 +534,9 @@ func TestWindowsTaskSwitchProbe(t *testing.T) {
 	t.Logf("instance job: in job %v, limit flags %#x %s", old.InJob, old.JobFlags, old.JobErr)
 
 	// The helper, started by the instance, and the instance's end.
-	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+	if err := os.WriteFile(filepath.Join(home, "go"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	done := winProbeRead(t, home, "old-done.json", 45*time.Second)
 	if done.Err != "" || done.HelperPID == 0 {
 		t.Fatalf("instance could not start the helper: %s", done.Err)
@@ -543,7 +569,9 @@ func TestWindowsTaskSwitchProbe(t *testing.T) {
 	}
 
 	// The helper runs the task again; /end controls the new instance.
-	os.WriteFile(filepath.Join(home, "run"), nil, 0o600)
+	if err := os.WriteFile(filepath.Join(home, "run"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	helper := winProbeRead(t, home, "helper.json", 45*time.Second)
 	t.Logf("helper job: in job %v, limit flags %#x %s", helper.InJob, helper.JobFlags, helper.JobErr)
 	if helper.RunExit != 0 || helper.Err != "" {

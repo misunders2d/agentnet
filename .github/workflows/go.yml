@@ -4,10 +4,16 @@ on:
     branches: [main, revival/mvp]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_task_probe:
+        description: "Run only the native Windows Task Scheduler probe (creates and removes a private task)"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   native:
+    if: ${{ !inputs.windows_task_probe }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: go test -race -count=1 -timeout 900s ./...
   container:
+    if: ${{ !inputs.windows_task_probe }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,3 +41,18 @@ jobs:
         run: scripts/hub-container-test.sh
         env:
           AGENTNET_TEST_IMAGE: agentnet-hub:ci
+  windows-task-probe:
+    if: ${{ inputs.windows_task_probe }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Task Scheduler probe (private task, removed afterwards)
+        run: go test -count=1 -timeout 300s -run TestWindowsTaskSwitchProbe -v ./itest
+        env:
+          AGENTNET_WINTASK: "1"
