@@ -50,6 +50,7 @@ type Agent struct {
 	kick       func()      // wakes the current stream's retry worker
 	wakeWorker func()      // wakes the question/task worker; a no-op outside Run
 	changes    *changeFeed // local state changed (changes.go)
+	members    memberState // the Hub's member list from the push stream (members.go)
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run

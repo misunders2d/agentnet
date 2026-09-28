@@ -65,6 +65,7 @@ type Hub struct {
 	releaseMu  sync.Mutex
 	releaseGen int64
 	presence   presence
+	membersGen atomic.Int64 // changes with the member list (see members.go)
 	waiters    waiters
 	stats      Stats
 	heartbeat  time.Duration
@@ -125,7 +126,7 @@ func Open(cfg Config) (*Hub, error) {
 			cfg.Logf("expire session %s#%s: %v", agent, session, err)
 		}
 		h.waiters.notifyAll() // some waited-for messages may have expired
-	}}
+	}, onChange: func(string) { h.membersChanged() }}
 	err = nil
 	if !cfg.PlatformTLS {
 		err = h.loadOrCreateCert(u.Hostname())

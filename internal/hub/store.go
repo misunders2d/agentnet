@@ -171,6 +171,37 @@ func (s *store) agent(address string) (agent, error) {
 	return a, json.Unmarshal([]byte(pub), &a.Public)
 }
 
+// enrolledMember is one unrevoked agent for the member list.
+type enrolledMember struct {
+	address string
+	joined  int64 // unix seconds
+}
+
+// members lists up to limit unrevoked agents, most recently enrolled first,
+// and whether more exist.
+func (s *store) members(limit int) ([]enrolledMember, bool, error) {
+	rows, err := s.db.Query(`SELECT address, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?`, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []enrolledMember
+	for rows.Next() {
+		var m enrolledMember
+		if err := rows.Scan(&m.address, &m.joined); err != nil {
+			return nil, false, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
+}
+
 func (s *store) agentCount() (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT count(*) FROM agents`).Scan(&n)

@@ -399,6 +399,64 @@ type SessionInfo struct {
 	Connected bool      `json:"connected"` // false during the reconnect grace period
 }
 
+// Member presence, as the Hub sees the agent's daemons: at least one
+// connected; none connected but one within its reconnect grace; none.
+const (
+	PresenceConnected    = "connected"
+	PresenceReconnecting = "reconnecting"
+	PresenceOffline      = "offline"
+)
+
+// Member is one enrolled, unrevoked agent in the Hub's member list. The
+// label part of the address is the person label an admin chose for the
+// invite, not a verified identity, and being listed grants nothing: keys
+// still come from the per-address directory and are trusted as before.
+type Member struct {
+	Address  string `json:"address"`
+	Presence string `json:"presence"` // PresenceConnected, PresenceReconnecting or PresenceOffline
+	Joined   int64  `json:"joined"`   // enrollment time, unix seconds
+}
+
+// Members is the Hub's member list (GET /v1/agents, and the "members" push
+// event), most recently joined first. Truncated means more agents are
+// enrolled than MaxMembers: the list is then not complete.
+type Members struct {
+	Members   []Member `json:"members"`
+	Truncated bool     `json:"truncated"`
+}
+
+// MaxMembers bounds one member list, keeping it far below MaxBody.
+const MaxMembers = 1000
+
+// MembersHeader, set to "1" on a push stream, says the Hub sends the member
+// list on that stream (first on connect, then on every change). Older Hubs
+// neither send it nor list members.
+const MembersHeader = "Agentnet-Members"
+
+// Valid reports whether m is a member list a Hub may send: bounded, with
+// well-formed unique addresses and known presence values.
+func (m Members) Valid() error {
+	if len(m.Members) > MaxMembers {
+		return fmt.Errorf("%d members exceed the limit of %d", len(m.Members), MaxMembers)
+	}
+	seen := make(map[string]bool, len(m.Members))
+	for _, e := range m.Members {
+		if _, _, err := SplitAddress(e.Address); err != nil {
+			return err
+		}
+		if seen[e.Address] {
+			return fmt.Errorf("%s listed twice", e.Address)
+		}
+		seen[e.Address] = true
+		switch e.Presence {
+		case PresenceConnected, PresenceReconnecting, PresenceOffline:
+		default:
+			return fmt.Errorf("%s: unknown presence %q", e.Address, e.Presence)
+		}
+	}
+	return nil
+}
+
 // ValidID reports whether s is a 128-bit lowercase hex identifier.
 func ValidID(s string) bool {
 	if len(s) != 32 {

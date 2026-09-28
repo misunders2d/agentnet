@@ -101,7 +101,7 @@ func TestReleasePushedOnStream(t *testing.T) {
 			line := sc.Text()
 			if e, ok := strings.CutPrefix(line, "event: "); ok {
 				event = e
-			} else if d, ok := strings.CutPrefix(line, "data: "); ok {
+			} else if d, ok := strings.CutPrefix(line, "data: "); ok && event != "members" {
 				return event, d
 			}
 		}

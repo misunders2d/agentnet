@@ -49,7 +49,7 @@ func TestIdleHTTP2StreamOutlivesWriteTimeout(t *testing.T) {
 	sc.Buffer(make([]byte, 64<<10), protocol.MaxBody)
 	nextEvent := func() string {
 		for sc.Scan() {
-			if e, ok := strings.CutPrefix(sc.Text(), "event: "); ok && e != "release" {
+			if e, ok := strings.CutPrefix(sc.Text(), "event: "); ok && e != "release" && e != "members" {
 				return e
 			}
 		}

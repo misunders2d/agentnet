@@ -21,6 +21,7 @@ func (h *Hub) routes() http.Handler {
 		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion})
 	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
+	mux.HandleFunc("GET /v1/agents", h.handleMembers)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
@@ -143,6 +144,7 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 		os.Remove(filepath.Join(h.cfg.DataDir, BootstrapFile))
 	}
 	h.cfg.Logf("enrolled %s", req.Public.Address)
+	h.membersChanged()
 	writeJSON(w, http.StatusCreated, protocol.DirectoryEntry{Public: req.Public})
 }
 
@@ -288,6 +290,7 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	h.streams.disconnect(req.Address)
 	h.presence.drop(req.Address)
+	h.membersChanged()
 	h.waiters.notifyAll() // a revoked agent's receipt waits end without a state
 	h.cfg.Logf("revoked %s by %s", req.Address, caller)
 	writeJSON(w, http.StatusOK, map[string]string{"revoked": req.Address})

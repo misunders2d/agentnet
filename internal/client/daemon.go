@@ -127,6 +127,8 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 		return false, err
 	}
 	a.Logf("connected to hub as %s", a.Address)
+	a.membersConnected(resp.Header)
+	defer a.membersDisconnected()
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)
@@ -210,6 +212,8 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		} else {
 			a.wakeWorker()
 		}
+	case "members":
+		a.onMembers([]byte(data)) // the Hub's member list (members.go)
 	case "ping":
 		a.wakeWorker()
 		// Prove this connection is alive; the Hub drops unanswered streams.

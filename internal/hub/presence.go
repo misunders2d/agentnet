@@ -18,6 +18,7 @@ type presence struct {
 	grace    time.Duration
 	sessions map[string]map[string]*session // agent -> session id
 	onEnd    func(agent, session string)
+	onChange func(agent string) // the agent's state (see state) changed; called without the lock
 	closed   bool
 }
 
@@ -29,7 +30,8 @@ type session struct {
 
 func (p *presence) connect(agent string, ad protocol.SessionAd) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	before := p.stateLocked(agent)
+	defer func() { p.changedAfterUnlock(agent, before) }()
 	if p.sessions == nil {
 		p.sessions = map[string]map[string]*session{}
 	}
@@ -53,7 +55,8 @@ func (p *presence) connect(agent string, ad protocol.SessionAd) {
 // removes a newer one's registration.
 func (p *presence) disconnect(agent, id string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	before := p.stateLocked(agent)
+	defer func() { p.changedAfterUnlock(agent, before) }()
 	s := p.sessions[agent][id]
 	if s == nil {
 		return
@@ -70,17 +73,21 @@ func (p *presence) end(agent, id string, s *session) {
 		p.mu.Unlock()
 		return // reconnected, or already replaced
 	}
+	before := p.stateLocked(agent)
+	defer func() { p.changedAfterUnlock(agent, before) }()
 	delete(p.sessions[agent], id)
 	if len(p.sessions[agent]) == 0 {
 		delete(p.sessions, agent)
 	}
-	defer p.mu.Unlock()
 	p.onEnd(agent, id) // under the lock, so close() waits for it
 }
 
 // drop ends every session of agent at once (revocation).
 func (p *presence) drop(agent string) {
 	p.mu.Lock()
+	if p.stateLocked(agent) != protocol.PresenceOffline {
+		defer p.notify(agent) // after the sessions have ended
+	}
 	for _, s := range p.sessions[agent] {
 		if s.timer != nil {
 			s.timer.Stop()
@@ -94,6 +101,43 @@ func (p *presence) drop(agent string) {
 	p.mu.Unlock()
 	for _, id := range ids {
 		p.onEnd(agent, id)
+	}
+}
+
+// state is the agent's presence: connected if any of its sessions has an
+// open connection, reconnecting if it has sessions but all are within their
+// grace period, offline if it has none.
+func (p *presence) state(agent string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stateLocked(agent)
+}
+
+func (p *presence) stateLocked(agent string) string {
+	if len(p.sessions[agent]) == 0 {
+		return protocol.PresenceOffline
+	}
+	for _, s := range p.sessions[agent] {
+		if s.conns > 0 {
+			return protocol.PresenceConnected
+		}
+	}
+	return protocol.PresenceReconnecting
+}
+
+// changedAfterUnlock releases the lock and reports a change of agent's state
+// since before.
+func (p *presence) changedAfterUnlock(agent, before string) {
+	after := p.stateLocked(agent)
+	p.mu.Unlock()
+	if after != before {
+		p.notify(agent)
+	}
+}
+
+func (p *presence) notify(agent string) {
+	if p.onChange != nil {
+		p.onChange(agent)
 	}
 }
 

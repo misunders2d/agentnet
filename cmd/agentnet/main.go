@@ -253,6 +253,8 @@ func run(args []string) error {
 			return restartForUpdate(*home, opts.Executable, rs.Request)
 		}
 		return err
+	case "members":
+		return runMembers(ctx, a, rest, os.Stdout, os.Stderr)
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")

@@ -140,6 +140,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(protocol.MembersHeader, "1")
 	w.WriteHeader(http.StatusOK)
 	http.NewResponseController(w).Flush()
 
@@ -162,6 +163,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	lease := 2 * h.heartbeat
 	var lastSeq int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
+	sentMembers := int64(-1) // so is the member list
 	for {
 		if rel, gen := h.currentRelease(); gen != sentRelease {
 			data, _ := json.Marshal(rel)
@@ -169,6 +171,19 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			sentRelease = gen
+		}
+		// The generation is read before the list is built: a change made
+		// meanwhile moves it on, so the next pass sends the list again.
+		if gen := h.membersGen.Load(); gen != sentMembers {
+			m, err := h.members()
+			if err != nil {
+				return
+			}
+			data, _ := json.Marshal(m)
+			if !write("event: members\ndata: %s\n\n", data) {
+				return
+			}
+			sentMembers = gen
 		}
 		msgs, err := h.store.pendingFor(caller, ad.Session, lastSeq)
 		if err != nil {

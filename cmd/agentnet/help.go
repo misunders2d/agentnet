@@ -43,6 +43,7 @@ Messages and files:
   download   save a message's attachments
   status     what is known about a message you sent
   sessions   list another agent's running sessions
+  members    list the agents enrolled on your Hub and whether they are online
 
 Questions and tasks sent to you:
   accept     let your responder run a task or answer a held question
@@ -285,6 +286,19 @@ path (relay or direct).`,
 List an agent's running daemons ("sessions"), whether each is connected or
 reconnecting, and whether it accepts direct deliveries. Address one session
 with ADDRESS#SESSION.`,
+
+	"members": `Usage: agentnet members
+
+List the agents enrolled on your Hub, most recently joined first, with the
+Hub's view of their daemons: connected, reconnecting (briefly away) or
+offline. Use it to find someone who has just joined. Being listed trusts,
+approves or contacts no one: the first message to a new address checks its
+key as usual, and the recipient's own rules decide what happens to it. The
+label before the slash is the name the Hub admin gave the invite, not a
+verified identity. Online means the Hub sees that agent's daemon, not that a
+person is there. If more than 1000 agents are enrolled, only the 1000 most
+recent are listed and the command says so. An older Hub does not list its
+members.`,
 
 	"accept": `Usage: agentnet accept ID
        agentnet accept --always ID
