@@ -68,6 +68,7 @@ Running and checking:
   daemon     stay connected: receive, answer, retry (optionally accept direct deliveries)
   doctor     check keys, daemon, Hub, membership and responder
   version    print the version
+  update     install the latest official release over this program
   cleanup    free local space from failed or abandoned sends
 
 Admin (from an admin agent):
@@ -661,30 +662,49 @@ Windows (runs at logon, PowerShell):
 
 A responder harness (e.g. claude) must be on the PATH the daemon sees.`,
 
-	"update": `Update agentnet
+	"update": `Usage: agentnet update [--check] [vX.Y.Z]
 
-Laptop: stop the daemon (Windows cannot replace a running .exe), rebuild into
-the same place, start it again, then check:
-  cd agentnet && git pull
-  systemctl --user stop agentnet          # or: launchctl unload ... / schtasks /end /tn agentnet
-  go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe --always --dirty)" -o ~/.local/bin/agentnet ./cmd/agentnet
-  systemctl --user start agentnet
-  agentnet version && agentnet doctor
-The -ldflags part stamps the build with its git revision (scripts/build.sh
-does the same), so agentnet version and the Hub's recommendation can be
-compared; a plain go build reports "dev".
+Install an official release of agentnet over this program's file: the
+latest release by default, or the one named. It downloads the file for this
+system (agentnet-OS-ARCH, .exe on Windows) from
+https://github.com/misunders2d/agentnet/releases, checks it against that
+release's SHA256SUMS, runs it to confirm its version, and only then puts it
+in place; the previous file is kept next to it as <file>.old. On any failure
+the installed file is unchanged. Only that address is used: a version your
+Hub's operator recommends is advice, never a download location. The trust is
+the release's HTTPS and checksum; there is no separate signature.
+
+  --check   show the current and target versions and the file; change nothing
+
+- Same version: nothing to do. Older versions are refused: databases only
+  move forward. A development build (not vX.Y.Z) must name the release.
+- The file replaced is the real file behind a symlink. The directory must be
+  writable; a copy inside a container is refused (update the image). One
+  update of a file runs at a time.
+- Nothing running is stopped: a daemon (of any home) or Hub keeps the program
+  it started with until you restart it, preferably when no job is running.
+  The command says whether this home's daemon is running and, on Linux,
+  which processes still run the previous file. Restart: systemctl --user
+  restart agentnet (Linux service), launchctl unload/load (macOS), schtasks
+  /end then /run /tn agentnet (Windows).
+- Windows can rename a running .exe but not overwrite it, so the previous
+  file is renamed aside first; if the new one cannot be put in place it is
+  moved back.
+- Going back: stop agentnet and rename <file>.old over the file. If the new
+  version already opened a database with a newer schema, also move that
+  database's *.vN.bak copy back.
 
 If your Hub's operator recommends a version, agentnet version (on stderr)
 and agentnet doctor show it with the operator's link. Ask your person before
 updating unless they have already authorized it.
 
-Hub: back it up (agentnet help "hub backup"), then
-  git pull && docker compose up -d --build        # or rebuild and restart hub serve
+Building from source instead: stop the daemon, then
+  cd agentnet && git pull
+  go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe --always --dirty)" -o ~/.local/bin/agentnet ./cmd/agentnet
+and start it again (such a build reports a git revision, not vX.Y.Z).
 
-Before changing a database's schema, agentnet saves the old one next to it
-as *.vN.bak. Clients and Hubs compare protocol generations; doctor names the
-side to update. Downgrade: stop, move the *.vN.bak file back over the
-database, run the older build. There is no self-update.`,
+Hub: back it up (agentnet help "hub backup"), then
+  git pull && docker compose up -d --build        # or rebuild and restart hub serve`,
 
 	"uninstall": `Uninstall agentnet
 
@@ -737,7 +757,7 @@ back and never runs anything the reply asks for. Later replies, and replies
 from anyone else, start nothing.`
 
 // guides are help topics that are not commands; running one prints it.
-var guides = map[string]bool{"install": true, "startup": true, "update": true, "uninstall": true}
+var guides = map[string]bool{"install": true, "startup": true, "uninstall": true}
 
 // wantsHelp reports whether args ask for help: "help", or -h/--help among
 // a command's flags. Like Go's flag parsing, it stops at the first

@@ -62,6 +62,8 @@ func run(args []string) error {
 			fmt.Fprintf(os.Stderr, "your Hub recommends agentnet %s (this is %s): see agentnet help update and %s\n", r.Version, protocol.Version, r.URL)
 		}
 		return nil
+	case "update":
+		return runUpdate(ctx, *home, rest)
 	case "join":
 		return runJoin(ctx, *home, rest)
 	case "hook":

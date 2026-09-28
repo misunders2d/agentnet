@@ -13,7 +13,7 @@ func TestHelpBeforeEnrollment(t *testing.T) {
 	c := buildCLI(t)
 	home := filepath.Join(c.dir, "no-home-yet")
 	commands := []string{"join", "whoami", "send", "ask", "task", "reply", "inbox", "download", "status",
-		"sessions", "accept", "decline", "cancel", "approve", "unapprove", "approvals", "open", "responder", "fingerprint", "trust",
+		"sessions", "accept", "decline", "cancel", "approve", "unapprove", "approvals", "open", "update", "responder", "fingerprint", "trust",
 		"daemon", "doctor", "version", "cleanup", "admin", "hub", "a2a"}
 	forms := [][]string{{"--help"}, {"-h"}, {"help"}, {}}
 	for _, f := range forms {
@@ -44,7 +44,7 @@ func TestHelpBeforeEnrollment(t *testing.T) {
 		t.Fatalf("help created the home directory (%v)", err)
 	}
 	for g, title := range map[string]string{"install": "Install agentnet", "startup": "Start agentnet daemon at login",
-		"update": "Update agentnet", "uninstall": "Uninstall agentnet"} {
+		"uninstall": "Uninstall agentnet"} {
 		for _, args := range [][]string{{g}, {"help", g}, {g, "--help"}} {
 			if out := c.run(append([]string{"--home", home}, args...)...); !strings.HasPrefix(out, title) {
 				t.Fatalf("guide %v:\n%s", args, out)

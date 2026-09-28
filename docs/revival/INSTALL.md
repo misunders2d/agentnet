@@ -214,8 +214,16 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
 
-Stop the daemon (Windows cannot replace a running `.exe`), `git pull`, rebuild
-into the same place, start it again and run `agentnet doctor`. For the Hub:
+From a release build, `agentnet update` installs the latest official release
+(or `agentnet update vX.Y.Z` a named one) over the program's file: it
+downloads this system's asset from the project's GitHub releases, checks it
+against that release's `SHA256SUMS`, runs it to confirm its version, keeps the
+previous file as `<file>.old`, and stops nothing. Then restart the daemon when
+no job is running and run `agentnet doctor`. Older versions are refused, a
+development build must name the release, and a copy inside a container should
+be updated through its image. Built from source: stop the daemon (Windows
+cannot replace a running `.exe`), `git pull`, rebuild into the same place,
+start it again and run `agentnet doctor`. For the Hub:
 back it up, then `git pull && docker compose up -d --build` (or rebuild and
 restart `hub serve`). Before changing a database's schema, `agentnet` saves
 the old one next to it as `*.vN.bak`. Clients and Hubs check the protocol
@@ -223,8 +231,8 @@ generation; a mismatch names the side to update. Downgrading is manual:
 stop the daemon, restore the previous binary, and restore the database from
 the `*.vN.bak` file or a full-home backup. Rolling back the database restores
 consistent keys and history with the older binary, at the cost of any messages
-or attachments received after the backup was made. There is no self-update.
-(`agentnet help update`.)
+or attachments received after the backup was made. Releases before the one
+that added `agentnet update` have no self-update (`agentnet help update`).
 
 Build with the version stamp (`scripts/build.sh`, or `go build -ldflags
 "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe
