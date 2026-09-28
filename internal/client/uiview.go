@@ -11,6 +11,10 @@ import (
 // Read-only views for the local messenger page. Threads are derived from
 // today's reply links on every read: nothing new is stored, so a message
 // whose parent arrives late simply joins its thread next time.
+//
+// These views are one installation's device history (version 1). Messages
+// of a conversation (a DM, version 2) are never part of them: they are shown
+// through the conversation APIs (agentnet dm), not as device threads.
 
 // ThreadSummary is one reply-linked conversation with one peer.
 type ThreadSummary struct {
@@ -65,13 +69,22 @@ func (a *Agent) Threads() ([]ThreadSummary, error) {
 }
 
 func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
-	links, err := a.store.peerLinks(peer)
+	all, err := a.store.peerLinks(peer)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := a.store.threadRows(peer)
 	if err != nil {
 		return nil, err
+	}
+	var links []link // device history only: rows has no conversation messages
+	for _, l := range all {
+		if _, ok := rows[l.id]; ok {
+			links = append(links, l)
+		}
+	}
+	if len(links) == 0 {
+		return nil, nil
 	}
 	// Union reply-linked messages into threads.
 	parent := map[string]string{}
@@ -135,9 +148,9 @@ func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
 }
 
 // conversationPeers lists every address this installation has exchanged
-// messages with.
+// device-history messages with (conversation messages left out).
 func (s *store) conversationPeers() ([]string, error) {
-	rows, err := s.db.Query(`SELECT sender FROM inbox UNION SELECT recipient FROM outbox`)
+	rows, err := s.db.Query(`SELECT sender FROM inbox WHERE conv IS NULL UNION SELECT recipient FROM outbox WHERE conv IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +166,14 @@ func (s *store) conversationPeers() ([]string, error) {
 	return out, rows.Err()
 }
 
-// threadRows reads direction, kind, state and read state for every message
-// exchanged with peer, and which sent questions or tasks have a reply.
+// threadRows reads direction, kind, state and read state for every
+// device-history message exchanged with peer, and which sent questions or
+// tasks have a reply.
 func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`) FROM inbox WHERE sender = ?`,
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`) FROM inbox WHERE sender = ? AND conv IS NULL`,
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -181,7 +195,7 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox WHERE recipient = ?`, peer)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox WHERE recipient = ? AND conv IS NULL`, peer)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +209,13 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 		out[r.id] = r
 	}
 	return out, rows.Err()
+}
+
+// PageReview is Review for the page: what waits for the person's decision in
+// device history. Conversation items are left out, since the page does not
+// show conversations yet; agentnet inbox and agentnet dm still list them.
+func (a *Agent) PageReview() ([]Message, error) {
+	return a.store.messages(` WHERE conv IS NULL AND `+inReview, reviewStates...)
 }
 
 func firstLine(s string) string {

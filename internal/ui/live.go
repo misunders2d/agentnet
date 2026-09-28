@@ -56,7 +56,7 @@ func (l *Live) Overview() (Overview, error) {
 			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
 			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
 	}
-	review, err := l.a.Review()
+	review, err := l.a.PageReview() // device history: conversation items are not shown here yet
 	if err != nil {
 		return o, err
 	}
@@ -69,11 +69,7 @@ func (l *Live) Overview() (Overview, error) {
 		return o, err
 	}
 	for _, x := range q {
-		reason := "It did not verify, so its content is not shown."
-		if x.Reason == "key_changed" {
-			reason = "Held until you trust " + x.Sender + "'s changed key."
-		}
-		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: reason, At: x.ReceivedAt})
+		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return o, nil
 }
@@ -102,11 +98,33 @@ func directoryOf(v client.MemberView, self string) Directory {
 	return d
 }
 
+// holdReason says why a received message is held back, for the person.
+func holdReason(reason, sender string) string {
+	switch reason {
+	case "key_changed":
+		return "Held until you trust " + sender + "'s changed key."
+	case "proof_pending":
+		return "Held until the conversation or person it names can be checked here. Nothing runs it."
+	case "identity_conflict":
+		return "Held: it disagrees with the person record kept here for " + sender + ". Nothing runs it."
+	case "conflicting_duplicate":
+		return "Held: " + sender + " sent different content under a message it already sent. Nothing runs it."
+	}
+	return "It did not verify, so its content is not shown."
+}
+
+// notShownHere answers for a conversation (DM) message: the page shows one
+// installation's device history, and conversations only through agentnet dm.
+const notShownHere = "This message belongs to a conversation, which this page does not show yet: see agentnet dm show."
+
 // Thread implements Provider.
 func (l *Live) Thread(id string) (Thread, error) {
 	c, err := l.a.Conversation(id, 0, 0)
 	if errors.Is(err, client.ErrNoMessage) {
 		return Thread{}, NotFound("no message with that id")
+	}
+	if errors.Is(err, client.ErrConversationItem) {
+		return Thread{}, Refuse(notShownHere)
 	}
 	if err != nil {
 		return Thread{}, err
@@ -171,6 +189,9 @@ func (l *Live) Thread(id string) (Thread, error) {
 // peer's daemons and the receipts of messages it still holds for them.
 func (l *Live) Refresh(threadID string) (Presence, error) {
 	c, err := l.a.Conversation(threadID, 0, 0)
+	if errors.Is(err, client.ErrConversationItem) {
+		return Presence{}, Refuse(notShownHere)
+	}
 	if err != nil {
 		return Presence{}, NotFound("no message with that id")
 	}
@@ -220,7 +241,7 @@ func (l *Live) Send(d Draft) (Sent, error) {
 	}
 	if d.ReplyTo != "" {
 		if err := l.a.CheckReplyTo(d.ReplyTo, d.To); err != nil {
-			return Sent{}, Refuse(err.Error())
+			return Sent{}, Refuse(sentence(err))
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)

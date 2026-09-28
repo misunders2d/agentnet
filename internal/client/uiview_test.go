@@ -159,3 +159,65 @@ func TestThreadsNoticeShapeIsExact(t *testing.T) {
 		t.Fatalf("notice with a reply %+v", c)
 	}
 }
+
+// The page's views are device history: DM messages, sent or received, never
+// become device threads, unread counts or page review items, also with a
+// device thread beside them. agentnet inbox's review keeps them, and viewing
+// marks nothing read.
+func TestPageViewsLeaveOutConversations(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	alice := w.alice.Address
+	c1, c2 := newDM(t, w.alice, w.bob), newDM(t, w.alice, w.bob)
+	if _, err := w.alice.SendConv(tctx(t), c1, ConvOutgoing{Body: "dm deploy topic"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.SendConv(tctx(t), c2, ConvOutgoing{Kind: envelope.KindQuestion, Body: "dm budget question?"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold both DMs", func() bool {
+		return len(convBodies(t, w.bob, c1)) == 1 && len(convBodies(t, w.bob, c2)) == 1
+	})
+	if _, err := w.bob.SendConv(tctx(t), c1, ConvOutgoing{Body: "dm reply from bob"}); err != nil {
+		t.Fatal(err)
+	}
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "device question?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the DM reply at alice and the device question at bob", func() bool {
+		return len(convBodies(t, w.alice, c1)) == 2 && len(threadsWith(t, w.bob, alice)) == 1
+	})
+
+	for who, a := range map[string]*Agent{"alice": w.alice, "bob": w.bob} {
+		ts, err := a.Threads()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ts) != 1 || ts[0].ID != q.ID || ts[0].Count != 1 || ts[0].Title != "device question?" {
+			t.Errorf("%s's page threads: %+v", who, ts)
+		}
+	}
+	if bt := threadsWith(t, w.bob, alice)[q.ID]; bt.Unread != 1 || bt.Review != 1 {
+		t.Errorf("bob's device thread counts DM messages: %+v", bt)
+	}
+	page, err := w.bob.PageReview()
+	if err != nil || len(page) != 1 || page[0].ID != q.ID {
+		t.Fatalf("page review: %v %+v", err, page)
+	}
+	all, err := w.bob.Review()
+	held := 0
+	for _, m := range all {
+		if m.State == stateConvHeld {
+			held++
+		}
+	}
+	if err != nil || len(all) != 2 || held != 1 {
+		t.Fatalf("agentnet inbox review lost the DM question: %v %+v", err, all)
+	}
+	if n := inboxCount(t, w.bob, `conv IS NOT NULL AND read_at IS NULL`); n != 2 {
+		t.Fatalf("%d unread DM messages at bob, want 2 (viewing marks nothing read)", n)
+	}
+}

@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,5 +220,89 @@ func TestLiveDirectoryFollowsTheServer(t *testing.T) {
 	}
 	if d.Status != DirectoryListed || d.At.IsZero() {
 		t.Fatalf("after losing the server: %+v", d)
+	}
+}
+
+// The page shows one installation's device history: a DM's messages are not
+// device threads or review items, and asking the page's own API for one
+// directly is refused plainly, as is a device reply to one. Nothing is sent.
+func TestLivePageLeavesOutConversations(t *testing.T) {
+	alice, bob, live, _ := liveWorldHub(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, a := range []*client.Agent{alice, bob} {
+		if _, err := a.CreatePerson(ctx, "Person of "+a.Address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var conv string
+	for deadline := time.Now().Add(20 * time.Second); conv == ""; time.Sleep(50 * time.Millisecond) {
+		c, err := alice.CreateDM(ctx, bob.Address)
+		if err == nil {
+			conv = c
+		} else if time.Now().After(deadline) {
+			t.Fatalf("no DM: %v", err)
+		}
+	}
+	if _, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Kind: envelope.KindQuestion, Body: "dm question?"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Body: "device hello"}); err != nil {
+		t.Fatal(err)
+	}
+	var dm string
+	var o Overview
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		msgs, _ := bob.ConversationMessages(conv)
+		o, _ = live.Overview()
+		if len(msgs) == 1 && len(o.Threads) == 1 {
+			dm = msgs[0].ID
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("DM %d, threads %+v", len(msgs), o.Threads)
+		}
+	}
+	if o.Threads[0].Title != "device hello" || len(o.Review) != 0 {
+		t.Fatalf("page shows DM content: threads %+v review %+v", o.Threads, o.Review)
+	}
+	if _, err := live.Thread(dm); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "agentnet dm show") {
+		t.Fatalf("thread of a DM message: %v", err)
+	}
+	if _, err := live.Refresh(dm); !errors.Is(err, ErrRefused) {
+		t.Fatalf("refresh of a DM message: %v", err)
+	}
+	if _, err := live.Send(Draft{To: alice.Address, Body: "device reply", ReplyTo: dm}); !errors.Is(err, ErrRefused) ||
+		!strings.Contains(err.Error(), "conversation") {
+		t.Fatalf("device reply to a DM message: %v", err)
+	}
+	if _, err := live.Act(Action{Do: DoAccept, ID: dm}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("accept on a DM message: %v", err)
+	}
+	// Through the page's HTTP API as the browser asks.
+	srv := New(live, "127.0.0.1", testToken)
+	get := httptest.NewRequest("GET", "/api/thread?id="+dm, nil)
+	get.Host = "127.0.0.1"
+	get.AddCookie(&http.Cookie{Name: cookieName, Value: testToken})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, get)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "belongs to a conversation") {
+		t.Fatalf("GET /api/thread for a DM message: %d %s", w.Code, w.Body)
+	}
+}
+
+// Each reason a message is held has its own plain words; conversation holds
+// never read as a failed signature.
+func TestHoldReasons(t *testing.T) {
+	seen := map[string]bool{}
+	for _, r := range []string{"key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate", "invalid"} {
+		text := holdReason(r, "bob/desk")
+		if seen[text] {
+			t.Errorf("%s shares its words with another reason: %q", r, text)
+		}
+		seen[text] = true
+		if r != "invalid" && strings.Contains(text, "did not verify") {
+			t.Errorf("%s reads as a failed signature: %q", r, text)
+		}
 	}
 }
