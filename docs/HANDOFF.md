@@ -304,8 +304,10 @@ If a local database or key file is damaged:
   [DECISIONS §3.2 and §2](DECISIONS.md). Still required: choose a person (e.g. Vitalii), hold a human DM,
   explicitly invite an agent with the context you allow, clear human/agent participants and authorship,
   and follow-ups until an explicit dismissal. A message kind is not a participant's identity or an agent
-  invitation; an address is one installation's key, not a person; nothing is merged by address. See
-  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
+  invitation; an address is one installation's key, not a person; nothing is merged by address. Zoom
+  must show each human with visible links to their own agents (ownership, not presence or invitation;
+  from the reviewed identity/agent relationship, never labels or addresses; no device-as-human shortcut).
+  See [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon

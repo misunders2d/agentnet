@@ -23,6 +23,15 @@
   A message kind (message, question, task) is neither a participant's identity
   nor an agent invitation. An address names one installation's key, not a
   person. Nothing is merged by address, and no human label is made up.
+- **Zoom: agents shown with their human (owner requirement, 2026-09-28).** In
+  Zoom, a human is a node with visible links to the agent nodes that belong to
+  them. The link means ownership or association only, and is drawn apart from
+  online state and from being invited into a conversation. An agent invited
+  into someone else's conversation stays linked to its own human. The link
+  comes only from the reviewed identity and agent relationship (the person's
+  roster, the agent's host installation and participation), never from a label
+  or an address. There is no device-as-human shortcut in the meantime. It is
+  part of the human-DM acceptance and of the final Zoom view.
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and
