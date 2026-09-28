@@ -693,71 +693,85 @@ S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
   trust or permission: keys, approvals and task grants work as today.
 - **Pi native attention:** under investigation (which lifecycle and idle APIs
   Pi supports); no design or code yet.
-- **Contact-first history** (reviewed recommendation below).
+- **Contacts and conversations** (reviewed direction below, corrected by the
+  owner).
 
 Still open, not implemented: a Chrome standalone/PWA install. S-R (reminders)
 keeps its status above. No group or identity work is in this release.
 
-**Contact-first history (reviewed recommendation, 2026-09-28; not
-implemented).**
+**Contacts and conversations (reviewed direction, corrected by the owner
+2026-09-28; not implemented).** This supersedes the contact-wide history
+recorded earlier the same day (715ac2a).
 - **Problem:** agents send most messages without `reply_to`, so every v1
   reply-linked thread is one message long. One contact then shows about 30 rows
-  or Zoom cards, and remote review notices crowd the list. Grouping by contact
-  alone only moves those cards down a level.
-- **Contact = exact address.** One entry per contact in every lens: a Classic
-  row, a Zoom node, a Comic issue. Nothing is merged by person label or by an
-  inferred human identity.
-- **History:** a contact opens one chronological history in both directions,
-  with stable paging: older messages load on request, new ones arrive by push,
-  and no message moves, repeats or is skipped across pages. Reply links stay
-  causal and visible (jump to the parent); an optional exchange focus shows one
-  reply-linked chain. A message without a reply link is a message, not a topic.
-  Zoom goes people, then the contact's history, then one message (no grid of
-  exchanges); Comic is one issue per contact.
-- **Sending:** the composer sends to the contact with no `reply_to` unless the
-  person picks a visible, cancellable reply target; answering a question or task
-  takes it over as today. Drafts are per contact (text, kind, target). No task
-  context or native session is merged across messages or contacts.
-- **Work cards:** each question or task and its result stays its own targeted
-  card. Nothing is hidden, and "done" is never inferred from a reply; state
-  comes from stored job and delivery states.
-- **Counts per contact, never summed:** unread, actionable here (a local
-  decision), and remote notices.
+  or Zoom cards, and remote review notices crowd the list.
+- **Model:** one row per contact (exact address), holding that contact's
+  separate conversations, each holding its messages. For admin/zenbook, for
+  example: "AgentNet rollout", "Pi cleanup", another discussion. Clutter goes
+  down by grouping under the contact, never by merging conversations. Nothing is
+  merged by person label or inferred human identity.
+- **The selected conversation owns the composer, draft and context.** A normal
+  send continues it; an explicit "New conversation" starts another. A reply
+  target is optional inside a conversation and never permission to combine
+  jobs.
+- **Never from a harness session:** conversation identity is not derived from
+  a native harness session, which is local execution state that may restart or
+  branch while the chat goes on. Task, grant and session isolation are
+  unchanged.
+- **Old v1 material:** reply links prove a chain; a message without one proves
+  neither the same topic nor a different one. Such messages stay reachable
+  under their contact without being assigned to a conversation by content,
+  time, key or session, and without being called one conversation. How they
+  are shown and later sorted is unresolved. No automatic (AI) grouping.
+- **All activity** per contact is optional and display-only: a time-ordered
+  view that is never a send target or a source of context.
+- **Identity:** named, shared, persistent conversations are S-B's stable
+  conversation identity (§8, §9.1 `conv`), so they need that wire and schema
+  work. Only the contact navigation itself is view-only.
+- **Kept from the review:** counts per contact are never summed (unread,
+  actionable here, remote notices); each question or task and its result stays
+  its own targeted card and "done" is never inferred from a reply; paging is
+  stable (no message moves, repeats or is skipped).
 - **Remote review notices:** grouped per sender into one line with the latest
   *reported* count and time, never shown as that machine's current queue. Every
-  record stays available in Details. Dismissing clears only the local notices.
-  There is no approve, accept or run control for remote requests, and a
-  machine command is never the main instruction to the person.
-- **Unresolved, next release:** a notice carries no request content and no
-  allowed route to respond, so it cannot ask the person to decide anything.
-  That needs the actual request plus an allowed response route. Until then:
-  no automatic remote query or task, and no new authority.
-- **Build:** no wire or schema change for grouping itself: a read-only history
-  method over the existing link indexes, plus per-contact counts. Directory,
-  Pi attention and the hosted stage are separate items.
+  record stays in Details. Dismissing clears only the local notices. No approve,
+  accept or run control for remote requests; a machine command is never the
+  main instruction to the person.
+- **Lenses:** Classic, contact rows that open into their conversations; Zoom,
+  people, then a contact's conversations, then a conversation, then a message;
+  Comic, a series per contact and an issue per conversation.
+- **Unresolved, next release:**
+  - a notice has no request content and no allowed response route, so it
+    cannot ask the person to decide anything; that needs both. Until then no
+    automatic remote query or task and no new authority;
+  - how old unlinked messages are shown and sorted.
 - **Acceptance:**
-  - A1: 30 unlinked messages from one address are one contact in every lens,
-    with a readable history listing each once in order and the same counts
-    everywhere.
-  - A2: in a reply chain, links jump to parents; exchange focus shows only the
-    chain.
-  - A3: a composer send carries no `reply_to`; an explicit reply carries exactly
-    the chosen id; answering a question takes it over once.
+  - A1: 30 unlinked messages from one address are one contact entry in every
+    lens; they are not merged into one conversation; each message is
+    reachable once; counts match across lenses.
+  - A2: two conversations with the same contact stay separate: sends, drafts,
+    context and replies never cross.
+  - A3: a normal send continues the selected conversation; "New conversation"
+    starts a separate one; an explicit reply carries exactly the chosen id and
+    combines no jobs; answering a question takes it over once.
   - A4: a held question or awaiting task counts 1 actionable, with the same
     dialogs and gates; unread counts separately.
   - A5: five notices from one sender make one line with the latest reported
     count and time, outside the actionable count, with no approve, accept or run
-    control; dismissing clears all five locally, a newer notice shows again, and
+    control; dismissing clears all five locally, a newer one shows again, and
     Details lists each.
-  - A6: a task sent and its result are each a targeted card with delivery state;
+  - A6: a task and its result are each a targeted card with delivery state;
     done is not inferred; a running received task can be stopped; nothing runs
     by itself.
-  - A7: drafts per contact restore text, kind and target; a stale target is
+  - A7: drafts are per conversation (text, kind, target); a stale target is
     dropped; nothing sends while switching.
   - A8: admin/laptop and admin/zenbook stay two contacts.
-  - A9: a push to another contact changes only its unread count; no polling.
-  - A10: loading older messages keeps the reading position, and no message is
-    repeated or skipped while new ones arrive.
+  - A9: a push changes only the affected contact and conversation; no polling.
+  - A10: loading older messages keeps the reading position; nothing repeats or
+    is skipped while new ones arrive.
+  - A11: restarting or branching a local harness session neither changes nor
+    splits a conversation.
+  - A12: All activity offers no composer and passes no context.
 
 **S-W: relay serves the app; phone/browser device (1:1, v1).**
 - **Build:** embedded assets, the browser engine, IndexedDB outbox, and a
