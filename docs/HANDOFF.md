@@ -303,7 +303,9 @@ If a local database or key file is damaged:
   a People directory with event-driven presence (online = daemon connected; listing grants no
   trust), Pi native attention (under investigation), and contacts and conversations (reviewed
   direction, corrected by the owner: one row per exact address holding separate conversations,
-  never merged; grouped remote notices; no remote approval). See
+  never merged; grouped remote notices; no remote approval), and one search for agents and
+  conversations (people once human identity exists; kinds shown, opens exactly the chosen item,
+  grants no trust). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
   remains an open request; S-R reminders unchanged.
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).

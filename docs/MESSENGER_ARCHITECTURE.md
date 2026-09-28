@@ -695,6 +695,16 @@ S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
   Pi supports); no design or code yet.
 - **Contacts and conversations** (reviewed direction below, corrected by the
   owner).
+- **Search (required by the owner):** one clear search entry finds agents
+  (exact addresses) and conversations, and later people. Results say which kind
+  each is and show the address or identity context when names match, so
+  same-named results can be told apart; choosing one opens exactly that contact
+  or conversation, never a guess or a merge (contact, then its separate
+  conversations, then messages, as below). Search reaches only what the
+  directory and local history already show and grants no trust or permission.
+  Person results wait for the human-identity model (§4); today's person label
+  (such as "admin") is not shown as a verified person. How search is built
+  (index, service, any AI) is not decided here.
 
 Still open, not implemented: a Chrome standalone/PWA install. S-R (reminders)
 keeps its status above. No group or identity work is in this release.
