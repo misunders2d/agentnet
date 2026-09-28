@@ -61,7 +61,7 @@ func (l *Live) Overview() (Overview, error) {
 	}
 	for _, m := range review {
 		o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
-			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: m.Kind == KindMessage && m.Status == StatusReviewNotice})
+			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))})
 	}
 	q, err := l.a.Quarantine()
 	if err != nil {

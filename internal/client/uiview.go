@@ -157,8 +157,10 @@ func (s *store) conversationPeers() ([]string, error) {
 // exchanged with peer, and which sent questions or tasks have a reply.
 func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, '') = ? FROM inbox WHERE sender = ?`,
-		envelope.StatusReviewNotice, peer)
+	// A review notice is exactly the shape the store files as one (see
+	// receivedNotice); a reply or a message with files never is.
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`) FROM inbox WHERE sender = ?`,
+		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +172,6 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 			return nil, err
 		}
 		r.in = true
-		r.notice = r.notice && r.kind == envelope.KindMessage
 		out[r.id] = r
 		if r.replyTo != "" {
 			replies[r.replyTo] = true

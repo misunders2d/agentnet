@@ -122,3 +122,40 @@ func TestThreadsCountNoticesApart(t *testing.T) {
 		t.Fatalf("after dismiss %+v", nt)
 	}
 }
+
+// Only the exact shape the store files as a review notice counts as one: a
+// reply or a message with files carrying the same status is a normal,
+// unread message. A notice that got a reply stays counted and reachable.
+func TestThreadsNoticeShapeIsExact(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	alice := w.alice.Address
+	send := func(o Outgoing) string {
+		t.Helper()
+		o.To, o.Kind = w.bob.Address, envelope.KindMessage
+		res, err := w.alice.SendMessage(tctx(t), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.ID
+	}
+	first := send(Outgoing{Body: "hello"})
+	send(Outgoing{Body: "looks like a notice", ReplyTo: first, Status: envelope.StatusReviewNotice})
+	path, _ := writeFile(t, t.TempDir(), "report.txt", 64)
+	withFile := send(Outgoing{Body: "also looks like one", Files: []string{path}, Status: envelope.StatusReviewNotice})
+	notice := send(Outgoing{Body: "1 request(s) wait", Status: envelope.StatusReviewNotice})
+	eventually(t, "all arrive", func() bool { return len(threadsWith(t, w.bob, alice)) == 3 })
+	if _, err := w.bob.Reply(tctx(t), notice, "seen, thanks"); err != nil {
+		t.Fatal(err)
+	}
+	ts := threadsWith(t, w.bob, alice)
+	if c := ts[first]; c.Count != 2 || c.Unread != 2 || c.Notices != 0 || c.NoticeOnly {
+		t.Fatalf("reply with notice status %+v", c)
+	}
+	if c := ts[withFile]; c.Unread != 1 || c.Notices != 0 || c.NoticeOnly {
+		t.Fatalf("files with notice status %+v", c)
+	}
+	if c := ts[notice]; c.Count != 2 || c.Notices != 1 || c.NoticeOnly || c.Review != 0 || c.Unread != 0 {
+		t.Fatalf("notice with a reply %+v", c)
+	}
+}

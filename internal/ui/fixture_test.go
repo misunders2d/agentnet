@@ -258,6 +258,11 @@ func TestStateTextAndNext(t *testing.T) {
 	if got := ReviewWhy(KindTask, "awaiting", "carol/ci", ""); got != "Tasks run only if you accept them" {
 		t.Fatalf("awaiting reason: %q", got)
 	}
+	// A review notice is exactly the stored shape: no reply link, no files.
+	if !IsReviewNotice(KindMessage, StatusReviewNotice, "", 0) || IsReviewNotice(KindMessage, StatusReviewNotice, "x", 0) ||
+		IsReviewNotice(KindMessage, StatusReviewNotice, "", 1) || IsReviewNotice(KindAnswer, StatusReviewNotice, "", 0) {
+		t.Fatal("review notice shape")
+	}
 	// Only states the client accepts a decision in offer it.
 	if a := ActionsFor(KindMessage, "held"); a != nil {
 		t.Fatalf("plain message actions %v", a)

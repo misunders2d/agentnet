@@ -79,7 +79,7 @@ const Comic = {
     first.classList.add("current");
     const book = el("div", { class: "book" }, first);
     this.book = book;
-    root.replaceChildren(
+    fill(root,
       el("div", { class: "comic-bar" },
         el("button", { type: "button", class: "chip", onclick: () => this.toggleGrid() }, this.grid ? "Back to reading" : "All pages"),
         el("span", { class: "page-count", "aria-live": "polite" })),
@@ -238,7 +238,7 @@ const Zoom = {
   refresh() {
     if (this.level >= 2 && (!state.data || state.data.peer !== this.peer)) this.level = this.peer ? 1 : 0;
     if (this.level === 3 && !state.data.messages.some((m) => m.id === this.msg)) this.level = 2;
-    $("zoom").replaceChildren(this.layer());
+    fill($("zoom"), this.layer());
   },
 
   layer() {

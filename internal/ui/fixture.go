@@ -213,7 +213,7 @@ func (f *Fixture) Overview() (Overview, error) {
 			Count: len(t.msgs), KeyChanged: f.peers[t.peer].key.Pending != "", NoticeOnly: true}
 		for _, m := range t.msgs {
 			v := f.view(t, m)
-			notice := m.Dir == "in" && m.Kind == KindMessage && m.Status == StatusReviewNotice
+			notice := m.Dir == "in" && IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Files))
 			s.NoticeOnly = s.NoticeOnly && notice
 			if notice {
 				if m.State == "needs_human" {

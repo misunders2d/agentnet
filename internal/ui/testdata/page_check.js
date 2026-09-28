@@ -12,8 +12,10 @@ class Elem {
       style: {}, dataset: {}, children: [], attrs: {} });
     this.classList = { add() {}, remove() {}, contains: () => false, toggle() {} };
   }
-  append(...k) { this.children.push(...k); }
-  replaceChildren(...k) { this.children = k; }
+  // Like the browser: anything that is not a node becomes text (false,
+  // null and arrays included), so stray values show up as text here too.
+  append(...k) { this.children.push(...k.map(asNode)); }
+  replaceChildren(...k) { this.children = k.map(asNode); }
   replaceWith() {}
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k] ?? null; }
@@ -33,6 +35,18 @@ class Elem {
   requestSubmit() {}
 }
 
+const asNode = (k) => (k instanceof Elem || (k && typeof k === "object" && "text" in k)) ? k : { text: String(k) };
+// strayText lists text the page should never show: a value a condition left
+// out, or an element list turned into text.
+function strayText(n, out = []) {
+  if (!(n instanceof Elem)) {
+    if (/^(false|null|undefined|true)$/.test(n.text) || String(n.text).includes("[object")) out.push(n.text);
+    return out;
+  }
+  for (const c of n.children) strayText(c, out);
+  return out;
+}
+const hasTag = (n, tag) => n instanceof Elem && (n.tagName === tag || n.children.some((c) => hasTag(c, tag)));
 const byId = {};
 const radios = ["message", "question", "task"].map((v) => Object.assign(new Elem("input"), { value: v, checked: v === "message" }));
 const document = {
@@ -257,6 +271,48 @@ const ev = { preventDefault() {} };
   check(acts.length === 2 && acts.every((b) => b.do === "resolve") && acts.map((b) => b.id).sort().join() === "n1,n2",
     "dismiss resolves exactly that sender's reports: " + JSON.stringify(acts));
   check(!calls.some((c) => c.path === "/api/send"), "dismissing sends nothing");
+
+  // Nothing a condition leaves out reaches the page as text: search with
+  // only conversation matches, the Zoom write dialog (and its kind picker),
+  // a read dialog without a summary, and the contact list.
+  overview.threads = threads;
+  await run("loadOverview()");
+  run("state").query = "rollout";
+  run("rerenderContacts")();
+  check(strayText($("conv-list")).length === 0, "search results show no stray text: " + strayText($("conv-list")));
+  run("clearSearch")();
+  check(strayText($("conv-list")).length === 0, "contact list shows no stray text: " + strayText($("conv-list")));
+  await run('openThread("a1")');
+  run("writeDialog")(run("state.data"), null);
+  check(strayText($("dialog-body")).length === 0 && hasTag($("dialog-body"), "select"),
+    "the write dialog shows its kind picker and no stray text: " + strayText($("dialog-body")));
+  run("writeDialog")(run("state.data"), run("state.data.messages[0]"));
+  check(strayText($("dialog-body")).length === 0, "the answer dialog shows no stray text: " + strayText($("dialog-body")));
+  run("readDialog")(run("state.data.messages[0]"));
+  check(strayText($("dialog-body")).length === 0, "the read dialog shows no stray text: " + strayText($("dialog-body")));
+
+  // Only the exact stored shape is a report; a reply or files make it a
+  // normal message.
+  const rep = { dir: "in", kind: "message", status: "review_notice", reply_to: "", files: null };
+  check(run("isReport")(rep) && !run("isReport")(Object.assign({}, rep, { reply_to: "x" })) &&
+    !run("isReport")(Object.assign({}, rep, { files: [{ name: "f" }] })) && !run("isReport")(Object.assign({}, rep, { kind: "answer" })),
+    "report shape is exact");
+
+  // A report that got a reply sits in a conversation and still counts and
+  // can be dismissed.
+  const mixed = [sum("mix", "hub/ops", { title: "1 request(s) wait", count: 2, notices: 1 }),
+    sum("n9", "hub/ops", { title: "old report", notice_only: true, last_at: "2026-09-28T07:00:00Z" })];
+  overview.threads = mixed;
+  overview.review = [{ id: "mix", peer: "hub/ops", kind: "message", why: "", excerpt: "1 request(s) wait", at: "2026-09-28T10:00:00Z", notice: true }];
+  await run("loadOverview()");
+  const mc = run("contactsOf")(mixed)[0];
+  check(mc.notices === 1 && mc.conversations.some((t) => t.id === "mix") && mc.reports.length === 1,
+    "a report with a reply is a conversation and still counted");
+  const line = run("reportLine")(mc);
+  check(line && strayText(line).length === 0 && JSON.stringify(line).includes("Dismiss 1 report"), "the report line counts it");
+  calls.length = 0;
+  await run("dismissReports")("hub/ops");
+  check(calls.filter((c) => c.path === "/api/act").map((c) => c.body.id).join() === "mix", "dismiss reaches the report in a conversation");
 
   if (failed) process.exit(1);
   console.log("page logic ok");

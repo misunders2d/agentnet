@@ -101,6 +101,13 @@ type ReviewItem struct {
 // StatusReviewNotice is the status of a review notice (a plain message).
 const StatusReviewNotice = "review_notice"
 
+// IsReviewNotice reports whether a received message is exactly a review
+// notice, the shape the client files as one: a plain message with that
+// status, no reply link and no files. Anything else is a normal message.
+func IsReviewNotice(kind, status, replyTo string, files int) bool {
+	return kind == KindMessage && status == StatusReviewNotice && replyTo == "" && files == 0
+}
+
 // QuarantineItem is a received envelope held back; its content is not shown.
 type QuarantineItem struct {
 	ID     string    `json:"id"`

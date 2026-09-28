@@ -8,6 +8,17 @@ const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {} };
 const lenses = ["classic", "comic", "zoom"];
 
+// present flattens children and drops the ones a condition left out (false,
+// null, undefined, ""), so they never reach the page as text.
+const present = (list) => list.flat(Infinity).filter((k) => k !== undefined && k !== null && k !== false && k !== "");
+const node = (k) => typeof k === "string" ? document.createTextNode(k) : k;
+
+// fill replaces an element's children; use it instead of replaceChildren.
+function fill(parent, ...kids) {
+  parent.replaceChildren(...present(kids).map(node));
+  return parent;
+}
+
 // el builds an element; string children become text nodes.
 function el(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -17,10 +28,7 @@ function el(tag, attrs, ...kids) {
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
     else e.setAttribute(k, v === true ? "" : v);
   }
-  for (const k of kids.flat()) {
-    if (k === undefined || k === null || k === false || k === "") continue;
-    e.append(typeof k === "string" ? document.createTextNode(k) : k);
-  }
+  for (const k of present(kids)) e.append(node(k));
   return e;
 }
 
@@ -101,7 +109,8 @@ function contactsOf(threads) {
     }
     c.keyChanged ||= t.key_changed;
     if (new Date(t.last_at) > new Date(c.lastAt)) c.lastAt = t.last_at;
-    if (t.notice_only) { c.reports.push(t); c.notices += t.notices; continue; }
+    c.notices += t.notices; // open reports, also any that got a reply
+    if (t.notice_only) { c.reports.push(t); continue; }
     c.review += t.review; c.unread += t.unread; c.running += t.running; c.waiting ||= t.waiting;
     const open = t.review || t.running || t.waiting;
     (t.count > 1 || open ? c.conversations : c.singles).push(t);
@@ -166,19 +175,25 @@ function threadRow(t, open, single) {
 // reportLine groups one sender's review notices: the latest reported text
 // and time, never presented as that machine's current queue.
 function reportLine(c) {
-  if (!c.reports.length) return null;
-  const openIDs = openReports(c.peer);
-  const latest = c.reports[0];
+  // Every report from this sender: open ones (also any that got a reply and
+  // so sit in a conversation) and dismissed ones, newest first.
+  const open = ((state.overview && state.overview.review) || []).filter((it) => it.notice && it.peer === c.peer)
+    .map((it) => ({ id: it.id, at: it.at, text: it.excerpt, open: true }));
+  const seen = new Set(open.map((r) => r.id));
+  const all = [...open, ...c.reports.filter((t) => !seen.has(t.id)).map((t) => ({ id: t.id, at: t.last_at, text: t.title, open: false }))]
+    .sort((a, b) => new Date(b.at) - new Date(a.at));
+  if (!all.length) return null;
+  const latest = all[0];
   const d = el("details", { class: "tech" }, el("summary", {}, "Details"),
-    el("ul", { class: "report-items" }, c.reports.map((r) => el("li", {},
-      el("time", { datetime: r.last_at }, when(r.last_at)), " · ", r.notices ? "not dismissed" : "dismissed", " · ",
-      el("span", { class: "hint" }, r.title)))));
-  return el("div", { class: "report-line" + (openIDs.length ? "" : " seen") },
+    el("ul", { class: "report-items" }, all.map((r) => el("li", {},
+      el("time", { datetime: r.at }, when(r.at)), " · ", r.open ? "not dismissed" : "dismissed", " · ",
+      el("span", { class: "hint" }, r.text)))));
+  return el("div", { class: "report-line" + (open.length ? "" : " seen") },
     el("p", {}, el("strong", {}, c.peer), " reported requests waiting for a person on that machine."),
-    el("p", { class: "hint" }, "Latest report " + when(latest.last_at) + ": “" + firstSentence(latest.title) + "”. Decide there; nothing here can approve them."),
+    el("p", { class: "hint" }, "Latest report " + when(latest.at) + ": \u201c" + firstSentence(latest.text) + "\u201d. Decide there; nothing here can approve them."),
     el("div", { class: "report-actions" },
-      openIDs.length ? el("button", { type: "button", class: "chip", onclick: (e) => dismissReports(c.peer, e.currentTarget),
-        title: "Clears these reports on this computer only; the requests still wait on " + c.peer }, "Dismiss " + plural(openIDs.length, "report", "reports"))
+      open.length ? el("button", { type: "button", class: "chip", onclick: (e) => dismissReports(c.peer, e.currentTarget),
+        title: "Clears these reports on this computer only; the requests still wait on " + c.peer }, "Dismiss " + plural(open.length, "report", "reports"))
         : el("span", { class: "hint" }, "Dismissed"),
       d));
 }
@@ -238,14 +253,14 @@ function renderReview(items) {
   btn.dataset.n = n;
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
     (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : ""));
-  $("review-list").replaceChildren(...(n ? decisions.map((it) => el("li", {},
+  fill($("review-list"), ...(n ? decisions.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
   const senders = [...new Set(reports.map((it) => it.peer))];
   $("reports").hidden = !senders.length;
-  $("report-list").replaceChildren(...senders.map((peer) => {
+  fill($("report-list"), ...senders.map((peer) => {
     const c = contactsOf(state.overview.threads).find((x) => x.peer === peer);
     return el("li", {}, c ? reportLine(c) : null);
   }));
@@ -267,10 +282,10 @@ function renderThreads(threads) {
   if (state.query.trim()) return renderSearch(threads);
   $("list-title").textContent = "Contacts";
   if (!threads.length) {
-    list.replaceChildren(el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button."));
+    fill(list, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button."));
     return;
   }
-  list.replaceChildren(...contactsOf(threads).map((c) => {
+  fill(list, ...contactsOf(threads).map((c) => {
     const expanded = state.expanded === c.peer;
     const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(expanded),
       onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
@@ -293,10 +308,10 @@ function renderSearch(threads) {
   const shown = conversations.slice(0, 30);
   const kind = (t) => t.count > 1 ? "Conversation" : "Message";
   if (!agents.length && !conversations.length) {
-    $("conv-list").replaceChildren(el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."));
+    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."));
     return;
   }
-  $("conv-list").replaceChildren(
+  fill($("conv-list"),
     agents.length > 0 && el("li", { class: "result-head" }, plural(agents.length, "agent", "agents")),
     ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result",
       onclick: () => { state.expanded = c.peer; clearSearch(); } },
@@ -322,7 +337,7 @@ function renderQuarantine(items) {
   box.hidden = !items.length;
   if (!items.length) return;
   $("quarantine-summary").textContent = items.length === 1 ? "1 message held back" : items.length + " messages held back";
-  $("quarantine-list").replaceChildren(...items.map((q) => el("li", {},
+  fill($("quarantine-list"), ...items.map((q) => el("li", {},
     el("span", {}, who(q.peer), " · ", when(q.at)), el("span", { class: "hint" }, q.reason))));
 }
 
@@ -395,7 +410,7 @@ async function loadThread(scrollToEnd) {
   }
   if (state.thread !== id) return; // another thread was opened meanwhile
   state.data = t;
-  $("conv-name").replaceChildren(who(t.peer));
+  fill($("conv-name"), who(t.peer));
   $("conv-topic").textContent = firstLine(t.messages[0].body, 90);
   $("conv-avatar").replaceWith(Object.assign(avatar(t.peer), { id: "conv-avatar" }));
   $("conv-presence").textContent = state.presence[t.peer] || "";
@@ -420,7 +435,7 @@ function renderBody(scrollToEnd) {
   const byId = Object.fromEntries(t.messages.map((m) => [m.id, m]));
   const tl = $("timeline");
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
-  tl.replaceChildren(...t.messages.map((m, i) => renderMsg(m, byId, t.messages[i - 1], t)));
+  fill(tl, ...t.messages.map((m, i) => renderMsg(m, byId, t.messages[i - 1], t)));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
 }
 
@@ -459,14 +474,14 @@ function renderPeerChips(t) {
     chips.push(el("button", { type: "button", class: "peer-chip on", title: "Tasks from this exact key run without asking: " + t.task_grant,
       onclick: () => revokeDialog(t) }, t.task_grant === "active" ? "Tasks: always (this key)" : "Tasks: grant on hold"));
   }
-  $("peer-chips").replaceChildren(...chips);
+  fill($("peer-chips"), ...chips);
 }
 
 function renderNotice(t) {
   const n = $("notice");
-  if (!t.key.pending) { n.hidden = true; n.replaceChildren(); return; }
+  if (!t.key.pending) { n.hidden = true; fill(n, ); return; }
   n.hidden = false;
-  n.replaceChildren(el("p", {}, t.peer + "'s key changed. Their new messages are held and sending is blocked until you trust the new key."),
+  fill(n, el("p", {}, t.peer + "'s key changed. Their new messages are held and sending is blocked until you trust the new key."),
     el("button", { type: "button", class: "btn", onclick: () => trustDialog(t) }, "Compare keys…"));
 }
 
@@ -552,7 +567,9 @@ const actionLabel = {
   approve: "Answer their questions automatically…", resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
 
-const isReport = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice";
+// isReport: exactly the shape the client files as a review notice (a plain
+// message with that status, no reply link, no files).
+const isReport = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.files && m.files.length);
 
 function actionButton(a, m, t, primary) {
   let label = actionLabel[a];
@@ -662,7 +679,7 @@ function dialog({ title, body, ok, run, gate, focus }) {
   const d = $("dialog");
   if (d.open) d.close();
   $("dialog-title").textContent = title;
-  $("dialog-body").replaceChildren(...body);
+  fill($("dialog-body"), ...body);
   $("dialog-error").textContent = "";
   const okBtn = $("dialog-ok");
   okBtn.textContent = ok;
