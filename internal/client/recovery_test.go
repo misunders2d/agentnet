@@ -331,3 +331,46 @@ func TestTrailingSlashHubURL(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Two people both called Bernard, both on a ThinkPad: the second join is
+// refused with a free name to offer, nothing is enrolled, and the same
+// invite and keys enroll the address the person confirms. The first
+// enrollment is never renamed or replaced.
+func TestJoinCollisionKeepsInviteAndKeys(t *testing.T) {
+	w := newWorld(t, "")
+	smithHome := filepath.Join(t.TempDir(), "smith")
+	smith := mustJoin(t, smithHome, w.aliceInvites("bernard"), "thinkpad")
+	smithAddr := smith.Address
+	smith.Close()
+
+	code := w.aliceInvites("bernard")
+	home := filepath.Join(t.TempDir(), "kim")
+	_, err := Join(tctx(t), home, code, "thinkpad")
+	if !errors.Is(err, ErrAddressTaken) || !strings.Contains(err.Error(), "bernard/thinkpad-2 is free now (not reserved)") ||
+		!strings.Contains(err.Error(), "invitation and this computer's key are still valid") {
+		t.Fatalf("collision: %v", err)
+	}
+	if _, err := Open(home); err == nil || !strings.Contains(err.Error(), "with another NAME") {
+		t.Fatalf("refused join left an openable agent or unclear advice: %v", err)
+	}
+	idPath, _ := paths(home)
+	before, err := identity.Load(idPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kim := mustJoin(t, home, code, "thinkpad-2")
+	if kim.Address != "bernard/thinkpad-2" || kim.Self().Fingerprint() != before.Public(kim.Address).Fingerprint() {
+		t.Fatalf("retry: %s with new keys?", kim.Address)
+	}
+	again, err := Open(smithHome)
+	if err != nil || again.Address != smithAddr {
+		t.Fatalf("first enrollment changed: %v %v", err, again)
+	}
+	again.Close()
+	if _, err := Join(tctx(t), smithHome, w.aliceInvites("bernard"), "thinkpad-3"); err == nil {
+		t.Fatal("an enrolled home was enrolled again")
+	}
+	if _, err := w.alice.Send(tctx(t), kim.Address, "welcome", ""); err != nil {
+		t.Fatalf("send to the confirmed address: %v", err)
+	}
+}

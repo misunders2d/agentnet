@@ -43,6 +43,9 @@ const MaxBody = 1 << 20
 // ClockSkew is the accepted difference between request and Hub clocks.
 const ClockSkew = 5 * time.Minute
 
+// MaxName is the longest valid label or agent name (namePattern).
+const MaxName = 32
+
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // ValidName reports whether s is a valid person label or agent name.
@@ -209,6 +212,7 @@ const (
 	CodeRevoked          = "revoked"           // the caller is revoked
 	CodeRecipientRevoked = "recipient_revoked" // the addressed agent is revoked
 	CodeSessionExpired   = "session_expired"   // the addressed session is not live
+	CodeAddressTaken     = "address_taken"     // join: the address is enrolled already; the invite stays unused
 )
 
 // DirectoryEntry is the Hub's answer for one address.

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -68,6 +70,64 @@ CREATE TABLE release(
   set_by TEXT NOT NULL,
   set_at INTEGER NOT NULL);
 `}
+
+// addressTakenError refuses a join for an enrolled (or revoked) address
+// and names a free one to offer the person. The invite stays unused; the
+// free name is not reserved, only checked again by the next join.
+type addressTakenError struct{ address, free string }
+
+func (e *addressTakenError) Error() string {
+	return fmt.Sprintf("address %s is already enrolled; %s is free now (not reserved)", e.address, e.free)
+}
+
+func (e *addressTakenError) Unwrap() error { return errAddressTaken }
+
+// freeAddress names a free address under label for a join that found
+// address taken. It runs only after a collision, so ordinary joins keep
+// the single indexed lookup.
+func freeAddress(tx *sql.Tx, label, address string) (string, error) {
+	rows, err := tx.Query(`SELECT address FROM agents WHERE label = ?`, label)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	taken := map[string]bool{}
+	for rows.Next() {
+		var addr string
+		if err := rows.Scan(&addr); err != nil {
+			return "", err
+		}
+		_, name, _ := protocol.SplitAddress(addr)
+		taken[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	_, name, _ := protocol.SplitAddress(address)
+	return protocol.Address(label, freeName(name, taken)), nil
+}
+
+// freeName returns the first NAME-N (N >= 2) not in taken, continuing an
+// existing short -N suffix, shortened to stay a valid name. Suffixes of
+// more than six digits are not continued, so N never overflows.
+func freeName(name string, taken map[string]bool) string {
+	base, n := name, 2
+	if i := strings.LastIndexByte(name, '-'); i > 0 && len(name)-i-1 <= 6 {
+		if k, err := strconv.Atoi(name[i+1:]); err == nil && k >= 1 && name[i+1] != '0' {
+			base, n = name[:i], k+1
+		}
+	}
+	for ; ; n++ {
+		suffix := "-" + strconv.Itoa(n)
+		b := base
+		if max := protocol.MaxName - len(suffix); len(b) > max {
+			b = strings.TrimRight(b[:max], "-")
+		}
+		if c := b + suffix; !taken[c] && protocol.ValidName(c) {
+			return c
+		}
+	}
+}
 
 var (
 	errInviteInvalid = errors.New("invite invalid, expired, or already used")
@@ -176,8 +236,12 @@ func (s *store) enroll(secret string, pub identity.Public, label string) (bootst
 	if err := tx.QueryRow(`SELECT count(*) FROM agents WHERE address = ?`, pub.Address).Scan(&exists); err != nil {
 		return false, err
 	}
-	if exists > 0 {
-		return false, errAddressTaken
+	if exists > 0 { // revoked addresses stay taken
+		free, err := freeAddress(tx, label, pub.Address)
+		if err != nil {
+			return false, err
+		}
+		return false, &addressTakenError{address: pub.Address, free: free}
 	}
 	if _, err := tx.Exec(`INSERT INTO agents(address, label, public, admin, created_at) VALUES(?, ?, ?, ?, ?)`,
 		pub.Address, label, string(data), admin, time.Now().Unix()); err != nil {

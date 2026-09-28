@@ -133,7 +133,7 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "", err.Error())
 		return
 	case errors.Is(err, errAddressTaken):
-		writeError(w, http.StatusConflict, "", err.Error())
+		writeError(w, http.StatusConflict, protocol.CodeAddressTaken, err.Error())
 		return
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "", "storage error")

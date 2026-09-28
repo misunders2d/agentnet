@@ -118,3 +118,23 @@ func TestReleaseInstallCommands(t *testing.T) {
 		}
 	}
 }
+
+// The packet says which part of the address the invitation fixes and what
+// a taken address means, without the agent choosing a name itself.
+func TestInvitePacketExplainsTakenAddress(t *testing.T) {
+	code := protocol.Invite{Hub: "https://hub.example.test:8443", Label: "bernard", Secret: "s"}.Encode()
+	packet, err := invitePacket(code, "admin/laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"bernard/ is fixed by this invitation; only NAME is theirs to choose",
+		"If join says\n   the address is taken, nothing was enrolled and this code still works",
+		"join again only with the one they confirm",
+		"Do not choose or infer it yourself",
+	} {
+		if !strings.Contains(packet, want) {
+			t.Fatalf("packet lacks %q:\n%s", want, packet)
+		}
+	}
+}

@@ -98,6 +98,11 @@ confirmed it, confirm the full address before joining. Nothing is created until 
 the same command again; it reuses the same keys. An existing enrollment in
 the home is never replaced.
 
+If the Hub says the address is taken (another device already has it, or had
+it and was revoked), nothing was enrolled and the invitation and keys stay
+valid. The Hub names a free address, which is not reserved: show it to the
+person or ask for another NAME, and join again only with the one they confirm.
+
 Example (after the person chose "laptop"):
   agentnet join --agent laptop 'agentnet-invite-v1:eyJodWIiOi...'`,
 
@@ -418,7 +423,10 @@ Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
 bob): use the name your person gave for this invitation, or ask them who is
 being invited and what name to use. Do not infer it or reuse your own label,
 "admin", a user, host or model name unless your person chose it. The label is
-a name, not a role; only --admin grants admin rights.
+a name, not a role; only --admin grants admin rights. Give different people
+different labels even when their names match (e.g. bernard-kim and
+bernard-smith): a label is only the name you typed, so the same label does not
+make two people one person, and it proves nothing about who they are.
 
 invite prints a self-contained invitation for the person LABEL (their
 address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,

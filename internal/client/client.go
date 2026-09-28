@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -111,6 +112,14 @@ func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
 	req := protocol.JoinRequest{Secret: inv.Secret, Public: id.Public(address)}
 	protocol.SignJoin(&req, id.Sign)
 	if err := conn.do(ctx, "POST", "/v1/join", req, nil); err != nil {
+		var he *HubError
+		if errors.As(err, &he) && he.Status == http.StatusConflict {
+			// A definite refusal: nothing was enrolled. Never pick another
+			// name here; the person confirms the address they want.
+			return nil, fmt.Errorf("%s: %w; nothing was enrolled, and this invitation and this computer's key are still valid. "+
+				"Hub: %s. Ask the person to confirm that address or choose another NAME, then run: agentnet join --agent NAME CODE",
+				address, ErrAddressTaken, he.Msg)
+		}
 		return nil, fmt.Errorf("enrollment not confirmed: %w (run the same join command again to retry)", err)
 	}
 	if err := st.setConfig(map[string]string{"enrolled": "1"}); err != nil {
@@ -122,6 +131,10 @@ func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
 	st.db.Close()
 	return Open(home)
 }
+
+// ErrAddressTaken means the Hub refused a join because the address is
+// enrolled (or was, and is revoked). The invite and keys stay usable.
+var ErrAddressTaken = errors.New("address already taken on this Hub")
 
 // Open loads an enrolled agent from home.
 func Open(home string) (*Agent, error) {
@@ -139,7 +152,8 @@ func Open(home string) (*Agent, error) {
 	}
 	if enrolled, _ := st.config("enrolled"); enrolled != "1" {
 		st.db.Close()
-		return nil, fmt.Errorf("enrollment in %s is incomplete; run the same `agentnet join` command again", home)
+		return nil, fmt.Errorf("enrollment in %s is incomplete; run `agentnet join` again with the same invitation "+
+			"(with another NAME if the Hub said the address was taken)", home)
 	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify}
 	var hubURL, cert string
