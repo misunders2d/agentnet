@@ -1024,6 +1024,31 @@ inferred from a build string.
 - **Unchanged:** schema migration with `*.vN.bak` on the next start; identity
   keys, history, approvals and grants in the same home; manual downgrade.
 
+### 19.2b Owner requirement: one-command update (2026-09-28; not implemented)
+
+- **Requirement.** One `agentnet update`, with no agent, script, curl or manual
+  restart sequence, installs the latest *published stable* release from the
+  project's GitHub releases for this platform, checked against its
+  `SHA256SUMS`, and the person keeps their home: keys, history, approvals and
+  grants.
+- **Activation.** The binary carries the page, so the new release brings its UI
+  with it. This home's running daemon switches to the new program by itself,
+  and an open messenger page keeps its address and settings and reconnects.
+  - It never interrupts active work: a running job finishes first.
+  - It never restarts another home's daemon or a Hub.
+  - No background service, periodic check or new dependency.
+- **Safety kept.** No downgrade and no schema going backwards; a development
+  build is not silently replaced by an older release.
+- **Honest limits to state:** a binary with today's updater can only replace
+  the file (its daemon still needs one restart), and a page loaded from an
+  older build reloads before it uses the new UI, with drafts kept or clearly
+  lost.
+- **Known gap.** Development builds are stamped with
+  `git describe --always --dirty`, which ignores the lightweight release tags
+  (v0.2.x): a build after v0.2.1 reports `v0.1.50-N-g…`. A dev stamp is
+  therefore not a reliable lower bound, and comparing it with the latest
+  release alone could install older code over a newer schema.
+
 ### 19.3 Proposed lifecycle for later work (all unimplemented)
 
 **Relay: one unit.**
