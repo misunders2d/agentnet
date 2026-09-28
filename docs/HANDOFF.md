@@ -267,7 +267,7 @@ If a local database or key file is damaged:
 - **Never paste raw keys, invite codes, or auth tokens into public issues or transcripts.**
 
 ### 5.5 Headless Troubleshooting & Operational Continuation
-- A relay and an enrolled server responder are different processes/homes. The relay does not answer questions by itself. On the receiving installation check `doctor`, `responder show`, sender approval and `inbox --review`. A delivered question may be held; approval does not itself run an older held item. Tasks still require explicit local acceptance.
+- A relay and an enrolled server responder are different processes/homes. The relay does not answer questions by itself. On the receiving installation check `doctor`, `responder show`, sender approval and `inbox --review`. A delivered question may be held; approval does not itself run an older held item. Tasks require explicit local acceptance (`accept ID`) unless the local user granted that sender's exact key (`approvals` lists grants and whether they still hold).
 - Use `conversation ID` for durable two-way history without changing read state. Ordinary `inbox` marks listed messages read; `inbox --review` does not. Read state never proves a model or person understood the message.
 - The daemon's service environment can differ from an interactive shell. Resolve the actual harness on its PATH and its canonical credential bootstrap. In the live Pi task, an AgentNet-only wrapper reused the host's existing secret runner for the child; the daemon received no injected Telegram secret. This was host configuration, not a mandatory Infisical dependency. Preserve the host's non-poller setting and AgentNet background-hook isolation.
 - A timeout does not prove an external effect failed. Before retrying an effectful task, check its provider/ledger evidence and any human confirmation needed to rule out duplicates. The successful Telegram acceptance was independently verified once; it did not prove the person read it.
@@ -293,7 +293,7 @@ If a local database or key file is damaged:
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
 - **Live Daemon Web UI Integration (`MEL-429`)**: The UI exists as a fixture-backed demo only (`agentnet ui --demo`).
 - **Group Messaging & Federation**: Deferred from initial slice.
-- **Automated Task Execution**: Under no circumstances should tasks be auto-executed. Explicit human approval via `agentnet accept` remains mandatory.
+- **Automated Task Execution**: Tasks run only after `agentnet accept ID` or under a local, per-key task grant (`approve --tasks`, `accept --always`; see docs/revival/M4.md). No other path may run a task: nothing received, no name match and no policy engine grants it.
 
 ### 6.3 Team Roles & Next Slice Design Scope
 - **Human Owner & Caller**: Sergey (final authority on product scope, security rules, emotion requirements, and release approvals).

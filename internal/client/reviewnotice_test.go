@@ -230,7 +230,7 @@ func TestReviewNoticeShape(t *testing.T) {
 		in := base
 		in.ID = protocol.NewID()
 		c.mod(&in)
-		if got, err := initialState(w.bob.store.db, in); err != nil || got != c.want {
+		if got, err := initialState(w.bob.store.db, in, ""); err != nil || got != c.want {
 			t.Errorf("%s: state %q (%v), want %q", c.name, got, err, c.want)
 		}
 	}
@@ -238,7 +238,7 @@ func TestReviewNoticeShape(t *testing.T) {
 	in := base
 	in.ID, in.Kind, in.Status = protocol.NewID(), envelope.KindMessage, envelope.StatusReviewNotice
 	for i := 0; i < 2; i++ {
-		if err := w.bob.store.addInbox(in); err != nil {
+		if err := w.bob.store.addInbox(in, ""); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -46,9 +46,12 @@ Messages and files:
 
 Questions and tasks sent to you:
   accept     let your responder run a task or answer a held question
+             (accept --always ID: also let this sender's future tasks run)
   decline    refuse a task or question
   cancel     stop your responder's current work on a message
-  approve    answer an agent's questions automatically (unapprove to stop)
+  approve    answer an agent's questions automatically (unapprove to stop);
+             approve --tasks: run its tasks without asking, for its exact key
+  approvals  list who is approved, with task keys and whether they still hold
   resolve    close an item your responder marked needs_human
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
@@ -146,8 +149,10 @@ Example:
 
 	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
-Send a task. It never runs by itself: the recipient must accept it, then
-their responder runs it with their normal permissions. The outcome arrives as
+Send a task. It waits until the recipient accepts it, unless they granted
+your agent's exact key standing permission to run tasks (accept --always,
+approve --tasks); either way their responder runs it with their normal
+permissions. The outcome arrives as
 kind "result" with a status (done, failed, timeout, cancelled, declined).
 Output and --wait as for send: "delivered" means it reached their inbox, not
 that it was accepted or done.
@@ -176,7 +181,8 @@ and never accepts or clears anything.
 Items waiting for your decision (--review):
   held         a question from an agent you have not approved:
                accept ID, reply ID TEXT, or decline ID
-  awaiting     a task: accept ID or decline ID (tasks never run by themselves)
+  awaiting     a task: accept ID (or accept --always ID) or decline ID
+               (tasks run without asking only under a task grant)
   needs_human  your responder stopped and asked you to decide (reason shown),
                or a review notice: an agent says requests wait for a
                person on its machine (agentnet help review-to); any agent
@@ -263,11 +269,17 @@ reconnecting, and whether it accepts direct deliveries. Address one session
 with ADDRESS#SESSION.`,
 
 	"accept": `Usage: agentnet accept ID
+       agentnet accept --always ID
 
 Let your responder run a task that awaits acceptance, answer a held question,
 or rerun one that was interrupted, failed, cancelled or marked needs_human.
 A rerun starts afresh; it does not resume the earlier run. Only you can do
-this; nothing a sender does can.`,
+this; nothing a sender does can.
+
+--always (tasks only) also lets future tasks from the same sender run without
+asking, in one step: only for the exact key that signed this task, and only
+while that key is still the one you trust. Like approve --tasks; stop with
+agentnet unapprove --tasks ADDRESS.`,
 
 	"decline": `Usage: agentnet decline ID [REASON]
 
@@ -306,10 +318,29 @@ default; only the local user sets it.`,
 
 	"approve": `Usage: agentnet approve ADDRESS
        agentnet unapprove ADDRESS
+       agentnet approve --tasks ADDRESS
+       agentnet unapprove --tasks ADDRESS
 
 Approve: questions from ADDRESS are answered automatically by your responder.
 Unapprove: stop that; their questions still waiting go back to "held".
-Approval never covers tasks.`,
+Question approval never covers tasks.
+
+--tasks: tasks from ADDRESS run without asking, with your responder's normal
+task permissions, for the key you trust for ADDRESS now (its fingerprint is
+printed; compare it with the sender's agentnet whoami if unsure). Tasks
+already waiting still need accept ID; failed or interrupted ones are never
+rerun by this. If that agent's key changes, the grant stops holding and its
+tasks wait for you again, even after you trust the new key: grant again to
+renew. unapprove --tasks: its tasks not yet started wait for you again; ones
+running now are listed and may finish unless you cancel them. Nothing a
+sender writes, and no name, grants this.`,
+
+	"approvals": `Usage: agentnet approvals
+
+List agents whose questions are answered automatically, and agents whose
+tasks run without asking, with the granted key and whether the grant still
+holds (active, or inactive because the key changed or a change is pending).
+Changes nothing.`,
 
 	"responder": `Usage: agentnet responder list
        agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]

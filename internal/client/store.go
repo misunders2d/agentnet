@@ -128,6 +128,13 @@ ALTER TABLE inbox ADD COLUMN session_ref TEXT;
 ALTER TABLE attention ADD COLUMN release_seen TEXT;
 `, `
 ALTER TABLE inbox ADD COLUMN review_sent INTEGER NOT NULL DEFAULT 0;
+`, `
+ALTER TABLE inbox ADD COLUMN verified_by TEXT;
+CREATE TABLE task_grants(
+  address TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  public TEXT NOT NULL,
+  added_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -194,18 +201,62 @@ func (s *store) peer(address string) (pinned identity.Public, pending *identity.
 	return pinned, pending, true, nil
 }
 
+// pin trusts p for its address. If that replaces a different key, tasks
+// that were to run under a task grant go back to waiting for the person.
 func (s *store) pin(p identity.Public) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	old, found, err := pinnedKey(tx, p.Address)
+	if err != nil {
+		return err
+	}
 	data, _ := json.Marshal(p)
-	_, err := s.db.Exec(`INSERT INTO peers(address, public, pinned_at) VALUES(?, ?, ?)
+	if _, err := tx.Exec(`INSERT INTO peers(address, public, pinned_at) VALUES(?, ?, ?)
 		ON CONFLICT(address) DO UPDATE SET public = excluded.public, pending = NULL, pinned_at = excluded.pinned_at`,
-		p.Address, string(data), time.Now().Unix())
-	return err
+		p.Address, string(data), time.Now().Unix()); err != nil {
+		return err
+	}
+	if found && old.Fingerprint() != p.Fingerprint() {
+		if err := demoteGranted(tx, p.Address, "", "the sender's key changed"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
+// setPending records a different key the directory offers for p's
+// address. Until it is resolved, no task from there runs without asking.
 func (s *store) setPending(p identity.Public) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	data, _ := json.Marshal(p)
-	_, err := s.db.Exec(`UPDATE peers SET pending = ? WHERE address = ?`, string(data), p.Address)
-	return err
+	if _, err := tx.Exec(`UPDATE peers SET pending = ? WHERE address = ?`, string(data), p.Address); err != nil {
+		return err
+	}
+	if err := demoteGranted(tx, p.Address, "", "the sender's key may have changed"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// pinnedKey returns the key pinned for address, read within q.
+func pinnedKey(q querier, address string) (identity.Public, bool, error) {
+	var pub identity.Public
+	var data string
+	err := q.QueryRow(`SELECT public FROM peers WHERE address = ?`, address).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return pub, false, nil
+	}
+	if err != nil {
+		return pub, false, err
+	}
+	return pub, true, json.Unmarshal([]byte(data), &pub)
 }
 
 // addOutbox records a message, its attachment manifest and its pending
@@ -322,8 +373,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?)`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''))`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -350,12 +401,13 @@ var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
 
 const inReview = `state IN (?, ?, ?)`
 
-func inboxArgs(in envelope.Inner, state string) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state}
+func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy}
 }
 
 // initialState decides whether a new message waits for anything.
-func initialState(db querier, in envelope.Inner) (string, error) {
+// verifiedBy is the fingerprint of the key that verified in ("" if unknown).
+func initialState(db querier, in envelope.Inner, verifiedBy string) (string, error) {
 	switch in.Kind {
 	case envelope.KindQuestion:
 		var n int
@@ -367,7 +419,11 @@ func initialState(db querier, in envelope.Inner) (string, error) {
 		}
 		return stateHeld, nil
 	case envelope.KindTask:
-		return stateAwaiting, nil
+		granted, err := taskGranted(db, in.From, verifiedBy)
+		if err != nil || !granted {
+			return stateAwaiting, err
+		}
+		return statePending, nil
 	case envelope.KindMessage:
 		if isReviewNotice(in) {
 			return stateNeedHuman, nil
@@ -414,12 +470,13 @@ type querier interface {
 }
 
 // insertInner stores a verified message and its attachment manifest.
-func insertInner(tx *sql.Tx, in envelope.Inner) error {
-	state, err := initialState(tx, in)
+// verifiedBy is the fingerprint of the key the caller verified it with.
+func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
+	state, err := initialState(tx, in, verifiedBy)
 	if err != nil {
 		return err
 	}
-	res, err := tx.Exec(insertInbox, inboxArgs(in, state)...)
+	res, err := tx.Exec(insertInbox, inboxArgs(in, state, verifiedBy)...)
 	if err != nil {
 		return err
 	}
@@ -446,13 +503,14 @@ func insertInner(tx *sql.Tx, in envelope.Inner) error {
 	return nil
 }
 
-func (s *store) addInbox(in envelope.Inner) error {
+// addInbox stores in, which the key with fingerprint verifiedBy verified.
+func (s *store) addInbox(in envelope.Inner, verifiedBy string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := insertInner(tx, in); err != nil {
+	if err := insertInner(tx, in, verifiedBy); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -490,13 +548,13 @@ func (s *store) held(sender, reason string) ([]envelope.Envelope, error) {
 
 // promote moves a verified message from quarantine to the inbox atomically;
 // the new inbox row carries an unsent delivered receipt.
-func (s *store) promote(in envelope.Inner) error {
+func (s *store) promote(in envelope.Inner, verifiedBy string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := insertInner(tx, in); err != nil {
+	if err := insertInner(tx, in, verifiedBy); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
@@ -691,16 +749,20 @@ func (j job) followUp() bool {
 
 // claimJob gives the oldest eligible question or task to the worker,
 // recording which responder took it. Only one caller can win a row. A
-// question is eligible if the local user accepted it, or if it is pending
-// and its sender is still approved at claim time.
+// question or task is eligible if the local user accepted it, or if it is
+// pending and, at claim time, its sender is still approved (question) or
+// still holds a task grant for the key that verified it (task).
 func (s *store) claimJob(responder string) (job, bool, error) {
 	var j job
 	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL
 		WHERE id = (SELECT id FROM inbox WHERE state = ?
-		              OR (state = ? AND (kind != ? OR sender IN (SELECT address FROM approvals)))
+		              OR (state = ? AND (kind NOT IN (?, ?)
+		                OR (kind = ? AND sender IN (SELECT address FROM approvals))
+		                OR (kind = ? AND `+taskGrantHolds+`)))
 		            ORDER BY received_at, id LIMIT 1)
 		RETURNING id, sender, kind, body, coalesce(reply_to, ''), coalesce(status, '')`,
-		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status)
+		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
+		envelope.KindQuestion, envelope.KindTask).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, false, nil
 	}

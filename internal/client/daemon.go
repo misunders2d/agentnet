@@ -281,7 +281,9 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 	}
 	in, err := envelope.Open(env, a.id, a.Address, sender)
 	if err == nil {
-		if err := a.store.addInbox(in); err != nil {
+		// The key that verified it is the evidence, not whatever is pinned
+		// by the time it is stored.
+		if err := a.store.addInbox(in, sender.Fingerprint()); err != nil {
 			return err
 		}
 		a.wakeWorker()

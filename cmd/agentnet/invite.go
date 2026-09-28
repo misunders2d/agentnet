@@ -169,7 +169,7 @@ func invitePacket(code, inviter string) (string, error) {
 		w("8. This agent becomes the Hub's first admin. To invite someone, ask the")
 		w("   person for the invitee's name, then: agentnet admin invite THEIR-NAME")
 	}
-	w("Do not approve anyone for automatic answers unless the person asks")
+	w("Do not approve anyone for automatic answers or tasks unless the person asks")
 	w("(agentnet help approve). All commands: agentnet --help")
 	w("")
 	w("Invite code (private, single use):")

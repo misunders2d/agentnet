@@ -117,7 +117,7 @@ func TestSessionCreateAndResumeAcrossRestart(t *testing.T) {
 		t.Fatalf("first run: %s", run)
 	}
 	m, _ := w.bob.store.inboxMessage(q1)
-	w.bob.store.addInbox(envelope.Inner{ID: q1, From: w.alice.Address, To: w.bob.Address, TS: m.SentAt.Unix(), Kind: envelope.KindQuestion, Body: "q"})
+	w.bob.store.addInbox(envelope.Inner{ID: q1, From: w.alice.Address, To: w.bob.Address, TS: m.SentAt.Unix(), Kind: envelope.KindQuestion, Body: "q"}, "")
 
 	stop()
 	runWith(t, w, w.bob, RunOptions{})

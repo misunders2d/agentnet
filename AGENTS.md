@@ -34,8 +34,13 @@ program, `agentnet`, that is both the laptop client and the Hub.
   point is that a coworker gets the answer this person's agent would give.
   If an answer needs an action the harness may not take, the result is
   needs-human, not an invented answer. **Tasks** run only after the
-  recipient accepts them, with the harness's normal permissions — nothing is
-  auto-approved or bypassed. Workers never touch the user's open sessions.
+  recipient accepts them (`accept ID`), or when the recipient has granted
+  that sender's exact verified key standing permission (`approve --tasks`,
+  `accept --always`); a grant is local only, never set by anything received
+  or by names, stops holding when that key changes (until granted again) and
+  never reruns failed or interrupted work. Either way the harness's normal
+  permissions apply — nothing is bypassed. Workers never touch the user's
+  open sessions.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),
   changed peer keys block until trusted, revoked agents are refused, secrets
   and plaintext never go to logs.

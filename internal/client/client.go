@@ -526,7 +526,7 @@ func (a *Agent) Trust(ctx context.Context, address string) (string, error) {
 			a.Logf("held message %s still does not verify: %v", env.ID, err)
 			continue
 		}
-		if err := a.store.promote(in); err != nil {
+		if err := a.store.promote(in, e.Public.Fingerprint()); err != nil {
 			return "", err
 		}
 	}

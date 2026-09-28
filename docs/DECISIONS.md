@@ -167,9 +167,9 @@ Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negoti
 ## 6. Non-Negotiable Operational Guardrails for Future Work
 
 1. **Human Authorization Gate on Tasks**:
-   - Tasks must always arrive as `awaiting`.
-   - Execution occurs only after explicit local operator transition (`agentnet accept <id>`).
-   - Workers never run tasks automatically or touch open user sessions.
+   - Tasks arrive as `awaiting` unless the local operator granted that sender's exact verified key (`approve --tasks ADDRESS`, `accept --always ID`); then they arrive `pending` and the worker rechecks the grant, the verifying key and the current pin when it claims them.
+   - Otherwise execution occurs only after explicit local operator transition (`agentnet accept <id>`). Grants are local, per key, revocable, never transferred to a new key, and never rerun failed or interrupted work (decided 2026-09-28, owner-authorized).
+   - Workers never touch open user sessions.
 
 2. **Skills-On Question Guardrails**:
    - Questions retain the recipient's skills, plugins, and MCP servers.

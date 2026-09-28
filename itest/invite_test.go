@@ -55,7 +55,7 @@ func TestInvitationPacket(t *testing.T) {
 		"agentnet responder show", "keep that choice", "agentnet responder list",
 		"found\n   is not proof it is logged in or working", "Do not choose for them or assume it is you",
 		"agentnet responder set --harness NAME --dir DIR   or   agentnet responder off",
-		"Do not approve anyone for automatic answers unless the person asks",
+		"Do not approve anyone for automatic answers or tasks unless the person asks",
 		"Hub: https://" + addr, "ask\nthe person who invited you for a new invitation",
 	} {
 		if !strings.Contains(packet, want) {

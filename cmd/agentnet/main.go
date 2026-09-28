@@ -85,8 +85,13 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
 		return runSendKind(ctx, a, cmd, rest)
-	case "accept", "cancel", "approve", "unapprove", "resolve":
-		if len(rest) != 1 {
+	case "accept", "approve", "unapprove":
+		if len(rest) == 2 && ((cmd == "accept" && rest[0] == "--always") || (cmd != "accept" && rest[0] == "--tasks")) {
+			return runTaskGrant(a, cmd, rest[1])
+		}
+		fallthrough
+	case "cancel", "resolve":
+		if len(rest) != 1 || strings.HasPrefix(rest[0], "-") {
 			return fmt.Errorf("usage: %s ID-or-ADDRESS", cmd)
 		}
 		var err error
@@ -133,6 +138,8 @@ func run(args []string) error {
 			return nil
 		}
 		return errors.New("usage: review-to [ADDRESS | --off]")
+	case "approvals":
+		return runApprovals(a)
 	case "decline":
 		if len(rest) < 1 || len(rest) > 2 {
 			return errors.New("usage: decline ID [REASON]")
@@ -685,6 +692,58 @@ func runResponder(a *client.Agent, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown responder command %q", args[0])
+}
+
+// runTaskGrant handles accept --always ID, approve --tasks ADDRESS and
+// unapprove --tasks ADDRESS.
+func runTaskGrant(a *client.Agent, cmd, arg string) error {
+	const perms = "they run with this computer's normal task permissions for your responder"
+	switch cmd {
+	case "accept":
+		sender, fp, err := a.AcceptAlways(arg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("accept %s\n", arg)
+		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", sender, fp, perms, sender)
+	case "approve":
+		fp, err := a.GrantTasks(arg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", arg, fp, perms, arg)
+	case "unapprove":
+		running, err := a.RevokeTasks(arg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("tasks from %s wait for you again\n", arg)
+		for _, id := range running {
+			fmt.Printf("still running: %s (it may finish; stop it with agentnet cancel %s)\n", id, id)
+		}
+	}
+	return nil
+}
+
+func runApprovals(a *client.Agent) error {
+	qs, err := a.QuestionApprovals()
+	if err != nil {
+		return err
+	}
+	ts, err := a.TaskGrants()
+	if err != nil {
+		return err
+	}
+	for _, q := range qs {
+		fmt.Printf("questions  %s\n", q)
+	}
+	for _, t := range ts {
+		fmt.Printf("tasks      %s  key %s  %s\n", t.Address, t.Fingerprint, t.Status)
+	}
+	if len(qs) == 0 && len(ts) == 0 {
+		fmt.Println("none: every question and task waits for you")
+	}
+	return nil
 }
 
 // printHarnesses lists the choices for the default responder. It only

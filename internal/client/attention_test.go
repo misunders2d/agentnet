@@ -71,7 +71,7 @@ func TestConversationBothWays(t *testing.T) {
 	// A peer can make its own messages point at each other.
 	for _, pair := range [][2]string{{"cyc-a", "cyc-b"}, {"cyc-b", "cyc-a"}} {
 		if err := w.alice.store.addInbox(envelope.Inner{ID: pair[0], From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(),
-			Kind: envelope.KindMessage, Body: pair[0], ReplyTo: pair[1]}); err != nil {
+			Kind: envelope.KindMessage, Body: pair[0], ReplyTo: pair[1]}, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,7 +231,7 @@ func TestArrivalNeverReused(t *testing.T) {
 		return envelope.Inner{ID: id, From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: id}
 	}
 	for _, id := range []string{"m1", "m2", "m2"} {
-		if err := w.alice.store.addInbox(in(id)); err != nil {
+		if err := w.alice.store.addInbox(in(id), ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -239,7 +239,7 @@ func TestArrivalNeverReused(t *testing.T) {
 		t.Fatalf("top %d", top)
 	}
 	w.alice.store.db.Exec(`DELETE FROM inbox WHERE id = 'm2'`)
-	w.alice.store.addInbox(in("m3"))
+	w.alice.store.addInbox(in("m3"), "")
 	var n int64
 	w.alice.store.db.QueryRow(`SELECT arrival FROM inbox WHERE id = 'm3'`).Scan(&n)
 	if n != 3 {
@@ -335,7 +335,7 @@ func TestConversationPageIsBounded(t *testing.T) {
 	add := func(id, replyTo string, body string) {
 		t.Helper()
 		if err := w.alice.store.addInbox(envelope.Inner{ID: id, From: w.bob.Address, To: w.alice.Address, TS: 1,
-			Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo}); err != nil {
+			Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo}, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
