@@ -6,6 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
+  dm: null, dmData: null, personOpen: {},
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -342,6 +343,254 @@ function contactBody(c, open) {
   ];
 }
 
+// ---- people and DMs ------------------------------------------------------------------
+//
+// A person is a human as their own AgentNet presents them, set up only when
+// they choose; the name is their claim. Each DM is its own conversation, also
+// with the same person, and stays apart from device history (the contacts
+// below, one installation each). Nothing is merged by name or address.
+
+const personStateText = {
+  self: "your person",
+  pinned: "checked against their computer's key",
+  conflict: "frozen: they published a different record",
+  listed: "not checked yet (checked when you start a DM)",
+};
+
+const personKey = (p) => p.person || "listed:" + p.address;
+
+function peopleSection() {
+  const o = state.overview;
+  if (!o || !o.persons) return [];
+  const head = el("li", { class: "result-head" }, "People");
+  if (!o.person) {
+    return [head, el("li", { class: "person-setup" },
+      el("p", {}, "You have no person yet. A person is you, the human, as others see you in DMs."),
+      el("button", { type: "button", class: "chip", onclick: () => personDialog() }, "Set up your person…"))];
+  }
+  const dms = o.dms || [];
+  const people = [...(o.people || [])].sort((a, b) => {
+    const la = dms.find((d) => d.peer.person && d.peer.person === a.person), lb = dms.find((d) => d.peer.person && d.peer.person === b.person);
+    if (la || lb) return (lb ? new Date(lb.last_at) : 0) - (la ? new Date(la.last_at) : 0);
+    return a.label.localeCompare(b.label);
+  });
+  return [head,
+    el("li", { class: "hint person-me" }, "You: ", el("strong", {}, o.person.label), " · ",
+      o.person.published ? "others can start a DM with you" : "not on your server yet"),
+    ...people.map((p) => personRow(p, dms.filter((d) => d.peer.person && d.peer.person === p.person))),
+    !people.length && el("li", { class: "hint empty-list" }, "No one else on your server has set up a person yet.")];
+}
+
+function personRow(p, dms) {
+  const key = personKey(p);
+  const open = !!state.personOpen[key];
+  const unread = dms.reduce((n, d) => n + d.unread, 0);
+  const held = dms.reduce((n, d) => n + d.held, 0);
+  const last = dms[0];
+  const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(open),
+    onclick: () => { state.personOpen[key] = !open; rerenderContacts(); } },
+    avatar(p.label || p.address),
+    el("span", { class: "conv-main" },
+      el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
+        el("span", { class: "kind-tag" }, "Person"), last && el("span", { class: "conv-time" }, when(last.last_at))),
+      el("span", { class: "conv-bottom" },
+        el("span", { class: "conv-last" }, last ? last.last || "No messages yet" : "No DM yet"),
+        p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
+        held > 0 && el("span", { class: "conv-flag calm" }, held + " held"),
+        unread > 0 && el("span", { class: "conv-flag unread" }, unread + " new")),
+      el("span", { class: "conv-sub" }, "via " + p.address + " · " + (personStateText[p.state] || p.state) +
+        (dms.length ? " · " + plural(dms.length, "DM", "DMs") : ""))));
+  return el("li", { class: "contact-item" + (open ? " open" : "") }, head,
+    open && el("div", { class: "contact-body" },
+      dms.length > 0 && el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => {
+        const b = el("button", { type: "button", class: "thread-row", "aria-current": String(state.dm === d.id), onclick: () => openDM(d.id) },
+          el("span", { class: "thread-title" }, d.title || "No messages yet"),
+          d.count > 1 && el("span", { class: "thread-count", title: plural(d.count, "message", "messages") }, String(d.count)),
+          d.waiting > 0 && el("span", { class: "conv-flag calm" }, d.waiting + " kept"),
+          d.unread > 0 && el("span", { class: "conv-flag unread" }, d.unread + " new"),
+          el("span", { class: "conv-time", title: "Started " + new Date(d.created).toLocaleString() + (d.mine ? " by you" : " by them") }, when(d.last_at)));
+        return el("li", {}, b);
+      })),
+      p.state === "conflict"
+        ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
+        : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)));
+}
+
+// personDialog sets up this installation's person, only when asked.
+function personDialog() {
+  const name = el("input", { id: "person-name", type: "text", autocomplete: "off", maxlength: "64" });
+  dialog({
+    title: "Set up your person",
+    body: [el("p", {}, "A person is you, the human, as others see you in DMs. You set it up once, on this computer; nothing sets it up for you."),
+      el("p", {}, "The name is what you call yourself: others see it as your claim, not a checked identity. If you already set up your person on another computer, do not set up a second one here: linking computers comes later."),
+      el("label", { for: "person-name", class: "field-label" }, "Your name"), name],
+    ok: "Set up",
+    focus: name,
+    run: async () => {
+      const r = await api("/api/person", { label: name.value });
+      announce(r.note);
+      await loadOverview();
+    },
+  });
+  state.dialogRestore = { type: "person" };
+}
+
+// newDMDialog starts a separate DM with a person; nothing is sent yet.
+function newDMDialog(p) {
+  dialog({
+    title: "New DM with " + p.label,
+    body: [el("p", {}, "A new conversation with ", el("strong", {}, p.label), " (the name they give) through " + p.address +
+      ". It is separate from your other DMs with them."),
+      p.state === "listed" && el("p", {}, "Their person record is checked against their computer's key now and kept here. If they later publish a different one, your DMs with them freeze."),
+      el("p", { class: "hint" }, "Nothing is sent until you write.")],
+    ok: "Start DM",
+    run: async () => {
+      const r = await api("/api/dm/new", { address: p.address });
+      state.personOpen[p.person || personKey(p)] = true;
+      await loadOverview();
+      await openDM(r.id);
+    },
+  });
+}
+
+// ---- a DM ---------------------------------------------------------------------------
+
+function beginDM(id) {
+  const changed = state.dm !== id;
+  if (changed) {
+    keepDraft();
+    state.thread = null;
+    state.data = null;
+    state.dmData = null;
+    state.draftKey = null;
+    $("body").value = "";
+    grow();
+    setKind("message");
+    setAnswering(null);
+  }
+  state.dm = id;
+  return changed;
+}
+
+async function openDM(id) {
+  const changed = beginDM(id);
+  document.body.classList.add("show-conv");
+  await loadDM(true);
+  if (state.dmData) state.personOpen[personKey(state.dmData.peer)] = true;
+  await loadOverview();
+  if (changed) api("/api/refresh", { id }).catch(() => {}); // once per open: receipts the server still holds
+}
+
+async function loadDM(scrollToEnd) {
+  const id = state.dm;
+  if (!id) return;
+  let t;
+  try {
+    t = await api("/api/dm?id=" + encodeURIComponent(id));
+  } catch (e) {
+    announce(e.message);
+    return;
+  }
+  if (state.dm !== id) return; // another conversation was opened meanwhile
+  state.dmData = t;
+  fill($("conv-name"), t.peer.label);
+  $("conv-topic").textContent = "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
+  $("conv-avatar").replaceWith(Object.assign(avatar(t.peer.label || t.peer.address), { id: "conv-avatar" }));
+  const online = presenceOf(t.peer.address); // the server's pushed view, only while current
+  $("conv-presence").textContent = "The name they give · via " + t.peer.address + " · " + (personStateText[t.peer.state] || t.peer.state) +
+    (online ? " · their computer is " + online : "");
+  fill($("peer-chips"));
+  const n = $("notice");
+  n.hidden = !t.frozen;
+  fill(n, t.frozen && el("p", {}, t.frozen));
+  $("composer").hidden = false;
+  renderDMBody(scrollToEnd);
+  const key = "dm:" + id;
+  if (state.draftKey === null) restoreDraft(key, { messages: [] }); // just switched here (beginDM)
+  state.draftKey = key;
+  syncComposer();
+  const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
+  if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
+}
+
+// renderDMBody draws the open DM. DMs are drawn this way in every lens for
+// now; Zoom does not show them yet.
+function renderDMBody(scrollToEnd) {
+  const t = state.dmData;
+  if (!t || state.lens === "zoom") return;
+  const tl = $("timeline");
+  tl.hidden = false;
+  $("comic").hidden = true;
+  const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
+  fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
+    : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + t.peer.label + " only."));
+  if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
+}
+
+// dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
+// shown as that: a person's name is their claim, an agent is marked.
+function dmMsg(m, t, prev) {
+  const mine = m.dir === "out";
+  const agent = (m.origin || "").startsWith("agent:");
+  const author = mine ? "You" : agent ? "An agent on " + m.from + ", as their AgentNet says" : t.peer.label;
+  const cont = prev && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
+    new Date(m.at) - new Date(prev.at) < 10 * 60e3;
+  const held = m.state === "conv_held";
+  const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who" }, author),
+    agent && el("span", { class: "tag" }, "Agent"),
+    kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
+    m.unread && el("span", { class: "tag unread" }, "New"),
+    el("time", { datetime: m.at }, when(m.at)));
+  return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held ? " needs" : "") },
+    !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(t.peer.label || m.from, "sm")),
+    el("div", { class: "col" }, meta,
+      el("div", { class: "bubble", tabindex: "-1" }, el("p", { class: "body" }, m.body)),
+      held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
+      el("div", { class: "foot" }, !held && m.state_text && el("span", {}, m.state_text), dmDetails(m))));
+}
+
+function dmDetails(m) {
+  const by = m.dir === "out" ? "This installation" : m.from;
+  const origin = m.origin === "ui" ? by + " says a person wrote it. That is its claim, not proof."
+    : (m.origin || "").startsWith("agent:") ? by + " says an agent (" + m.origin.slice(6) + ") wrote it. That is its claim."
+      : by + " did not say who wrote it.";
+  return el("details", { class: "tech" }, el("summary", {}, "Details"),
+    el("dl", {},
+      el("dt", {}, "Written by"), el("dd", {}, origin),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Device"), el("dd", {}, m.from),
+      el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
+      el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
+      m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
+}
+
+async function sendDM() {
+  const t = state.dmData;
+  if (state.sending || !t || t.frozen) return;
+  const key = state.draftKey, text = $("body").value;
+  state.sending = true;
+  syncComposer();
+  $("compose-error").textContent = "";
+  try {
+    const r = await api("/api/dm/send", { conv: t.id, body: text });
+    announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
+      : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
+    if (state.draftKey === key) {
+      if ($("body").value === text) { $("body").value = ""; grow(); }
+    } else if (state.drafts[key] && state.drafts[key].text === text) {
+      delete state.drafts[key];
+    }
+  } catch (e) {
+    if (state.draftKey === key) $("compose-error").textContent = e.message;
+    else announce("Not sent to " + t.peer.label + ": " + e.message + " Your text is kept in that DM.");
+  } finally {
+    state.sending = false;
+    syncComposer();
+    if (state.newVersion) updated(state.newVersion);
+  }
+}
+
 let rerenderContacts = () => {};
 function rerender() {
   renderThreads(state.overview.threads);
@@ -388,12 +637,14 @@ function renderThreads(threads) {
   const list = $("conv-list");
   if (state.query.trim()) return renderSearch(threads);
   $("list-title").textContent = "Contacts";
+  const people = peopleSection();
+  const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices: messages per installation");
   if (!threads.length) {
-    fill(list, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button, or with someone below."),
+    fill(list, people, devices, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button, or with someone below."),
       directorySection(threads));
     return;
   }
-  fill(list, ...contactsOf(threads).map((c) => {
+  fill(list, people, devices, ...contactsOf(threads).map((c) => {
     const expanded = state.expanded === c.peer;
     const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(expanded),
       onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
@@ -458,7 +709,7 @@ function renderQuarantine(items) {
 // nothing can be sent until the new one has loaded. It reports whether the
 // conversation changed.
 function beginThread(id) {
-  const changed = !state.data || !state.data.messages.some((m) => m.id === id);
+  const changed = !!state.dm || !state.data || !state.data.messages.some((m) => m.id === id);
   if (changed) {
     keepDraft();
     state.data = null;
@@ -468,6 +719,8 @@ function beginThread(id) {
     setKind("message");
     setAnswering(null);
   }
+  state.dm = null;
+  state.dmData = null;
   state.thread = id;
   return changed;
 }
@@ -539,6 +792,7 @@ async function loadThread(scrollToEnd) {
 // renderBody draws the open thread in the chosen presentation. Zoom draws
 // itself (lenses.js).
 function renderBody(scrollToEnd) {
+  if (state.dm) { renderDMBody(scrollToEnd); return; }
   const t = state.data;
   if (!t || state.lens === "zoom") return;
   if (state.lens === "comic") { Comic.render(t); return; }
@@ -559,8 +813,8 @@ function setLens(name) {
   const zoom = name === "zoom";
   document.querySelector(".app").hidden = zoom;
   $("zoom").hidden = !zoom;
-  $("timeline").hidden = name === "comic";
-  $("comic").hidden = name !== "comic";
+  $("timeline").hidden = name === "comic" && !state.dm; // DMs are not drawn as a comic yet
+  $("comic").hidden = name !== "comic" || !!state.dm;
   if (zoom) {
     Object.assign(Zoom, state.data ? { level: 2, peer: state.data.peer } : { level: 0, peer: null });
     if (state.overview) Zoom.refresh();
@@ -882,6 +1136,17 @@ function restoreDraft(key, t) {
 // syncComposer enables what the open conversation allows. A send on its way
 // keeps Send disabled, whatever refreshes meanwhile.
 function syncComposer() {
+  if (state.dm) { // a DM: messages only, to the person
+    const d = state.dmData;
+    const blocked = !d || !!d.frozen;
+    $("body").disabled = blocked;
+    $("send").disabled = blocked || state.sending;
+    $("kind").hidden = true;
+    $("body").placeholder = !d ? "" : d.frozen ? "Nothing more can be sent in this conversation" : "Write to " + d.peer.label;
+    kindHint();
+    return;
+  }
+  $("kind").hidden = false;
   const t = state.data;
   const blocked = !t || !!t.key.pending;
   $("body").disabled = blocked;
@@ -898,6 +1163,7 @@ function grow() {
 
 async function send(ev) {
   ev.preventDefault();
+  if (state.dm) { await sendDM(); return; }
   const t = state.data;
   if (state.sending || !t || t.key.pending) return; // one send at a time, to a loaded conversation
   // Everything this send needs is fixed now: switching conversation or a
@@ -934,6 +1200,7 @@ async function send(ev) {
 }
 
 function kindHint() {
+  if (state.dm) { $("compose-hint").textContent = "A DM is for the person; nothing runs it. Ctrl+Enter sends."; return; }
   $("compose-hint").textContent = state.answering
     ? "Your reply answers this " + state.answering.kind + " and takes it over from your responder. Ctrl+Enter sends."
     : {
@@ -996,6 +1263,7 @@ async function reconnect() {
   try {
     await loadOverview();
     if (state.thread) await loadThread(false);
+    else if (state.dm) await loadDM(false);
   } catch (e) {
     return false;
   }
@@ -1030,7 +1298,7 @@ function keepForReload() {
   if (state.dialogRestore && $("dialog").open) {
     for (const f of $("dialog-body").querySelectorAll("input[type=text], textarea, select")) if (f.id) fields[f.id] = f.value;
   }
-  const keep = { drafts, thread: state.thread, lens: state.lens, dialog: state.dialogRestore && $("dialog").open ? state.dialogRestore : null, fields };
+  const keep = { drafts, thread: state.thread, dm: state.dm, lens: state.lens, dialog: state.dialogRestore && $("dialog").open ? state.dialogRestore : null, fields };
   try {
     const text = JSON.stringify(keep);
     sessionStorage.setItem(reloadKey, text);
@@ -1051,10 +1319,12 @@ async function restoreAfterReload() {
   for (const [k, d] of Object.entries(keep.drafts || {})) state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null };
   if (keep.lens) setLens(keep.lens);
   if (keep.thread) await openThread(keep.thread);
+  else if (keep.dm) await openDM(keep.dm);
   const r = keep.dialog;
   if (r) {
     const m = r.msg && state.data ? state.data.messages.find((x) => x.id === r.msg) : null;
     if (r.type === "new") newConversationDialog(r.prefill);
+    else if (r.type === "person") personDialog();
     else if (r.type === "write" && state.data) writeDialog(state.data, m);
     else if (r.type === "decline" && m) decide("decline", m, state.data);
     for (const [id, v] of Object.entries(keep.fields || {})) { const f = document.getElementById(id); if (f) f.value = v; }
@@ -1073,6 +1343,7 @@ async function refetch(first) {
       again = false;
       const o = await loadOverview();
       if (state.thread) await loadThread(false);
+      else if (state.dm) await loadDM(false);
       if (state.lens === "zoom") Zoom.refresh();
       announceChanges(o, first);
       first = false;
@@ -1086,6 +1357,10 @@ function announceChanges(o, first) {
   for (const t of o.threads) {
     if (!first && state.lastSeen[t.id] !== t.last_at) changed.push(t.peer);
     state.lastSeen[t.id] = t.last_at;
+  }
+  for (const d of o.dms || []) {
+    if (!first && state.lastSeen["dm:" + d.id] !== d.last_at) changed.push(d.peer.label);
+    state.lastSeen["dm:" + d.id] = d.last_at;
   }
   if (changed.length) announce("New activity with " + [...new Set(changed)].join(", "));
 }
@@ -1146,7 +1421,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Open the latest conversation; reports are not conversations.
     const first = o.threads.find((t) => !t.notice_only && (t.count > 1 || t.review || t.running || t.waiting)) ||
       o.threads.find((t) => !t.notice_only);
-    if (state.lens !== "zoom" && !state.thread && first && window.matchMedia("(min-width: 761px)").matches) openThread(first.id);
+    const dm = (o.dms || [])[0];
+    const wide = state.lens !== "zoom" && !state.thread && !state.dm && window.matchMedia("(min-width: 761px)").matches;
+    if (wide && dm && (!first || new Date(dm.last_at) > new Date(first.last_at))) openDM(dm.id);
+    else if (wide && first) openThread(first.id);
   }).catch(() => { $("lost").hidden = false; });
   listen();
 });

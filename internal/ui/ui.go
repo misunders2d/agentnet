@@ -60,6 +60,112 @@ type Overview struct {
 	Seq        uint64           `json:"seq"`
 	Version    string           `json:"version"` // the program serving the page (an update changes it)
 	Directory  Directory        `json:"directory"`
+	// Human DMs, when the provider holds them (Persons): this installation's
+	// person (nil until the person creates one), the people known or listed,
+	// and the two-person conversations. They are never part of Threads.
+	Persons bool         `json:"persons"`
+	Person  *PersonView  `json:"person,omitempty"`
+	People  []PersonView `json:"people"`
+	DMs     []DMSummary  `json:"dms"`
+}
+
+// Persons is implemented by providers that hold human DMs.
+type Persons interface {
+	// CreatePerson creates this installation's person, once, as the person
+	// asked; the note says what is not done yet (the server may not hold it).
+	CreatePerson(label string) (PersonView, string, error)
+	DM(id string) (DMThread, error)
+	// NewDM starts a separate conversation with the person on the device at
+	// address; nothing is sent until a message is.
+	NewDM(address string) (string, error)
+	SendDM(d DMDraft) (Sent, error)
+}
+
+// Person states the page shows.
+const (
+	PersonSelf     = "self"     // created on this installation
+	PersonPinned   = "pinned"   // checked against their device's key and kept here
+	PersonConflict = "conflict" // a different record was seen: frozen
+	PersonListed   = "listed"   // the server lists a record; not checked here yet
+)
+
+// PersonView is a person as the page shows them. The label is the person's
+// own claim, never a checked name; the person id and the device say who it
+// is here. A listed person has no id yet: it is known once it is checked.
+type PersonView struct {
+	Person      string `json:"person,omitempty"`
+	Label       string `json:"label"`
+	Address     string `json:"address"` // the one device the person speaks through
+	Fingerprint string `json:"fingerprint,omitempty"`
+	State       string `json:"state"`
+	Published   bool   `json:"published,omitempty"` // own person: the server holds it, as far as this installation knows
+}
+
+// DMSummary is one two-person conversation in the sidebar.
+type DMSummary struct {
+	ID      string     `json:"id"`
+	Peer    PersonView `json:"peer"`
+	Created time.Time  `json:"created"` // the creator's claim
+	Mine    bool       `json:"mine"`    // started on this installation
+	Count   int        `json:"count"`
+	Title   string     `json:"title"` // first line of the first message
+	Last    string     `json:"last"`  // first line of the latest message
+	LastAt  time.Time  `json:"last_at"`
+	Unread  int        `json:"unread"`
+	Held    int        `json:"held"`    // their questions or tasks held for the person; nothing runs them
+	Waiting int        `json:"waiting"` // messages kept here because they cannot read conversations now
+}
+
+// DMThread is one conversation's messages, oldest first.
+type DMThread struct {
+	ID       string      `json:"id"`
+	Peer     PersonView  `json:"peer"`
+	Created  time.Time   `json:"created"`
+	Mine     bool        `json:"mine"`
+	Frozen   string      `json:"frozen,omitempty"` // why nothing can be sent in it
+	Messages []DMMessage `json:"messages"`
+}
+
+// DMMessage is one message of a DM.
+type DMMessage struct {
+	ID        string    `json:"id"`
+	Dir       string    `json:"dir"` // in or out
+	From      string    `json:"from"`
+	Kind      string    `json:"kind"`
+	Body      string    `json:"body"`
+	ReplyTo   string    `json:"reply_to,omitempty"`
+	Origin    string    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State     string    `json:"state"`
+	StateText string    `json:"state_text"`
+	Detail    string    `json:"detail,omitempty"`
+	At        time.Time `json:"at"`
+	Unread    bool      `json:"unread,omitempty"`
+	Replica   bool      `json:"replica,omitempty"`
+}
+
+// DMDraft is a message the person writes in a DM. The page sends messages
+// only: a DM's question or task would run nowhere yet.
+type DMDraft struct {
+	Conv    string `json:"conv"`
+	Body    string `json:"body"`
+	ReplyTo string `json:"reply_to,omitempty"`
+}
+
+// DMStateText is what the page says about a DM message's state.
+func DMStateText(dir, kind, state, peer, detail string) string {
+	if dir == "out" {
+		if state == "waiting" {
+			if detail == "" {
+				detail = peer + " cannot read conversations now"
+			}
+			return "Kept here, not sent yet: " + detail
+		}
+		return StateText("out", kind, state, peer)
+	}
+	if state == "conv_held" {
+		return "Held for you: nothing runs it. Answer here if you want to."
+	}
+	return ""
 }
 
 // Me describes this installation.

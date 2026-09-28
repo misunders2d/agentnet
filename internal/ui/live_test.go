@@ -306,3 +306,182 @@ func TestHoldReasons(t *testing.T) {
 		}
 	}
 }
+
+// runDaemon runs a's daemon until the returned stop (also at cleanup).
+func runDaemon(t *testing.T, a *client.Agent) func() {
+	t.Helper()
+	a.Logf = t.Logf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.Run(ctx, client.RunOptions{}); close(done) }()
+	var once bool
+	stop := func() {
+		if !once {
+			once = true
+			cancel()
+			<-done
+		}
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+// Human DMs on the page, over two real installations: a person exists only
+// when set up; someone listed is shown by the name they claim until checked;
+// two DMs with the same person stay separate, also after a restart; a DM
+// question is held for the person and nothing runs it; DMs never become
+// device history.
+func TestLiveHumanDMs(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, err := alice.Invite(ctx, "bob", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobHome := filepath.Join(t.TempDir(), "bob")
+	bob, err := client.Join(ctx, bobHome, code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDaemon(t, alice)
+	stopBob := runDaemon(t, bob)
+	live := NewLive(bob)
+	eventually := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	overview := func(l *Live) Overview {
+		t.Helper()
+		o, err := l.Overview()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+
+	// Nobody has a person: none is made for anyone.
+	if o := overview(live); !o.Persons || o.Person != nil || len(o.People) != 0 || len(o.DMs) != 0 {
+		t.Fatalf("before any person: %+v %+v %+v", o.Person, o.People, o.DMs)
+	}
+	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	var listed PersonView
+	eventually("alice listed by the name she claims", func() bool {
+		for _, p := range overview(live).People {
+			if p.Address == alice.Address {
+				listed = p
+			}
+		}
+		return listed.Address != ""
+	})
+	if listed.State != PersonListed || listed.Label != "Alice" || listed.Person != "" {
+		t.Fatalf("listed person shown as known: %+v", listed)
+	}
+	if _, err := live.NewDM(alice.Address); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "person") {
+		t.Fatalf("a DM without a person of your own: %v", err)
+	}
+	me, note, err := live.CreatePerson("Bob")
+	if err != nil || me.State != PersonSelf || me.Label != "Bob" || note == "" {
+		t.Fatalf("create person: %+v %q %v", me, note, err)
+	}
+	if _, _, err := live.CreatePerson("Bob again"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a second person: %v", err)
+	}
+
+	// Two DMs with Alice, each its own conversation.
+	var d1, d2 string
+	eventually("a first DM", func() bool { d1, err = live.NewDM(alice.Address); return err == nil })
+	if d2, err = live.NewDM(alice.Address); err != nil || d2 == d1 {
+		t.Fatalf("second DM %q (first %q): %v", d2, d1, err)
+	}
+	for conv, body := range map[string]string{d1: "deploy topic", d2: "budget topic"} {
+		if s, err := live.SendDM(DMDraft{Conv: conv, Body: body}); err != nil || s.State == "waiting" {
+			t.Fatalf("send in %s: %+v %v", conv, s, err)
+		}
+	}
+	eventually("alice to hold both", func() bool {
+		m1, _ := alice.ConversationMessages(d1)
+		m2, _ := alice.ConversationMessages(d2)
+		return len(m1) == 1 && len(m2) == 1
+	})
+	if _, err := alice.SendConv(ctx, d1, client.ConvOutgoing{Body: "on deploy"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.SendConv(ctx, d2, client.ConvOutgoing{Kind: envelope.KindQuestion, Body: "can you check the budget?"}); err != nil {
+		t.Fatal(err)
+	}
+	bodies := func(l *Live, id string) string {
+		t.Helper()
+		d, err := l.DM(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range d.Messages {
+			out = append(out, m.Dir+":"+m.Body)
+		}
+		return strings.Join(out, "|")
+	}
+	eventually("both replies, each in its own DM", func() bool {
+		return bodies(live, d1) == "out:deploy topic|in:on deploy" && bodies(live, d2) == "out:budget topic|in:can you check the budget?"
+	})
+	eventually("the receipt of a DM message sent from the page", func() bool {
+		d, _ := live.DM(d1)
+		return d.Messages[0].State == "delivered" && d.Messages[0].StateText == "Delivered to "+alice.Address
+	})
+	d, _ := live.DM(d2)
+	q := d.Messages[1]
+	if q.State != "conv_held" || !strings.Contains(q.StateText, "nothing runs it") || d.Peer.State != PersonPinned || d.Peer.Label != "Alice" {
+		t.Fatalf("held question %+v, peer %+v", q, d.Peer)
+	}
+	time.Sleep(300 * time.Millisecond) // the daemon had its chance to claim anything
+	if d, _ = live.DM(d2); d.Messages[1].State != "conv_held" {
+		t.Fatalf("the DM question changed state: %+v", d.Messages[1])
+	}
+	o := overview(live)
+	if len(o.DMs) != 2 || o.DMs[0].Peer.Person == "" || o.DMs[0].Peer.Person != o.DMs[1].Peer.Person || len(o.Threads) != 0 || len(o.Review) != 0 {
+		t.Fatalf("overview: dms %+v threads %+v review %+v", o.DMs, o.Threads, o.Review)
+	}
+	people := 0
+	for _, p := range o.People {
+		if p.Address == alice.Address {
+			people++
+			if p.State != PersonPinned || p.Person != o.DMs[0].Peer.Person {
+				t.Fatalf("alice after a DM: %+v", p)
+			}
+		}
+	}
+	if people != 1 {
+		t.Fatalf("alice shown %d times: %+v", people, o.People)
+	}
+
+	// A restart keeps both DMs apart, and the person as it was set up.
+	stopBob()
+	bob.Close()
+	again, err := client.Open(bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { again.Close() })
+	live2 := NewLive(again)
+	o = overview(live2)
+	if o.Person == nil || o.Person.Person != me.Person || len(o.DMs) != 2 {
+		t.Fatalf("after a restart: person %+v, %d DMs", o.Person, len(o.DMs))
+	}
+	if bodies(live2, d1) != "out:deploy topic|in:on deploy" || bodies(live2, d2) != "out:budget topic|in:can you check the budget?" {
+		t.Fatalf("after a restart: %q / %q", bodies(live2, d1), bodies(live2, d2))
+	}
+}

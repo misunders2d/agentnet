@@ -92,6 +92,7 @@ const overview = { demo: false, me: { address: "me/laptop", fingerprint: "SHA256
 // down is set, every request fails as if the daemon were gone.
 let down = false;
 let refreshReply = { text: "Connection unknown" }; // the one check made when a thread opens
+const dmThreads = {}; // DMs by id, for /api/dm
 const calls = [];
 const hold = {};
 const held = {};
@@ -106,6 +107,10 @@ function fetch(url, opts) {
   else if (u.pathname === "/api/overview") data = Object.assign({ version: serving }, overview);
   else if (u.pathname === "/api/send") data = { id: "new", state: "delivered" };
   else if (u.pathname === "/api/refresh") data = refreshReply;
+  else if (u.pathname === "/api/dm") data = dmThreads[u.searchParams.get("id")] || {};
+  else if (u.pathname === "/api/dm/send") data = { id: "sent-dm", state: "custody" };
+  else if (u.pathname === "/api/dm/new") data = { id: "d3" };
+  else if (u.pathname === "/api/person") data = { person: { person: "p-me", label: body.label, address: "me/laptop", state: "self" }, note: "Your person is set up." };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
   if (hold[u.pathname]) return new Promise((res) => { (held[u.pathname] ||= []).push(() => res(resp)); });
   return Promise.resolve(resp);
@@ -492,6 +497,76 @@ const ev = { preventDefault() {} };
   await new Promise((r) => setTimeout(r, 0));
   check($("conv-presence").textContent === "Connection unknown", "no answer: unknown, no time: " + $("conv-presence").textContent);
   delete overview.directory;
+
+  // Human DMs: a person exists only when set up by hand; each DM with the
+  // same person is separate; a DM sends only DM messages; a held question
+  // offers nothing to run; a frozen DM sends nothing; device history stays
+  // apart.
+  const T = "2026-09-28T12:00:00Z";
+  const alicePerson = { person: "p-alice", label: "Alice", address: "alice/desk", state: "pinned" };
+  const dmsg = (id, dir, body, extra) => Object.assign({ id, dir, from: dir === "in" ? "alice/desk" : "me/laptop", kind: "message", body,
+    origin: "ui", state: "", state_text: "", at: T }, extra);
+  Object.assign(overview, { threads: [], review: [], persons: true, person: null, people: [alicePerson], dms: [] });
+  calls.length = 0;
+  await run("loadOverview()");
+  let side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("Set up your person") && !side.includes("Alice"), "without a person the page offers setup and no DMs: " + side);
+  check(!calls.some((c) => c.path === "/api/person"), "nothing sets up a person by itself");
+  run("personDialog()");
+  byId["person-name"].value = "Sergey";
+  check(!calls.some((c) => c.path === "/api/person"), "the setup dialog waits for its button");
+  await $("dialog-ok").onclick();
+  const made = calls.filter((c) => c.path === "/api/person");
+  check(made.length === 1 && made[0].body.label === "Sergey", "one person is set up, with the name typed");
+  overview.person = { person: "p-me", label: "Sergey", address: "me/laptop", state: "self", published: true };
+  overview.dms = [
+    { id: "d2", peer: alicePerson, created: T, mine: true, count: 2, title: "budget", last: "can you check?", last_at: T, unread: 1, held: 1, waiting: 1 },
+    { id: "d1", peer: alicePerson, created: T, mine: true, count: 1, title: "deploy", last: "deploy", last_at: T, unread: 0, held: 0, waiting: 0 },
+  ];
+  dmThreads.d1 = { id: "d1", peer: alicePerson, created: T, mine: true, messages: [dmsg("m1", "out", "deploy", { state: "delivered", state_text: "Delivered to alice/desk" })] };
+  dmThreads.d2 = { id: "d2", peer: alicePerson, created: T, mine: true, messages: [
+    dmsg("m2", "out", "budget", { state: "waiting", state_text: "Kept here, not sent yet: alice/desk cannot read conversations now" }),
+    dmsg("m3", "in", "can you check?", { kind: "question", state: "conv_held", state_text: "Held for you: nothing runs it. Answer here if you want to.", unread: true })] };
+  dmThreads.d3 = { id: "d3", peer: { person: "p-vit", label: "Vitalii", address: "vitalii/laptop", state: "pinned" }, created: T, mine: true, messages: [] };
+  run('state.personOpen["p-alice"] = true');
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("2 DMs") && side.includes("budget") && side.includes("deploy") && side.includes("checked against their computer"),
+    "two DMs with one person are listed apart, with how the person is known: " + side);
+  calls.length = 0;
+  await run('openDM("d2")');
+  check(calls.some((c) => c.path === "/api/dm") && !calls.some((c) => c.path === "/api/thread"), "a DM opens through the DM API");
+  check($("kind").hidden === true && $("body").placeholder === "Write to Alice", "a DM's composer writes messages to the person");
+  let tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("Held for you") && tl.includes("Kept here, not sent yet") && !/Accept|responder answer|Decline/.test(tl),
+    "a held DM question offers nothing to run, a kept message says so: " + tl);
+  check(calls.some((c) => c.path === "/api/act" && c.body.do === "read" && c.body.ids.includes("m3")), "opening a DM marks its new message read");
+  check($("timeline").children.flatMap((c) => strayText(c)).length === 0, "no stray text in a DM");
+  $("body").value = "on budget";
+  calls.length = 0;
+  await run("send")(ev);
+  const dmSends = calls.filter((c) => c.path === "/api/dm/send");
+  check(dmSends.length === 1 && dmSends[0].body.conv === "d2" && dmSends[0].body.body === "on budget" && sends().length === 0,
+    "a DM message goes to its DM only, never as an older message");
+  $("body").value = "for d2 later";
+  await run('openDM("d1")');
+  check($("body").value === "", "another DM with the same person starts with its own empty draft");
+  await run('openDM("d2")');
+  check($("body").value === "for d2 later", "each DM keeps its own draft");
+  dmThreads.d1.frozen = "Frozen: a different person record was published.";
+  await run('openDM("d1")');
+  check($("send").disabled && $("body").disabled && !$("notice").hidden, "a frozen DM sends nothing");
+  calls.length = 0;
+  run('newDMDialog({ label: "Vitalii", address: "vitalii/laptop", state: "listed" })');
+  check(!calls.some((c) => c.path === "/api/dm/new") && JSON.stringify($("dialog-body").children.map(textOf)).includes("checked against their computer"),
+    "starting a DM with a listed person says what is checked, and waits");
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/dm/new" && c.body.address === "vitalii/laptop") && run("state.dm") === "d3",
+    "confirming starts a new DM with that device's person and opens it");
+  await run('openThread("a1")');
+  check(run("state.dm") === null && $("kind").hidden === false && run("state.data.peer") === "alice/desk",
+    "device history opens apart from DMs, with its own composer");
+  Object.assign(overview, { persons: false, person: null, people: [], dms: [] });
 
   if (failed) process.exit(1);
   console.log("page logic ok");

@@ -39,6 +39,9 @@ func (l *Live) Overview() (Overview, error) {
 		o.Release = r.Version
 	}
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
+	if err := l.dmOverview(&o); err != nil {
+		return o, err
+	}
 	threads, err := l.a.Threads()
 	if err != nil {
 		return o, err
@@ -188,6 +191,9 @@ func (l *Live) Thread(id string) (Thread, error) {
 // Refresh implements Refresher: once per open thread, ask the Hub about the
 // peer's daemons and the receipts of messages it still holds for them.
 func (l *Live) Refresh(threadID string) (Presence, error) {
+	if p, ok, err := l.refreshDM(threadID); ok || err != nil {
+		return p, err
+	}
 	c, err := l.a.Conversation(threadID, 0, 0)
 	if errors.Is(err, client.ErrConversationItem) {
 		return Presence{}, Refuse(notShownHere)
@@ -205,9 +211,14 @@ func (l *Live) Refresh(threadID string) (Presence, error) {
 			l.a.Status(ctx, m.ID, 0) // stores a changed state; the change is pushed to the page
 		}
 	}
-	sessions, err := l.a.Sessions(ctx, c.Peer)
+	return l.presence(ctx, c.Peer), nil
+}
+
+// presence asks the Hub once about peer's daemons.
+func (l *Live) presence(ctx context.Context, peer string) Presence {
+	sessions, err := l.a.Sessions(ctx, peer)
 	if err != nil {
-		return Presence{Text: "Connection unknown"}, nil
+		return Presence{Text: "Connection unknown"}
 	}
 	live := 0
 	for _, s := range sessions {
@@ -218,11 +229,11 @@ func (l *Live) Refresh(threadID string) (Presence, error) {
 	now := time.Now()
 	switch {
 	case live > 0:
-		return Presence{Text: "Their computer is connected", At: now}, nil
+		return Presence{Text: "Their computer is connected", At: now}
 	case len(sessions) > 0:
-		return Presence{Text: "Their computer is reconnecting", At: now}, nil
+		return Presence{Text: "Their computer is reconnecting", At: now}
 	}
-	return Presence{Text: "Their computer is offline", At: now}, nil
+	return Presence{Text: "Their computer is offline", At: now}
 }
 
 // Send implements Provider.

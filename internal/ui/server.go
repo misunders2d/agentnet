@@ -54,6 +54,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/send", s.send)
 	mux.HandleFunc("POST /api/act", s.act)
 	mux.HandleFunc("POST /api/simulate", s.simulate)
+	mux.HandleFunc("POST /api/person", s.person)
+	mux.HandleFunc("GET /api/dm", s.dm)
+	mux.HandleFunc("POST /api/dm/new", s.newDM)
+	mux.HandleFunc("POST /api/dm/send", s.sendDM)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -183,6 +187,83 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, pr)
+}
+
+// persons is the provider's human DMs, or a refusal saying there are none.
+func (s *Server) persons(w http.ResponseWriter) (Persons, bool) {
+	p, ok := s.p.(Persons)
+	if !ok {
+		writeErr(w, NotFound("DMs are not available here"))
+	}
+	return p, ok
+}
+
+func (s *Server) person(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Label string `json:"label"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	p, ok := s.persons(w)
+	if !ok {
+		return
+	}
+	me, note, err := p.CreatePerson(v.Label)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"person": me, "note": note})
+}
+
+func (s *Server) dm(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.persons(w)
+	if !ok {
+		return
+	}
+	t, err := p.DM(r.URL.Query().Get("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, t)
+}
+
+func (s *Server) newDM(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Address string `json:"address"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	p, ok := s.persons(w)
+	if !ok {
+		return
+	}
+	id, err := p.NewDM(v.Address)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": id})
+}
+
+func (s *Server) sendDM(w http.ResponseWriter, r *http.Request) {
+	var d DMDraft
+	if !readJSON(w, r, &d) {
+		return
+	}
+	p, ok := s.persons(w)
+	if !ok {
+		return
+	}
+	sent, err := p.SendDM(d)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, sent)
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {

@@ -572,3 +572,10 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .relay-page { max-width: 36rem; margin: 0 auto; padding: 48px 16px; line-height: 1.5; }
 .relay-page h1 { font-size: 1.5rem; margin: 0 0 16px; }
 .relay-page p { margin: 0 0 12px; }
+
+/* People and human DMs. */
+.kind-tag { flex: none; font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); }
+.person-setup { padding: 8px; display: grid; gap: 8px; justify-items: start; }
+.person-setup p { margin: 0; color: var(--muted); font-size: 13px; }
+.person-me { padding: 2px 8px 6px; }
+.person-name { font-weight: 650; }

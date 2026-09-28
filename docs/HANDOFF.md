@@ -314,6 +314,10 @@ If a local database or key file is damaged:
   review found R1 (signed person conflict ignored on the cache/event path) and R2 (missing-proof queue
   starvation), being corrected. Not built: agent participation/execution, page person/DM/Zoom views,
   device linking, groups, browser devices. Human DMs are not complete.
+- **Human DMs on the page (candidate)**: person setup by hand, people listed by their claimed name until checked,
+  separate persistent DMs, a message-only DM composer with receipts, held questions/tasks (nothing runs), frozen
+  DMs; apart from device history. Not yet in Comic/Zoom; no agent invitation, Zoom human–agent links, device
+  linking, people search or relay browser DMs.
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon

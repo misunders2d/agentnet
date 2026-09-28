@@ -55,6 +55,20 @@
   - linking devices, groups, browser devices.
 
   Human DMs are **not** complete.
+- **Human DMs on the page: a candidate (2026-09-28).** The daemon's page adds,
+  through the core's APIs only:
+  - setting up your person by hand (never automatically);
+  - people on your server shown by the name they claim until checked (the
+    check happens when you start a DM);
+  - separate DMs with a person, kept across restarts;
+  - a message-only DM composer, with receipts. A question or task from them is
+    held for you and nothing runs it; a frozen DM sends nothing.
+
+  DMs stay apart from device history (the contacts by address), and Comic and
+  Zoom do not draw them yet. Not built: agent invitation and participation,
+  Zoom's human–agent links, linking devices, searching people, DMs on the
+  relay's browser page. The core's own acceptance still waits on one fix (a
+  kept DM message went out despite a person conflict).
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and

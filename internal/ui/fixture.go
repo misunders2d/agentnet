@@ -24,6 +24,16 @@ type Fixture struct {
 	seq      uint64
 	changed  chan struct{}
 	arrivals int
+	person   *PersonView  // this demo installation's person, once created
+	listed   []PersonView // invented people the demo server lists
+	dms      []*fxDM
+}
+
+type fxDM struct {
+	id      string
+	peer    PersonView
+	created time.Time
+	msgs    []DMMessage
 }
 
 type fxPeer struct {
@@ -122,6 +132,7 @@ func NewFixture(now func() time.Time) *Fixture {
 
 	// Who the server lists: the peers above, and someone who just joined and
 	// has not written yet.
+	f.listed = []PersonView{{Label: "Vitalii", Address: "vitalii/laptop", State: PersonListed}}
 	f.dir = Directory{Status: DirectoryListed, Current: true, At: t, Members: []DirMember{
 		{Address: "vitalii/laptop", Presence: "connected", Joined: ago(30)},
 		{Address: "hub/ops", Presence: "connected", Joined: ago(3000)},
@@ -251,6 +262,24 @@ func (f *Fixture) Overview() (Overview, error) {
 		o.Threads = append(o.Threads, s)
 	}
 	sort.SliceStable(o.Threads, func(i, j int) bool { return o.Threads[i].LastAt.After(o.Threads[j].LastAt) })
+	o.Persons, o.Person, o.People, o.DMs = true, f.person, []PersonView{}, []DMSummary{}
+	pinned := map[string]bool{}
+	for _, d := range f.dms {
+		if !pinned[d.peer.Address] {
+			o.People = append(o.People, d.peer)
+			pinned[d.peer.Address] = true
+		}
+		s := DMSummary{ID: d.id, Peer: d.peer, Created: d.created, Mine: true, Count: len(d.msgs), LastAt: d.created}
+		if n := len(d.msgs); n > 0 {
+			s.Title, s.Last, s.LastAt = excerpt(d.msgs[0].Body), excerpt(d.msgs[n-1].Body), d.msgs[n-1].At
+		}
+		o.DMs = append(o.DMs, s)
+	}
+	for _, p := range f.listed {
+		if !pinned[p.Address] {
+			o.People = append(o.People, p)
+		}
+	}
 	return o, nil
 }
 
@@ -486,4 +515,82 @@ func (f *Fixture) Simulate(what string) error {
 	}
 	f.bump()
 	return nil
+}
+
+// CreatePerson implements Persons with an invented person.
+func (f *Fixture) CreatePerson(label string) (PersonView, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return PersonView{}, "", Refuse("Write the name you want others to see.")
+	}
+	if f.person != nil {
+		return *f.person, "", Refuse("This installation already has a person; a second one is not created.")
+	}
+	f.person = &PersonView{Person: "demo-person-me", Label: label, Address: f.me.Address, State: PersonSelf, Published: true}
+	f.bump()
+	return *f.person, "Your person is set up (demo: nothing leaves this page).", nil
+}
+
+// NewDM implements Persons: the invented person is checked at once.
+func (f *Fixture) NewDM(address string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.person == nil {
+		return "", Refuse("Set up your person first.")
+	}
+	var peer *PersonView
+	for _, d := range f.dms {
+		if d.peer.Address == address {
+			peer = &d.peer
+		}
+	}
+	for _, p := range f.listed {
+		if peer == nil && p.Address == address {
+			p.Person, p.State, p.Fingerprint = "demo-person-"+strings.ReplaceAll(address, "/", "-"), PersonPinned, "demo"
+			peer = &p
+		}
+	}
+	if peer == nil {
+		return "", Refuse(address + " has no person record on this server.")
+	}
+	f.nextID++
+	d := &fxDM{id: fmt.Sprintf("dm%04d", f.nextID), peer: *peer, created: f.now()}
+	f.dms = append(f.dms, d)
+	f.bump()
+	return d.id, nil
+}
+
+// DM implements Persons.
+func (f *Fixture) DM(id string) (DMThread, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.dms {
+		if d.id == id {
+			return DMThread{ID: d.id, Peer: d.peer, Created: d.created, Mine: true, Messages: append([]DMMessage{}, d.msgs...)}, nil
+		}
+	}
+	return DMThread{}, NotFound("no conversation with that id")
+}
+
+// SendDM implements Persons: the invented person receives it at once.
+func (f *Fixture) SendDM(x DMDraft) (Sent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body := strings.TrimSpace(x.Body)
+	if body == "" {
+		return Sent{}, Refuse("Write a message first.")
+	}
+	for _, d := range f.dms {
+		if d.id == x.Conv {
+			f.nextID++
+			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
+				ReplyTo: x.ReplyTo, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
+			d.msgs = append(d.msgs, m)
+			f.bump()
+			return Sent{ID: m.ID, State: m.State}, nil
+		}
+	}
+	return Sent{}, NotFound("no conversation with that id")
 }
