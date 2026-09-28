@@ -208,10 +208,25 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	return nil
 }
 
-// updateStatus shows what became of the last switch request of this home.
+// updateStatus shows what became of the last switch request of this home,
+// as the record it is, and what runs now: whether a daemon holds the home
+// and whether the process that switched is still alive. It never presents
+// the record as the current state.
 func updateStatus(home string) error {
+	running := false
+	if st, err := os.Stat(home); err == nil && st.IsDir() {
+		if release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); err == nil {
+			release()
+		} else {
+			running = true
+		}
+	}
 	if pending, err := client.PendingUpdateSwitch(home); err == nil && pending != "" {
-		fmt.Printf("switch to agentnet %s requested: pending (the daemon switches once no job runs)\n", pending)
+		if running {
+			fmt.Printf("switch to agentnet %s requested: pending (the daemon switches once no job runs)\n", pending)
+		} else {
+			fmt.Printf("switch to agentnet %s requested; no daemon is running for this home now, so it completes when the daemon starts\n", pending)
+		}
 		return nil
 	}
 	act, ok, err := client.ReadUpdateActivation(home)
@@ -220,10 +235,22 @@ func updateStatus(home string) error {
 		return err
 	case !ok:
 		fmt.Println("no switch was requested in this home")
+		return nil
 	case act.Result == client.ActivationRunning:
-		fmt.Printf("the daemon runs agentnet %s since %s (process %d)\n", act.Running, act.At.Format(time.RFC3339), act.PID)
+		fmt.Printf("last switch: at %s the daemon started as agentnet %s (process %d)\n", act.At.Format(time.RFC3339), act.Running, act.PID)
 	default:
-		fmt.Printf("switch to agentnet %s: %s at %s: %s\n", act.To, act.Result, act.At.Format(time.RFC3339), act.Detail)
+		fmt.Printf("last switch: at %s the switch to agentnet %s was %s: %s\n", act.At.Format(time.RFC3339), act.To, strings.ReplaceAll(act.Result, "_", " "), act.Detail)
+	}
+	alive, known := processAlive(act.PID)
+	switch {
+	case !running:
+		fmt.Println("now: no daemon is running for this home")
+	case act.Result == client.ActivationRunning && known && alive:
+		fmt.Printf("now: a daemon is running, and process %d is still alive\n", act.PID)
+	case act.Result == client.ActivationRunning && known:
+		fmt.Printf("now: a daemon is running, but not process %d; its version is not checked here\n", act.PID)
+	default:
+		fmt.Println("now: a daemon is running; which version is not checked here")
 	}
 	return nil
 }

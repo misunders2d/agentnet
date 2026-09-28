@@ -265,7 +265,8 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 	if pidOf(t, c, "bob") != bobPID || !strings.HasPrefix(c.run("version"), "agentnet v9.0.2 ") {
 		t.Fatal("a refused update changed something")
 	}
-	if out := c.run("--home", "bob", "update", "--status"); !strings.Contains(out, "runs agentnet v9.0.2") {
+	if out := c.run("--home", "bob", "update", "--status"); !strings.Contains(out, "started as agentnet v9.0.2") ||
+		!strings.Contains(out, fmt.Sprintf("process %d is still alive", bobPID)) {
 		t.Fatalf("status: %s", out)
 	}
 }

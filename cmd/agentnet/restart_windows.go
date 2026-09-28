@@ -12,6 +12,9 @@ func canSwitchInPlace() (bool, string) {
 	return false, "switching a running daemon is not supported on Windows yet; restart it (schtasks /end, then /run /tn agentnet) when no job runs"
 }
 
+// processAlive is not checked on Windows.
+func processAlive(pid int) (alive, known bool) { return false, false }
+
 // restartForUpdate is not reached on Windows: the daemon does not switch
 // there yet (canSwitchInPlace), and agentnet update says so.
 func restartForUpdate(home, exe string, r client.UpdateRequest) error {

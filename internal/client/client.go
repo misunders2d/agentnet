@@ -64,6 +64,7 @@ type Agent struct {
 		sync.Mutex
 		pending   *UpdateRequest // requested: no new job starts
 		switching *UpdateRequest // the daemon is stopping for it
+		ready     bool           // started: requests are settled and looked at
 	}
 }
 

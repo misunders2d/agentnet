@@ -510,7 +510,54 @@ func TestUpdateAsksTheDaemonToSwitch(t *testing.T) {
 	if err != nil || !strings.Contains(out, "now runs agentnet v9.9.9 (seen: it restarted as process 4242)") {
 		t.Fatalf("done: %v\n%s", err, out)
 	}
-	if out, _ := updateIn(t, home, "--status"); !strings.Contains(out, "runs agentnet v9.9.9") {
+	if out, _ := updateIn(t, home, "--status"); !strings.Contains(out, "last switch: at ") || !strings.Contains(out, "started as agentnet v9.9.9 (process 4242)") ||
+		!strings.Contains(out, "now: a daemon is running") {
 		t.Fatalf("status after: %s", out)
+	}
+}
+
+// --status shows the last switch as a record, then what runs now; a record
+// of a daemon that has since stopped or been replaced is never shown as the
+// current state.
+func TestUpdateStatusIsHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("processes are not checked on Windows")
+	}
+	home := t.TempDir()
+	gone := exec.Command("sh", "-c", "exit 0")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	record := func(pid int) {
+		client.RecordUpdateActivation(home, client.UpdateActivation{ID: "x", To: "v9.9.9", Result: client.ActivationRunning, Running: "v9.9.9", PID: pid})
+	}
+	status := func() string {
+		out, err := updateIn(t, home, "--status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	record(gone.Process.Pid)
+	if out := status(); !strings.Contains(out, "last switch: at ") || !strings.Contains(out, "now: no daemon is running for this home") ||
+		strings.Contains(out, "still alive") {
+		t.Fatalf("stopped daemon: %s", out)
+	}
+	release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")) // some daemon runs now
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if out := status(); !strings.Contains(out, fmt.Sprintf("but not process %d", gone.Process.Pid)) {
+		t.Fatalf("another daemon: %s", out)
+	}
+	record(os.Getpid())
+	if out := status(); !strings.Contains(out, fmt.Sprintf("process %d is still alive", os.Getpid())) {
+		t.Fatalf("same process: %s", out)
+	}
+	release()
+	client.RequestUpdateSwitch(home, client.UpdateRequest{ID: "y", Exe: "/x/agentnet", To: "v9.9.10"})
+	if out := status(); !strings.Contains(out, "no daemon is running for this home now, so it completes when the daemon starts") {
+		t.Fatalf("pending without a daemon: %s", out)
 	}
 }

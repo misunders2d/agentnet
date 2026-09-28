@@ -207,3 +207,51 @@ func TestUpdateSettledAtStart(t *testing.T) {
 		}
 	}
 }
+
+// An update counts as done only once the daemon has started everything
+// local: a failing start records a failure, and nothing records success
+// before the messenger page (Owned) is up.
+func TestUpdateActivationOnlyWhenStarted(t *testing.T) {
+	setVersion(t, "v9.9.9")
+	w := newWorld(t, "")
+	exe := fakeProgram(t, "v9.9.9")
+
+	RequestUpdateSwitch(w.bobHome, UpdateRequest{ID: "bind", Exe: exe, To: "v9.9.9"})
+	res, _ := runUntilStop(t, w.bob, RunOptions{Executable: exe,
+		Owned: func() (func(), error) { return nil, errors.New("address in use") }})
+	if err := <-res; err == nil || !strings.Contains(err.Error(), "address in use") {
+		t.Fatalf("Run: %v", err)
+	}
+	if act := activation(t, w.bob); act.ID != "bind" || act.Result != ActivationFailed || !strings.Contains(act.Detail, "address in use") {
+		t.Fatalf("failed start recorded as %+v", act)
+	}
+	if _, err := os.Stat(filepath.Join(w.bobHome, updateRequestFile)); !os.IsNotExist(err) {
+		t.Fatal("request left behind")
+	}
+
+	RequestUpdateSwitch(w.bobHome, UpdateRequest{ID: "late", Exe: exe, To: "v9.9.9"})
+	var seenDuringStart UpdateActivation
+	res, stop := runUntilStop(t, w.bob, RunOptions{Executable: exe, Owned: func() (func(), error) {
+		time.Sleep(300 * time.Millisecond) // the worker is running meanwhile
+		seenDuringStart, _, _ = ReadUpdateActivation(w.bobHome)
+		return func() {}, nil
+	}})
+	eventually(t, "late settled", func() bool {
+		act, ok, _ := ReadUpdateActivation(w.bobHome)
+		return ok && act.ID == "late"
+	})
+	if seenDuringStart.ID == "late" {
+		t.Fatalf("success recorded before the page was up: %+v", seenDuringStart)
+	}
+	if act := activation(t, w.bob); act.Result != ActivationRunning {
+		t.Fatalf("started: %+v", act)
+	}
+	// Stop only once the stream is up: stopping while it connects leaves the
+	// test Hub's shutdown waiting (seen before this change too).
+	eventually(t, "session", func() bool {
+		infos, err := w.alice.sessions(tctx(t), w.bob.Address)
+		return err == nil && len(infos) > 0 && infos[0].Connected
+	})
+	stop()
+	<-res
+}

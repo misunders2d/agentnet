@@ -46,21 +46,20 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	defer release()
 	a.exe, a.canSwitch = opts.Executable, opts.CanSwitch
 	a.update.Lock()
-	a.update.pending, a.update.switching = nil, nil
+	a.update.pending, a.update.switching, a.update.ready = nil, nil, false
 	a.update.Unlock()
-	a.settleUpdate()
 	ctx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	a.stopRun = stopRun
 	stopWorker, err := a.startWorker(ctx)
 	if err != nil {
-		return err
+		return a.startFailed(err)
 	}
 	defer stopWorker()
 	if opts.Owned != nil {
 		stopOwned, err := opts.Owned()
 		if err != nil {
-			return err
+			return a.startFailed(err)
 		}
 		defer stopOwned()
 	}
@@ -69,11 +68,14 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	if opts.Listen != "" {
 		endpoint, cert, stop, err := a.startDirect(opts, ad.Session)
 		if err != nil {
-			return err
+			return a.startFailed(err)
 		}
 		defer stop()
 		ad.Endpoint, ad.CertPEM = endpoint, cert
 	}
+	// Everything local is up: only now does an update this start completes
+	// count as done, and only now are new requests looked at.
+	a.settleUpdate()
 	protocol.SignAd(&ad, a.id.Sign)
 	a.adQuery = "?ad=" + ad.Encode()
 	a.Logf("session %s#%s", a.Address, ad.Session)

@@ -14,6 +14,15 @@ import (
 // canSwitchInPlace: on Unix the updated program takes this process's place.
 func canSwitchInPlace() (bool, string) { return true, "" }
 
+// processAlive reports whether process pid exists (known: it could be asked).
+func processAlive(pid int) (alive, known bool) {
+	if pid <= 0 {
+		return false, false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM, true
+}
+
 // restartForUpdate puts the updated program file in place of this daemon
 // process: same process id, arguments and environment, so a service manager
 // or terminal that started the daemon keeps it. The new program records the

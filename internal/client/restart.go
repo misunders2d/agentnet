@@ -139,9 +139,17 @@ func (a *Agent) finishUpdateRequest(act UpdateActivation) {
 	}
 }
 
-// settleUpdate runs when the daemon starts: it completes or clears a request
-// left by an update, whatever happened since, and never starts a switch.
+// settleUpdate runs once the daemon has started everything local (worker,
+// messenger page, direct listener): it completes or clears a request left
+// by an update, whatever happened since, and never starts a switch. Then
+// the worker may look at new requests.
 func (a *Agent) settleUpdate() {
+	defer func() {
+		a.update.Lock()
+		a.update.ready = true
+		a.update.Unlock()
+		a.wakeWorker()
+	}()
 	r, found, err := readUpdateRequest(a.home)
 	if !found {
 		return
@@ -160,6 +168,20 @@ func (a *Agent) settleUpdate() {
 	a.finishUpdateRequest(act)
 }
 
+// startFailed records, for a request left by an update, that the daemon
+// could not start (so nothing claims the update took effect), and returns
+// err.
+func (a *Agent) startFailed(err error) error {
+	if r, found, rerr := readUpdateRequest(a.home); found {
+		detail := "the daemon could not start as agentnet " + protocol.Version + ": " + err.Error()
+		if rerr != nil {
+			detail = "unreadable request; " + detail
+		}
+		a.finishUpdateRequest(UpdateActivation{ID: r.ID, To: r.To, Result: ActivationFailed, Detail: detail})
+	}
+	return err
+}
+
 // checkUpdateRequest looks for a request while the daemon runs. A request
 // for this daemon's own program file makes it pending: no new job starts.
 func (a *Agent) checkUpdateRequest() {
@@ -168,8 +190,8 @@ func (a *Agent) checkUpdateRequest() {
 	}
 	a.update.Lock()
 	defer a.update.Unlock()
-	if a.update.pending != nil {
-		return
+	if !a.update.ready || a.update.pending != nil {
+		return // not started yet (settleUpdate first), or already pending
 	}
 	r, found, err := readUpdateRequest(a.home)
 	switch {
