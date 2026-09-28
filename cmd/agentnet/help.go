@@ -222,7 +222,7 @@ daemon exit.
   --limit N   at most N messages (default 50; 0: all); the header says which
   --offset N  skip the first N`,
 
-	"hooks": `Usage: agentnet hooks show|install|remove claude|codex [--file PATH]
+	"hooks": `Usage: agentnet hooks show|install|remove claude|codex|pi [--file PATH]
 
 Hooks let a running Claude Code or Codex session learn what arrived for
 AgentNet at its own natural points: when it starts, when you send a prompt,
@@ -242,11 +242,22 @@ Each session is told only message ids, kinds, senders and states (never the
 text, which comes from other people's agents), and each session keeps its
 own place, so reading or answering in one session never hides anything from
 another. If new messages arrive during a turn, the session is asked once to
-check them before it finishes. Pi and Antigravity hooks, and hooks on
-Windows, are not supported; use agentnet inbox and agentnet conversation
-there. Sessions the background worker starts are not told anything.`,
+check them before it finishes. Sessions the background worker starts are not
+told anything.
 
-	"hook": `Usage: agentnet hook claude|codex
+Pi: install writes one extension file, $PI_CODING_AGENT_DIR/extensions/
+agentnet.ts (default ~/.pi/agent), which Pi loads when it starts; an
+agentnet.ts that AgentNet did not write is never replaced or removed, and no
+backup is left there (Pi would load it). A Pi session is told when it
+starts, when you send a prompt, once before a run finishes, and while it is
+idle: a short notice that the next turn also sees; no model turn is started.
+It watches the AgentNet home for changes (no polling) only while Pi runs.
+A notice counts as seen once Pi has been handed it.
+
+Antigravity hooks, and hooks on Windows, are not supported; use agentnet
+inbox and agentnet conversation there.`,
+
+	"hook": `Usage: agentnet hook claude|codex|pi
 
 Run by the hooks that agentnet hooks install configures: reads the hook
 event (JSON) on stdin and prints what to tell the session. It only reads

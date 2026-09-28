@@ -97,8 +97,9 @@ func TestHooksRefuseBadConfigAndUnsupportedHarness(t *testing.T) {
 	if err := runHooks(t.TempDir(), []string{"install", "codex", "--file", file}); err == nil {
 		t.Fatal("installed into invalid JSON")
 	}
-	if err := runHooks(t.TempDir(), []string{"install", "pi"}); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("pi: %v", err)
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir()) // never the real Pi directory
+	if err := runHooks(t.TempDir(), []string{"install", "gemini"}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("gemini: %v", err)
 	}
 	// A new file is created owner-only.
 	fresh := filepath.Join(t.TempDir(), "sub", "hooks.json")

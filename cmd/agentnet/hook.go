@@ -24,13 +24,23 @@ var hookHarnesses = []string{"claude", "codex"}
 // hookEvents are the events AgentNet installs.
 var hookEvents = []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
 
+// piEvents are the events AgentNet's Pi extension sends (agentnet-pi.ts):
+// the session lifecycle, Idle for arrivals while Pi waits, and Ack once it
+// has handed the text to Pi.
+var piEvents = []string{"SessionStart", "UserPromptSubmit", "Idle", "Stop", "Ack"}
+
 // runHook is called by a harness hook. It never fails loudly: without an
 // enrolled agent, or on any error, it prints nothing and exits 0, so a
 // broken or missing AgentNet never disturbs the session. It creates nothing
 // in a missing home.
 func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) error {
-	if len(args) != 1 || !slices.Contains(hookHarnesses, args[0]) {
-		return fmt.Errorf("usage: hook %s (reads the hook event on stdin)", strings.Join(hookHarnesses, "|"))
+	if len(args) != 1 || (!slices.Contains(hookHarnesses, args[0]) && args[0] != "pi") {
+		return fmt.Errorf("usage: hook %s|pi (reads the hook event on stdin)", strings.Join(hookHarnesses, "|"))
+	}
+	pi := args[0] == "pi"
+	events := hookEvents
+	if pi {
+		events = piEvents
 	}
 	if os.Getenv(client.BackgroundEnv) == "1" {
 		return nil // a session the AgentNet worker started: not the user's
@@ -39,11 +49,14 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		SessionID      string `json:"session_id"`
 		HookEventName  string `json:"hook_event_name"`
 		StopHookActive bool   `json:"stop_hook_active"`
+		Pos            int64  `json:"pos"`     // Ack (pi)
+		HasPos         bool   `json:"has_pos"` // Ack (pi)
+		Release        string `json:"release"` // Ack (pi)
 	}
 	if err := json.NewDecoder(io.LimitReader(stdin, 64<<20)).Decode(&in); err != nil {
 		return nil
 	}
-	if !slices.Contains(hookEvents, in.HookEventName) {
+	if !slices.Contains(events, in.HookEventName) {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(home, "identity.json")); err != nil {
@@ -54,11 +67,23 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		return nil
 	}
 	defer a.Close()
+	if in.HookEventName == "Ack" {
+		a.AckAttention("pi", in.SessionID, in.Pos, in.HasPos, in.Release)
+		return nil
+	}
 	at, err := a.Attention(client.HookEvent{Harness: args[0], Session: in.SessionID, Event: in.HookEventName, StopActive: in.StopHookActive})
 	if err != nil || at.Text == "" {
 		if err == nil {
 			at.Commit() // records a new session's starting point
 		}
+		return nil
+	}
+	if pi {
+		// Pi's extension shows the text itself and acknowledges it only
+		// after that (event Ack), so nothing is recorded here.
+		pos, hasPos, release := at.Ack()
+		data, _ := json.Marshal(map[string]any{"text": at.Text, "ack": map[string]any{"pos": pos, "has_pos": hasPos, "release": release}})
+		stdout.Write(append(data, '\n'))
 		return nil
 	}
 	var out any
@@ -214,11 +239,14 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 // runHooks shows, installs or removes AgentNet's hooks in a harness's
 // user-level hook configuration.
 func runHooks(home string, args []string) error {
-	usage := errors.New("usage: hooks show|install|remove claude|codex [--file PATH]")
+	usage := errors.New("usage: hooks show|install|remove claude|codex|pi [--file PATH]")
 	if len(args) < 2 {
 		return usage
 	}
 	action, harness := args[0], args[1]
+	if harness == "pi" {
+		return runPiHooks(home, action, args[2:])
+	}
 	if !slices.Contains(hookHarnesses, harness) {
 		return fmt.Errorf("hooks for %q are not supported: only %s hook contracts are implemented; other agents can use `agentnet inbox` and `agentnet conversation`", harness, strings.Join(hookHarnesses, " and "))
 	}

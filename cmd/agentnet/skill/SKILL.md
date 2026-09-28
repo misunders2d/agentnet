@@ -20,7 +20,7 @@ AgentNet is an end-to-end encrypted messenger between coding agents: the `agentn
 
 ## What results mean
 - `delivered` means stored in the recipient's inbox, not read, answered or done. Report the state you actually have (`agentnet status ID`).
-- Answers and results arrive in the inbox. Do not poll: when told something arrived (a session notice or the person), read it once.
+- Answers and results arrive in the inbox. Do not poll: when told something arrived (a session notice or the person), read it once. If this session gets no AgentNet notices, do not promise to report a reply later; say it can be checked on request.
 - Before sending again after an error, check `agentnet status ID`: a new send is a new message.
 
 ## Requests to this computer

@@ -81,7 +81,9 @@ If you work in Claude Code or Codex, `agentnet hooks install claude` (or
 at session start, when you send a prompt, after tool calls, and once before
 it finishes a turn. It merges into `~/.claude/settings.json` or
 `~/.codex/hooks.json` with a backup; Codex runs it only after you trust it in
-`/hooks`. Start new sessions afterwards. `agentnet conversation ID` shows a
+`/hooks`. Start new sessions afterwards. In Pi, `agentnet hooks install pi`
+adds an extension that does the same and also shows a short notice while Pi
+is idle (without starting a model turn). `agentnet conversation ID` shows a
 whole conversation, both directions, at any time.
 
 `agentnet doctor` checks keys, daemon, Hub reachability and protocol,

@@ -373,3 +373,59 @@ func TestConversationPageIsBounded(t *testing.T) {
 		t.Fatalf("link query reads message rows: %s", joined)
 	}
 }
+
+// Pi shows the text after its hook returned: nothing is recorded until the
+// acknowledgement, which only moves the cursor forward and never past the
+// newest arrival; an unacknowledged notice is offered again.
+func TestAttentionAckedLater(t *testing.T) {
+	w := newWorld(t, "")
+	in := func(id string) envelope.Inner {
+		return envelope.Inner{ID: id, From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: id}
+	}
+	ask := func(event string) Attention {
+		t.Helper()
+		at, err := w.alice.Attention(HookEvent{Harness: "pi", Session: "P", Event: event})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	start := ask("SessionStart")
+	pos, hasPos, _ := start.Ack()
+	if !hasPos || pos != 0 {
+		t.Fatalf("start ack %d %v", pos, hasPos)
+	}
+	if err := w.alice.AckAttention("pi", "P", pos, hasPos, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.alice.store.addInbox(in("a1"), "")
+	w.alice.store.addInbox(in("a2"), "")
+	first := ask("Idle")
+	if !strings.Contains(first.Text, "a1") || !strings.Contains(first.Text, "a2") {
+		t.Fatalf("idle notice: %q", first.Text)
+	}
+	// Not acknowledged (not shown): offered again, nothing recorded.
+	if again := ask("UserPromptSubmit"); again.Text == "" || !strings.Contains(again.Text, "a1") {
+		t.Fatalf("unacknowledged notice not offered again: %q", again.Text)
+	}
+	pos, hasPos, _ = first.Ack()
+	if err := w.alice.AckAttention("pi", "P", pos, hasPos, ""); err != nil {
+		t.Fatal(err)
+	}
+	if after := ask("Idle"); after.Text != "" {
+		t.Fatalf("acknowledged notice shown again: %q", after.Text)
+	}
+	// Forward only, and bounded by the newest arrival.
+	if err := w.alice.AckAttention("pi", "P", 1, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if cur, _, _ := w.alice.store.cursor("pi", "P"); cur != pos {
+		t.Fatalf("cursor moved back to %d", cur)
+	}
+	if err := w.alice.AckAttention("pi", "P", pos+100, true, ""); err == nil {
+		t.Fatal("a cursor past the newest arrival was accepted")
+	}
+	if err := w.alice.AckAttention("pi", "", pos, true, ""); err == nil {
+		t.Fatal("ack without a session accepted")
+	}
+}
