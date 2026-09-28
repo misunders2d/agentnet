@@ -118,8 +118,12 @@ func TestWindowsUpdateSwitchThroughTask(t *testing.T) {
 		if err := os.WriteFile(bin, data, 0o700); err != nil {
 			t.Fatal(err)
 		}
+		exe, err := filepath.EvalSymlinks(bin) // as agentnet update names the file it replaced
+		if err != nil {
+			t.Fatal(err)
+		}
 		id := protocol.NewID()
-		if err := client.RequestUpdateSwitch(home, client.UpdateRequest{ID: id, Exe: bin, From: "", To: to, At: time.Now()}); err != nil {
+		if err := client.RequestUpdateSwitch(home, client.UpdateRequest{ID: id, Exe: exe, From: "", To: to, At: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 		return id
