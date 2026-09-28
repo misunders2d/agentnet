@@ -111,7 +111,10 @@ func installed(t *testing.T, current string) (exe string, before os.FileInfo) {
 	}
 	os.WriteFile(exe, selfBytes(t), 0o755)
 	os.WriteFile(exe+".fakeversion", []byte(current), 0o600)
-	before, _ = os.Stat(exe)
+	before, err := fileIdentity(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
 	oldExe, oldVersion := executable, protocol.Version
 	executable = func() (string, error) { return exe, nil }
 	protocol.Version = current
@@ -120,9 +123,33 @@ func installed(t *testing.T, current string) (exe string, before os.FileInfo) {
 	return exe, before
 }
 
+// fileIdentity is the identity of the file at path now. It is read through
+// an open handle: on Windows, os.Stat by path reads the identity only at the
+// first os.SameFile, from whatever file the path names by then, so a
+// FileInfo kept from before an update would take on the new file's identity.
+func fileIdentity(path string) (os.FileInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Stat()
+}
+
+// sameFileNow reports whether two paths name the same file now, however
+// they are spelled (a symlinked or short temporary directory, for example).
+func sameFileNow(a, b string) bool {
+	fa, err := fileIdentity(a)
+	if err != nil {
+		return false
+	}
+	fb, err := fileIdentity(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
 // unchanged reports whether exe is still the file before was.
 func unchanged(exe string, before os.FileInfo) bool {
-	now, err := os.Stat(exe)
+	now, err := fileIdentity(exe)
 	return err == nil && os.SameFile(now, before)
 }
 
@@ -166,7 +193,7 @@ func TestUpdateInstallsRelease(t *testing.T) {
 	if unchanged(exe, before) {
 		t.Fatal("the release was not installed")
 	}
-	if old, err := os.Stat(exe + ".old"); err != nil || !os.SameFile(old, before) {
+	if old, err := fileIdentity(exe + ".old"); err != nil || !os.SameFile(old, before) {
 		t.Fatalf("previous file not kept: %v", err)
 	}
 	os.Remove(exe + ".fakeversion") // the new file reports the release's version
@@ -498,7 +525,7 @@ func TestUpdateAsksTheDaemonToSwitch(t *testing.T) {
 			}
 			var r client.UpdateRequest
 			json.Unmarshal(data, &r)
-			if r.Exe != exe || r.To != "v9.9.9" {
+			if !sameFileNow(r.Exe, exe) || r.To != "v9.9.9" { // the request names the resolved file
 				continue
 			}
 			os.Remove(filepath.Join(home, "update-request.json"))
