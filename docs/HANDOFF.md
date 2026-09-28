@@ -288,6 +288,12 @@ If a local database or key file is damaged:
    - Track progress across tickets `MEL-409` through `MEL-435` in project [Agent Net Revived](https://linear.app/mellanni/project/agent-net-revived-c2f1212b3580).
 
 ### 6.2 Explicitly Held / Deferred Work
+- **Messenger continuation contract (2026-09-28)**: Before scoping chat work, read
+  [DECISIONS §3.2](DECISIONS.md#32-persistent-conversations--temporary-participation-2026-09-28).
+  Conversations outlive model sessions; participant/history access is explicit.
+  An agent's first report does **not** dismiss it: it remains available for
+  follow-ups, with no model calls merely to wait, until explicitly dismissed.
+  This records design direction and acceptance examples, not implementation approval.
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.

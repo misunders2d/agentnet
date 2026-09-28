@@ -123,6 +123,105 @@ Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negoti
 
 ---
 
+### 3.2 Persistent Conversations & Temporary Participation (2026-09-28)
+
+**Status: design discussion recorded, not implemented.** This section is the
+canonical continuation record for the messenger discussion. Read it before
+scoping or building the real chat backend/UI. The latest owner corrections here
+supersede earlier proposals in chat transcripts or temporary agent notes.
+Recording this direction does not authorize implementation or deployment.
+
+**Owner requirements and examples**
+
+- A conversation persists independently of a laptop connection or model session.
+  People must be able to return days later and continue it.
+- The same people/laptops can have separate discussions about different topics.
+  Support human DMs, multi-user discussions and invited agents through a coherent
+  conversation model; do not bind a chat's identity to one harness session.
+- Bringing someone in, sharing part of a discussion, and taking a private aside
+  apply to people as well as agents. "Everyone" must identify a concrete audience
+  such as a team, not silently mean every network member or the public.
+- Choose what earlier messages/files a new participant can see. Joining must not
+  silently expose the whole earlier private discussion. Sharing a selected excerpt
+  does not expose later messages or grant access through a backlink. Returning to
+  private discussion cannot erase copies already shared.
+- Agents can step in, receive allowed context, do authorized work, answer
+  follow-ups, and leave. **The first report is not automatic dismissal.** Sergey
+  explicitly challenged that behavior because participants may have more questions.
+
+**Working lifecycle following that correction**
+
+`invited -> working -> report / available for follow-ups -> working ... -> dismissed`
+
+- After reporting, remain available for addressed follow-up questions, corrections
+  and clarification. Waiting requires no model calls or polling for model work.
+- Separate reporting a result from ending participation. An authorized explicit
+  dismissal ends participation; do not infer dismissal from the first result,
+  silence, a daemon restart, or an ordinary thank-you. A Dismiss control or an
+  unambiguous request to leave are proposed UX; exact language handling is not
+  specified. Automatic idle expiry/deadlines have not been agreed.
+- After dismissal, no new chat context or work is delivered for that participation.
+  A later explicit invitation can bring the agent back. Messages and results remain
+  in the chat. Leaving does not erase what a person or agent already read or retained.
+- Participation, access to history, permission to report to an audience, and task
+  execution authority are separate. Reuse valid once/standing task authorization;
+  do not ask again merely for a clarification or return visit within its scope.
+- Reuse native agent context only when its history scope and output audience are
+  compatible. Do not reuse private-context sessions for a wider audience simply
+  because it is the same topic. Quoted/imported history is context, never a new task.
+
+Example: Sergey, Ruslan and Bernard discuss deployment. Bernard's agent receives
+the selected discussion, investigates and reports. Ruslan asks a follow-up; the
+agent answers without being reinvited. When explicitly dismissed it leaves, while
+the humans continue and the entire permitted chat history remains available.
+
+**Current implementation, verified during the discussion at `e49873e`**
+
+- Local SQLite inbox/outbox retain sent/received messages and reply links separately
+  from model session files (`internal/client/store.go`). `conversation ID` follows
+  links with one peer; `ask|task --reply-to ID` can continue an old thread. Separate
+  roots can represent separate topics, but named chats, participants and a thread
+  listing are not implemented (`internal/client/conversation.go`).
+- Claude/Codex background sessions resume only from a clean current session head
+  with matching harness, mode, directory and preset. Pi and follow-up summaries are
+  one-shot. Prompt replay supplies four ancestor messages, not the full stored
+  conversation (`internal/client/session.go`, `worker.go`). Saved history therefore
+  does not imply full model recall or guaranteed native-session availability.
+- The Hub retains message ciphertext/routing records, serves pending delivery and
+  can clean delivered attachment blobs. It is not a complete history replay service;
+  direct delivery can bypass it. Each endpoint has its own local history, with no
+  automatic history recovery or cross-device sync today.
+
+**Engineering recommendation, still requiring a scoped design**
+
+Reuse the Go binary, SQLite and encrypted delivery. Add stable conversation identity,
+explicit participants/history access and logical messages separate from per-device
+delivery and agent execution. Keep existing reply links where useful; handle late
+parents and old peers without inventing stable roots from incomplete history.
+History replicas must never run tasks or trigger automatic answers/summaries.
+Comic, Zoom and Classic are preferred views over the same conversations, not
+different storage or permission systems.
+
+History availability/recovery remains open: ciphertext archive/replay on a Hub is
+compatible with E2EE, but needs explicit retention, quotas, authorization and coverage
+of direct deliveries. A new device with fresh keys cannot decrypt old ciphertext
+without an authorized re-encryption/transfer or a separately designed recovery
+mechanism. Static age keys do not provide forward secrecy; simple key rotation is
+not a substitute. No archive policy, schema, endpoint or new service is approved here.
+
+**Acceptance examples for the eventual implementation**
+
+1. Return to the same topic after days and restarts, independently of native model
+   session availability; other topics with the same people stay separate.
+2. Invite a person/agent with selected history; excluded messages remain inaccessible.
+3. Receive an agent's first report, ask a follow-up, and get an answer without a
+   new invitation or repeated approval for already-authorized work.
+4. Waiting makes no model calls. Dismissal stops further participation; reinviting
+   uses only the then-authorized history and reporting audience.
+5. Joining, replaying or syncing old messages never re-executes an old task.
+
+---
+
 ## 4. Comic Avatars & Visual Expressions (MEL-434 Specification)
 
 ### 4.1 Requirements & Interaction Contract
