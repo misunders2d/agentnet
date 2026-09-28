@@ -394,7 +394,9 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 }
 
 func (s *store) queued() ([]envelope.Envelope, error) {
-	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? ORDER BY created_at`, stateQueued)
+	// A conversation message to a frozen (conflicting) person is not sent.
+	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
+		(SELECT address FROM persons WHERE state = ?)) ORDER BY created_at`, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}

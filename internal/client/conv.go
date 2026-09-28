@@ -344,6 +344,9 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 	if ok, why := a.convSupport(ctx, address, key, feats); !ok {
 		return "", errors.New(why)
 	}
+	if !a.personSendable(address, them.info.Roster) { // the profile just read may have frozen it
+		return "", errPersonConflict
+	}
 	members := []protocol.ConvMember{{Person: me.info.Person, Roster: me.info.Roster}, {Person: them.info.Person, Roster: them.info.Roster}}
 	slices.SortFunc(members, func(x, y protocol.ConvMember) int {
 		if x.Person < y.Person {
@@ -489,6 +492,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	return ConvSent{ID: env.ID, LID: in.LID, State: res.State}, nil
 }
 
+// personSendable reports whether the person on the device at address is
+// pinned and not frozen (and, if roster is given, still that roster).
+func (a *Agent) personSendable(address, roster string) bool {
+	p, ok, err := a.store.personByAddress(address)
+	return err == nil && ok && p.info.State == personPinned && (roster == "" || p.info.Roster == roster)
+}
+
 // releaseConv queues waiting conversation messages whose recipient can now
 // read them; the sync's outbox flush sends them.
 func (a *Agent) releaseConv(ctx context.Context, feats []string) {
@@ -504,6 +514,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			if err == nil && found {
 				ok, _ = a.convSupport(ctx, to, key, feats)
 			}
+			// Support alone is not enough: the profile just read may have
+			// frozen the person, and a frozen person gets nothing.
+			ok = ok && a.personSendable(to, "")
 			checked[to] = ok
 		}
 		if ok {
