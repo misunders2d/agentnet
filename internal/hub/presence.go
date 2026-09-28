@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -139,6 +140,18 @@ func (p *presence) notify(agent string) {
 	if p.onChange != nil {
 		p.onChange(agent)
 	}
+}
+
+// sessionIDs lists agent's live sessions (connected or within grace), sorted.
+func (p *presence) sessionIDs(agent string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := make([]string, 0, len(p.sessions[agent]))
+	for id := range p.sessions[agent] {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 // live reports whether the session is connected or within its grace period.

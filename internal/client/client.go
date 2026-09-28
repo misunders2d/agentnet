@@ -51,6 +51,8 @@ type Agent struct {
 	wakeWorker func()      // wakes the question/task worker; a no-op outside Run
 	changes    *changeFeed // local state changed (changes.go)
 	members    memberState // the Hub's member list from the push stream (members.go)
+	session    string      // this run's session id (Run); "" outside Run
+	convWork   convWork    // conversation upkeep due on the next sync (conv.go)
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
@@ -557,6 +559,12 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 		in, err := envelope.Open(env, a.id, a.Address, e.Public)
 		if err != nil {
 			a.Logf("held message %s still does not verify: %v", env.ID, err)
+			continue
+		}
+		if in.V == envelope.Version2 { // a conversation message needs its conversation proof too
+			if err := a.admitConv(ctx, env, in, e.Public, true); err != nil {
+				return "", err
+			}
 			continue
 		}
 		if err := a.store.promote(in, e.Public.Fingerprint()); err != nil {

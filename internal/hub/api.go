@@ -18,12 +18,15 @@ import (
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion})
+		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion, Features: features})
 	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
 	mux.HandleFunc("GET /v1/agents", h.handleMembers)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
+	mux.HandleFunc("GET /v1/agents/{label}/{agent}/profile", h.handleProfile)
+	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
+	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
 	mux.HandleFunc("POST /v1/messages/{id}/ack", h.handleAck)

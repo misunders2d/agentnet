@@ -114,12 +114,16 @@ func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 	defer tx.Rollback()
 	var kind, state string
 	var verifiedBy sql.NullString
-	err = tx.QueryRow(`SELECT sender, kind, state, verified_by FROM inbox WHERE id = ?`, id).Scan(&sender, &kind, &state, &verifiedBy)
+	var conv bool
+	err = tx.QueryRow(`SELECT sender, kind, state, verified_by, conv IS NOT NULL FROM inbox WHERE id = ?`, id).Scan(&sender, &kind, &state, &verifiedBy, &conv)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", fmt.Errorf("no inbox message %s", id)
 	}
 	if err != nil {
 		return "", "", err
+	}
+	if conv {
+		return "", "", ErrConversationItem
 	}
 	if kind != envelope.KindTask {
 		return "", "", errors.New("--always is for tasks; to answer an agent's questions automatically use agentnet approve ADDRESS")

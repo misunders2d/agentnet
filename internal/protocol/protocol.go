@@ -33,8 +33,9 @@ const ProtocolVersion = 1
 
 // VersionInfo is the Hub's unauthenticated GET /v1/version answer.
 type VersionInfo struct {
-	Version  string `json:"version"`
-	Protocol int    `json:"protocol"`
+	Version  string   `json:"version"`
+	Protocol int      `json:"protocol"`
+	Features []string `json:"features,omitempty"` // Feature*; absent on older relays
 }
 
 // MaxBody bounds every request body the Hub reads.
@@ -415,6 +416,9 @@ type Member struct {
 	Address  string `json:"address"`
 	Presence string `json:"presence"` // PresenceConnected, PresenceReconnecting or PresenceOffline
 	Joined   int64  `json:"joined"`   // enrollment time, unix seconds
+	// Person is the signed person roster this device published, if any,
+	// exactly as signed; a receiver verifies it against the device's key.
+	Person json.RawMessage `json:"person,omitempty"`
 }
 
 // Members is the Hub's member list (GET /v1/agents, and the "members" push
@@ -425,7 +429,8 @@ type Members struct {
 	Truncated bool     `json:"truncated"`
 }
 
-// MaxMembers bounds one member list, keeping it far below MaxBody.
+// MaxMembers bounds one member list, keeping it below MaxBody even when
+// every member carries a person record of MaxPersonRecord bytes.
 const MaxMembers = 1000
 
 // MembersHeader, set to "1" on a push stream, says the Hub sends the member
@@ -452,6 +457,9 @@ func (m Members) Valid() error {
 		case PresenceConnected, PresenceReconnecting, PresenceOffline:
 		default:
 			return fmt.Errorf("%s: unknown presence %q", e.Address, e.Presence)
+		}
+		if len(e.Person) > MaxPersonRecord {
+			return fmt.Errorf("%s: person record too large", e.Address)
 		}
 	}
 	return nil

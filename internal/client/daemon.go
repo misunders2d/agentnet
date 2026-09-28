@@ -65,6 +65,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	}
 
 	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
+	a.session = ad.Session
 	if opts.Listen != "" {
 		endpoint, cert, stop, err := a.startDirect(opts, ad.Session)
 		if err != nil {
@@ -129,6 +130,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.Logf("connected to hub as %s", a.Address)
 	a.membersConnected(resp.Header)
 	defer a.membersDisconnected()
+	a.convWork.due(convPublish | convRetry | convRelease) // a new connection: publish, then look again
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)
@@ -186,6 +188,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 // on connect and on each Hub ping, so retries ride on existing traffic
 // instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
+	a.convSync(ctx) // only what an event made due: no request otherwise
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
@@ -307,6 +310,9 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		sender = e.Public
 	}
 	in, err := envelope.Open(env, a.id, a.Address, sender)
+	if err == nil && in.V == envelope.Version2 {
+		return a.admitConv(ctx, env, in, sender, false)
+	}
 	if err == nil {
 		// The key that verified it is the evidence, not whatever is pinned
 		// by the time it is stored.

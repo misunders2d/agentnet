@@ -44,6 +44,8 @@ Messages and files:
   status     what is known about a message you sent
   sessions   list another agent's running sessions
   members    list the agents enrolled on your Hub and whether they are online
+  person     create or show the person this installation speaks for
+  dm         two-person conversations between persons
 
 Questions and tasks sent to you:
   accept     let your responder run a task or answer a held question
@@ -286,6 +288,43 @@ path (relay or direct).`,
 List an agent's running daemons ("sessions"), whether each is connected or
 reconnecting, and whether it accepts direct deliveries. Address one session
 with ADDRESS#SESSION.`,
+
+	"person": `Usage: agentnet person
+       agentnet person create NAME
+
+Create the person this installation speaks for, once, explicitly. Nothing
+creates a person for you: not joining, not an address, not a name, not an
+update, and existing conversations stay as they are. NAME is only what you
+call yourself; others see it as your claim, not as a verified identity. The
+record (a random person id, NAME and this installation's key) is signed by
+this installation and published on your Hub, so others can start a DM with
+you. If you already created a person on another computer, do not create a
+second one here: linking computers to one person comes later.
+
+Limits: one computer per person for now. If this installation's keys are
+replaced, its person cannot continue: others see a conflict and your DMs
+freeze. A different record for a person or address someone has pinned is
+treated the same way (frozen, never replaced).`,
+
+	"dm": `Usage: agentnet dm new ADDRESS
+       agentnet dm list
+       agentnet dm show ID
+       agentnet dm send [--question|--task] ID TEXT
+
+A DM is a conversation between two persons (see agentnet help person), with
+its own id: each dm new starts a separate one, even with the same person,
+and it stays after restarts. dm new ADDRESS starts one with the person that
+installation speaks for; both of you need a person, and both installations
+and your Hub need a version that carries conversations.
+
+Messages are end-to-end encrypted and signed; the conversation's signed
+root travels with them. A question or task in a DM is for the person: no
+agent runs it (agent participation comes later), and accept, reply and
+decline do not apply to it; answer with dm send. If the other installation
+cannot read conversations right now, dm send keeps the message as waiting
+and sends it when it can; it is never sent in the older format. dm show
+lists the messages and their states; an origin shown (ui, agent:NAME) is
+what the sending installation says, not proof.`,
 
 	"members": `Usage: agentnet members
 

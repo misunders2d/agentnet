@@ -69,6 +69,15 @@ CREATE TABLE release(
   note TEXT NOT NULL,
   set_by TEXT NOT NULL,
   set_at INTEGER NOT NULL);
+`, `
+ALTER TABLE agents ADD COLUMN person TEXT;
+ALTER TABLE agents ADD COLUMN last_session TEXT;
+CREATE TABLE caps(
+  address TEXT NOT NULL,
+  session TEXT NOT NULL,
+  record TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY(address, session));
 `}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
@@ -174,13 +183,14 @@ func (s *store) agent(address string) (agent, error) {
 // enrolledMember is one unrevoked agent for the member list.
 type enrolledMember struct {
 	address string
-	joined  int64 // unix seconds
+	joined  int64  // unix seconds
+	person  string // its signed person roster, if published
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
 // and whether more exist.
 func (s *store) members(limit int) ([]enrolledMember, bool, error) {
-	rows, err := s.db.Query(`SELECT address, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?`, limit+1)
+	rows, err := s.db.Query(`SELECT address, created_at, coalesce(person, '') FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -188,7 +198,7 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		if err := rows.Scan(&m.address, &m.joined); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &m.person); err != nil {
 			return nil, false, err
 		}
 		out = append(out, m)
@@ -200,6 +210,72 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 		return out[:limit], true, nil
 	}
 	return out, false, nil
+}
+
+// setPerson stores the signed person roster address published.
+func (s *store) setPerson(address string, roster []byte) error {
+	_, err := s.db.Exec(`UPDATE agents SET person = ? WHERE address = ? AND revoked_at IS NULL`, string(roster), address)
+	return err
+}
+
+// setLastSession records the session that connected last for address, so
+// an offline device keeps what that session could read.
+func (s *store) setLastSession(address, session string) error {
+	_, err := s.db.Exec(`UPDATE agents SET last_session = ? WHERE address = ?`, session, address)
+	return err
+}
+
+// maxCapsSessions bounds the capability records kept per device.
+const maxCapsSessions = 8
+
+// putCaps stores a session's capability record unless a newer one is
+// stored for that session, and keeps only the newest records per device.
+func (s *store) putCaps(address, session string, ts int64, record []byte) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO caps(address, session, record, ts) VALUES(?, ?, ?, ?)
+		ON CONFLICT(address, session) DO UPDATE SET record = excluded.record, ts = excluded.ts WHERE excluded.ts > caps.ts`,
+		address, session, string(record), ts); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM caps WHERE address = ? AND session NOT IN
+		(SELECT session FROM caps WHERE address = ? ORDER BY ts DESC, session LIMIT ?)
+		AND session IS NOT (SELECT last_session FROM agents WHERE address = ?)`,
+		address, address, maxCapsSessions, address); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// profileRows returns address's published person roster, last connected
+// session and the capability records of sessions.
+func (s *store) profileRows(address string, sessions []string) (person, last string, caps map[string]string, err error) {
+	var p, l sql.NullString
+	if err = s.db.QueryRow(`SELECT person, last_session FROM agents WHERE address = ? AND revoked_at IS NULL`, address).Scan(&p, &l); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = errNotFound
+		}
+		return
+	}
+	person, last, caps = p.String, l.String, map[string]string{}
+	if len(sessions) == 0 && last != "" {
+		sessions = []string{last}
+	}
+	for _, id := range sessions {
+		var rec string
+		switch err = s.db.QueryRow(`SELECT record FROM caps WHERE address = ? AND session = ?`, address, id).Scan(&rec); {
+		case err == nil:
+			caps[id] = rec
+		case errors.Is(err, sql.ErrNoRows):
+			err = nil
+		default:
+			return
+		}
+	}
+	return
 }
 
 func (s *store) agentCount() (int, error) {

@@ -255,6 +255,10 @@ func run(args []string) error {
 		return err
 	case "members":
 		return runMembers(ctx, a, rest, os.Stdout, os.Stderr)
+	case "person":
+		return runPerson(ctx, a, rest, os.Stdout)
+	case "dm":
+		return runDM(ctx, a, rest, os.Stdout)
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")

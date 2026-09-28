@@ -13,14 +13,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"filippo.io/age"
 
 	"github.com/misunders2d/agentnet/internal/identity"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Version is the envelope format version.
 const Version = 1
+
+// Version2 is the conversation envelope (human DMs). Its signature uses its
+// own domain, so a v1 signature can never pass for v2 or back; an older
+// client rejects it and quarantines it (fail closed), which is why senders
+// use it only for devices whose signed capabilities include protocol.CapEnv2.
+const Version2 = 2
 
 // MaxCiphertext bounds a message body; files travel separately.
 const MaxCiphertext = 256 << 10
@@ -77,6 +85,16 @@ type Inner struct {
 	Session     string       `json:"session,omitempty"`
 	Fallback    bool         `json:"fallback,omitempty"`
 	Status      string       `json:"status,omitempty"` // for answers and results
+
+	// Version 2 only; each must be empty in version 1.
+	Conv    string          `json:"conv,omitempty"`    // conversation id (protocol.ConvRoot.ID)
+	LID     string          `json:"lid,omitempty"`     // logical id, the same in every per-device copy
+	Root    json.RawMessage `json:"root,omitempty"`    // the conversation's signed root, at most protocol.MaxConvRoot bytes
+	Sub     string          `json:"sub,omitempty"`     // "" (a turn), SubEvent or SubExcerpt
+	Replica bool            `json:"replica,omitempty"` // a history copy: never executes
+	Origin  string          `json:"origin,omitempty"`  // OriginUI or "agent:<harness>": the sender's assertion, not proof
+	Emotion string          `json:"emotion,omitempty"` // the agent's chosen emotion; required on agent-origin turns
+	Target  *Target         `json:"target,omitempty"`  // the one execution recipient of a question or task
 }
 
 // Kinds of messages. The kind is signed and encrypted; it states intent,
@@ -114,21 +132,108 @@ const (
 	StatusReviewNotice = "review_notice"
 )
 
+// Version 2 inner values.
+const (
+	SubEvent   = "event"   // a conversation event; history only, never a request
+	SubExcerpt = "excerpt" // shared history; never a request
+	OriginUI   = "ui"      // typed by a person, as the sending device asserts
+	// OriginAgentPrefix starts "agent:<harness>", written by an agent.
+	OriginAgentPrefix = "agent:"
+)
+
+// Target names the one device that may execute a question or task (its
+// own locally configured responder decides how; a sender selects no
+// command, path or settings). Without a target, a question or task is
+// addressed to the person and is never run by an agent.
+type Target struct {
+	Address     string `json:"address"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// AgentOrigin reports whether origin says an agent wrote the turn.
+func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAgentPrefix) }
+
+// checkVersion2 validates the version 2 fields of in (or their absence in
+// version 1).
+func checkVersion2(in Inner) error {
+	if in.V != Version2 {
+		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Sub != "" || in.Replica || in.Origin != "" || in.Emotion != "" || in.Target != nil {
+			return errors.New("conversation fields in a version 1 message")
+		}
+		return nil
+	}
+	if !protocol.ValidHash(in.Conv) || !validID(in.LID) {
+		return errors.New("invalid conversation or logical id")
+	}
+	if len(in.Root) == 0 || len(in.Root) > protocol.MaxConvRoot {
+		return errors.New("missing or oversized conversation root")
+	}
+	switch in.Sub {
+	case "", SubEvent, SubExcerpt:
+	default:
+		return fmt.Errorf("unknown sub %q", in.Sub)
+	}
+	if in.Origin != "" && in.Origin != OriginUI && !(AgentOrigin(in.Origin) && validToken(strings.TrimPrefix(in.Origin, OriginAgentPrefix), 32)) {
+		return fmt.Errorf("invalid origin %q", in.Origin)
+	}
+	if in.Emotion != "" && !validToken(in.Emotion, 24) {
+		return fmt.Errorf("invalid emotion %q", in.Emotion)
+	}
+	if t := in.Target; t != nil {
+		if in.Kind != KindQuestion && in.Kind != KindTask {
+			return errors.New("only a question or task has an execution target")
+		}
+		if _, _, err := protocol.SplitAddress(t.Address); err != nil || !protocol.ValidFingerprint(t.Fingerprint) {
+			return errors.New("invalid execution target")
+		}
+	}
+	return nil
+}
+
+// validToken reports whether s is 1–max characters of [a-z0-9-].
+func validToken(s string, max int) bool {
+	if s == "" || len(s) > max {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // ErrNotForMe means the envelope is addressed to another agent.
 var ErrNotForMe = errors.New("envelope addressed to another agent")
 
+// signed is what the sender signs: a domain line for the envelope's
+// version, then the envelope without its signature as JSON.
 func (e Envelope) signed() []byte {
+	domain := "agentnet-envelope-v1\n"
+	if e.V == Version2 {
+		domain = "agentnet-envelope-v2\n"
+	}
 	e.Sig = nil
 	data, _ := json.Marshal(e)
-	return append([]byte("agentnet-envelope-v1\n"), data...)
+	return append([]byte(domain), data...)
 }
 
 // Seal encrypts in to recipient and signs the envelope with the sender key.
+// in.V selects the version: Version2 for a conversation message, anything
+// else version 1. An agent-origin version 2 turn must carry an emotion.
 func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelope, error) {
 	if !validKind(in.Kind) {
 		return Envelope{}, fmt.Errorf("unknown message kind %q", in.Kind)
 	}
-	in.V = Version
+	if in.V != Version2 {
+		in.V = Version
+	}
+	if err := checkVersion2(in); err != nil {
+		return Envelope{}, err
+	}
+	if in.V == Version2 && AgentOrigin(in.Origin) && in.Sub == "" && in.Emotion == "" {
+		return Envelope{}, errors.New("an agent's turn must carry an emotion")
+	}
 	plain, err := json.Marshal(in)
 	if err != nil {
 		return Envelope{}, err
@@ -147,7 +252,7 @@ func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelop
 	if ct.Len() > MaxCiphertext {
 		return Envelope{}, fmt.Errorf("message too large (%d bytes encrypted, max %d)", ct.Len(), MaxCiphertext)
 	}
-	env := Envelope{V: Version, ID: in.ID, From: in.From, To: in.To, TS: in.TS, Kind: in.Kind, CT: ct.Bytes(),
+	env := Envelope{V: in.V, ID: in.ID, From: in.From, To: in.To, TS: in.TS, Kind: in.Kind, CT: ct.Bytes(),
 		Session: in.Session, Fallback: in.Fallback}
 	for _, a := range in.Attachments {
 		env.Blobs = append(env.Blobs, a.Blob)
@@ -158,7 +263,7 @@ func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelop
 
 // VerifySig checks the outer signature and shape; the Hub calls this.
 func (e Envelope) VerifySig(senderKey ed25519.PublicKey) error {
-	if e.V != Version {
+	if e.V != Version && e.V != Version2 {
 		return fmt.Errorf("unsupported envelope version %d", e.V)
 	}
 	if e.ID == "" || e.From == "" || e.To == "" || e.Kind == "" || len(e.CT) == 0 {
@@ -218,6 +323,9 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if in.V != e.V || in.ID != e.ID || in.From != e.From || in.To != e.To || in.TS != e.TS || in.Kind != e.Kind ||
 		in.Session != e.Session || in.Fallback != e.Fallback {
 		return in, errors.New("encrypted header does not match signed envelope")
+	}
+	if err := checkVersion2(in); err != nil {
+		return in, err
 	}
 	if len(in.Attachments) != len(e.Blobs) {
 		return in, errors.New("encrypted manifest does not match signed attachments")

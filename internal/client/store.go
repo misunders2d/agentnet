@@ -135,6 +135,45 @@ CREATE TABLE task_grants(
   fingerprint TEXT NOT NULL,
   public TEXT NOT NULL,
   added_at INTEGER NOT NULL);
+`, `
+CREATE TABLE persons(
+  person TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  roster TEXT NOT NULL,
+  label TEXT NOT NULL,
+  state TEXT NOT NULL,
+  conflict TEXT,
+  pinned_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX persons_address ON persons(address);
+CREATE TABLE conversations(
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  peer TEXT NOT NULL,
+  pinned_at INTEGER NOT NULL);
+ALTER TABLE inbox ADD COLUMN conv TEXT;
+ALTER TABLE inbox ADD COLUMN lid TEXT;
+ALTER TABLE inbox ADD COLUMN sub TEXT;
+ALTER TABLE inbox ADD COLUMN replica INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inbox ADD COLUMN origin TEXT;
+ALTER TABLE inbox ADD COLUMN emotion TEXT;
+ALTER TABLE inbox ADD COLUMN target TEXT;
+ALTER TABLE inbox ADD COLUMN content_hash TEXT;
+ALTER TABLE inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inbox ADD COLUMN last_attempt_at INTEGER;
+ALTER TABLE inbox ADD COLUMN received_ms INTEGER;
+CREATE UNIQUE INDEX inbox_logical ON inbox(verified_by, lid) WHERE lid IS NOT NULL;
+CREATE INDEX inbox_conv ON inbox(conv, received_at) WHERE conv IS NOT NULL;
+ALTER TABLE outbox ADD COLUMN conv TEXT;
+ALTER TABLE outbox ADD COLUMN lid TEXT;
+ALTER TABLE outbox ADD COLUMN kind TEXT;
+ALTER TABLE outbox ADD COLUMN origin TEXT;
+ALTER TABLE outbox ADD COLUMN emotion TEXT;
+ALTER TABLE outbox ADD COLUMN target TEXT;
+ALTER TABLE outbox ADD COLUMN created_ms INTEGER;
+CREATE INDEX outbox_conv ON outbox(conv, created_at) WHERE conv IS NOT NULL;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -382,11 +421,12 @@ const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, rep
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
 const (
-	statePending   = "pending"  // eligible for the worker because the sender is approved
-	stateAccepted  = "accepted" // eligible for the worker because the local user accepted it
-	stateHeld      = "held"     // question from a sender not approved for automatic answers
-	stateAwaiting  = "awaiting" // task waiting for the local human to accept
-	stateRunning   = "running"  // the worker owns it
+	statePending   = "pending"   // eligible for the worker because the sender is approved
+	stateAccepted  = "accepted"  // eligible for the worker because the local user accepted it
+	stateHeld      = "held"      // question from a sender not approved for automatic answers
+	stateConvHeld  = "conv_held" // a conversation (version 2) question or task: never run until participation exists
+	stateAwaiting  = "awaiting"  // task waiting for the local human to accept
+	stateRunning   = "running"   // the worker owns it
 	stateCancelReq = "cancel_requested"
 	stateAnswered  = "answered"  // the worker replied
 	stateManual    = "manual"    // someone replied by hand
@@ -400,9 +440,9 @@ const (
 )
 
 // reviewStates are the states that wait for the local human's decision.
-var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
+var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld}
 
-const inReview = `state IN (?, ?, ?)`
+const inReview = `state IN (?, ?, ?, ?)`
 
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
 	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy}
@@ -716,7 +756,11 @@ func (s *store) markRead(ids []string) error {
 }
 
 func (s *store) inboxKind(id string) (sender, kind string, err error) {
-	err = s.db.QueryRow(`SELECT sender, kind FROM inbox WHERE id = ?`, id).Scan(&sender, &kind)
+	var conv bool
+	err = s.db.QueryRow(`SELECT sender, kind, conv IS NOT NULL FROM inbox WHERE id = ?`, id).Scan(&sender, &kind, &conv)
+	if err == nil && conv {
+		err = ErrConversationItem
+	}
 	return
 }
 
@@ -757,11 +801,12 @@ func (j job) followUp() bool {
 // still holds a task grant for the key that verified it (task).
 func (s *store) claimJob(responder string) (job, bool, error) {
 	var j job
-	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL
-		WHERE id = (SELECT id FROM inbox WHERE state = ?
+	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
+		attempts = attempts + 1, last_attempt_at = unixepoch()
+		WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (state = ?
 		              OR (state = ? AND (kind NOT IN (?, ?)
 		                OR (kind = ? AND sender IN (SELECT address FROM approvals))
-		                OR (kind = ? AND `+taskGrantHolds+`)))
+		                OR (kind = ? AND `+taskGrantHolds+`))))
 		            ORDER BY received_at, id LIMIT 1)
 		RETURNING id, sender, kind, body, coalesce(reply_to, ''), coalesce(status, '')`,
 		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,

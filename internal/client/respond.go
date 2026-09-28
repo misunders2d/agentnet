@@ -66,6 +66,9 @@ func (a *Agent) Reply(ctx context.Context, id, body string, files ...string) (Se
 // Outgoing.Wait does.
 func (a *Agent) ReplyWait(ctx context.Context, id, body string, wait time.Duration, files ...string) (SendResult, error) {
 	sender, kind, err := a.store.inboxKind(id)
+	if errors.Is(err, ErrConversationItem) {
+		return SendResult{}, err
+	}
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
 	}
@@ -79,6 +82,9 @@ func (a *Agent) ReplyWait(ctx context.Context, id, body string, wait time.Durati
 // Decline refuses a task (or held question) and tells the sender.
 func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, error) {
 	sender, kind, err := a.store.inboxKind(id)
+	if errors.Is(err, ErrConversationItem) {
+		return SendResult{}, err
+	}
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
 	}
@@ -94,7 +100,7 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 // or marked needs_human. A rerun starts afresh; it does not resume the
 // earlier run. Only the local user can do this; nothing received can.
 func (a *Agent) Accept(id string) error {
-	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND
+	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND conv IS NULL AND
 		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))`,
 		stateAccepted, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
 		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)

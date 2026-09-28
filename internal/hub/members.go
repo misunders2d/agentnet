@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -28,7 +29,11 @@ func (h *Hub) members() (protocol.Members, error) {
 	}
 	out := protocol.Members{Members: make([]protocol.Member, 0, len(rows)), Truncated: truncated}
 	for _, r := range rows {
-		out.Members = append(out.Members, protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined})
+		m := protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined}
+		if r.person != "" {
+			m.Person = json.RawMessage(r.person)
+		}
+		out.Members = append(out.Members, m)
 	}
 	return out, nil
 }

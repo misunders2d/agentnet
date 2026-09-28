@@ -135,6 +135,10 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	sub := h.streams.add(caller, cancel)
 	defer h.streams.remove(caller, sub)
+	if err := h.store.setLastSession(caller, ad.Session); err != nil {
+		writeError(w, http.StatusInternalServerError, "", "storage error")
+		return
+	}
 	h.presence.connect(caller, ad)
 	defer h.presence.disconnect(caller, ad.Session)
 

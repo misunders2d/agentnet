@@ -164,6 +164,13 @@ func TestCLIMembersCompat(t *testing.T) {
 		if l := lastMembersLine(c, "b1.log"); l != "" {
 			t.Fatalf("a member list from an older Hub: %s", l)
 		}
+		// Persons and DMs need a newer Hub, and say so; nothing is sent.
+		if out, err := c.try("--home", "a1", "person", "create", "Alice"); err == nil || !strings.Contains(out, "not yet published") {
+			t.Fatalf("person on an older Hub: %v %s", err, out)
+		}
+		if out, err := c.try("--home", "a1", "dm", "new", "bob/desk"); err == nil || !strings.Contains(out, "needs an update") {
+			t.Fatalf("dm on an older Hub: %v %s", err, out)
+		}
 	})
 
 	t.Run("older client", func(t *testing.T) {
