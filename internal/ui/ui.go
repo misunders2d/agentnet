@@ -76,21 +76,30 @@ type ThreadSummary struct {
 	Last       string    `json:"last"`
 	LastAt     time.Time `json:"last_at"`
 	Count      int       `json:"count"`
-	Review     int       `json:"review"`
-	Unread     int       `json:"unread"`
+	Review     int       `json:"review"` // decisions here; review notices not counted
+	Unread     int       `json:"unread"` // review notices not counted
 	Running    int       `json:"running"`
 	Waiting    bool      `json:"waiting"`
 	KeyChanged bool      `json:"key_changed"`
+	Notices    int       `json:"notices"`     // open review notices (reports from another machine)
+	NoticeOnly bool      `json:"notice_only"` // the thread is only review notices: not a conversation
 }
 
-// ReviewItem is a received item waiting for a local decision.
+// ReviewItem is a received item waiting for the person. Notice marks a
+// review notice: another machine reported that requests wait for a person
+// there. It is not a decision here and carries no request.
 type ReviewItem struct {
-	ID      string `json:"id"`
-	Peer    string `json:"peer"`
-	Kind    string `json:"kind"`
-	Why     string `json:"why"`
-	Excerpt string `json:"excerpt"`
+	ID      string    `json:"id"`
+	Peer    string    `json:"peer"`
+	Kind    string    `json:"kind"`
+	Why     string    `json:"why"`
+	Excerpt string    `json:"excerpt"`
+	At      time.Time `json:"at"`
+	Notice  bool      `json:"notice,omitempty"`
 }
+
+// StatusReviewNotice is the status of a review notice (a plain message).
+const StatusReviewNotice = "review_notice"
 
 // QuarantineItem is a received envelope held back; its content is not shown.
 type QuarantineItem struct {
@@ -298,8 +307,8 @@ func StateText(dir, kind, state, peer string) string {
 func otherText(kind, state string) string {
 	switch state {
 	case "needs_human":
-		if kind == KindMessage {
-			return "Needs you: a notice to look at; nothing here runs or can be accepted"
+		if kind == KindMessage { // a review notice: a report, not a decision here
+			return "Reported: requests wait for a person on that machine; nothing here can approve them"
 		}
 		return "Needs you: your responder's follow-up asked for a person"
 	case "pending", "accepted":

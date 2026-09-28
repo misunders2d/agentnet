@@ -5,7 +5,7 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false };
+  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {} };
 const lenses = ["classic", "comic", "zoom"];
 
 // el builds an element; string children become text nodes.
@@ -46,7 +46,8 @@ const firstLine = (s, n) => {
 };
 const announce = (t) => { $("live").textContent = t; };
 const kindTag = { question: "Question", task: "Task" };
-const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted" };
+const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted",
+  review_notice: "Report" };
 
 // Addresses are person/agent: the person leads, the agent is secondary.
 function who(addr) {
@@ -81,18 +82,173 @@ async function loadOverview() {
   return o;
 }
 
+// ---- contacts ------------------------------------------------------------------
+//
+// One entry per exact address. A contact holds its conversations separately:
+// a reply-linked chain is one conversation; a message linked to nothing is
+// shown as a single message, never merged into a topic by guesswork. Review
+// notices are reports from another machine, kept apart from both.
+
+// contactsOf groups thread summaries by address, newest activity first.
+function contactsOf(threads) {
+  const by = new Map();
+  for (const t of threads) {
+    let c = by.get(t.peer);
+    if (!c) {
+      c = { peer: t.peer, conversations: [], singles: [], reports: [], review: 0, unread: 0, running: 0, notices: 0,
+        waiting: false, keyChanged: false, lastAt: t.last_at, last: "" };
+      by.set(t.peer, c);
+    }
+    c.keyChanged ||= t.key_changed;
+    if (new Date(t.last_at) > new Date(c.lastAt)) c.lastAt = t.last_at;
+    if (t.notice_only) { c.reports.push(t); c.notices += t.notices; continue; }
+    c.review += t.review; c.unread += t.unread; c.running += t.running; c.waiting ||= t.waiting;
+    const open = t.review || t.running || t.waiting;
+    (t.count > 1 || open ? c.conversations : c.singles).push(t);
+  }
+  const newest = (a, b) => new Date(b.last_at) - new Date(a.last_at);
+  const list = [...by.values()];
+  for (const c of list) {
+    c.conversations.sort(newest); c.singles.sort(newest); c.reports.sort(newest);
+    const latest = [...c.conversations, ...c.singles].sort(newest)[0];
+    c.last = latest ? latest.last : "";
+  }
+  return list.sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
+}
+
+// searchKnown finds known agents (by address) and conversations or single
+// messages (by their first and latest lines). It never invents people.
+function searchKnown(q, threads) {
+  q = q.trim().toLowerCase();
+  if (!q) return { agents: [], conversations: [] };
+  const agents = contactsOf(threads).filter((c) => c.peer.toLowerCase().includes(q));
+  const conversations = threads.filter((t) => !t.notice_only &&
+    (t.title.toLowerCase().includes(q) || t.last.toLowerCase().includes(q)))
+    .sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
+  return { agents, conversations };
+}
+
+const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+// counts shows a contact's or conversation's numbers side by side; they are
+// never added together.
+function counts(x) {
+  return [
+    x.review > 0 && el("span", { class: "badge", title: "Decisions for you here" }, String(x.review),
+      el("span", { class: "sr-only" }, x.review === 1 ? " needs your decision" : " need your decision")),
+    x.unread > 0 && el("span", { class: "conv-flag unread" }, x.unread + " new"),
+    x.notices > 0 && el("span", { class: "conv-flag report", title: "Reports that requests wait on that machine" },
+      plural(x.notices, "report", "reports")),
+  ];
+}
+
+function threadFlag(t) {
+  if (t.review) return el("span", { class: "badge" }, String(t.review), el("span", { class: "sr-only" }, " needs your decision"));
+  if (t.key_changed) return el("span", { class: "conv-flag danger" }, "Key changed");
+  if (t.running) return el("span", { class: "conv-flag calm" }, "Responder working");
+  if (t.unread) return el("span", { class: "conv-flag unread" }, t.unread + " new");
+  if (t.waiting) return el("span", { class: "conv-flag calm" }, "Awaiting reply");
+  return null;
+}
+
+// threadRow is one compact line for a conversation or single message.
+function threadRow(t, open, single) {
+  const current = !!(state.data && state.data.messages.some((m) => m.id === t.id));
+  const b = el("button", { type: "button", class: "thread-row" + (single ? " single" : ""), "aria-current": current ? "true" : "false" },
+    el("span", { class: "thread-title" }, t.title),
+    t.count > 1 && el("span", { class: "thread-count", title: plural(t.count, "message", "messages") }, String(t.count)),
+    threadFlag(t),
+    el("span", { class: "conv-time" }, when(t.last_at)));
+  b.addEventListener("click", () => open(t.id, b));
+  return el("li", {}, b);
+}
+
+// reportLine groups one sender's review notices: the latest reported text
+// and time, never presented as that machine's current queue.
+function reportLine(c) {
+  if (!c.reports.length) return null;
+  const openIDs = openReports(c.peer);
+  const latest = c.reports[0];
+  const d = el("details", { class: "tech" }, el("summary", {}, "Details"),
+    el("ul", { class: "report-items" }, c.reports.map((r) => el("li", {},
+      el("time", { datetime: r.last_at }, when(r.last_at)), " · ", r.notices ? "not dismissed" : "dismissed", " · ",
+      el("span", { class: "hint" }, r.title)))));
+  return el("div", { class: "report-line" + (openIDs.length ? "" : " seen") },
+    el("p", {}, el("strong", {}, c.peer), " reported requests waiting for a person on that machine."),
+    el("p", { class: "hint" }, "Latest report " + when(latest.last_at) + ": “" + firstSentence(latest.title) + "”. Decide there; nothing here can approve them."),
+    el("div", { class: "report-actions" },
+      openIDs.length ? el("button", { type: "button", class: "chip", onclick: (e) => dismissReports(c.peer, e.currentTarget),
+        title: "Clears these reports on this computer only; the requests still wait on " + c.peer }, "Dismiss " + plural(openIDs.length, "report", "reports"))
+        : el("span", { class: "hint" }, "Dismissed"),
+      d));
+}
+
+const firstSentence = (s) => (s || "").split(/\.\s/)[0].replace(/\.$/, "");
+
+function openReports(peer) {
+  return ((state.overview && state.overview.review) || []).filter((it) => it.notice && it.peer === peer).map((it) => it.id);
+}
+
+// dismissReports clears one sender's open reports here, one existing
+// resolve per report. Nothing is sent and nothing is approved.
+async function dismissReports(peer, button) {
+  if (button) { if (button.disabled) return; button.disabled = true; }
+  const ids = openReports(peer);
+  let failed = 0;
+  for (const id of ids) {
+    try { await act({ do: "resolve", id }); } catch (e) { failed++; }
+  }
+  announce(failed ? failed + " report(s) could not be dismissed." : "Reports from " + peer + " dismissed on this computer.");
+}
+
+// contactBody is what a contact opens into, in the sidebar and in Zoom:
+// its reports, its conversations, and its single messages folded away.
+function contactBody(c, open) {
+  const singlesOpen = !!state.singlesOpen[c.peer];
+  const unreadSingles = c.singles.reduce((n, t) => n + t.unread, 0);
+  return [
+    reportLine(c),
+    c.conversations.length > 0 && el("ul", { class: "thread-list", "aria-label": "Conversations with " + c.peer },
+      c.conversations.map((t) => threadRow(t, open, false))),
+    c.singles.length > 0 && el("button", { type: "button", class: "singles-toggle", "aria-expanded": String(singlesOpen),
+      onclick: () => { state.singlesOpen[c.peer] = !singlesOpen; rerenderContacts(); } },
+      (singlesOpen ? "Hide " : "") + plural(c.singles.length, "single message", "single messages") +
+      (unreadSingles && !singlesOpen ? " · " + unreadSingles + " new" : "") + (singlesOpen ? "" : " (not linked to a conversation)")),
+    singlesOpen && el("ul", { class: "thread-list singles", "aria-label": "Single messages from " + c.peer }, c.singles.map((t) => threadRow(t, open, true))),
+    !c.conversations.length && !c.singles.length && !c.reports.length && el("p", { class: "hint" }, "No messages yet."),
+    el("button", { type: "button", class: "text-btn new-conv", onclick: () => newConversationDialog(c.peer) }, "New conversation with " + c.peer),
+  ];
+}
+
+let rerenderContacts = () => {};
+function rerender() {
+  renderThreads(state.overview.threads);
+  if (state.lens === "zoom") Zoom.refresh();
+}
+
 function renderReview(items) {
+  const decisions = items.filter((it) => !it.notice);
+  const reports = items.filter((it) => it.notice);
   const btn = $("review-btn");
-  const n = items.length;
+  const n = decisions.length;
   $("review-count").textContent = n;
   $("review-word").textContent = n ? "Needs you" : "Nothing needs you";
+  $("review-reports").hidden = !reports.length;
+  $("review-reports").textContent = plural(reports.length, "report", "reports");
   btn.dataset.n = n;
-  btn.setAttribute("aria-label", n === 1 ? "1 item needs your decision" : n + " items need your decision");
-  $("review-list").replaceChildren(...(n ? items.map((it) => el("li", {},
+  btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
+    (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : ""));
+  $("review-list").replaceChildren(...(n ? decisions.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
-      el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing is waiting for you.")]));
+      el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
+  const senders = [...new Set(reports.map((it) => it.peer))];
+  $("reports").hidden = !senders.length;
+  $("report-list").replaceChildren(...senders.map((peer) => {
+    const c = contactsOf(state.overview.threads).find((x) => x.peer === peer);
+    return el("li", {}, c ? reportLine(c) : null);
+  }));
 }
 
 function toggleReview(open) {
@@ -103,29 +259,62 @@ function toggleReview(open) {
   if (show) $("review").querySelector("button")?.focus();
 }
 
+// renderThreads draws the sidebar: contacts, or search results while a
+// search is typed.
 function renderThreads(threads) {
+  rerenderContacts = rerender;
+  const list = $("conv-list");
+  if (state.query.trim()) return renderSearch(threads);
+  $("list-title").textContent = "Contacts";
   if (!threads.length) {
-    $("conv-list").replaceChildren(el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button."));
+    list.replaceChildren(el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button."));
     return;
   }
-  $("conv-list").replaceChildren(...threads.map((t) => {
-    let flag = null;
-    if (t.review) flag = el("span", { class: "badge", title: "Needs your decision" }, String(t.review),
-      el("span", { class: "sr-only" }, t.review === 1 ? " item needs your decision" : " items need your decision"));
-    else if (t.key_changed) flag = el("span", { class: "conv-flag danger" }, "Key changed");
-    else if (t.running) flag = el("span", { class: "conv-flag calm" }, "Responder working");
-    else if (t.unread) flag = el("span", { class: "conv-flag unread" }, t.unread + " new");
-    else if (t.waiting) flag = el("span", { class: "conv-flag calm" }, "Awaiting reply");
-    const current = state.data && state.data.messages.some((m) => m.id === t.id);
-    return el("li", {},
-      el("button", { type: "button", class: "conv-item", "aria-current": current ? "true" : "false", onclick: () => openThread(t.id) },
-        avatar(t.peer),
-        el("span", { class: "conv-main" },
-          el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(t.peer)),
-            el("span", { class: "conv-time" }, when(t.last_at))),
-          el("span", { class: "conv-subject" }, t.title),
-          el("span", { class: "conv-bottom" }, el("span", { class: "conv-last" }, t.count > 1 ? t.last : ""), flag))));
+  list.replaceChildren(...contactsOf(threads).map((c) => {
+    const expanded = state.expanded === c.peer;
+    const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(expanded),
+      onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
+      avatar(c.peer),
+      el("span", { class: "conv-main" },
+        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), el("span", { class: "conv-time" }, when(c.lastAt))),
+        el("span", { class: "conv-bottom" },
+          el("span", { class: "conv-last" }, c.last || (c.reports.length ? "Reports only" : "")),
+          c.keyChanged && el("span", { class: "conv-flag danger" }, "Key changed"), counts(c)),
+        el("span", { class: "conv-sub" }, [plural(c.conversations.length, "conversation", "conversations"),
+          c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · "))));
+    return el("li", { class: "contact-item" + (expanded ? " open" : "") }, head,
+      expanded && el("div", { class: "contact-body" }, contactBody(c, (id) => openThread(id))));
   }));
+}
+
+function renderSearch(threads) {
+  const { agents, conversations } = searchKnown(state.query, threads);
+  $("list-title").textContent = "Search results";
+  const shown = conversations.slice(0, 30);
+  const kind = (t) => t.count > 1 ? "Conversation" : "Message";
+  if (!agents.length && !conversations.length) {
+    $("conv-list").replaceChildren(el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."));
+    return;
+  }
+  $("conv-list").replaceChildren(
+    agents.length > 0 && el("li", { class: "result-head" }, plural(agents.length, "agent", "agents")),
+    ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result",
+      onclick: () => { state.expanded = c.peer; clearSearch(); } },
+      el("span", { class: "result-kind" }, "Agent"), el("span", { class: "result-main" }, who(c.peer),
+        el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), counts(c)))),
+    conversations.length > 0 && el("li", { class: "result-head" }, plural(conversations.length, "conversation or message", "conversations or messages")),
+    ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result",
+      onclick: () => { state.expanded = t.peer; clearSearch(); openThread(t.id); } },
+      el("span", { class: "result-kind" }, kind(t)),
+      el("span", { class: "result-main" }, el("span", { class: "result-title" }, t.title),
+        el("span", { class: "hint" }, "with ", t.peer, " · ", when(t.last_at))), threadFlag(t)))),
+    conversations.length > shown.length && el("li", { class: "hint result-more" }, (conversations.length - shown.length) + " more: type more to narrow the search."));
+}
+
+function clearSearch() {
+  state.query = "";
+  $("search").value = "";
+  rerenderContacts();
 }
 
 function renderQuarantine(items) {
@@ -162,6 +351,11 @@ async function openThread(id, focusId) {
   const changed = beginThread(id);
   document.body.classList.add("show-conv");
   await loadThread(changed);
+  if (state.data) { // the sidebar opens at this conversation's contact, with the item in view
+    state.expanded = state.data.peer;
+    const s = state.overview && state.overview.threads.find((x) => x.id === state.data.messages[0].id);
+    if (s && s.count === 1 && !(s.review || s.running || s.waiting)) state.singlesOpen[s.peer] = true;
+  }
   await loadOverview();
   if (focusId) flash(focusId);
   if (changed) refreshThread();
@@ -202,6 +396,7 @@ async function loadThread(scrollToEnd) {
   if (state.thread !== id) return; // another thread was opened meanwhile
   state.data = t;
   $("conv-name").replaceChildren(who(t.peer));
+  $("conv-topic").textContent = firstLine(t.messages[0].body, 90);
   $("conv-avatar").replaceWith(Object.assign(avatar(t.peer), { id: "conv-avatar" }));
   $("conv-presence").textContent = state.presence[t.peer] || "";
   renderPeerChips(t);
@@ -287,7 +482,8 @@ function renderMsg(m, byId, prev, t) {
   const cont = continues(m, prev);
   const parent = m.reply_to && byId[m.reply_to];
   const actions = m.actions || [];
-  const needs = actions.some((a) => decisionActions.includes(a));
+  const report = isReport(m); // a report from another machine, not a decision here
+  const needs = !report && actions.some((a) => decisionActions.includes(a));
   const working = actions.includes("cancel");
   const refWord = m.kind === "answer" ? "Answer to: " : m.kind === "result" ? "Result for: " : "Reply to: ";
 
@@ -311,7 +507,10 @@ function renderMsg(m, byId, prev, t) {
     el("time", { datetime: m.at }, when(m.at)));
 
   let panel = null;
-  if (needs) {
+  if (report) {
+    panel = el("div", { class: "report-line" }, el("p", {}, m.state_text),
+      actions.length > 0 && el("div", { class: "acts" }, actions.map((a) => actionButton(a, m, t, false))));
+  } else if (needs) {
     panel = el("div", { class: "decide" },
       el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
       m.detail && el("p", { class: "decide-detail" }, m.detail),
@@ -353,8 +552,11 @@ const actionLabel = {
   approve: "Answer their questions automatically…", resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
 
+const isReport = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice";
+
 function actionButton(a, m, t, primary) {
   let label = actionLabel[a];
+  if (a === "resolve" && isReport(m)) label = "Dismiss report…";
   if (a === "accept" && m.kind === "question") label = "Let your responder answer…";
   if (a === "accept" && ["needs_human", "interrupted", "failed", "cancelled"].includes(m.state)) label = "Run your responder again…";
   return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m, t) }, label);
@@ -404,6 +606,11 @@ function decide(a, m, t) {
     });
   }
   if (a === "approve") return approvalDialog(t);
+  if (a === "resolve" && isReport(m)) {
+    return dialog({ title: "Dismiss this report?", body: [quote,
+      el("p", {}, "It is cleared on this computer only. The requests it reported still wait for a person on " + m.from + "'s machine; nothing here can approve them.")],
+      ok: "Dismiss", run: () => act({ do: "resolve", id: m.id }) });
+  }
   if (a === "resolve") {
     return dialog({ title: "Close without replying?", body: [quote, el("p", {}, "Nothing is sent to " + m.from + ".")],
       ok: "Close", run: () => act({ do: "resolve", id: m.id }) });
@@ -480,8 +687,9 @@ function dialog({ title, body, ok, run, gate, focus }) {
   (focus || $("dialog-cancel")).focus();
 }
 
-function newConversationDialog() {
+function newConversationDialog(prefill) {
   const to = el("input", { id: "new-to", type: "text", placeholder: "person/agent, e.g. bob/desk", autocomplete: "off", spellcheck: "false" });
+  if (typeof prefill === "string") to.value = prefill;
   const kind = el("select", { id: "new-kind" }, ["message", "question", "task"].map((k) => el("option", { value: k }, k[0].toUpperCase() + k.slice(1))));
   const body = el("textarea", { id: "new-body", rows: "4", placeholder: "What do you want to say?" });
   dialog({
@@ -491,7 +699,7 @@ function newConversationDialog() {
       el("label", { for: "new-body", class: "field-label" }, "Message"), body,
       el("p", { class: "hint" }, "A message never runs anything. A question may be answered by their responder if they approved you. A task runs only if they accept it, once or by standing permission for your key.")],
     ok: "Send",
-    focus: to,
+    focus: typeof prefill === "string" ? body : to,
     run: async () => {
       const r = await api("/api/send", { to: to.value.trim(), kind: kind.value, body: body.value });
       announce(r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
@@ -659,9 +867,19 @@ document.addEventListener("DOMContentLoaded", () => {
   kindHint();
   $("replying-cancel").addEventListener("click", () => setAnswering(null));
   $("review-btn").addEventListener("click", () => toggleReview());
-  $("new-btn").addEventListener("click", newConversationDialog);
+  $("new-btn").addEventListener("click", () => newConversationDialog());
+  $("search").addEventListener("input", () => { state.query = $("search").value; rerenderContacts(); });
+  $("search").addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("search").value) { e.preventDefault(); clearSearch(); }
+    if (e.key === "Enter") { const first = $("conv-list").querySelector(".result"); if (first) first.click(); }
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("review").hidden) { toggleReview(false); $("review-btn").focus(); return; }
+    if (e.key === "/" && !$("dialog").open && !e.target.closest("input, textarea, select") && state.lens !== "zoom") {
+      e.preventDefault();
+      $("search").focus();
+      return;
+    }
     // Page turning and zooming keys, unless typing or a dialog is open.
     if ($("dialog").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     const handled = state.lens === "zoom" ? Zoom.onKey(e)
@@ -692,7 +910,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   loadOverview().then((o) => {
     setLens(saved);
-    if (state.lens !== "zoom" && !state.thread && o.threads.length && window.matchMedia("(min-width: 761px)").matches) openThread(o.threads[0].id);
+    // Open the latest conversation; reports are not conversations.
+    const first = o.threads.find((t) => !t.notice_only && (t.count > 1 || t.review || t.running || t.waiting)) ||
+      o.threads.find((t) => !t.notice_only);
+    if (state.lens !== "zoom" && !state.thread && first && window.matchMedia("(min-width: 761px)").matches) openThread(first.id);
   }).catch(() => { $("lost").hidden = false; });
   listen();
 });

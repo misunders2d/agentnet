@@ -160,7 +160,7 @@ func TestSendAndDecideThroughTheAPI(t *testing.T) {
 	}
 	var o Overview
 	get("/api/overview", &o)
-	if !o.Demo || len(o.Review) != 3 || len(o.Threads) == 0 {
+	if !o.Demo || len(o.Review) != 5 || len(o.Threads) == 0 {
 		t.Fatalf("demo %v review %d threads %d", o.Demo, len(o.Review), len(o.Threads))
 	}
 	if code := get("/api/thread?id=nope", &Thread{}); code != http.StatusNotFound {

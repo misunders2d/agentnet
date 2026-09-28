@@ -72,6 +72,14 @@ func TestLiveReviewNoticeCanOnlyBeResolved(t *testing.T) {
 	}
 	o := waitReview(t, live)
 	id := o.Review[0].ID
+	if !o.Review[0].Notice || o.Review[0].At.IsZero() {
+		t.Fatalf("review item %+v", o.Review[0])
+	}
+	for _, s := range o.Threads {
+		if s.ID == id && (!s.NoticeOnly || s.Notices != 1 || s.Review != 0 || s.Unread != 0) {
+			t.Fatalf("thread summary %+v", s)
+		}
+	}
 	if !strings.HasPrefix(o.Review[0].Why, "review notice") {
 		t.Fatalf("why %q", o.Review[0].Why)
 	}
@@ -80,7 +88,7 @@ func TestLiveReviewNoticeCanOnlyBeResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := th.Messages[0]
-	if strings.Join(m.Actions, ",") != DoResolve || m.Next != "Needs you" || !strings.Contains(m.StateText, "nothing here runs") {
+	if strings.Join(m.Actions, ",") != DoResolve || m.Next != "Needs you" || !strings.Contains(m.StateText, "nothing here can approve") {
 		t.Fatalf("notice view %+v", m)
 	}
 	for _, do := range []string{DoAccept, DoAcceptAlways, DoDecline} {

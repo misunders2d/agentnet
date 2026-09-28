@@ -7,7 +7,7 @@
 
 const motion = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const stampWord = { question: "QUESTION", task: "TASK", answer: "ANSWER", result: "RESULT" };
-const needsYou = (m) => (m.actions || []).some((a) => decisionActions.includes(a));
+const needsYou = (m) => !isReport(m) && (m.actions || []).some((a) => decisionActions.includes(a));
 const working = (m) => (m.actions || []).includes("cancel");
 const authorName = (m) => m.dir === "in" ? m.from : "You (this computer)";
 
@@ -219,7 +219,8 @@ const Comic = {
         el("p", {}, (m.state_text || "").replace(/^Needs you: /, "")),
         m.detail && el("p", { class: "hint" }, m.detail),
         el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, this.t, i === 0)))),
-      working(m) && el("div", { class: "acts" }, actionButton("cancel", m, this.t, false)));
+      working(m) && el("div", { class: "acts" }, actionButton("cancel", m, this.t, false)),
+      isReport(m) && (m.actions || []).length > 0 && el("div", { class: "acts" }, m.actions.map((a) => actionButton(a, m, this.t, false))));
   },
 };
 
@@ -230,7 +231,7 @@ const Zoom = {
 
   names() {
     const t = state.data;
-    return ["Everyone", this.level >= 1 ? this.peer : "Person", t && this.level >= 2 ? firstLine(t.messages[0].body, 40) : "Conversation", "Message"];
+    return ["Everyone", this.level >= 1 ? this.peer : "Contact", t && this.level >= 2 ? firstLine(t.messages[0].body, 40) : "Conversation", "Message"];
   },
 
   // refresh redraws the current level after new data, without motion.
@@ -292,13 +293,7 @@ const Zoom = {
   // Level 0: each person you talk to, around this computer.
   everyone() {
     const o = state.overview;
-    const peers = new Map();
-    for (const t of o.threads) {
-      const p = peers.get(t.peer) || { peer: t.peer, threads: 0, review: 0, unread: 0, keyChanged: false, last: t.last_at };
-      p.threads++; p.review += t.review; p.unread += t.unread; p.keyChanged ||= t.key_changed;
-      peers.set(t.peer, p);
-    }
-    const list = [...peers.values()];
+    const list = contactsOf(o.threads);
     if (!list.length) return el("p", { class: "hint" }, "No conversations yet. Start one from the classic view with the + button.");
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 100 100");
@@ -317,9 +312,9 @@ const Zoom = {
       svg.append(l);
     });
     const nodes = list.map((p, i) => {
-      const status = [p.threads === 1 ? "1 conversation" : p.threads + " conversations",
+      const status = [plural(p.conversations.length, "conversation", "conversations"),
         p.review && p.review + " need" + (p.review === 1 ? "s" : "") + " you", p.keyChanged && "key changed",
-        !p.review && p.unread && p.unread + " new"].filter(Boolean).join(" · ");
+        p.unread && p.unread + " new", p.notices && plural(p.notices, "report", "reports")].filter(Boolean).join(" · ");
       const node = el("button", { type: "button", class: "node" + (p.review ? " glow" : "") + (p.keyChanged ? " danger" : ""),
         "aria-label": p.peer + ", " + status },
         avatar(p.peer, "node-face"), el("span", { class: "node-name" }, who(p.peer)), el("span", { class: "node-status" }, status),
@@ -337,23 +332,16 @@ const Zoom = {
       el("p", { class: "zoom-hint" }, "Glowing people have something waiting for your decision."));
   },
 
-  // Level 1: one person's conversations.
+  // Level 1: one contact: its reports and its separate conversations, as a
+  // compact list (the same one the sidebar shows).
   person() {
-    const threads = state.overview.threads.filter((t) => t.peer === this.peer);
+    const c = contactsOf(state.overview.threads).find((x) => x.peer === this.peer);
+    if (!c) return el("p", { class: "hint" }, "No conversations with " + this.peer + ".");
     return el("div", { class: "zoom-person" },
       el("header", { class: "zoom-head" }, avatar(this.peer), el("div", {}, el("h2", {}, who(this.peer)),
-        el("p", { class: "hint" }, state.presence[this.peer] || (threads.length === 1 ? "1 conversation" : threads.length + " conversations")))),
-      el("div", { class: "scene-cards" }, threads.map((t) => {
-        const tag = t.review ? ["needs", "Needs you"] : t.key_changed ? ["danger", "Key changed"] : t.running ? ["calm", "Responder working"]
-          : t.waiting ? ["calm", "Awaiting reply"] : t.unread ? ["new", t.unread + " new"] : null;
-        const card = el("button", { type: "button", class: "scene-card" + (t.review ? " st-needs" : "") },
-          tag && el("span", { class: "tag " + tag[0] }, tag[1]),
-          el("h3", {}, t.title),
-          t.count > 1 && el("p", { class: "gist" }, t.last),
-          el("span", { class: "hint" }, (t.count === 1 ? "1 message" : t.count + " messages") + " · " + when(t.last_at)));
-        card.addEventListener("click", () => this.go(2, { thread: t.id }, card));
-        return card;
-      })));
+        el("p", { class: "hint" }, state.presence[this.peer] || plural(c.conversations.length, "conversation", "conversations")),
+        el("div", { class: "zoom-counts" }, counts(c)))),
+      el("div", { class: "zoom-contact" }, contactBody(c, (id, from) => this.go(2, { thread: id }, from))));
   },
 
   // Level 2: one conversation as a short chat.
@@ -373,7 +361,8 @@ const Zoom = {
           m.state_text && !needsYou(m) && el("p", { class: "narr" + (working(m) ? " running" : "") }, m.state_text),
           needsYou(m) && el("div", { class: "decide" }, el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
             el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, t, i === 0)))),
-          working(m) && el("div", { class: "acts" }, actionButton("cancel", m, t, false)));
+          working(m) && el("div", { class: "acts" }, actionButton("cancel", m, t, false)),
+          isReport(m) && (m.actions || []).length > 0 && el("div", { class: "acts" }, m.actions.map((a) => actionButton(a, m, t, false))));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!t.key.pending,
         onclick: () => writeDialog(t, null) }, t.key.pending ? "Sending is blocked until you trust the new key" : "Write in this conversation…")));

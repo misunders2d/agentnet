@@ -40,12 +40,20 @@
         <div class="review-wrap">
           <button type="button" id="review-btn" class="review-btn" aria-expanded="false" aria-controls="review">
             <span id="review-word">Needs you</span>
-            <span id="review-count" class="count">0</span>
+            <span class="review-counts">
+              <span id="review-reports" class="count reports" hidden></span>
+              <span id="review-count" class="count">0</span>
+            </span>
           </button>
           <div id="review" class="review" hidden>
             <h2>Waiting for your decision</h2>
             <p class="hint">Each one opens in its conversation, where you decide.</p>
             <ul id="review-list"></ul>
+            <div id="reports" hidden>
+              <h2>Reported by other machines</h2>
+              <p class="hint">Requests wait for a person on those machines. Nothing here can approve them.</p>
+              <ul id="report-list"></ul>
+            </div>
           </div>
         </div>
         <button type="button" id="new-btn" class="new-btn" aria-label="New conversation" title="New conversation">
@@ -59,8 +67,12 @@
       </div>
     </header>
 
-    <h2 class="sr-only">Conversations</h2>
-    <ul id="conv-list" class="conv-list"></ul>
+    <div class="search">
+      <label class="sr-only" for="search">Search agents and conversations</label>
+      <input id="search" type="search" placeholder="Search agents and conversations" autocomplete="off" spellcheck="false">
+    </div>
+    <h2 class="sr-only" id="list-title">Contacts</h2>
+    <ul id="conv-list" class="conv-list" aria-labelledby="list-title"></ul>
 
     <footer class="side-foot">
       <details id="quarantine" class="held-back" hidden>
@@ -80,6 +92,7 @@
       <span id="conv-avatar" class="avatar" aria-hidden="true"></span>
       <div class="conv-title">
         <h1 id="conv-name">Choose a conversation</h1>
+        <p id="conv-topic" class="topic"></p>
         <p id="conv-presence" class="presence"></p>
       </div>
       <div id="peer-chips" class="peer-chips"></div>

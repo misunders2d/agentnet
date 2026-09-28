@@ -299,7 +299,8 @@ If a local database or key file is damaged:
   It covers the real Provider/backend contract, relay-served phone/browser devices
   and the requirement that the relay stays one portable unit (binary/container,
   one data volume, one port). Owner choices listed there (§15) remain open.
-- **Next release scope (recorded, not implemented)**: S-W relay-served HTTPS browser/phone,
+- **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
+  conversations, and separated review reports are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected; listing grants no
   trust), Pi native attention (under investigation), and contacts and conversations (reviewed
   direction, corrected by the owner: one row per exact address holding separate conversations,

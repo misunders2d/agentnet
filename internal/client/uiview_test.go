@@ -91,3 +91,34 @@ func TestThreadsAndChangeFeed(t *testing.T) {
 		t.Fatalf("still unread: %+v", mt)
 	}
 }
+
+// A review notice is a report from another machine: it is counted apart
+// from decisions here and from unread messages, and its thread is marked.
+func TestThreadsCountNoticesApart(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	alice := w.alice.Address
+	n, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage,
+		Status: envelope.StatusReviewNotice, Body: "2 request(s) wait"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Body: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "both arrive", func() bool { return len(threadsWith(t, w.bob, alice)) == 2 })
+	ts := threadsWith(t, w.bob, alice)
+	if nt := ts[n.ID]; !nt.NoticeOnly || nt.Notices != 1 || nt.Review != 0 || nt.Unread != 0 {
+		t.Fatalf("notice thread %+v", nt)
+	}
+	if mt := ts[m.ID]; mt.NoticeOnly || mt.Notices != 0 || mt.Unread != 1 {
+		t.Fatalf("message thread %+v", mt)
+	}
+	if err := w.bob.Resolve(n.ID); err != nil {
+		t.Fatal(err)
+	}
+	if nt := threadsWith(t, w.bob, alice)[n.ID]; nt.Notices != 0 || !nt.NoticeOnly {
+		t.Fatalf("after dismiss %+v", nt)
+	}
+}

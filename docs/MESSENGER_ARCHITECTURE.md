@@ -680,7 +680,10 @@ option, not a gate.
   no new crypto code. It is not a disconnected app, and the same bundle is what
   the relay serves in S-W.
 
-**Next release scope (recorded 2026-09-28; nothing below is implemented).**
+**Next release scope (recorded 2026-09-28).** Implemented so far: the v1
+navigation part of contacts and conversations, search of known agents and
+conversations, and separated review notices (see "In this build" below). The
+rest is not implemented.
 S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
 - **S-W** as designed below: the relay serves the page over HTTPS to a browser
   or phone. §6's code-trust limit stands: a browser device trusts the code the
@@ -710,7 +713,7 @@ Still open, not implemented: a Chrome standalone/PWA install. S-R (reminders)
 keeps its status above. No group or identity work is in this release.
 
 **Contacts and conversations (reviewed direction, corrected by the owner
-2026-09-28; not implemented).** This supersedes the contact-wide history
+2026-09-28; v1 navigation implemented, named conversations not).** This supersedes the contact-wide history
 recorded earlier the same day (715ac2a).
 - **Problem:** agents send most messages without `reply_to`, so every v1
   reply-linked thread is one message long. One contact then shows about 30 rows
@@ -755,6 +758,20 @@ recorded earlier the same day (715ac2a).
     cannot ask the person to decide anything; that needs both. Until then no
     automatic remote query or task and no new authority;
   - how old unlinked messages are shown and sorted.
+- **In this build (v1, no wire or schema change):** one sidebar row, Zoom node
+  and Zoom contact level per exact address; a contact opens into a compact list
+  of its conversations (reply-linked chains, plus single messages that still
+  need something), with its other single messages folded under "N single
+  messages (not linked to a conversation)", each still its own item; the
+  selected conversation keeps its own composer target and draft; "New
+  conversation with ..." starts a separate one. Search finds known agents by
+  address and conversations or single messages by their first and latest
+  lines, labelled by kind, and opens exactly that item; there are no people
+  results. Review notices are reports: counted apart (unread, decisions here,
+  reports), grouped per sender with the latest reported text and time,
+  dismissed locally, never offered for approval. Not yet: named conversations
+  (S-B), sorting old single messages into conversations, stable paging for very
+  long conversations, and full-text search.
 - **Acceptance:**
   - A1: 30 unlinked messages from one address are one contact entry in every
     lens; they are not merged into one conversation; each message is

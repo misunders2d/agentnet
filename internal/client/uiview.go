@@ -20,10 +20,14 @@ type ThreadSummary struct {
 	Last    string    `json:"last"`  // first line of the latest message
 	LastAt  time.Time `json:"last_at"`
 	Count   int       `json:"count"`
-	Review  int       `json:"review"`  // received items waiting for the person
-	Unread  int       `json:"unread"`  // received messages not yet read
+	Review  int       `json:"review"`  // received items waiting for a decision here
+	Unread  int       `json:"unread"`  // received messages not yet read (review notices not counted)
 	Running int       `json:"running"` // received items the worker is on
 	Waiting bool      `json:"waiting"` // a question or task sent here has no reply yet
+	// Notices counts open review notices: reports from another machine that
+	// requests wait for a person there. They are not decisions here.
+	Notices    int  `json:"notices"`
+	NoticeOnly bool `json:"notice_only"` // every message in the thread is a review notice
 }
 
 // threadRow is what a summary needs to know about one message.
@@ -33,6 +37,7 @@ type threadRow struct {
 	kind    string
 	state   string
 	unread  bool
+	notice  bool // in only: a review notice (see envelope.StatusReviewNotice)
 	replied bool // out only: a received message replies to it
 }
 
@@ -97,10 +102,16 @@ func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
 	for _, g := range groups {
 		sortThread(g, byID)
 		first, last := byID[g[0]], byID[g[len(g)-1]]
-		t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0)}
+		t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true}
 		for _, id := range g {
 			r := rows[id]
+			t.NoticeOnly = t.NoticeOnly && r.notice
 			switch {
+			case r.notice:
+				if r.state == stateNeedHuman {
+					t.Notices++
+				}
+				continue
 			case r.in && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
 				t.Review++
 			case r.in && (r.state == stateRunning || r.state == stateCancelReq):
@@ -146,18 +157,20 @@ func (s *store) conversationPeers() ([]string, error) {
 // exchanged with peer, and which sent questions or tasks have a reply.
 func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, '') FROM inbox WHERE sender = ?`, peer)
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, '') = ? FROM inbox WHERE sender = ?`,
+		envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
 	}
 	replies := map[string]bool{}
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &r.notice); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.in = true
+		r.notice = r.notice && r.kind == envelope.KindMessage
 		out[r.id] = r
 		if r.replyTo != "" {
 			replies[r.replyTo] = true

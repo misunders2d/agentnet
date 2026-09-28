@@ -52,14 +52,16 @@ func (l *Live) Overview() (Overview, error) {
 			changedKeys[t.Peer] = k.Pending != ""
 		}
 		o.Threads = append(o.Threads, ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
-			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer]})
+			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
+			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
 	}
 	review, err := l.a.Review()
 	if err != nil {
 		return o, err
 	}
 	for _, m := range review {
-		o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail), Excerpt: excerpt(m.Body)})
+		o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
+			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: m.Kind == KindMessage && m.Status == StatusReviewNotice})
 	}
 	q, err := l.a.Quarantine()
 	if err != nil {

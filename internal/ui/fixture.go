@@ -53,6 +53,7 @@ func NewFixture(now func() time.Time) *Fixture {
 	f.peers["bob/desk"] = &fxPeer{presence: "Their computer is connected", approved: true, key: PeerKey{Pinned: "SHA256:0b7c 44e1 92aa 6d30"}}
 	f.peers["carol/ci"] = &fxPeer{presence: "Their computer is reconnecting", approved: true, key: PeerKey{Pinned: "SHA256:a12f 07c9 5b3e e811"}}
 	f.peers["dave/srv"] = &fxPeer{presence: "Their computer is offline", key: PeerKey{Pinned: "SHA256:77d0 1c5a 8e42 3f9b"}}
+	f.peers["hub/ops"] = &fxPeer{presence: "Their computer is connected", key: PeerKey{Pinned: "SHA256:31c7 0e9a 4d22 b5f8"}}
 	f.peers["erin/lab"] = &fxPeer{presence: "Connection unknown",
 		key: PeerKey{Pinned: "SHA256:9c41 7be0 22fd 13a8", Pending: "SHA256:e05b 61c2 8a7f 4d19"}}
 
@@ -95,6 +96,28 @@ func NewFixture(now func() time.Time) *Fixture {
 		Body: "Is it safe to rotate the Hub TLS certificate tonight, or is anything still pinned to the old one?"})
 	f.quar = append(f.quar, QuarantineItem{ID: f.id(), Peer: "dave/srv", At: ago(300),
 		Reason: "It did not verify, so its content is not shown."})
+
+	// Announcements bob's agent sent without linking them: each is its own
+	// message, not a conversation.
+	for i, body := range []string{
+		"Stable AgentNet v0.2.1 is published: https://example.invalid/releases/v0.2.1",
+		"Relay update deployed; idle stream disconnects are fixed.",
+		"CI is green on main again.",
+		"Heads up: staging database maintenance tonight 22:00-22:30.",
+		"Nightly backup verified.",
+	} {
+		f.add(f.thread("bob/desk"), &Message{Dir: "in", Kind: KindMessage, At: ago(300 + 240*i), Body: body})
+	}
+	// Review notices: hub/ops reports that requests wait for a person on
+	// that machine. They carry no request and cannot be decided here.
+	for _, n := range []struct {
+		min  int
+		body string
+	}{{240, "1 request(s) wait for a person's decision on hub/ops. Review there: agentnet inbox --review"},
+		{12, "2 request(s) wait for a person's decision on hub/ops. Review there: agentnet inbox --review"}} {
+		f.add(f.thread("hub/ops"), &Message{Dir: "in", Kind: KindMessage, Status: StatusReviewNotice, State: "needs_human", At: ago(n.min), Unread: true,
+			Body: n.body, Detail: "review notice: requests wait for a person's decision on hub/ops; decide there. Nothing here runs or can be accepted"})
+	}
 
 	erin := f.thread("erin/lab")
 	f.add(erin, &Message{Dir: "in", Kind: KindMessage, At: ago(2880),
@@ -187,16 +210,26 @@ func (f *Fixture) Overview() (Overview, error) {
 	for _, t := range f.threads {
 		first, last := t.msgs[0], t.msgs[len(t.msgs)-1]
 		s := ThreadSummary{ID: first.ID, Peer: t.peer, Title: excerpt(first.Body), Last: excerpt(last.Body), LastAt: last.At,
-			Count: len(t.msgs), KeyChanged: f.peers[t.peer].key.Pending != ""}
+			Count: len(t.msgs), KeyChanged: f.peers[t.peer].key.Pending != "", NoticeOnly: true}
 		for _, m := range t.msgs {
 			v := f.view(t, m)
+			notice := m.Dir == "in" && m.Kind == KindMessage && m.Status == StatusReviewNotice
+			s.NoticeOnly = s.NoticeOnly && notice
+			if notice {
+				if m.State == "needs_human" {
+					s.Notices++
+					o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail),
+						Excerpt: excerpt(m.Body), At: m.At, Notice: true})
+				}
+				continue
+			}
 			if m.Dir == "in" && m.Unread {
 				s.Unread++
 			}
 			switch {
 			case v.Next == "Needs you":
 				s.Review++
-				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body)})
+				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At})
 			case m.State == "running" && m.Dir == "in":
 				s.Running++
 			case strings.HasPrefix(v.Next, "Waiting on"):

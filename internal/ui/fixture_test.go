@@ -34,12 +34,23 @@ func reviewOf(t *testing.T, f *Fixture, peer, kind string) string {
 func TestFixtureOverviewIsThreads(t *testing.T) {
 	f := testFixture()
 	o := overview(t, f)
-	if !o.Demo || len(o.Review) != 3 || len(o.Quarantine) != 1 {
-		t.Fatalf("demo %v review %d quarantine %d", o.Demo, len(o.Review), len(o.Quarantine))
+	decisions, notices := 0, 0
+	for _, it := range o.Review {
+		if it.Notice {
+			notices++
+		} else {
+			decisions++
+		}
+	}
+	if !o.Demo || decisions != 3 || notices != 2 || len(o.Quarantine) != 1 {
+		t.Fatalf("demo %v decisions %d notices %d quarantine %d", o.Demo, decisions, notices, len(o.Quarantine))
 	}
 	perPeer := map[string]int{}
 	for i, s := range o.Threads {
 		perPeer[s.Peer]++
+		if (s.Peer == "hub/ops") != s.NoticeOnly || (s.Peer == "hub/ops" && (s.Notices != 1 || s.Review != 0 || s.Unread != 0)) {
+			t.Fatalf("notice flags %+v", s)
+		}
 		if i > 0 && s.LastAt.After(o.Threads[i-1].LastAt) {
 			t.Fatalf("threads not newest first at %d", i)
 		}
@@ -49,7 +60,7 @@ func TestFixtureOverviewIsThreads(t *testing.T) {
 		}
 	}
 	// One peer, several independent threads.
-	if perPeer["carol/ci"] != 4 || perPeer["bob/desk"] != 2 {
+	if perPeer["carol/ci"] != 4 || perPeer["bob/desk"] != 7 || perPeer["hub/ops"] != 2 {
 		t.Fatalf("threads per peer %v", perPeer)
 	}
 	// Any message of a thread opens the whole thread.
@@ -257,8 +268,12 @@ func TestStateTextAndNext(t *testing.T) {
 		if a := ActionsFor(k, "needs_human"); len(a) != 1 || a[0] != DoResolve {
 			t.Fatalf("%s needs_human actions %v", k, a)
 		}
-		if Next("in", k, "needs_human", "bob/desk", false) != "you" || !strings.HasPrefix(StateText("in", k, "needs_human", "bob/desk"), "Needs you: ") {
-			t.Fatalf("%s needs_human not shown as needing you", k)
+		want := "Needs you: "
+		if k == KindMessage {
+			want = "Reported: " // a review notice is a report from that machine, not a decision here
+		}
+		if Next("in", k, "needs_human", "bob/desk", false) != "you" || !strings.HasPrefix(StateText("in", k, "needs_human", "bob/desk"), want) {
+			t.Fatalf("%s needs_human shown as %q", k, StateText("in", k, "needs_human", "bob/desk"))
 		}
 	}
 	for _, s := range []string{"answered", "manual", "declined", "resolved", "pending"} {
