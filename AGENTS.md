@@ -63,6 +63,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Working rules
 
+- Credit participating coding agents in commit trailers: Codex uses
+  `Co-authored-by: Codex <noreply@openai.com>` and Claude uses
+  `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;
+  do not invent account emails for other assistants.
 - Tests: `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
