@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -268,9 +267,7 @@ func checkSchema(ctx context.Context, home, staged, target string, releaseForwar
 	if err != nil {
 		return fmt.Errorf("cannot read the schema of this home's database (%v); nothing was changed", err)
 	}
-	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	out, _ := exec.CommandContext(vctx, staged, "version", "--schema").Output()
+	out, _ := runQuiet(30*time.Second, 64<<10, staged, "version", "--schema")
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	supports := -1
 	if len(lines) == 2 {
@@ -333,9 +330,7 @@ func versionLine(v string) string {
 
 // fileVersion runs path's `version` (bounded) and returns its first line.
 func fileVersion(ctx context.Context, path string) (string, error) {
-	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(vctx, path, "version").Output()
+	out, err := runQuiet(30*time.Second, 64<<10, path, "version")
 	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	return line, err
 }

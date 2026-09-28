@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -57,9 +56,6 @@ func switchHooks(home, exe string) (func() (bool, string), func(client.UpdateReq
 // these arguments as this user, this process is its running instance, and
 // no job would end a helper together with this process.
 func checkTaskInstance(exe string, args []string) error {
-	if err := checkJob(); err != nil {
-		return err
-	}
 	if err := checkTaskDefinition(exe, args); err != nil {
 		return err
 	}
@@ -70,7 +66,7 @@ func checkTaskInstance(exe string, args []string) error {
 	if state != taskStateRunning || !slices.Contains(pids, os.Getpid()) {
 		return fmt.Errorf("this daemon is not the running instance of the scheduled task %s (it was started some other way)", winTaskName)
 	}
-	return nil
+	return checkJob()
 }
 
 const (
@@ -79,9 +75,9 @@ const (
 )
 
 func checkTaskDefinition(exe string, args []string) error {
-	out, err := quietCommand("schtasks", "/query", "/tn", winTaskName, "/xml", "ONE").Output()
+	out, err := runTask(30*time.Second, 1<<20, "schtasks", "/query", "/tn", winTaskName, "/xml", "ONE")
 	if err != nil {
-		return fmt.Errorf("no scheduled task %s to restart this daemon (agentnet help startup)", winTaskName)
+		return fmt.Errorf("no scheduled task %s to restart this daemon (agentnet help startup): %v", winTaskName, err)
 	}
 	def, err := parseTaskDef(out)
 	if err != nil {
@@ -140,9 +136,9 @@ func taskInstances() (int, []int, error) {
 	for i, c := range u {
 		binary.LittleEndian.PutUint16(b[2*i:], c)
 	}
-	out, err := quietCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(b)).Output()
+	out, err := runTask(60*time.Second, 64<<10, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(b))
 	if err != nil {
-		return 0, nil, fmt.Errorf("%v: %s", err, bytes.TrimSpace(out))
+		return 0, nil, err
 	}
 	state, list, ok := strings.Cut(strings.TrimSpace(string(out)), "|")
 	if !ok {
@@ -166,11 +162,15 @@ func taskInstances() (int, []int, error) {
 	return n, pids, nil
 }
 
-func quietCommand(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
-	return cmd
+func init() {
+	quietAttr = func(cmd *exec.Cmd) {
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
+	}
 }
+
+// runTask runs schtasks and PowerShell for the switch, always bounded
+// (runQuiet); tests replace it.
+var runTask = runQuiet
 
 // helperReady is where the helper says it holds the daemon's process.
 func helperReady(home, id string) string { return filepath.Join(home, "update-helper-"+id+".ready") }
@@ -273,7 +273,7 @@ func runUpdateHelper(home string, args []string) error {
 				break
 			}
 		}
-		quietCommand("schtasks", "/run", "/tn", winTaskName).Run()
+		runTask(30*time.Second, 64<<10, "schtasks", "/run", "/tn", winTaskName)
 		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
 			if act, ok, _ := client.ReadUpdateActivation(home); ok && act.ID == *id {
 				return nil // the task's new instance settled it (running, or its own failure)

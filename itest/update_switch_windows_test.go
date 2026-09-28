@@ -155,11 +155,19 @@ func TestWindowsUpdateSwitchThroughTask(t *testing.T) {
 		t.Fatalf("after the switch: %q, %d threads", o.Version, len(o.Threads))
 	}
 
-	// 2. A helper lost mid-way: the daemon stops, nothing is started, the
-	// switch stays visibly pending; the next start of the task completes it.
+	// 2. A helper lost once the daemon relies on it: the daemon stops,
+	// nothing is started, the switch stays visibly pending; the next start of
+	// the task completes it. The page handoff is written only after the
+	// daemon has seen the helper ready and began stopping, so killing the
+	// helper then always hits this stage (killed earlier, the daemon would
+	// see it gone and keep serving instead). The helper cannot have started
+	// the task yet: it first waits for the daemon to exit, then asks Task
+	// Scheduler (PowerShell) before it runs anything.
 	id = replace(third, "v9.1.2")
 	ready := filepath.Join(home, "update-helper-"+id+".ready")
-	waitFor(t, "helper ready", func() bool { _, err := os.Stat(ready); return err == nil })
+	handoff := filepath.Join(home, "ui-handoff.json")
+	os.Remove(handoff)
+	waitFor(t, "daemon stopping for the switch", func() bool { _, err := os.Stat(handoff); return err == nil })
 	data, _ := os.ReadFile(ready)
 	helper, _ := strconv.Atoi(strings.TrimSpace(string(data)))
 	if p, err := os.FindProcess(helper); err == nil {
@@ -180,9 +188,9 @@ func TestWindowsUpdateSwitchThroughTask(t *testing.T) {
 	id = replace(old, "v9.1.0") // (going back only exercises the path here)
 	ready = filepath.Join(home, "update-helper-"+id+".ready")
 	waitFor(t, "helper ready", func() bool { _, err := os.Stat(ready); return err == nil })
-	winSchtasks("/change", "/tn", `\agentnet`, "/disable")
+	winSchtasks("/change", "/tn", `\agentnet`, "/disable") // after the daemon's own checks passed
 	act, ok = settled(id, 3*time.Minute)
-	if !ok || act.Result != client.ActivationFailed || !strings.Contains(act.Detail, "schtasks /run") {
+	if !ok || act.Result != client.ActivationFailed || !strings.Contains(act.Detail, "is disabled") {
 		t.Fatalf("task that cannot start: %+v (%v)", act, ok)
 	}
 	winSchtasks("/change", "/tn", `\agentnet`, "/enable")

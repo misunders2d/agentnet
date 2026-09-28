@@ -88,6 +88,8 @@ func TestCheckTaskDef(t *testing.T) {
 		{"not a program", `<Exec><Command>"C:\Users\bob\AppData\Local\agentnet\bin\agentnet.exe"</Command><Arguments>--home "C:\agent home" daemon --ui 127.0.0.1:0</Arguments></Exec>`,
 			`<ComHandler><ClassId>{1}</ClassId></ComHandler>`, nil, "exactly one program"},
 		{"stop existing", `IgnoreNew`, `StopExisting`, nil, "StopExisting"},
+		{"disabled", `<MultipleInstancesPolicy>`, `<Enabled>false</Enabled><MultipleInstancesPolicy>`, nil, "is disabled"},
+		{"enabled", `<MultipleInstancesPolicy>`, `<Enabled>true</Enabled><MultipleInstancesPolicy>`, nil, ""},
 		{"sid principal", `RUNNER\bob</UserId>`, `S-1-5-21-1-2-3-1001</UserId>`, nil, ""},
 		{"bare user", `RUNNER\bob</UserId>`, `bob</UserId>`, nil, ""},
 		{"daemon started otherwise", "", "", func(e *taskEnv) { e.args = []string{"daemon"} }, "but this daemon runs as"},
