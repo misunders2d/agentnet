@@ -303,6 +303,13 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 // are encrypted into a private spool first; if the Hub is unreachable the
 // message stays queued and the daemon resumes it.
 func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
+	if m.ReplyTo != "" { // never continue a conversation (DM) in the older format
+		if conv, err := a.store.convOf(m.ReplyTo); err != nil {
+			return SendResult{}, err
+		} else if conv != "" {
+			return SendResult{}, ErrConversationItem
+		}
+	}
 	if len(m.Files) > envelope.MaxAttachments {
 		return SendResult{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 	}

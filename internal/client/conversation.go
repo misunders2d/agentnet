@@ -165,6 +165,9 @@ func (a *Agent) CheckReplyTo(id, to string) error {
 	if errors.Is(err, ErrNoMessage) {
 		return fmt.Errorf("no message %s here to reply to", id)
 	}
+	if errors.Is(err, ErrConversationItem) {
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -174,12 +177,18 @@ func (a *Agent) CheckReplyTo(id, to string) error {
 	return nil
 }
 
-// peerOf returns the other party of a stored message.
+// peerOf returns the other party of a stored message. A conversation (DM)
+// message is not part of any reply thread: it is ErrConversationItem.
 func (s *store) peerOf(id string) (string, error) {
 	var peer string
-	err := s.db.QueryRow(`SELECT sender FROM inbox WHERE id = ? UNION ALL SELECT recipient FROM outbox WHERE id = ? LIMIT 1`, id, id).Scan(&peer)
+	var conv bool
+	err := s.db.QueryRow(`SELECT sender, conv IS NOT NULL FROM inbox WHERE id = ?
+		UNION ALL SELECT recipient, conv IS NOT NULL FROM outbox WHERE id = ? LIMIT 1`, id, id).Scan(&peer, &conv)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNoMessage
+	}
+	if err == nil && conv {
+		return "", ErrConversationItem
 	}
 	return peer, err
 }
@@ -190,10 +199,11 @@ type link struct {
 	at          int64
 }
 
-// peerLinksQuery reads only the link indexes (schema step 8), never
-// message bodies.
-const peerLinksQuery = `SELECT id, coalesce(reply_to, ''), received_at FROM inbox INDEXED BY inbox_links WHERE sender = ?
-	UNION ALL SELECT id, coalesce(reply_to, ''), created_at FROM outbox INDEXED BY outbox_links WHERE recipient = ?`
+// peerLinksQuery reads the link indexes (schema step 8), never message
+// bodies. Conversation (DM) messages are not in reply threads: a link to
+// one ends the thread there, like a link to an unknown id.
+const peerLinksQuery = `SELECT id, coalesce(reply_to, ''), received_at FROM inbox INDEXED BY inbox_links WHERE sender = ? AND conv IS NULL
+	UNION ALL SELECT id, coalesce(reply_to, ''), created_at FROM outbox INDEXED BY outbox_links WHERE recipient = ? AND conv IS NULL`
 
 // peerLinks returns the reply links of every message exchanged with peer.
 func (s *store) peerLinks(peer string) ([]link, error) {
@@ -225,7 +235,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			args = append(args, id)
 		}
 		rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-			state, coalesce(responder, ''), coalesce(detail, '') FROM inbox WHERE sender = ? AND id IN (`+marks+`)`, args...)
+			state, coalesce(responder, ''), coalesce(detail, '') FROM inbox WHERE sender = ? AND conv IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -251,7 +261,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			return nil, err
 		}
 		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, '')
-			FROM outbox WHERE recipient = ? AND id IN (`+marks+`)`, args...)
+			FROM outbox WHERE recipient = ? AND conv IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}

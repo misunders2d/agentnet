@@ -129,7 +129,7 @@ func (a *Agent) onMembers(data []byte) {
 	a.changes.bump()
 	// Presence, persons or capabilities may have changed: look again at
 	// held conversation messages on the stream's worker.
-	a.convWork.due(convRetry | convRelease)
+	a.convWork.due(convPersons | convRetry | convRelease)
 	if a.kick != nil {
 		a.kick()
 	}

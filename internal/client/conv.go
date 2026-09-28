@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,12 +44,21 @@ var ErrNotPublished = errors.New("not yet published on the Hub (the daemon publi
 
 // Upkeep that an event made due, done on the next sync (never on a timer).
 const (
-	convPublish uint32 = 1 << iota // publish this run's capabilities and the person, if not yet
-	convRetry                      // look again at messages held for proof
-	convRelease                    // look again at waiting conversation messages
+	convPublish   uint32 = 1 << iota // publish this run's capabilities and the person, if not yet
+	convRetry                        // new evidence: look again at every message held for proof, from the start
+	convRetryMore                    // continue that look from where the last page ended
+	convRelease                      // look again at waiting conversation messages
+	convPersons                      // compare published person records with the pinned ones
 )
 
-type convWork struct{ bits atomic.Uint32 }
+// proofPage bounds the held messages looked at in one sync.
+const proofPage = 50
+
+type convWork struct {
+	bits atomic.Uint32
+	mu   sync.Mutex
+	pos  heldPos // where the look at held messages continues
+}
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
 func (w *convWork) take() uint32 { return w.bits.Swap(0) }
@@ -73,8 +83,24 @@ func (a *Agent) convSync(ctx context.Context) {
 			}
 		}
 	}
-	if work&convRetry != 0 {
-		a.retryProof(ctx)
+	if work&convPersons != 0 { // before retrying held messages: a conflict must hold them
+		a.checkPersons(a.MemberView().Members)
+	}
+	if work&(convRetry|convRetryMore) != 0 {
+		if work&convRetry != 0 {
+			a.convWork.mu.Lock()
+			a.convWork.pos = heldPos{}
+			a.convWork.mu.Unlock()
+		}
+		if a.retryProof(ctx) {
+			// More pages: continue on the next sync, which this kicks now,
+			// so new evidence reaches every held message without waiting
+			// for another event; each sync does one bounded page.
+			a.convWork.due(convRetryMore)
+			if a.kick != nil {
+				a.kick()
+			}
+		}
 	}
 	if work&convRelease != 0 {
 		a.releaseConv(ctx, feats)
@@ -207,11 +233,58 @@ func (a *Agent) personOfKey(ctx context.Context, address string, key identity.Pu
 	if err != nil {
 		return p, fmt.Errorf("%w: %s: %v", errPersonRecord, address, err)
 	}
-	if err := a.store.pinPerson(r, prof.Person); err != nil {
+	if err := a.store.pinPerson(r, prof.Person, key); err != nil {
 		return p, err
 	}
 	p, _, err = a.store.personByAddress(address)
 	return p, err
+}
+
+// checkPersons compares the person records in a member list with the
+// persons pinned here (observePerson); members not pinned here are left
+// alone: listing someone never pins or trusts them.
+func (a *Agent) checkPersons(ms protocol.Members) {
+	for _, m := range ms.Members {
+		if len(m.Person) > 0 {
+			a.observePerson(m.Address, m.Person)
+		}
+	}
+}
+
+// observePerson checks a person record published for address against the
+// person pinned for it. Only a record that verifies against the very key
+// the pinned person was verified with, and names that device, counts as
+// evidence; if it then differs, the pinned person is frozen as a conflict
+// (it keeps its identity; nothing is replaced). A record that does not
+// verify, or nothing pinned, changes nothing: it is no proof of a conflict.
+func (a *Agent) observePerson(address string, blob json.RawMessage) {
+	p, ok, err := a.store.personByAddress(address)
+	if err != nil || !ok || p.info.State != personPinned {
+		return
+	}
+	pub := p.pub
+	if pub == nil { // pinned before keys were kept: the address's pinned key
+		pinned, _, found, err := a.store.peer(address)
+		if err != nil || !found || pinned.Fingerprint() != p.info.Fingerprint {
+			return
+		}
+		pub = &pinned
+	}
+	r, err := protocol.ParsePersonRoster(blob)
+	if err != nil || r.Verify(pub.SignKey) != nil {
+		return
+	}
+	if d := r.Devices[0]; d.Address != address || d.Fingerprint != p.info.Fingerprint {
+		return
+	}
+	if r.Hash() == p.info.Roster {
+		return
+	}
+	if err := a.store.pinPerson(r, blob, *pub); errors.Is(err, errPersonConflict) {
+		a.Logf("%s published a different person record than the one pinned here: frozen (conversations with %q hold)", address, p.info.Label)
+	} else if err != nil {
+		a.Logf("person record of %s: %v", address, err)
+	}
 }
 
 // convSupport reports whether a conversation message can go to the device
@@ -228,6 +301,9 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 	var prof protocol.Profile
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
 		return false, "cannot ask the Hub what " + address + " can read: " + err.Error()
+	}
+	if len(prof.Person) > 0 {
+		a.observePerson(address, prof.Person) // fresh evidence, checked before anything is sent
 	}
 	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) {
 		return false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)"
@@ -366,6 +442,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Origin == "" {
 		m.Origin = envelope.OriginUI
 	}
+	if m.ReplyTo != "" { // a reply stays within its own conversation
+		if c, err := a.store.convOf(m.ReplyTo); err != nil {
+			return ConvSent{}, err
+		} else if c != conv {
+			return ConvSent{}, fmt.Errorf("message %s is not in this conversation: a reply stays within its conversation", m.ReplyTo)
+		}
+	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: protocol.NewID(), Root: raw,
 		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target}
@@ -379,6 +462,11 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		why = "cannot reach the Hub: " + ferr.Error()
 	} else {
 		supported, why = a.convSupport(ctx, dev.Address, key, feats)
+	}
+	if now, _, err := a.store.personByID(peerID); err != nil {
+		return ConvSent{}, err
+	} else if now.info.State == personConflict { // the profile just showed a different record
+		return ConvSent{}, errPersonConflict
 	}
 	state := stateQueued
 	if !supported {
@@ -426,13 +514,25 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 	}
 }
 
-// retryProof looks again at messages held for conversation proof.
-func (a *Agent) retryProof(ctx context.Context) {
-	envs, err := a.store.heldFor(reasonProof, 50)
+// retryProof looks again at one page of messages held for conversation
+// proof, continuing from where the previous page ended, and reports whether
+// more follow. Messages still without proof stay held, in place.
+func (a *Agent) retryProof(ctx context.Context) (more bool) {
+	a.convWork.mu.Lock()
+	pos := a.convWork.pos
+	a.convWork.mu.Unlock()
+	envs, next, err := a.store.heldAfter(reasonProof, pos, proofPage)
 	if err != nil {
 		a.Logf("held conversation messages: %v", err)
-		return
+		return false
 	}
+	more = len(envs) == proofPage
+	if !more {
+		next = heldPos{} // the end: the next look starts from the beginning
+	}
+	a.convWork.mu.Lock()
+	a.convWork.pos = next
+	a.convWork.mu.Unlock()
 	for _, env := range envs {
 		sender, _, found, err := a.store.peer(env.From)
 		if err != nil || !found {
@@ -443,10 +543,11 @@ func (a *Agent) retryProof(ctx context.Context) {
 			continue
 		}
 		if err := a.admitConv(ctx, env, in, sender, true); err != nil && retryable(err) {
-			a.convWork.due(convRetry)
-			return
+			a.convWork.due(convRetry) // the Hub is out of reach: look again from the start next time
+			return false
 		}
 	}
+	return more
 }
 
 // admitConv admits a verified version 2 message, or holds it (quarantine)
@@ -513,6 +614,17 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if r, member := root.Member(sp.info.Person); !member || r != sp.info.Roster {
 		return hold(reasonInvalid, "the sender is not a member of this conversation")
+	}
+	if in.ReplyTo != "" { // a reply may name only a message of its own conversation
+		c, err := a.store.convOf(in.ReplyTo)
+		if err != nil {
+			return err
+		}
+		if known, err := a.store.knownMessage(in.ReplyTo); err != nil {
+			return err
+		} else if known && c != in.Conv {
+			return hold(reasonInvalid, "it replies to a message outside its conversation")
+		}
 	}
 	state := ""
 	if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {

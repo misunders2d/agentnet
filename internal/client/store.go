@@ -174,6 +174,12 @@ ALTER TABLE outbox ADD COLUMN emotion TEXT;
 ALTER TABLE outbox ADD COLUMN target TEXT;
 ALTER TABLE outbox ADD COLUMN created_ms INTEGER;
 CREATE INDEX outbox_conv ON outbox(conv, created_at) WHERE conv IS NOT NULL;
+`, `
+ALTER TABLE persons ADD COLUMN public TEXT;
+DROP INDEX inbox_links;
+CREATE INDEX inbox_links ON inbox(sender, id, reply_to, received_at, conv);
+DROP INDEX outbox_links;
+CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at, conv);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -56,12 +57,13 @@ type personRow struct {
 	info   PersonInfo
 	roster protocol.PersonRoster
 	raw    []byte
+	pub    *identity.Public // the device key it was verified against when pinned (nil for rows pinned before that was kept)
 }
 
 func scanPerson(row interface{ Scan(...any) error }) (personRow, bool, error) {
 	var p personRow
-	var raw string
-	err := row.Scan(&p.info.Person, &p.info.Address, &p.info.Fingerprint, &p.info.Roster, &raw, &p.info.Label, &p.info.State)
+	var raw, public string
+	err := row.Scan(&p.info.Person, &p.info.Address, &p.info.Fingerprint, &p.info.Roster, &raw, &p.info.Label, &p.info.State, &public)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, false, nil
 	}
@@ -72,10 +74,16 @@ func scanPerson(row interface{ Scan(...any) error }) (personRow, bool, error) {
 	if err := json.Unmarshal(p.raw, &p.roster); err != nil {
 		return p, false, err
 	}
+	if public != "" {
+		p.pub = &identity.Public{}
+		if err := json.Unmarshal([]byte(public), p.pub); err != nil {
+			return p, false, err
+		}
+	}
 	return p, true, nil
 }
 
-const personCols = `person, address, fingerprint, hash, roster, label, state`
+const personCols = `person, address, fingerprint, hash, roster, label, state, coalesce(public, '')`
 
 func (s *store) selfPerson() (personRow, bool, error) {
 	return scanPerson(s.db.QueryRow(`SELECT `+personCols+` FROM persons WHERE state = ?`, personSelf))
@@ -98,10 +106,11 @@ func (s *store) setSelfPerson(r protocol.PersonRoster, raw []byte) error {
 	return s.done(err)
 }
 
-// pinPerson pins a verified roster. A different record for a pinned person
-// id, or another person for a pinned address, freezes the pinned one as a
-// conflict (errPersonConflict); nothing is replaced.
-func (s *store) pinPerson(r protocol.PersonRoster, raw []byte) error {
+// pinPerson pins a roster verified against pub, keeping pub to check later
+// records against. A different record for a pinned person id, or another
+// person for a pinned address, freezes the pinned one as a conflict
+// (errPersonConflict); nothing is replaced.
+func (s *store) pinPerson(r protocol.PersonRoster, raw []byte, pub identity.Public) error {
 	d := r.Devices[0]
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -145,8 +154,9 @@ func (s *store) pinPerson(r protocol.PersonRoster, raw []byte) error {
 	case !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO persons(person, address, fingerprint, hash, roster, label, state, pinned_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Person, d.Address, d.Fingerprint, r.Hash(), string(raw), r.Label, personPinned, time.Now().Unix()); err != nil {
+	public, _ := json.Marshal(pub)
+	if _, err := tx.Exec(`INSERT INTO persons(person, address, fingerprint, hash, roster, label, state, pinned_at, public) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Person, d.Address, d.Fingerprint, r.Hash(), string(raw), r.Label, personPinned, time.Now().Unix(), string(public)); err != nil {
 		return err
 	}
 	return s.done(tx.Commit())
@@ -293,6 +303,25 @@ func targetJSON(t *envelope.Target) string {
 	return string(data)
 }
 
+// convOf returns the conversation of a stored message, "" for a message
+// outside any (version 1) or an unknown id.
+func (s *store) convOf(id string) (string, error) {
+	var conv string
+	err := s.db.QueryRow(`SELECT coalesce(conv, '') FROM inbox WHERE id = ?
+		UNION ALL SELECT coalesce(conv, '') FROM outbox WHERE id = ? LIMIT 1`, id, id).Scan(&conv)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return conv, err
+}
+
+// knownMessage reports whether id is a stored message.
+func (s *store) knownMessage(id string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ?) + (SELECT count(*) FROM outbox WHERE id = ?)`, id, id).Scan(&n)
+	return n > 0, err
+}
+
 // holdAs quarantines env with reason, or changes the reason it is held for.
 func (s *store) holdAs(env envelope.Envelope, reason string) error {
 	raw, _ := json.Marshal(env)
@@ -301,26 +330,36 @@ func (s *store) holdAs(env envelope.Envelope, reason string) error {
 	return s.done(err)
 }
 
-// heldFor returns up to limit envelopes held for reason, oldest first.
-func (s *store) heldFor(reason string, limit int) ([]envelope.Envelope, error) {
-	rows, err := s.db.Query(`SELECT envelope FROM quarantine WHERE reason = ? ORDER BY received_at, id LIMIT ?`, reason, limit)
+// heldPos is a position in the quarantine's (received_at, id) order.
+type heldPos struct {
+	at int64
+	id string
+}
+
+// heldAfter returns up to limit envelopes held for reason after pos, in
+// (received_at, id) order, and the position of the last one returned. The
+// order is stable: re-holding a message changes its reason, not its place.
+func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Envelope, heldPos, error) {
+	rows, err := s.db.Query(`SELECT envelope, received_at, id FROM quarantine
+		WHERE reason = ? AND (received_at > ? OR (received_at = ? AND id > ?)) ORDER BY received_at, id LIMIT ?`,
+		reason, pos.at, pos.at, pos.id, limit)
 	if err != nil {
-		return nil, err
+		return nil, pos, err
 	}
 	defer rows.Close()
 	var out []envelope.Envelope
 	for rows.Next() {
 		var data string
 		var env envelope.Envelope
-		if err := rows.Scan(&data); err != nil {
-			return nil, err
+		if err := rows.Scan(&data, &pos.at, &pos.id); err != nil {
+			return nil, pos, err
 		}
 		if err := json.Unmarshal([]byte(data), &env); err != nil {
-			return nil, err
+			return nil, pos, err
 		}
 		out = append(out, env)
 	}
-	return out, rows.Err()
+	return out, pos, rows.Err()
 }
 
 // addConvOutbox records a sealed conversation message as queued (to send)

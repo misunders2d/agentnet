@@ -128,7 +128,7 @@ func TestPersonIsExplicit(t *testing.T) {
 		Devices: []protocol.RosterDevice{{Address: w.alice.Address, Fingerprint: alicePub.Fingerprint()}}}
 	other.Sign(w.alice.id.Sign)
 	raw, _ := json.Marshal(other)
-	if err := w.bob.store.pinPerson(other, raw); !errors.Is(err, errPersonConflict) {
+	if err := w.bob.store.pinPerson(other, raw, alicePub); !errors.Is(err, errPersonConflict) {
 		t.Fatalf("another person for a pinned address: %v", err)
 	}
 	if _, err := w.bob.personOfKey(tctx(t), w.alice.Address, alicePub); !errors.Is(err, errPersonConflict) {
