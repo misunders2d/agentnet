@@ -345,11 +345,27 @@ assessment, §15).**
 - **Relay support:** a `features` list added to `GET /v1/version`. Old clients
   decode Hub responses leniently (`internal/client/transport.go:134`), so they
   ignore it. No field means an old relay, so the client sends v1 only.
-- **Peer support:** a separately signed **capability record** `{address, caps,
-  ts}` under the domain `agentnet-caps-v1`, stored and served by new relays at a
-  new endpoint.
-  - Peers verify it against the pinned key. A relay can withhold it, which safely
-    means v1, but cannot forge it.
+- **Peer support:** a separately signed **capability record** `{address,
+  session, caps, ts}` under the domain `agentnet-caps-v1`, stored and served by
+  new relays at a new endpoint.
+  - Each daemon or browser session publishes a record. The relay serves the
+    device's **latest** record together with the session it came from, and whether
+    a newer session has connected without publishing one.
+  - Senders cache the last verified record per device. An offline peer keeps its
+    capabilities, so v2 work is sent into custody as normal.
+  - **Unknown** (no record ever): v1 for legacy 1:1 threads only. The device
+    cannot be added to v2 conversations.
+  - **Changed** (a newer session published none, or published fewer
+    capabilities): the sender does **not** silently downgrade conversation-scoped
+    v2 work to v1. It holds that work in the outbox, visibly: "waiting: <device>'s
+    AgentNet can't read this conversation".
+  - **Conflicting concurrent sessions** of one device: use the least capable.
+  - v2 envelopes already queued or in custody before a downgrade may still be
+    quarantined by the old client. Quarantine is visible; there is no promise of
+    zero quarantines under races (§19).
+  - Peers verify it against the pinned key. A relay can withhold it but cannot
+    forge it. Withholding means v1 **only for legacy pairwise threads**.
+    Conversation-scoped v2 work is held, never downgraded.
   - An old relay returns 404, which means v1.
 - **Signed session ads stay exactly v1.** Their signatures re-marshal the struct,
   and old relays verify the old struct (`protocol.go:341`), so they are not
@@ -791,3 +807,192 @@ to derived v1 threads. Nothing is merged across installations by label.
   epochs stay pending and non-executable (§4, §8, §9.3).
 - (d) The notification-content owner gate is removed: content-free and
   attention-only is existing direction (§12.3, §15).
+
+## 19. Updates and versions
+
+### 19.1 Three different versions, never conflated
+
+| Version | What it is | How it is compared | Status |
+|---|---|---|---|
+| **Build / served frontend release** | the binary's `protocol.Version` string (e.g. `git describe`). Relay-served assets would be part of the relay binary; daemon-hosted assets are part of the daemon binary | equality only; no ordering (`internal/client/release.go`) | build stamp and recommendation existing; relay-served bundle **not shipped** (proposed) |
+| **Protocol capability** | relay API generation `ProtocolVersion` (a mismatch refuses, naming the side to update; protocol generation check in `client.go`); envelope `V` (1 today, 2 proposed); relay `features` and per-session capability records (§9.1) | exact generation; negotiated capabilities | generation existing; the rest proposed |
+| **Database schema** | append-only SQL steps per store (client, relay); browser IndexedDB version (proposed) | step count; `*.vN.bak` snapshot before upgrading (`internal/sqlitedb/sqlitedb.go:69-80`) | existing (SQLite); proposed (IndexedDB) |
+
+A build change does not imply a protocol change. A protocol capability is never
+inferred from a build string.
+
+### 19.2 What exists today
+- **Recommendation, not installation.** A relay admin can recommend a client
+  build: `admin release set`, pushed on the stream, no polling.
+  - Members whose build differs get one content-free desktop notice. Each hooked
+    session gets one line saying to ask the person unless already authorized.
+    `version` and `doctor` show it.
+  - In the shipped build, AgentNet never downloads or installs anything
+    (`release.go`, `INSTALL.md` "Updating and downgrading"). This release adds an
+    explicit update command (§19.2a).
+- **Laptop update.** Stop the daemon, rebuild or replace the binary, start it,
+  run `doctor`. The schema migrates with a `*.vN.bak` snapshot.
+- **Downgrade** is manual. It restores the previous binary plus `*.vN.bak` or a
+  home backup, and loses what arrived after that backup (documented).
+- **Busy jobs.** A job running when the daemon stops is marked `interrupted` at
+  the next start (`daemon.go:319`, `store.go:823`). There is no automatic retry,
+  and an explicit `accept` re-runs it.
+- **Relay update.** Back up (stop, `hub backup`), rebuild or replace, start.
+
+### 19.2a This release: explicit CLI self-update (reviewed source; not shipped)
+
+- **Where it stands.** Owner direction: self-update is part of this release and
+  stays small.
+  - Implemented in source at `d99fdcc`, with a subsequent under-lock check of
+    the installed binary's version. Claude implemented it; Agy reviewed the
+    candidate; Codex reviewed the race correction.
+  - The full Linux race suite passed before that correction; the affected CLI
+    package and help integration test passed afterwards. The new race regression
+    failed against the earlier code. An isolated Linux binary updated itself
+    from the official release and matched its published checksum.
+  - Native Windows/macOS execution is pending; cross-platform vet is not runtime
+    proof. Nothing has been pushed or installed on the operator's machine.
+- **Exact behaviour** is documented in `agentnet help update` and
+  `docs/revival/INSTALL.md`, not repeated here. In summary:
+  - it is explicit, with no periodic check, automatic install, service or new
+    dependency;
+  - it downloads the official release asset only from the project's fixed release
+    address; the relay's recommendation is advice, never a download location;
+  - it checks the release's `SHA256SUMS`: integrity, not host trust, and there is
+    no separate signature;
+  - it keeps the previous file as `<file>.old`;
+  - older versions are refused, because databases only move forward.
+- **It replaces the file it runs from.** That can be a laptop client, or a bare
+  Hub executable run with `hub serve`.
+  - A copy inside a container is refused. Container deployments stay
+    operator-managed (§19.3).
+- **Nothing running is stopped or restarted.** A running daemon or Hub keeps its
+  old program until someone restarts it. The command reports that.
+  - Only a stop or restart interrupts a running job, which then follows today's
+    rule (§19.2): it becomes `interrupted`, with explicit accept to re-run.
+- **Unchanged:** schema migration with `*.vN.bak` on the next start; identity
+  keys, history, approvals and grants in the same home; manual downgrade.
+
+### 19.3 Proposed lifecycle for later work (all unimplemented)
+
+**Relay: one unit.**
+- **Procedure:** stop, `hub backup`, replace the binary or container (assets
+  inside), start (schema steps plus `.bak`), check a real browser and a daemon.
+- **Keep old clients working.** API changes are additive only: new endpoints, and
+  fields that clients decode leniently. v1 envelopes stay accepted.
+  `ProtocolVersion` is bumped only for a deliberate breaking change, which older
+  daemons and cached browser apps then report as "update required", never as a
+  silent failure.
+- **Rollback.** Restore the backup into a new volume.
+  - **Limit:** the relay forgets messages and receipts recorded after the backup.
+  - **Unknown is not lost.** A message the restored relay does not know may already
+    have been delivered, by relay or by the direct path, or may not have been.
+    Proposed: clients reconcile by asking for each message's state. An
+    unknown answer becomes **"delivery unknown — reconciliation needed"**, not
+    "lost".
+  - **Transport retransmission** of the **same stored envelope** (same id, same
+    signature) stays allowed, using today's idempotent path. The relay accepts an
+    identical re-post and rejects a different one (`internal/hub/store.go:293-296`).
+    The recipient stores an id once (`INSERT OR IGNORE`).
+  - Retransmission is never permission to re-run effects. No new envelope or new
+    id is created automatically.
+  - If the recipient's own store, and so its dedupe and job state, was also
+    restored, the outcome is uncertain. That recipient's automation is paused
+    until a person reconciles (see restore procedure below).
+
+**Browser device: served frontend release.**
+- **How it arrives.** The relay serves the new assets. The installed app's service
+  worker fetches them, but **activates only at a safe point**:
+  - no send in flight (the outbox is durably queued in IndexedDB);
+  - drafts already saved (drafts are written to IndexedDB continuously);
+  - one coordinating tab confirms all tabs can switch (Web Locks +
+    BroadcastChannel).
+  The person sees "Update ready (build X) — restart app". There is never a blind
+  reload in the middle of a send.
+- **Kept across versions:** keys (same origin, non-extractable), IndexedDB data,
+  outbox and drafts.
+  - IndexedDB schema steps are append-only.
+  - An app older than its data, after a relay rollback, refuses to write and says
+    so rather than risk corruption.
+- **Trust.** Every update is new code from the relay, the same trust as §6. No
+  signing or updater is assumed.
+
+**Laptop daemon.**
+- **Update:** the explicit `agentnet update` of this release (§19.2a), or the
+  manual build as today. Restarting the daemon afterwards is a separate step; see
+  the stop/restart rule for running jobs.
+  - Proposed small improvement: `doctor` and the UI show running jobs before the
+    person stops the daemon. Interrupted jobs follow today's rule: no automatic
+    retry, explicit accept.
+- **Kept:** identity keys, history, approvals and task grants, because the same
+  home migrates in place.
+  - The key fingerprint must be unchanged after the update; a test checks it.
+- **Downgrade** as today (`.vN.bak` or a home backup), with its data-loss limit.
+  - A downgraded v1 session publishes no capability record. Peers see
+    "changed" and hold new conversation-scoped v2 work visibly (§9.1).
+  - v2 already queued or in custody may be quarantined, visibly.
+
+**Restoring any store rewinds authority, not only messages.**
+- A restored daemon database rewinds several things at once:
+  - approvals and task grants;
+  - epochs and participations;
+  - job states and the dedupe ledger.
+- If no newer event arrives, nothing fails closed on its own. An older epoch could
+  still list a removed member, and an older grant could still hold.
+- **Proposed future restore procedure** (not part of the core updater, and no new
+  command is imposed on it now): restoring writes a local "restored, automation
+  paused" mark into the restored store. While it is set:
+  - approved-sender auto-answers stop;
+  - standing and assignment task grants stop;
+  - participation jobs stop.
+- The person clears the mark after reviewing two things:
+  - authority (grants, approvals, current epochs and participations), reconfirmed;
+  - post-backup work (jobs that may have run after the backup), reconciled.
+- **Manual restores** (copying `*.vN.bak` or a home directory) and existing old
+  binaries do **not** set this mark. The procedure documents setting it, or the
+  person must pause automation themselves. Nothing enforces it magically.
+- No new service or counter infrastructure is implied.
+
+**Authority.**
+- Once/always task grants authorize **tasks from a specific peer key**. They do
+  **not** make that peer, the relay or its release recommendation a trusted
+  software channel.
+- An "update AgentNet" task is an ordinary task, accepted by the person (or under
+  a grant the person deliberately gave for tasks from that key).
+- `agentnet update` itself (§19.2a) runs only when invoked: by a person, or inside
+  a task accepted once or covered by an existing standing task grant for that key.
+  There is no extra reapproval.
+- A relay recommendation, a peer message or a notification never triggers it.
+- There is no new permission system and no background updater.
+
+### 19.4 Acceptance tests (real upgrades, not compilation)
+- **Relay:**
+  - back up; upgrade to a build with a new schema step;
+  - a previous-build daemon and a new daemon keep exchanging messages;
+  - a cached older browser app keeps working or truthfully says "update required";
+  - restore the backup: post-backup messages show "delivery unknown";
+  - retransmitting the identical envelope does not duplicate at a recipient that
+    already stored it;
+  - a recipient whose store was also restored keeps the re-arrived task waiting
+    for the person (automation paused).
+- **Daemon:**
+  - `agentnet update` while a job runs: nothing stops, and the job finishes on the
+    old program;
+  - **stopping or restarting** the daemon while a job runs: the job becomes
+    `interrupted`, and an explicit accept re-runs it once;
+  - key fingerprint, history, approvals and grants are unchanged;
+  - restore via the documented procedure: an approved sender's question is not
+    auto-answered and a granted task does not auto-run until the person resumes
+    automation;
+  - downgrade: peers mark the device "changed", and new conversation-scoped v2
+    work is held visibly (not sent as v1). Earlier queued v2 may quarantine
+    visibly.
+  - an offline v2 peer still receives v2 into custody;
+  - two conflicting concurrent sessions: the least capable wins.
+- **Browser:**
+  - deploy new assets during a send: no reload until the send is queued or done;
+  - two open tabs: one activation;
+  - keys, drafts and outbox survive;
+  - an older app with newer data refuses writes.
+- **Mixed versions:** the §9.1 matrix run with real binaries (itest style), across
+  restarts.
