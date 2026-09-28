@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/ui/static"
 )
 
 const testToken = "0123456789abcdef0123456789abcdef"
@@ -129,11 +131,11 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 // the page has no HTML sinks and no inline script or style.
 func TestPageInsertsTextOnly(t *testing.T) {
 	sinks := regexp.MustCompile(`innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function`)
-	err := fs.WalkDir(static, "static", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(static.Files, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, _ := static.ReadFile(path)
+		data, _ := fs.ReadFile(static.Files, path)
 		if loc := sinks.FindIndex(data); loc != nil {
 			t.Errorf("%s uses %q", path, data[loc[0]:loc[1]])
 		}

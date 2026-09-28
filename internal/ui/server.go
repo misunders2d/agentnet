@@ -2,7 +2,6 @@ package ui
 
 import (
 	"crypto/subtle"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +12,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-)
 
-//go:embed static
-var static embed.FS
+	"github.com/misunders2d/agentnet/internal/ui/static"
+)
 
 const (
 	cookieName = "agentnet_ui"
@@ -119,7 +117,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	data, err := static.ReadFile("static/index.html")
+	data, err := fs.ReadFile(static.Files, "index.html")
 	if err != nil {
 		http.Error(w, "missing page", http.StatusInternalServerError)
 		return
@@ -138,7 +136,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := fs.ReadFile(static, "static/"+name)
+	data, err := fs.ReadFile(static.Files, name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
