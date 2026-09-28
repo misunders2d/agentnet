@@ -299,6 +299,13 @@ If a local database or key file is damaged:
   It covers the real Provider/backend contract, relay-served phone/browser devices
   and the requirement that the relay stays one portable unit (binary/container,
   one data volume, one port). Owner choices listed there (§15) remain open.
+- **Increments, not the messenger (owner correction, 2026-09-28)**: the device-inbox page (S-A,
+  directory included) and the N7 browser transport (S-W, v1) do not complete the messenger contract of
+  [DECISIONS §3.2 and §2](DECISIONS.md). Still required: choose a person (e.g. Vitalii), hold a human DM,
+  explicitly invite an agent with the context you allow, clear human/agent participants and authorship,
+  and follow-ups until an explicit dismissal. A message kind is not a participant's identity or an agent
+  invitation; an address is one installation's key, not a person; nothing is merged by address. See
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon

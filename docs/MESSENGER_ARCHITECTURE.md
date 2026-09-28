@@ -7,6 +7,22 @@
   open.
 - Nothing here is built or frozen. Field, table, route and API names are
   provisional.
+- **Increments, not the messenger (owner correction, 2026-09-28).** What is
+  built (S-A: the page over one installation's inbox, contacts by exact
+  address, v1 reply-linked conversations, the member directory) and the planned
+  N7 browser transport (S-W, v1 envelopes) are increments. They do **not**
+  complete the messenger contract of DECISIONS §3.2 and §2. The required
+  journey is:
+  - choose a person (for example Vitalii), not a device address;
+  - hold a human DM with them;
+  - explicitly invite an agent, with the earlier context you allow;
+  - see which participants are humans and which are agents, and who wrote
+    each message;
+  - ask the agent follow-ups until someone explicitly dismisses it.
+
+  A message kind (message, question, task) is neither a participant's identity
+  nor an agent invitation. An address names one installation's key, not a
+  person. Nothing is merged by address, and no human label is made up.
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and
