@@ -656,6 +656,11 @@ option, not a gate.
 ## 16. A5: rollout
 
 **S-A: the frontend on the real backend (laptop).**
+- **Status:** implemented (`agentnet daemon --ui`, `internal/ui/live.go`):
+  Classic, Comic and Zoom over the same Provider (`static/lenses.js`). Faces are
+  initials only, since authorship by person or agent is not recorded and
+  emotions are S-B/§13. Accepting a task and letting the responder run it are
+  covered by the existing worker tests, not by a model run from the page.
 - **Build:**
   - the daemon hosts the bundle;
   - the daemon Provider sits over the existing inbox/outbox;
@@ -727,6 +732,32 @@ option, not a gate.
 **S-E: linked devices** (DECISIONS §2 S1). After S-B.
 
 **S-F (owner-gated):** history transfer, archive, recovery.
+
+**S-R: "Remind me later" on a message (Required by the owner, 2026-09-28; not
+part of S-A).** A question the person cannot answer now gets a reminder at a
+time they choose. It is an independent follow-on to S-A: it needs only S-A
+and a small appended reminder store, not S-B through S-F (listed here last
+does not mean after them). Reminders on a phone come separately with S-W and
+S-P.
+- **Build:** a local, owner-only reminder record in the client store (a new
+  appended schema step): message id (and so its derived thread), due time,
+  state. The daemon arms one timer for the earliest due reminder and re-arms
+  it after each change; no polling and no extra service.
+- **Rules:**
+  - A reminder only asks for attention. Snoozing never answers, accepts,
+    declines or runs anything, and changes nothing the sender sees.
+  - It is personal to this installation. It is separate from remote
+    scheduling and from agent task state (`inbox.state`, jobs, grants).
+  - No exact-time promise while the laptop is off or the daemon is stopped:
+    a reminder that came due then is shown as overdue at the next start or
+    wake. A phone alert needs S-W and S-P.
+- **Journeys:**
+  - set a time on a held question; restart the daemon; at the due time an
+    attention-only notification appears and opens that conversation;
+  - due while the daemon was stopped: shown as overdue at the next start;
+  - reschedule, cancel, and mark done; answering the message by any path
+    also ends its reminder;
+  - the question's own state is unchanged throughout.
 
 **Migration.** Schema changes are appended steps only. Existing rows are linked
 to derived v1 threads. Nothing is merged across installations by label.

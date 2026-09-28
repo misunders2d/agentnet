@@ -116,7 +116,7 @@ func LocalRelease(home string) (protocol.Release, bool) {
 		return protocol.Release{}, false
 	}
 	defer db.Close()
-	return (&store{db}).release()
+	return (&store{db: db}).release()
 }
 
 // SetRelease sets (or with an empty version clears) the Hub's client

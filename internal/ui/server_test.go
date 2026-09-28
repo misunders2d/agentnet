@@ -69,11 +69,11 @@ func TestGuardRefusesWhatItShould(t *testing.T) {
 		hdr                      map[string]string
 		want                     int
 	}{
-		{"no cookie", "GET", "/api/state", "", nil, http.StatusUnauthorized},
-		{"wrong cookie", "GET", "/api/state", "", map[string]string{"Cookie": cookieName + "=nope"}, http.StatusUnauthorized},
-		{"token only on page", "GET", "/api/state?t=" + testToken, "", nil, http.StatusUnauthorized},
-		{"rebinding host", "GET", "/api/state", "", authed(ts, map[string]string{"Host": "evil.example:80"}), http.StatusMisdirectedRequest},
-		{"localhost alias", "GET", "/api/state", "", authed(ts, map[string]string{"Host": "localhost" + ts.URL[strings.LastIndex(ts.URL, ":"):]}), http.StatusMisdirectedRequest},
+		{"no cookie", "GET", "/api/overview", "", nil, http.StatusUnauthorized},
+		{"wrong cookie", "GET", "/api/overview", "", map[string]string{"Cookie": cookieName + "=nope"}, http.StatusUnauthorized},
+		{"token only on page", "GET", "/api/overview?t=" + testToken, "", nil, http.StatusUnauthorized},
+		{"rebinding host", "GET", "/api/overview", "", authed(ts, map[string]string{"Host": "evil.example:80"}), http.StatusMisdirectedRequest},
+		{"localhost alias", "GET", "/api/overview", "", authed(ts, map[string]string{"Host": "localhost" + ts.URL[strings.LastIndex(ts.URL, ":"):]}), http.StatusMisdirectedRequest},
 		{"post without origin", "POST", "/api/act", `{"id":"x","do":"accept"}`, authed(ts, map[string]string{"Content-Type": "application/json"}), http.StatusForbidden},
 		{"post cross origin", "POST", "/api/act", `{"id":"x","do":"accept"}`, authed(ts, map[string]string{"Origin": "http://evil.example", "Content-Type": "application/json"}), http.StatusForbidden},
 		{"post cross site fetch", "POST", "/api/act", `{"id":"x","do":"accept"}`, authed(ts, map[string]string{"Origin": ts.URL, "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"}), http.StatusForbidden},
@@ -112,6 +112,11 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/app.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
+	for _, a := range []string{"app.js", "lenses.js", "app.css"} {
+		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
+			t.Errorf("asset %s: %d", a, r.StatusCode)
+		}
+	}
 	csp := page.Header.Get("Content-Security-Policy")
 	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
@@ -144,54 +149,65 @@ func TestPageInsertsTextOnly(t *testing.T) {
 
 func TestSendAndDecideThroughTheAPI(t *testing.T) {
 	ts, f := newTestServer(t)
-	get := func(path string, v any) {
+	get := func(path string, v any) int {
 		resp := do(t, ts, "GET", path, "", authed(ts, nil))
-		if resp.StatusCode != 200 {
-			t.Fatalf("%s: %d", path, resp.StatusCode)
+		if resp.StatusCode == 200 {
+			if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-			t.Fatal(err)
-		}
+		return resp.StatusCode
 	}
-	var st State
-	get("/api/state", &st)
-	if !st.Demo || len(st.Review) != 3 {
-		t.Fatalf("demo %v review %d", st.Demo, len(st.Review))
+	var o Overview
+	get("/api/overview", &o)
+	if !o.Demo || len(o.Review) != 3 || len(o.Threads) == 0 {
+		t.Fatalf("demo %v review %d threads %d", o.Demo, len(o.Review), len(o.Threads))
 	}
-	// A body that looks like markup is stored and returned as plain text.
+	if code := get("/api/thread?id=nope", &Thread{}); code != http.StatusNotFound {
+		t.Fatalf("unknown thread: %d", code)
+	}
+	// A body that looks like markup is stored and returned as plain text,
+	// in a new thread of its own.
 	evil := `<img src=x onerror=alert(1)>`
-	resp := do(t, ts, "POST", "/api/send", `{"peer":"bob/desk","kind":"question","body":"`+strings.ReplaceAll(evil, `"`, `\"`)+`"}`, post(ts))
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("send: %d %s", resp.StatusCode, b)
+	resp := do(t, ts, "POST", "/api/send", `{"to":"bob/desk","kind":"question","body":"`+strings.ReplaceAll(evil, `"`, `\"`)+`"}`, post(ts))
+	var sent Sent
+	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&sent) != nil {
+		t.Fatalf("send: %d", resp.StatusCode)
 	}
-	var c Conversation
-	get("/api/conversation?peer=bob%2Fdesk", &c)
-	last := c.Messages[len(c.Messages)-1]
-	if last.Body != evil || last.Author.Label != "Sent from this window" || last.Next != "Waiting on bob/desk" {
-		t.Fatalf("last %+v", last)
+	var th Thread
+	get("/api/thread?id="+sent.ID, &th)
+	if len(th.Messages) != 1 || th.Messages[0].Body != evil || th.Messages[0].Author.Label != "This computer" ||
+		th.Messages[0].Next != "Waiting on bob/desk" {
+		t.Fatalf("new thread %+v", th)
 	}
 	// Sending to a peer whose key changed is refused with a reason.
-	resp = do(t, ts, "POST", "/api/send", `{"peer":"erin/lab","kind":"message","body":"hi"}`, post(ts))
-	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "paused") {
-		t.Fatalf("paused send: %d %s", resp.StatusCode, b)
+	resp = do(t, ts, "POST", "/api/send", `{"to":"erin/lab","kind":"message","body":"hi"}`, post(ts))
+	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "key changed") {
+		t.Fatalf("send to changed key: %d %s", resp.StatusCode, b)
 	}
-	// Accepting the waiting task through the API starts the simulated responder.
+	// Accepting the waiting task through the API starts the simulated
+	// responder, once.
 	var task string
-	for _, it := range st.Review {
+	for _, it := range o.Review {
 		if it.Kind == KindTask {
 			task = it.ID
 		}
 	}
 	resp = do(t, ts, "POST", "/api/act", `{"id":"`+task+`","do":"accept"}`, post(ts))
-	if resp.StatusCode != 200 {
-		t.Fatalf("accept: %d", resp.StatusCode)
+	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != 200 || !strings.Contains(string(b), `"note"`) {
+		t.Fatalf("accept: %d %s", resp.StatusCode, b)
 	}
 	if _, m := f.find(task); m.State != "running" {
 		t.Fatalf("task state %q", m.State)
 	}
 	if resp := do(t, ts, "POST", "/api/act", `{"id":"`+task+`","do":"accept"}`, post(ts)); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("second accept: %d", resp.StatusCode)
+	}
+	// Presence is asked for once per opened thread.
+	resp = do(t, ts, "POST", "/api/refresh", `{"id":"`+task+`"}`, post(ts))
+	var p Presence
+	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&p) != nil || p.Text != "Their computer is connected" {
+		t.Fatalf("refresh: %d %+v", resp.StatusCode, p)
 	}
 }
 

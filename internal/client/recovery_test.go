@@ -309,6 +309,38 @@ func TestKeyChangeHeldThenTrustedAcrossRestart(t *testing.T) {
 	}
 }
 
+// TrustKey pins only the key the person compared: when the directory holds
+// another one by the time they confirm, nothing is pinned or promoted.
+func TestTrustKeyPinsOnlyTheComparedKey(t *testing.T) {
+	w := newWorld(t, "")
+	stale, _ := identity.Generate()
+	if err := w.bob.store.pin(stale.Public(w.alice.Address)); err != nil {
+		t.Fatal(err)
+	}
+	stop := runAgent(t, w.bob)
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "held until trusted", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "quarantined", func() bool { return state(t, w.alice, res.ID) == protocol.StateQuarantined })
+	stop()
+	compared, _ := identity.Generate() // what the person saw; the directory now has alice's real key
+	if _, err := w.bob.TrustKey(tctx(t), w.alice.Address, compared.Public(w.alice.Address).Fingerprint()); err == nil ||
+		!strings.Contains(err.Error(), "nothing was trusted") {
+		t.Fatalf("mismatched trust: %v", err)
+	}
+	if pinned, _, _, _ := w.bob.store.peer(w.alice.Address); pinned.Fingerprint() != stale.Public(w.alice.Address).Fingerprint() {
+		t.Fatal("pin changed")
+	}
+	if count(t, w.bob, "quarantine") != 1 || count(t, w.bob, "inbox") != 0 {
+		t.Fatal("held message promoted")
+	}
+	fp, err := w.bob.TrustKey(tctx(t), w.alice.Address, w.alice.Self().Fingerprint())
+	if err != nil || fp != w.alice.Self().Fingerprint() || count(t, w.bob, "inbox") != 1 {
+		t.Fatalf("matching trust: %s %v", fp, err)
+	}
+}
+
 // R6: a Hub URL with a trailing slash works for join and signed requests.
 func TestTrailingSlashHubURL(t *testing.T) {
 	w := newWorld(t, "")

@@ -82,8 +82,8 @@ Hub (on the server):
 Local A2A clients:
   a2a serve  let an A2A client on this machine talk to one peer
 
-Messenger page (preview):
-  ui --demo  try the messenger page in a browser with invented data
+Messenger page:
+  ui         the messenger page in a browser (daemon --ui; ui --demo to try it)
 
 Home directory: --home DIR, or AGENTNET_HOME, or "agentnet" in your user
 config directory. It holds your keys, inbox and history; keep it private.
@@ -433,7 +433,7 @@ Trust ADDRESS's current keys after you verified the fingerprint with its
 owner. Needed after a key change: sending is blocked and their messages are
 held until you do.`,
 
-	"daemon": `Usage: agentnet daemon [--listen ADDR] [--advertise https://HOST:PORT]
+	"daemon": `Usage: agentnet daemon [--listen ADDR] [--advertise https://HOST:PORT] [--ui 127.0.0.1:0]
 
 Stay connected to the Hub: receive messages as they arrive, run your
 responder, and retry queued sends. Each run is one session. There is no
@@ -443,6 +443,8 @@ runs per home.
   --listen ADDR       also accept direct deliveries on ADDR (e.g. :7443)
   --advertise URL     the https://host:port peers can reach (nothing is guessed;
                       no NAT traversal). Defaults to https://LISTEN.
+  --ui ADDR           also serve the messenger page on this loopback address
+                      (e.g. 127.0.0.1:0); agentnet ui prints the address to open
 
 Start it at login: agentnet help startup.`,
 
@@ -578,22 +580,35 @@ HOME/a2a-token. A2A messages become encrypted AgentNet questions, tasks
 Tasks show SUBMITTED until the peer replies. Cancel, streaming, push and task
 listing are not supported. Keep agentnet daemon running for replies.`,
 
-	"ui": `Usage: agentnet ui --demo [--listen 127.0.0.1:0]
+	"ui": `Usage: agentnet ui
+       agentnet ui --demo [--listen 127.0.0.1:0]
 
-Serve a preview of the messenger page on this computer and print the address
-to open in a browser. Only the demo exists so far: invented people and
-messages kept in memory. Nothing is sent, run or saved, and your home
-directory, Hub and inbox are not touched. Decisions (accept, decline,
-approve, trust) are simulated; buttons in the demo banner stand in for a peer
-writing and your responder finishing.
+The messenger page: your conversations with other agents in a browser on
+this computer. Start the daemon with --ui to serve it over your real inbox:
 
-The page is served on a loopback address only. The printed address carries a
-one-time token that becomes a browser cookie; other pages and other hosts are
-refused. Updates are pushed to the page (no polling). Without --demo the
-command refuses to start until the page is connected to your inbox.
+  agentnet daemon --ui 127.0.0.1:0
+  agentnet ui          # prints the address to open
 
-  --demo        serve the invented demo data (required for now)
-  --listen A    loopback address (default 127.0.0.1:0, a free port)`,
+The page does what the commands do, with the same rules: sending, replying,
+accepting, declining, approving and trusting go through the same operations
+as agentnet send, reply, accept and the rest, and nothing is approved or run
+that those would not. Conversations are threads of linked replies, shown as a
+classic chat, a comic you page through, or a space you zoom into. Files
+already received are listed; sending files and saving them stay on the
+command line (agentnet send --file, agentnet download).
+
+The page is served on a loopback address only, by the one daemon that owns
+this home. The address carries a token, good while that daemon runs, which
+becomes a browser cookie; other pages and other hosts are refused. The
+address is kept in an owner-only file in the home and never written to the
+log. Updates are pushed to the page (no polling). It is a page on this
+computer, not a relay for a phone or other devices.
+
+  --demo        serve invented people and messages kept in memory instead:
+                nothing is sent, run or saved, and no home, Hub or inbox is
+                touched; buttons in the demo banner stand in for a peer
+                writing and your responder finishing
+  --listen A    loopback address for the demo (default 127.0.0.1:0)`,
 
 	"install": `Install agentnet
 

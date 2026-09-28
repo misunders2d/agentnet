@@ -215,6 +215,11 @@ func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([
 		return nil, fmt.Errorf("message %s has no attachments", id)
 	}
 	var saved []string
+	defer func() {
+		if len(saved) > 0 {
+			notifyDaemon(a.home) // a messenger page shows where files were saved
+		}
+	}()
 	for i, name := range finalNames(files) {
 		f, final := files[i], filepath.Join(dir, name)
 		if err := a.downloadOne(ctx, id, f, final, overwrite); err != nil {

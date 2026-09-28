@@ -119,6 +119,7 @@ func (a *Agent) Resolve(id string) error {
 	if n, _ := res.RowsAffected(); n != 1 {
 		return errors.New("nothing to resolve: not marked needs_human")
 	}
+	notifyDaemon(a.home)
 	return nil
 }
 
@@ -138,6 +139,9 @@ func (a *Agent) Cancel(id string) error {
 // Approve lets questions from address be answered automatically.
 func (a *Agent) Approve(address string) error {
 	_, err := a.store.db.Exec(`INSERT OR IGNORE INTO approvals(address, added_at) VALUES(?, ?)`, address, time.Now().Unix())
+	if err == nil {
+		notifyDaemon(a.home)
+	}
 	return err
 }
 
@@ -168,5 +172,9 @@ func (a *Agent) Unapprove(address string) error {
 		stateHeld, address, envelope.KindQuestion, statePending); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	notifyDaemon(a.home)
+	return nil
 }

@@ -1,10 +1,10 @@
 // Package ui serves the local messenger: a conversation-first web page on a
 // loopback address, backed by a Provider.
 //
-// Today the only Provider is the in-memory demo fixture (agentnet ui --demo):
-// nothing is read from or written to an AgentNet home, the Hub or the
-// network. The same handler is meant to be hosted later by the daemon with a
-// Provider built on the client's existing methods.
+// The daemon hosts it over the installation's real data (`agentnet daemon
+// --ui`, live.go): threads, sends and decisions go through the client's
+// existing operations and rules. `agentnet ui --demo` serves the same page
+// over invented data (fixture.go) for trying it out and for tests.
 //
 // The page gets changes pushed over one server-sent event stream that carries
 // only a change counter; it never polls and events never carry content.
@@ -19,17 +19,28 @@ import (
 // Provider is what the page needs from its backing store. It covers only
 // the actions the page uses.
 type Provider interface {
-	// State is the overview: this computer, conversations and review items.
-	State() State
-	// Conversation is every message with one peer, oldest first.
-	Conversation(peer string) (Conversation, error)
-	// Send sends a new message, question or task, or a reply.
-	Send(d Draft) (Message, error)
-	// Act applies a local decision to a received item or a peer.
-	Act(a Action) error
+	// Overview is this computer, its threads and what waits for the person.
+	Overview() (Overview, error)
+	// Thread is every message of the thread that contains message id,
+	// oldest first.
+	Thread(id string) (Thread, error)
+	// Send sends a new message, question or task (optionally linked to an
+	// earlier message of the same thread).
+	Send(d Draft) (Sent, error)
+	// Act applies a local decision; the result is a short note for the
+	// person.
+	Act(a Action) (string, error)
 	// Changed returns the current change counter and a channel that is
 	// closed at the next change.
 	Changed() (uint64, <-chan struct{})
+}
+
+// Refresher is implemented by providers that can ask the network about a
+// thread once when it is opened: the peer's presence and the receipts of
+// messages still in the Hub's custody. It is one bounded request per open,
+// never a poll.
+type Refresher interface {
+	Refresh(threadID string) (Presence, error)
 }
 
 // Simulator is implemented only by demo providers: controls that stand in
@@ -38,32 +49,38 @@ type Simulator interface {
 	Simulate(what string) error
 }
 
-// State is the overview shown around the conversation.
-type State struct {
-	Demo          bool          `json:"demo"`
-	Me            string        `json:"me"`
-	Machine       Machine       `json:"machine"`
-	Conversations []ConvSummary `json:"conversations"`
-	Review        []ReviewItem  `json:"review"`
-	Seq           uint64        `json:"seq"`
+// Overview is what the page shows around the open thread.
+type Overview struct {
+	Demo       bool             `json:"demo"`
+	Me         Me               `json:"me"`
+	Threads    []ThreadSummary  `json:"threads"`
+	Review     []ReviewItem     `json:"review"`
+	Quarantine []QuarantineItem `json:"quarantine"`
+	Release    string           `json:"release,omitempty"` // a recommended build other than this one
+	Seq        uint64           `json:"seq"`
 }
 
-// Machine describes this computer's side.
-type Machine struct {
-	Hub          string `json:"hub"`           // plain-language connection state
-	Responder    string `json:"responder"`     // harness name, or "" for manual only
+// Me describes this installation.
+type Me struct {
+	Address      string `json:"address"`
+	Fingerprint  string `json:"fingerprint"`
+	Responder    string `json:"responder"`     // harness, or "" when questions and tasks wait for the person
 	ResponderDir string `json:"responder_dir"` // where the responder runs
 }
 
-// ConvSummary is one row of the conversation list.
-type ConvSummary struct {
-	Peer     string    `json:"peer"`
-	Presence string    `json:"presence"` // plain text; never claims a person is there
-	Last     string    `json:"last"`     // first line of the latest message
-	LastAt   time.Time `json:"last_at"`
-	Next     string    `json:"next"`   // who owes the next move, plain text; "" when nothing is open
-	Review   int       `json:"review"` // items in this conversation waiting for you
-	Paused   bool      `json:"paused"` // sending paused (key changed)
+// ThreadSummary is one row of the thread list.
+type ThreadSummary struct {
+	ID         string    `json:"id"`
+	Peer       string    `json:"peer"`
+	Title      string    `json:"title"`
+	Last       string    `json:"last"`
+	LastAt     time.Time `json:"last_at"`
+	Count      int       `json:"count"`
+	Review     int       `json:"review"`
+	Unread     int       `json:"unread"`
+	Running    int       `json:"running"`
+	Waiting    bool      `json:"waiting"`
+	KeyChanged bool      `json:"key_changed"`
 }
 
 // ReviewItem is a received item waiting for a local decision.
@@ -75,77 +92,113 @@ type ReviewItem struct {
 	Excerpt string `json:"excerpt"`
 }
 
-// Conversation is one peer's messages.
-type Conversation struct {
-	Peer     string    `json:"peer"`
-	Presence string    `json:"presence"`
-	Notice   *Notice   `json:"notice,omitempty"`
-	Messages []Message `json:"messages"`
+// QuarantineItem is a received envelope held back; its content is not shown.
+type QuarantineItem struct {
+	ID     string    `json:"id"`
+	Peer   string    `json:"peer"`
+	Reason string    `json:"reason"` // plain text
+	At     time.Time `json:"at"`
 }
 
-// Notice is a conversation-wide warning such as a changed key.
-type Notice struct {
-	Kind string `json:"kind"` // "key_changed"
+// Thread is one conversation with one peer.
+type Thread struct {
+	ID        string    `json:"id"`
+	Peer      string    `json:"peer"`
+	Key       PeerKey   `json:"key"`
+	Approved  bool      `json:"approved"`   // questions from this peer are answered automatically
+	TaskGrant string    `json:"task_grant"` // "" none, "active", or why a grant does not hold
+	Messages  []Message `json:"messages"`
+}
+
+// PeerKey is what this installation knows about the peer's key.
+type PeerKey struct {
+	Pinned  string `json:"pinned,omitempty"`
+	Pending string `json:"pending,omitempty"` // a changed key waiting for trust; sending is blocked
+}
+
+// Presence is what the Hub says about the peer's running daemons. It
+// describes computers, never whether a person is there.
+type Presence struct {
 	Text string `json:"text"`
-	Old  string `json:"old,omitempty"`
-	New  string `json:"new,omitempty"`
 }
 
-// Message is one row of a conversation.
+// Message is one row of a thread.
 type Message struct {
 	ID        string    `json:"id"`
-	Dir       string    `json:"dir"` // in, out or system
-	Peer      string    `json:"peer"`
+	Dir       string    `json:"dir"` // in or out
+	From      string    `json:"from"`
+	To        string    `json:"to"`
 	Kind      string    `json:"kind"`
-	Body      string    `json:"body,omitempty"`
+	Body      string    `json:"body"`
 	ReplyTo   string    `json:"reply_to,omitempty"`
 	At        time.Time `json:"at"`
 	State     string    `json:"state,omitempty"`  // stored state, shown under details
 	Status    string    `json:"status,omitempty"` // outcome carried by an answer or result
 	Path      string    `json:"path,omitempty"`   // relay or direct
-	Author    Author    `json:"author"`
-	StateText string    `json:"state_text,omitempty"` // plain-language state
-	Next      string    `json:"next,omitempty"`       // who owes the next move
-	Note      *Note     `json:"note,omitempty"`
+	Responder string    `json:"responder,omitempty"`
+	Summary   string    `json:"summary,omitempty"` // follow-up summary written locally
+	Detail    string    `json:"detail,omitempty"`  // local note: failure or needs-human reason
+	Unread    bool      `json:"unread,omitempty"`
 	Files     []File    `json:"files,omitempty"`
-	Actions   []string  `json:"actions,omitempty"` // decisions available here
-	Detail    string    `json:"detail,omitempty"`  // reason for failures and needs-human
+	Author    Author    `json:"author"`
+	StateText string    `json:"state_text,omitempty"`
+	Next      string    `json:"next,omitempty"`
+	Actions   []string  `json:"actions,omitempty"` // decisions available on this message
 }
 
 // Author says who wrote a message, only as far as it is recorded.
 type Author struct {
-	Label  string `json:"label"`            // short, plain
-	About  string `json:"about"`            // what is and is not known, for details
-	Future bool   `json:"future,omitempty"` // illustrates a field the protocol does not have
-}
-
-// Note is text written on this computer about a message, never by the peer.
-type Note struct {
 	Label string `json:"label"`
-	Text  string `json:"text"`
+	About string `json:"about"`
 }
 
 // File is an attachment as the sender named it.
 type File struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	Saved string `json:"saved,omitempty"` // where it was downloaded, if it was
 }
 
 // Draft is a message to send.
 type Draft struct {
-	Peer    string `json:"peer"`
+	To      string `json:"to"`
 	Kind    string `json:"kind"` // message, question or task
 	Body    string `json:"body"`
 	ReplyTo string `json:"reply_to,omitempty"`
-	Files   []File `json:"files,omitempty"`
+}
+
+// Sent is the outcome of Send.
+type Sent struct {
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Path   string `json:"path,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Action is a local decision.
 type Action struct {
-	ID     string `json:"id"`     // message id, or peer address for trust
-	Do     string `json:"do"`     // accept, decline, approve, resolve, trust
-	Reason string `json:"reason"` // decline only
+	Do     string   `json:"do"`
+	ID     string   `json:"id,omitempty"`     // message id, or peer address for peer actions
+	Body   string   `json:"body,omitempty"`   // reply text
+	Reason string   `json:"reason,omitempty"` // decline reason
+	IDs    []string `json:"ids,omitempty"`    // read: messages to mark read
+	Key    string   `json:"key,omitempty"`    // trust: the fingerprint the person compared
 }
+
+// Actions the page can request.
+const (
+	DoReply        = "reply"         // answer a received item by hand (takes it over)
+	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
+	DoAcceptAlways = "accept_always" // run this task and let later tasks from this exact key run
+	DoDecline      = "decline"
+	DoResolve      = "resolve" // close a needs-human item without sending anything
+	DoCancel       = "cancel"
+	DoApprove      = "approve"   // ID = peer: answer its questions automatically
+	DoUnapprove    = "unapprove" // ID = peer
+	DoTrust        = "trust"     // ID = peer: trust its changed key
+	DoRevokeTasks  = "revoke_tasks"
+	DoRead         = "read"
+)
 
 // Errors a Provider returns for requests the page should explain. Wrap
 // them with Refuse or NotFound so the person sees a useful sentence.
@@ -168,14 +221,13 @@ func Refuse(text string) error { return explained{ErrRefused, text} }
 // NotFound is an ErrNotFound whose message is text.
 func NotFound(text string) error { return explained{ErrNotFound, text} }
 
-// Kinds and stored states the page understands.
+// Kinds the page understands.
 const (
 	KindMessage  = "message"
 	KindQuestion = "question"
 	KindAnswer   = "answer"
 	KindTask     = "task"
 	KindResult   = "result"
-	KindSystem   = "system"
 )
 
 // StateText is the plain-language line for a stored state. It says only
@@ -193,11 +245,16 @@ func StateText(dir, kind, state, peer string) string {
 			return "Not delivered: that session ended first"
 		case "failed":
 			return "Not sent"
+		case "quarantined":
+			return peer + " could not verify it"
 		}
 		return ""
 	}
-	if dir != "in" || (kind != KindQuestion && kind != KindTask) {
+	if dir != "in" {
 		return ""
+	}
+	if kind != KindQuestion && kind != KindTask {
+		return otherText(kind, state)
 	}
 	switch state {
 	case "pending", "accepted":
@@ -224,7 +281,7 @@ func StateText(dir, kind, state, peer string) string {
 	case "cancelled":
 		return "Cancelled"
 	case "interrupted":
-		return "Interrupted"
+		return "Interrupted: the daemon stopped while this ran"
 	case "summarized":
 		return "Summarized on this computer"
 	case "needs_human":
@@ -235,10 +292,40 @@ func StateText(dir, kind, state, peer string) string {
 	return ""
 }
 
+// otherText covers received messages, answers and results: a review notice
+// (a message that only asks for attention) and replies your responder
+// follows up on. None of them can be accepted or run from here.
+func otherText(kind, state string) string {
+	switch state {
+	case "needs_human":
+		if kind == KindMessage {
+			return "Needs you: a notice to look at; nothing here runs or can be accepted"
+		}
+		return "Needs you: your responder's follow-up asked for a person"
+	case "pending", "accepted":
+		return "Waiting for your responder's follow-up"
+	case "running":
+		return "Your responder is following up on this"
+	case "cancel_requested":
+		return "Stopping your responder"
+	case "summarized":
+		return "Summarized on this computer"
+	case "failed":
+		return "Your responder's follow-up failed"
+	case "cancelled":
+		return "Cancelled"
+	case "interrupted":
+		return "Interrupted: the daemon stopped while this ran"
+	case "resolved":
+		return "Closed by you"
+	}
+	return ""
+}
+
 // Next says who owes the next move for one message, or "" when nothing is
 // open. It is derived from stored states only.
 func Next(dir, kind, state, peer string, answered bool) string {
-	if dir == "in" && (kind == KindQuestion || kind == KindTask) {
+	if dir == "in" {
 		switch state {
 		case "held", "awaiting", "needs_human":
 			return "you"
@@ -254,6 +341,45 @@ func Next(dir, kind, state, peer string, answered bool) string {
 		}
 	}
 	return ""
+}
+
+// ActionsFor lists the decisions available on a received item in state,
+// following the client's rules (respond.go, taskgrant.go). A message,
+// answer or result that needs the person can only be closed here: nothing
+// received that way is accepted or run.
+func ActionsFor(kind, state string) []string {
+	if kind != KindQuestion && kind != KindTask {
+		if state == "needs_human" {
+			return []string{DoResolve}
+		}
+		return nil
+	}
+	switch state {
+	case "held":
+		return []string{DoReply, DoAccept, DoApprove, DoDecline}
+	case "awaiting":
+		return []string{DoAccept, DoAcceptAlways, DoReply, DoDecline}
+	case "needs_human":
+		return []string{DoReply, DoAccept, DoResolve}
+	case "running":
+		return []string{DoCancel}
+	case "interrupted", "failed", "cancelled":
+		return []string{DoAccept, DoReply}
+	}
+	return nil
+}
+
+// ReviewWhy is the short reason an item waits for the person: the
+// responder's own explanation when there is one, else its state.
+func ReviewWhy(kind, state, peer, detail string) string {
+	if detail != "" {
+		return detail
+	}
+	why := strings.TrimPrefix(StateText("in", kind, state, peer), "Needs you: ")
+	if strings.HasPrefix(why, peer) {
+		return why // an address keeps its case
+	}
+	return capitalize(why)
 }
 
 // excerpt is the first line of s, shortened.

@@ -49,6 +49,13 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer stopWorker()
+	if opts.Owned != nil {
+		stopOwned, err := opts.Owned()
+		if err != nil {
+			return err
+		}
+		defer stopOwned()
+	}
 
 	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
 	if opts.Listen != "" {
@@ -332,7 +339,9 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		default:
 		}
 	}
-	stopKicks, err := listenKicks(a.home, a.wakeWorker)
+	// A wake from another agentnet process means it changed local state:
+	// the worker looks again, and so does a messenger page.
+	stopKicks, err := listenKicks(a.home, func() { a.wakeWorker(); a.changes.bump() })
 	if err != nil {
 		// Still works: new messages and Hub pings wake the worker.
 		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)

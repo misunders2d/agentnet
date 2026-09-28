@@ -73,7 +73,7 @@ func run(args []string) error {
 	case "hooks":
 		return runHooks(*home, rest)
 	case "ui":
-		return runUI(ctx, rest, os.Stdout)
+		return runUI(ctx, *home, rest, os.Stdout)
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
@@ -217,10 +217,20 @@ func run(args []string) error {
 		var opts client.RunOptions
 		fs.StringVar(&opts.Listen, "listen", "", "accept direct deliveries on this address (e.g. :7443); off by default")
 		fs.StringVar(&opts.Advertise, "advertise", "", "https://host:port peers can reach (default https://LISTEN)")
+		uiAddr := fs.String("ui", "", "serve the messenger page on this loopback address (e.g. 127.0.0.1:0); off by default")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		a.Logf = log.Printf
+		if *uiAddr != "" {
+			opts.Owned = func() (func(), error) {
+				stop, err := startDaemonUI(a, *home, *uiAddr, log.Printf)
+				if err != nil {
+					return nil, fmt.Errorf("--ui: %w", err)
+				}
+				return stop, nil
+			}
+		}
 		return a.Run(ctx, opts)
 	case "sessions":
 		if len(rest) != 1 {

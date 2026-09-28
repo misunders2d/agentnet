@@ -42,8 +42,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("GET /api/state", s.state)
-	mux.HandleFunc("GET /api/conversation", s.conversation)
+	mux.HandleFunc("GET /api/overview", s.overview)
+	mux.HandleFunc("GET /api/thread", s.thread)
+	mux.HandleFunc("POST /api/refresh", s.refresh)
 	mux.HandleFunc("POST /api/send", s.send)
 	mux.HandleFunc("POST /api/act", s.act)
 	mux.HandleFunc("POST /api/simulate", s.simulate)
@@ -53,7 +54,7 @@ func (s *Server) Handler() http.Handler {
 
 // guard applies the checks every request must pass: the Host must be the
 // loopback address we listen on (DNS rebinding), a session cookie or the
-// one-time token on the page must match, and state-changing requests must
+// token on the page must match, and state-changing requests must
 // come from this origin as JSON (cross-site requests and forms).
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +123,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 // asset serves one embedded file; there are no directory listings.
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	types := map[string]string{"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
+	types := map[string]string{"app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {
 		http.NotFound(w, r)
@@ -137,17 +138,43 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.p.State())
-}
-
-func (s *Server) conversation(w http.ResponseWriter, r *http.Request) {
-	c, err := s.p.Conversation(r.URL.Query().Get("peer"))
+func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+	o, err := s.p.Overview()
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, c)
+	writeJSON(w, o)
+}
+
+func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
+	t, err := s.p.Thread(r.URL.Query().Get("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, t)
+}
+
+// refresh asks the network about one thread once, when the page opens it.
+func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		ID string `json:"id"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	rf, ok := s.p.(Refresher)
+	if !ok {
+		writeJSON(w, Presence{Text: "Connection unknown"})
+		return
+	}
+	pr, err := rf.Refresh(v.ID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, pr)
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
@@ -168,11 +195,14 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &a) {
 		return
 	}
-	if err := s.p.Act(a); err != nil {
+	note, err := s.p.Act(a)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, struct{}{})
+	writeJSON(w, struct {
+		Note string `json:"note"`
+	}{note})
 }
 
 func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {

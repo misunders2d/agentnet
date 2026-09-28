@@ -154,7 +154,7 @@ agentnet/
 │   ├── invite.go               # Join, admin invite, bootstrap invite parsing
 │   ├── hook.go                 # Hook runner and installer for Claude Code & Codex
 │   ├── hubcmd.go               # Hub serve, storage, cleanup, backup, restore
-│   └── uicmd.go                # agentnet ui --demo command (fixture-backed web)
+│   └── uicmd.go                # agentnet ui: the daemon-hosted messenger page (daemon --ui) and --demo
 ├── internal/
 │   ├── protocol/               # Wire types, addresses, invite format, request signing
 │   ├── envelope/               # Encrypted envelope format, age encryption, manifests
@@ -294,7 +294,7 @@ If a local database or key file is damaged:
   An agent's first report does **not** dismiss it: it remains available for
   follow-ups, with no model calls merely to wait, until explicitly dismissed.
   This records design direction and acceptance examples, not implementation approval.
-- **Messenger architecture (reviewed proposal, not implemented)**: read
+- **Messenger architecture (reviewed proposal; only slice S-A implemented)**: read
   [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) before any messenger code.
   It covers the real Provider/backend contract, relay-served phone/browser devices
   and the requirement that the relay stays one portable unit (binary/container,
@@ -302,7 +302,14 @@ If a local database or key file is damaged:
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
-- **Live Daemon Web UI Integration (`MEL-429`)**: The UI exists as a fixture-backed demo only (`agentnet ui --demo`).
+- **Live Daemon Web UI Integration (`MEL-429`, slice S-A)**: `agentnet daemon --ui 127.0.0.1:0` serves the
+  messenger page over this home's real inbox from the daemon that owns the home; `agentnet ui` prints its
+  address (token kept in the owner-only `HOME/ui-url`, never logged). Classic, Comic and Zoom presentations
+  share one Provider and the same decision dialogs. Threads are derived v1 reply links;
+  every action is an existing `Agent` operation with its CLI gates; changes are pushed (store writes and
+  the local kick socket), never polled. It is a page on this computer only: no relay hosting, phone or
+  browser devices, groups, conversation v2, file sending from the page, or push (S-W, S-B, S-C, S-P and later).
+  Tests: `internal/ui`, `internal/client/uiview_test.go`, `itest/ui_test.go` (two synthetic homes, real binary).
 - **Group Messaging & Federation**: Deferred from initial slice.
 - **Automated Task Execution**: Tasks run only after `agentnet accept ID` or under a local, per-key task grant (`approve --tasks`, `accept --always`; see docs/revival/M4.md). No other path may run a task: nothing received, no name match and no policy engine grants it.
 

@@ -45,9 +45,10 @@ type Agent struct {
 	store      *store
 	hub        *hubConn
 	heartbeat  time.Duration
-	adQuery    string // this run's signed session ad, for the push stream
-	kick       func() // wakes the current stream's retry worker
-	wakeWorker func() // wakes the question/task worker; a no-op outside Run
+	adQuery    string      // this run's signed session ad, for the push stream
+	kick       func()      // wakes the current stream's retry worker
+	wakeWorker func()      // wakes the question/task worker; a no-op outside Run
+	changes    *changeFeed // local state changed (changes.go)
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
@@ -155,7 +156,9 @@ func Open(home string) (*Agent, error) {
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run `agentnet join` again with the same invitation "+
 			"(with another NAME if the Hub said the address was taken)", home)
 	}
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify}
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
+		changes: newChangeFeed()}
+	st.onChange = a.changes.bump
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
@@ -343,6 +346,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 		return SendResult{}, err
 	}
+	defer notifyDaemon(a.home) // a messenger page open in the daemon shows the message and its state
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
 	}
@@ -478,7 +482,11 @@ func (a *Agent) Inbox(unreadOnly, markRead bool) ([]Message, error) {
 	for i, m := range msgs {
 		ids[i] = m.ID
 	}
-	return msgs, a.store.markRead(ids)
+	if err := a.store.markRead(ids); err != nil {
+		return msgs, err
+	}
+	notifyDaemon(a.home)
+	return msgs, nil
 }
 
 // Review lists received items waiting for the local human's decision: held
@@ -509,9 +517,20 @@ func (a *Agent) Fingerprints(ctx context.Context, address string) (pinned, curre
 // held because of a key change that now verify. Each message moves to the
 // inbox atomically, so an interrupted Trust can simply be run again.
 func (a *Agent) Trust(ctx context.Context, address string) (string, error) {
+	return a.TrustKey(ctx, address, "")
+}
+
+// TrustKey is Trust for the one key the person compared: the key fetched
+// from the directory is pinned only if its fingerprint is expect. Another
+// key (it changed after the person looked) changes nothing. An empty expect
+// trusts whatever the directory has now, as Trust does.
+func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, error) {
 	e, err := a.directory(ctx, address)
 	if err != nil {
 		return "", err
+	}
+	if got := e.Public.Fingerprint(); expect != "" && got != expect {
+		return "", fmt.Errorf("%s's key is now %s, not the %s you compared; nothing was trusted: compare the new fingerprint", address, got, expect)
 	}
 	if err := a.store.pin(e.Public); err != nil {
 		return "", err

@@ -88,32 +88,7 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 			}
 		}
 	}
-	depth := map[string]int{}
-	var depthOf func(id string, guard int) int
-	depthOf = func(id string, guard int) int {
-		if d, ok := depth[id]; ok {
-			return d
-		}
-		d := 0
-		if p := byID[id].replyTo; seen[p] && guard > 0 {
-			d = depthOf(p, guard-1) + 1
-		}
-		depth[id] = d
-		return d
-	}
-	for _, id := range order {
-		depthOf(id, len(order))
-	}
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := byID[order[i]], byID[order[j]]
-		if a.at != b.at {
-			return a.at < b.at
-		}
-		if depth[a.id] != depth[b.id] {
-			return depth[a.id] < depth[b.id]
-		}
-		return a.id < b.id
-	})
+	sortThread(order, byID)
 	c := Conversation{Peer: peer, Total: len(order), Offset: min(max(offset, 0), len(order))}
 	page := order[c.Offset:]
 	if limit > 0 && len(page) > limit {
@@ -140,6 +115,42 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		c.Messages = append(c.Messages, m)
 	}
 	return c, nil
+}
+
+// sortThread orders one thread's messages oldest first. Times have whole
+// seconds, so a reply stored in the same second as its parent is placed
+// after it by its depth in the thread.
+func sortThread(order []string, byID map[string]link) {
+	in := make(map[string]bool, len(order))
+	for _, id := range order {
+		in[id] = true
+	}
+	depth := map[string]int{}
+	var depthOf func(id string, guard int) int
+	depthOf = func(id string, guard int) int {
+		if d, ok := depth[id]; ok {
+			return d
+		}
+		d := 0
+		if p := byID[id].replyTo; in[p] && guard > 0 {
+			d = depthOf(p, guard-1) + 1
+		}
+		depth[id] = d
+		return d
+	}
+	for _, id := range order {
+		depthOf(id, len(order))
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := byID[order[i]], byID[order[j]]
+		if a.at != b.at {
+			return a.at < b.at
+		}
+		if depth[a.id] != depth[b.id] {
+			return depth[a.id] < depth[b.id]
+		}
+		return a.id < b.id
+	})
 }
 
 // CheckReplyTo refuses to link a new message to id unless id is a message

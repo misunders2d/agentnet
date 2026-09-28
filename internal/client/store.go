@@ -143,14 +143,17 @@ const (
 	stateFailed = "failed" // rejected by the Hub; not retried
 )
 
-type store struct{ db *sql.DB }
+type store struct {
+	db       *sql.DB
+	onChange func() // set by the Agent: local state changed (changes.go)
+}
 
 func openStore(path string) (*store, error) {
 	db, err := sqlitedb.Open(path, schema)
 	if err != nil {
 		return nil, err
 	}
-	return &store{db}, nil
+	return &store{db: db}, nil
 }
 
 func (s *store) setConfig(kv map[string]string) error {
@@ -224,7 +227,7 @@ func (s *store) pin(p identity.Public) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 // setPending records a different key the directory offers for p's
@@ -242,7 +245,7 @@ func (s *store) setPending(p identity.Public) error {
 	if err := demoteGranted(tx, p.Address, "", "the sender's key may have changed"); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 // pinnedKey returns the key pinned for address, read within q.
@@ -291,7 +294,7 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 			return err
 		}
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 func (s *store) uploadStored(blobID string) (bool, error) {
@@ -317,7 +320,7 @@ func (s *store) releaseUploads(messageID string) error {
 func (s *store) setOutboxState(id, state, errText, path string) error {
 	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path) WHERE id = ?`,
 		state, errText, path, id)
-	return err
+	return s.done(err)
 }
 
 // outboxState returns a sent message's last known state and path.
@@ -513,14 +516,14 @@ func (s *store) addInbox(in envelope.Inner, verifiedBy string) error {
 	if err := insertInner(tx, in, verifiedBy); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 // quarantine holds an envelope that failed verification, keyed by its id.
 func (s *store) quarantine(id, sender, reason string, raw []byte) error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO quarantine(id, sender, reason, envelope, received_at) VALUES(?, ?, ?, ?, ?)`,
 		id, sender, reason, string(raw), time.Now().Unix())
-	return err
+	return s.done(err)
 }
 
 // held returns envelopes quarantined for sender with reason, oldest first.
@@ -560,7 +563,7 @@ func (s *store) promote(in envelope.Inner, verifiedBy string) error {
 	if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 type receipt struct{ id, state string }
@@ -700,7 +703,7 @@ func (s *store) attachments(messageID string) ([]FileInfo, error) {
 
 func (s *store) setSaved(messageID, blobID, path string) error {
 	_, err := s.db.Exec(`UPDATE attachments SET saved_path = ? WHERE message_id = ? AND blob_id = ?`, path, messageID, blobID)
-	return err
+	return s.done(err)
 }
 
 func (s *store) markRead(ids []string) error {
@@ -709,7 +712,7 @@ func (s *store) markRead(ids []string) error {
 			return err
 		}
 	}
-	return nil
+	return s.done(nil)
 }
 
 func (s *store) inboxKind(id string) (sender, kind string, err error) {
@@ -769,6 +772,7 @@ func (s *store) claimJob(responder string) (job, bool, error) {
 	if err != nil {
 		return j, false, err
 	}
+	s.changed()
 	err = s.db.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, j.ID).Scan(&j.Attachments)
 	return j, true, err
 }
@@ -784,7 +788,7 @@ func (s *store) jobState(id string) (string, error) {
 func (s *store) finishJob(id, state, detail string) error {
 	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
 		state, detail, id, stateRunning, stateCancelReq)
-	return err
+	return s.done(err)
 }
 
 // unnotified returns the ids of items waiting for the human that no desktop
@@ -823,7 +827,7 @@ func (s *store) markNotified(ids []string) error {
 func (s *store) interruptRunning() error {
 	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running'
 		WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
-	return err
+	return s.done(err)
 }
 
 // threadText returns up to max earlier messages of the conversation with

@@ -31,6 +31,10 @@ type RunOptions struct {
 	// Advertise is the https://host:port peers should dial. It must be
 	// reachable by them; nothing is guessed. Defaults to https://Listen.
 	Advertise string
+	// Owned, if set, starts local services that need this daemon to own the
+	// home (the messenger page). It runs once the home lock is held and the
+	// worker is listening; its stop runs when the daemon ends.
+	Owned func() (stop func(), err error)
 }
 
 // Direct delivery limits. Variables so tests can shorten them.
