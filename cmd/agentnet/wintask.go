@@ -29,6 +29,7 @@ const updateHelperCmd = "update-helper"
 type taskDef struct {
 	UserID  string `xml:"Principals>Principal>UserId"`
 	Policy  string `xml:"Settings>MultipleInstancesPolicy"`
+	Enabled string `xml:"Settings>Enabled"` // absent means enabled
 	Actions struct {
 		Any []struct {
 			XMLName   xml.Name
@@ -71,6 +72,9 @@ type taskEnv struct {
 // action, of this program's file, with exactly these arguments, for this
 // user, and a policy that does not stop a running instance.
 func checkTaskDef(def taskDef, env taskEnv) error {
+	if strings.EqualFold(strings.TrimSpace(def.Enabled), "false") {
+		return fmt.Errorf("the scheduled task %s is disabled, so it could not start the daemon again", winTaskName)
+	}
 	if len(def.Actions.Any) != 1 || def.Actions.Any[0].XMLName.Local != "Exec" {
 		return fmt.Errorf("the task %s does not have exactly one program to start", winTaskName)
 	}

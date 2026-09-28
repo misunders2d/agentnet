@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -44,6 +45,8 @@ func TestMain(m *testing.M) {
 			}
 		case "sleep":
 			time.Sleep(30 * time.Second)
+		case "spew":
+			os.Stdout.Write(bytes.Repeat([]byte("x"), 3<<20))
 		}
 		os.Exit(0)
 	}
