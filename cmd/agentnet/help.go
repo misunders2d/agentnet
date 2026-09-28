@@ -717,16 +717,20 @@ the release's HTTPS and checksum; there is no separate signature.
   writable; a copy inside a container is refused (update the image). One
   update of a file runs at a time, and it stops without changes if the file
   no longer reports this program's version (another update got there first).
-- This home's daemon switches (Linux, macOS): if it runs the updated file,
-  it is asked to start no new job, let a running one finish and store its
-  result, and restart in place as the new version (same process, so a
-  service manager keeps it). An open messenger page reconnects at the same
-  address and login and reloads, keeping unsent text. The command says what
-  it saw: switched, or pending while a job runs (then --status).
+- This home's daemon switches: if it runs the updated file, it is asked to
+  start no new job, let a running one finish and store its result, and then
+  run the new version. On Linux and macOS it restarts in place (same
+  process, so a service manager keeps it). On Windows only a daemon started
+  by the scheduled task agentnet, exactly as agentnet help startup creates
+  it, switches: before stopping it starts a helper, which has Task Scheduler
+  start the task again once it is gone. A daemon started any other way (from
+  a console) is not stopped; restart it yourself. An open messenger page
+  reconnects at the same address and login and reloads, keeping unsent text.
+  The command says what it saw: switched, or pending while a job runs (then
+  --status).
 - Nothing else is stopped: another home's daemon or a Hub keeps the program
   it started with until you restart it; on Linux the command lists processes
-  still running the previous file. On Windows the daemon does not switch
-  yet: restart it when no job runs (schtasks /end, then /run /tn agentnet).
+  still running the previous file.
 - Copies made before this existed: v0.2.1 and earlier have no update
   command (install the new release once by hand); older development builds
   can install a named release but not switch their daemon (restart it once,

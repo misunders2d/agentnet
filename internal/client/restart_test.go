@@ -255,3 +255,39 @@ func TestUpdateActivationOnlyWhenStarted(t *testing.T) {
 	stop()
 	<-res
 }
+
+// What must take over after the switch is prepared before the daemon stops;
+// if that fails, the daemon keeps serving and jobs start again.
+func TestUpdatePrepareFailureKeepsServing(t *testing.T) {
+	st := installStub(t, "answer")
+	setVersion(t, "v9.9.8")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	exe := fakeProgram(t, "v9.9.9")
+	prepared := make(chan UpdateRequest, 2)
+	res, _ := runUntilStop(t, w.bob, RunOptions{Executable: exe, PrepareSwitch: func(r UpdateRequest) error {
+		prepared <- r
+		return errors.New("helper did not get ready")
+	}})
+	runWith(t, w, w.alice, RunOptions{})
+	RequestUpdateSwitch(w.bobHome, UpdateRequest{ID: "p1", Exe: exe, To: "v9.9.9"})
+	eventually(t, "p1 settled", func() bool {
+		act, ok, _ := ReadUpdateActivation(w.bobHome)
+		return ok && act.ID == "p1"
+	})
+	if act := activation(t, w.bob); act.Result != ActivationNotApplied || !strings.Contains(act.Detail, "helper did not get ready") {
+		t.Fatalf("%+v", act)
+	}
+	if r := <-prepared; r.ID != "p1" {
+		t.Fatalf("prepared %+v", r)
+	}
+	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "still serving?", Kind: envelope.KindTask})
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	w.bob.Accept(task.ID)
+	waitState(t, w.bob, task.ID, stateAnswered)
+	select {
+	case err := <-res:
+		t.Fatalf("the daemon stopped: %v", err)
+	default:
+	}
+}

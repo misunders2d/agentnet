@@ -236,14 +236,22 @@ func (a *Agent) switchForUpdate(ctx context.Context, r UpdateRequest) {
 	defer cancel()
 	out, err := exec.CommandContext(vctx, a.exe, "version").Output()
 	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	if err != nil || !strings.HasPrefix(line, "agentnet "+r.To+" (protocol ") {
+	notApplied := func(detail string) {
 		a.update.Lock()
 		a.update.pending = nil
 		a.update.Unlock()
-		a.finishUpdateRequest(UpdateActivation{ID: r.ID, To: r.To, Result: ActivationNotApplied,
-			Detail: fmt.Sprintf("%s reports %q, so the daemon keeps running agentnet %s", a.exe, line, protocol.Version)})
+		a.finishUpdateRequest(UpdateActivation{ID: r.ID, To: r.To, Result: ActivationNotApplied, Detail: detail})
 		a.wakeWorker() // jobs may start again
+	}
+	if err != nil || !strings.HasPrefix(line, "agentnet "+r.To+" (protocol ") {
+		notApplied(fmt.Sprintf("%s reports %q, so the daemon keeps running agentnet %s", a.exe, line, protocol.Version))
 		return
+	}
+	if a.prepare != nil {
+		if err := a.prepare(r); err != nil {
+			notApplied("could not prepare the switch, so the daemon keeps running agentnet " + protocol.Version + ": " + err.Error())
+			return
+		}
 	}
 	a.update.Lock()
 	a.update.switching = &r
@@ -257,6 +265,15 @@ func (a *Agent) switchForUpdate(ctx context.Context, r UpdateRequest) {
 // SchemaSteps is the number of schema steps this program's home database
 // has; a program with fewer cannot open a home this one has opened.
 func SchemaSteps() int { return len(schema) }
+
+// PendingUpdate returns the id and version of a request not yet completed.
+func PendingUpdate(home string) (id, to string) {
+	r, found, err := readUpdateRequest(home)
+	if !found || err != nil {
+		return "", ""
+	}
+	return r.ID, r.To
+}
 
 // PendingUpdateSwitch returns the version a request not yet completed asks
 // for, or "".

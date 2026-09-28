@@ -455,9 +455,6 @@ func TestUpdateChecksTheHomeSchema(t *testing.T) {
 // With this home's daemon running, update asks it to switch and says only
 // what it has seen: done, or pending while a job runs.
 func TestUpdateAsksTheDaemonToSwitch(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the daemon does not switch on Windows yet")
-	}
 	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
 	old := switchWait
 	switchWait = 2 * time.Second

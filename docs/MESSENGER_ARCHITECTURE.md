@@ -1071,8 +1071,16 @@ inferred from a build string.
     (conversation drafts, composer, open dialogs) or, without storage, asks;
   - `agentnet update` reports only what it observed (switched, pending, not
     applied, failed); `--status` later.
-  - Windows: the daemon does not switch yet (core is probing a scheduled-task
-    restart); update says to restart it.
+  - Windows: a daemon that is exactly the running instance of the scheduled
+    task `\agentnet` (same file, same arguments including `--home` and
+    `--ui`, same user, not StopExisting, and not in a kill-on-close job)
+    starts a helper (the updated program) before it stops and waits until
+    the helper holds it; the helper waits for it to be gone and its lock
+    free, checks the task again, runs `schtasks /run` a bounded few times,
+    and records a failure if no start completes the request. A daemon
+    started any other way is not stopped (explicit limit). The native
+    product test (`itest/update_switch_windows_test.go`, opt-in
+    `AGENTNET_WINTASK=1`) has not run yet; before it does, this is unproven.
   - Evidence: `itest/update_switch_test.go` (Linux, real binaries, local
     release server), client switch tests, updater tests, page checks.
 

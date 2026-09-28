@@ -69,6 +69,8 @@ func run(args []string) error {
 		return nil
 	case "update":
 		return runUpdate(ctx, *home, rest)
+	case updateHelperCmd: // hidden: see restart_windows.go
+		return runUpdateHelper(*home, rest)
 	case "skill":
 		return runSkill(os.Stdout, rest)
 	case "join":
@@ -234,7 +236,7 @@ func run(args []string) error {
 				opts.Executable = exe
 			}
 		}
-		opts.CanSwitch = canSwitchInPlace
+		opts.CanSwitch, opts.PrepareSwitch = switchHooks(*home, opts.Executable)
 		if *uiAddr != "" {
 			opts.Owned = func() (func(), error) {
 				stop, err := startDaemonUI(a, *home, *uiAddr, log.Printf)

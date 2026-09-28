@@ -299,9 +299,6 @@ func switchDaemon(home, exe, from, target string) bool {
 		fmt.Printf("this home's daemon is not running; started, it runs agentnet %s\n", target)
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		return false // not yet: reportRunning says to restart it
-	}
 	r := client.UpdateRequest{ID: protocol.NewID(), Exe: exe, From: from, To: target, At: time.Now()}
 	if err := client.RequestUpdateSwitch(home, r); err != nil {
 		fmt.Printf("could not ask this home's daemon to switch (%v); restart it to run agentnet %s\n", err, target)

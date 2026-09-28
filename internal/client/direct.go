@@ -43,6 +43,11 @@ type RunOptions struct {
 	// and why not. A daemon that cannot is never stopped for an update: the
 	// request is recorded as not applied, with the reason.
 	CanSwitch func() (ok bool, why string)
+	// PrepareSwitch, if set, runs once the daemon is ready to switch and
+	// before it stops: whatever must take over afterwards (on Windows, a
+	// helper that has the scheduled task start the new program) is started
+	// and confirmed here. An error means the daemon does not stop.
+	PrepareSwitch func(r UpdateRequest) error
 }
 
 // Direct delivery limits. Variables so tests can shorten them.

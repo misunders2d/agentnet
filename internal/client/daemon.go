@@ -44,7 +44,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
-	a.exe, a.canSwitch = opts.Executable, opts.CanSwitch
+	a.exe, a.canSwitch, a.prepare = opts.Executable, opts.CanSwitch, opts.PrepareSwitch
 	a.update.Lock()
 	a.update.pending, a.update.switching, a.update.ready = nil, nil, false
 	a.update.Unlock()

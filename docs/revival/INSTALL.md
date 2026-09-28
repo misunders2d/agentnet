@@ -223,16 +223,19 @@ asset from the project's GitHub releases, checks it against that release's
 home's database, and keeps the previous file as `<file>.old`. Anything
 failing leaves the installed file untouched.
 
-Then, on Linux and macOS, it asks this home's daemon, if that daemon runs the
-updated file, to switch: the daemon starts no new job, lets a running one
-finish and store its result, and restarts in place as the new version (the
-same process, so a systemd or launchd service keeps it). An open messenger
+Then it asks this home's daemon, if that daemon runs the updated file, to
+switch: the daemon starts no new job, lets a running one finish and store
+its result, and runs the new version. On Linux and macOS it restarts in
+place (the same process, so a systemd or launchd service keeps it). On
+Windows only a daemon started by the scheduled task `agentnet`, exactly as in
+"Starting the daemon at login", switches: before stopping it starts a helper
+that has Task Scheduler start the task again once it is gone; a daemon
+started from a console is not stopped (restart it yourself). An open messenger
 page reconnects at the same address with the same login and reloads itself,
 keeping unsent text. `agentnet update` reports what it saw: the daemon runs
 the new version, or the switch is pending while a job runs (`agentnet update
 --status` tells later). Other homes' daemons and a Hub keep the program they
-started with until restarted. On Windows the daemon does not switch yet:
-restart it (`schtasks /end`, then `/run /tn agentnet`) when no job runs.
+started with until restarted.
 
 Which release is installed: a release build takes only a newer release. A
 development build stamped from a release (`vX.Y.Z-N-gHASH` or `vX.Y.Z+…`)

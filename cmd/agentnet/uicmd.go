@@ -160,7 +160,14 @@ func takeUIHandoff(home, listen string) (addr, token string) {
 		return "", ""
 	}
 	var h uiHandoff
-	if json.Unmarshal(data, &h) != nil || h.ID == "" || os.Getenv(client.UpdateRestartEnv) != h.ID || len(h.Token) < 32 {
+	if json.Unmarshal(data, &h) != nil || h.ID == "" || len(h.Token) < 32 {
+		return "", ""
+	}
+	// This start completes that update: it was put in the daemon's place
+	// for it (Unix), or the request is still open and this program is the
+	// version it asked for (on Windows the scheduled task starts it).
+	pendingID, pendingTo := client.PendingUpdate(home)
+	if os.Getenv(client.UpdateRestartEnv) != h.ID && (pendingID != h.ID || pendingTo != protocol.Version) {
 		return "", ""
 	}
 	lh, lp, err1 := net.SplitHostPort(listen)

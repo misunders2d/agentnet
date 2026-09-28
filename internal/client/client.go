@@ -59,6 +59,7 @@ type Agent struct {
 
 	exe       string                       // the daemon's program file as started (RunOptions.Executable)
 	canSwitch func() (ok bool, why string) // RunOptions.CanSwitch
+	prepare   func(UpdateRequest) error    // RunOptions.PrepareSwitch
 	stopRun   context.CancelFunc           // stops the current Run (switching for an update)
 	update    struct {
 		sync.Mutex
