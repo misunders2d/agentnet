@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 	"github.com/misunders2d/agentnet/internal/ui"
@@ -41,12 +42,19 @@ func runUI(ctx context.Context, home string, args []string, out io.Writer) error
 		if *listen != "127.0.0.1:0" {
 			return errors.New("--listen is for --demo; the daemon's page address is chosen with agentnet daemon --ui")
 		}
+		noPage := errors.New("no messenger page is running for this home: start the daemon with `agentnet daemon --ui 127.0.0.1:0` (see agentnet help ui)")
 		data, err := secfile.Read(filepath.Join(home, uiURLFile))
 		if errors.Is(err, os.ErrNotExist) {
-			return errors.New("no messenger page is running for this home: start the daemon with `agentnet daemon --ui 127.0.0.1:0` (see agentnet help ui)")
+			return noPage
 		}
 		if err != nil {
 			return err
+		}
+		// A daemon that was killed (a crash, a power cut, a stop on Windows)
+		// leaves its address behind; only a running daemon serves it.
+		if release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); err == nil {
+			release()
+			return noPage
 		}
 		fmt.Fprintf(out, "Open: %s\n", strings.TrimSpace(string(data)))
 		return nil

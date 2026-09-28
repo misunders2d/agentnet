@@ -74,6 +74,18 @@ func (c *cli) try(args ...string) (string, error) {
 // start runs a long-lived process; the returned func interrupts and reaps it.
 func (c *cli) start(logName string, args ...string) func() {
 	c.t.Helper()
+	stop, _ := c.startProc(logName, args...)
+	return stop
+}
+
+// gracefulStop reports whether start's stop lets the process clean up.
+// On Windows it can only kill: there is no console interrupt for a child.
+var gracefulStop = runtime.GOOS != "windows"
+
+// startProc is start that also returns kill, which ends the process at once
+// with no cleanup, as a crash or power cut would.
+func (c *cli) startProc(logName string, args ...string) (stop, kill func()) {
+	c.t.Helper()
 	log, err := os.Create(filepath.Join(c.dir, logName))
 	if err != nil {
 		c.t.Fatal(err)
@@ -85,13 +97,13 @@ func (c *cli) start(logName string, args ...string) func() {
 		c.t.Fatal(err)
 	}
 	stopped := false
-	stop := func() {
+	end := func(force bool) {
 		if stopped {
 			return
 		}
 		stopped = true
-		if runtime.GOOS == "windows" {
-			cmd.Process.Kill() // no console interrupt for child processes; SQLite recovers
+		if force || !gracefulStop {
+			cmd.Process.Kill() // SQLite recovers
 		} else {
 			cmd.Process.Signal(os.Interrupt)
 		}
@@ -105,8 +117,9 @@ func (c *cli) start(logName string, args ...string) func() {
 		}
 		log.Close()
 	}
+	stop = func() { end(false) }
 	c.t.Cleanup(stop)
-	return stop
+	return stop, func() { end(true) }
 }
 
 func freeAddr(t *testing.T) string {

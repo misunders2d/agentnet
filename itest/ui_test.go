@@ -27,25 +27,26 @@ type page struct {
 }
 
 // openPage reads the address `agentnet ui` prints and trades its token for
-// the page cookie, as a browser would.
+// the page cookie, as a browser would. A daemon just started may still be on
+// its way to serving the page, so this waits until the address answers.
 func (c *cli) openPage(t *testing.T, home string) *page {
 	t.Helper()
-	waitFile(t, filepath.Join(c.dir, home, "ui-url"))
-	out := c.run("--home", home, "ui")
-	url, ok := strings.CutPrefix(out, "Open: ")
-	if !ok {
-		t.Fatalf("agentnet ui: %q", out)
-	}
 	jar, _ := cookiejar.New(nil)
-	p := &page{t: t, base: url[:strings.Index(url, "/?t=")], cl: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
-	resp, err := p.cl.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("open page: %d", resp.StatusCode)
-	}
+	p := &page{t: t, cl: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
+	waitFor(t, home+"'s page", func() bool {
+		out, err := c.try("--home", home, "ui")
+		url, ok := strings.CutPrefix(out, "Open: ")
+		if err != nil || !ok {
+			return false
+		}
+		resp, err := p.cl.Get(url)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		p.base = url[:strings.Index(url, "/?t=")]
+		return resp.StatusCode == 200
+	})
 	return p
 }
 
@@ -143,6 +144,25 @@ func nextEvent(t *testing.T, ch <-chan uint64, after uint64, what string) uint64
 		case <-deadline:
 			t.Fatalf("no event for %s", what)
 		}
+	}
+}
+
+// oldCookieRefused checks that the cookie of an earlier daemon's page does
+// not open the page of the daemon now running.
+func oldCookieRefused(t *testing.T, old, now *page) {
+	t.Helper()
+	oldURL, _ := url.Parse(old.base)
+	req, _ := http.NewRequest("GET", now.base+"/api/overview", nil)
+	for _, ck := range old.cl.Jar.Cookies(oldURL) {
+		req.AddCookie(ck)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an earlier daemon's cookie: %d", resp.StatusCode)
 	}
 }
 
@@ -278,27 +298,15 @@ func TestUIDaemonJourney(t *testing.T) {
 	if strings.Contains(string(logData), token) || !strings.Contains(string(logData), "messenger page on http://127.0.0.1:") {
 		t.Fatalf("bob's log:\n%s", logData)
 	}
-	if _, err := os.Stat(filepath.Join(c.dir, "bob", "ui-url")); !os.IsNotExist(err) {
-		t.Fatalf("address file left after stop (%v)", err)
+	if _, err := os.Stat(filepath.Join(c.dir, "bob", "ui-url")); gracefulStop && !os.IsNotExist(err) {
+		t.Fatalf("address file left after a graceful stop (%v)", err)
 	}
 	if out, err := c.try("--home", "bob", "ui"); err == nil || !strings.Contains(out, "daemon --ui") {
 		t.Fatalf("ui with no daemon: %q", out)
 	}
-	c.start("bob2.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
+	_, killBob := c.startProc("bob2.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
 	bp2 := c.openPage(t, "bob")
-	oldURL, _ := url.Parse(bp.base)
-	req, _ := http.NewRequest("GET", bp2.base+"/api/overview", nil)
-	for _, ck := range bp.cl.Jar.Cookies(oldURL) {
-		req.AddCookie(ck)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("old cookie after restart: %d", resp.StatusCode)
-	}
+	oldCookieRefused(t, bp, bp2)
 	o = bp2.overview()
 	if len(o.Threads) != 3 || len(o.Review) != 0 {
 		t.Fatalf("after restart: %d threads, review %+v", len(o.Threads), o.Review)
@@ -308,5 +316,19 @@ func TestUIDaemonJourney(t *testing.T) {
 	}
 	if m := bp2.thread(task).Messages[0]; m.State != "declined" {
 		t.Fatalf("task after restart: %s", m.State)
+	}
+
+	// Killed with no cleanup (a crash, a power cut, a stop on Windows): the
+	// old address stays in the file, but agentnet ui does not offer a page
+	// nobody serves, and the next daemon serves everything again.
+	killBob()
+	if out, err := c.try("--home", "bob", "ui"); err == nil || !strings.Contains(out, "daemon --ui") {
+		t.Fatalf("ui after the daemon was killed: %q", out)
+	}
+	c.start("bob3.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
+	bp3 := c.openPage(t, "bob")
+	oldCookieRefused(t, bp2, bp3)
+	if o := bp3.overview(); len(o.Threads) != 3 {
+		t.Fatalf("after a kill: %d threads", len(o.Threads))
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
@@ -66,7 +67,16 @@ func TestDaemonUIAddressStaysOutOfTheLog(t *testing.T) {
 	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
+	// agentnet ui offers the address only while a daemon holds the home.
 	var out bytes.Buffer
+	if err := runUI(context.Background(), home, nil, &out); err == nil || !strings.Contains(err.Error(), "daemon --ui") || out.Len() != 0 {
+		t.Fatalf("address offered with no daemon running: %q %v", out.String(), err)
+	}
+	release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	if err := runUI(context.Background(), home, nil, &out); err != nil || out.String() != "Open: "+url+"\n" {
 		t.Fatalf("ui printed %q: %v", out.String(), err)
 	}
