@@ -138,3 +138,38 @@ func TestInvitePacketExplainsTakenAddress(t *testing.T) {
 		}
 	}
 }
+
+// Every packet, including the first-admin one, tells the installing agent
+// to keep things plain for the person and explains the default assistant
+// before asking for it, without overstating what it can or cannot do.
+func TestInvitePacketPlainLanguageGuidance(t *testing.T) {
+	code := protocol.Invite{Hub: "https://hub.example.test:8443", Label: "vitalii", Secret: "s"}.Encode()
+	for _, inviter := range []string{"admin/laptop", ""} {
+		packet, err := invitePacket(code, inviter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		talk := strings.Index(packet, "How to talk with the person")
+		if talk < 0 || talk > strings.Index(packet, "1. Check whether agentnet is installed") {
+			t.Fatalf("guidance does not lead the packet (%q):\n%s", inviter, packet)
+		}
+		for _, want := range []string{
+			"Use short, friendly, plain sentences",
+			"Ask one thing at a time, and say what it is for and what happens next",
+			"do not ask the same thing again",
+			"its own background conversation, not in any chat",
+			"Choosing it lets\n     nobody in by itself",
+			"keep handling everything yourself",
+			"you can change this later",
+			"do not promise it is free",
+			"keep their effects, so do not describe it as unable to change anything",
+			"which folder it should work in",
+			"Do not choose for them or assume it is you",
+			"they can take it back",
+		} {
+			if !strings.Contains(packet, want) {
+				t.Fatalf("packet (%q) lacks %q:\n%s", inviter, want, packet)
+			}
+		}
+	}
+}
