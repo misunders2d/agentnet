@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "name": "agentnet-age-vendor",
+  "version": "0.0.0",
+  "description": "Build input for static/vendor/age.mjs; see build.sh. Never installed at run time.",
+  "dependencies": {
+    "age-encryption": "0.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
