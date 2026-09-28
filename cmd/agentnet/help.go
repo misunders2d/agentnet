@@ -489,8 +489,9 @@ get it at once, others when they next connect. Each person gets one
 content-free desktop notice per recommendation and each Claude Code or Codex
 session one line (version, your https URL, agentnet help update); the note is
 shown to people only, never to models. Setting the same version and URL
-again announces nothing new. It is a recommendation: nothing is downloaded
-or installed. Versions are compared only for equality.
+again announces nothing new. It is a recommendation: receiving it downloads
+and installs nothing (members update with agentnet update when they choose).
+Versions are compared only for equality.
 Give the whole text to the coding agent on their computer, privately. The
 label is your statement about who they are. revoke immediately cuts ADDRESS
 off.
@@ -669,8 +670,9 @@ latest release by default, or the one named. It downloads the file for this
 system (agentnet-OS-ARCH, .exe on Windows) from
 https://github.com/misunders2d/agentnet/releases, checks it against that
 release's SHA256SUMS, runs it to confirm its version, and only then puts it
-in place; the previous file is kept next to it as <file>.old. On any failure
-the installed file is unchanged. Only that address is used: a version your
+in place; the previous file is kept next to it as <file>.old. If the
+download or any check fails, the installed file is not touched. Only that
+address is used: a version your
 Hub's operator recommends is advice, never a download location. The trust is
 the release's HTTPS and checksum; there is no separate signature.
 
@@ -688,9 +690,13 @@ the release's HTTPS and checksum; there is no separate signature.
   which processes still run the previous file. Restart: systemctl --user
   restart agentnet (Linux service), launchctl unload/load (macOS), schtasks
   /end then /run /tn agentnet (Windows).
-- Windows can rename a running .exe but not overwrite it, so the previous
-  file is renamed aside first; if the new one cannot be put in place it is
-  moved back.
+- Replacing: on Linux and macOS the previous file is hard-linked to
+  <file>.old and the new one renamed over the file, so the file is always
+  there. Windows (which can rename a running .exe but not overwrite it) and
+  filesystems without hard links use two renames instead: the previous file
+  to <file>.old, then the new one into place; if the second fails, the first
+  is undone. If that undo fails too, or the machine stops between the two
+  renames, the file is missing: rename <file>.old back to it.
 - Going back: stop agentnet and rename <file>.old over the file. If the new
   version already opened a database with a newer schema, also move that
   database's *.vN.bak copy back.

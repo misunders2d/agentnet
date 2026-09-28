@@ -218,7 +218,10 @@ From a release build, `agentnet update` installs the latest official release
 (or `agentnet update vX.Y.Z` a named one) over the program's file: it
 downloads this system's asset from the project's GitHub releases, checks it
 against that release's `SHA256SUMS`, runs it to confirm its version, keeps the
-previous file as `<file>.old`, and stops nothing. Then restart the daemon when
+previous file as `<file>.old`, and stops nothing. A failed download or check
+leaves the installed file untouched. On Windows and on filesystems without
+hard links the replacement is two renames; if the machine stops between them,
+or undoing a failed second rename fails, rename `<file>.old` back. Then restart the daemon when
 no job is running and run `agentnet doctor`. Older versions are refused, a
 development build must name the release, and a copy inside a container should
 be updated through its image. Built from source: stop the daemon (Windows
@@ -248,8 +251,10 @@ session with AgentNet hooks one line (version, the admin's URL, `agentnet
 help update`, and to ask the person unless already authorized), and
 `agentnet version` (on stderr) and `agentnet doctor` show it. Versions are
 compared only for being equal, never ordered. Re-setting the same version
-and URL announces nothing new. It is advice only: AgentNet never downloads
-or installs anything, and the note is shown to people, not to models.
+and URL announces nothing new. It is advice only: receiving a
+recommendation downloads and installs nothing (only an explicit `agentnet
+update`, run by a person or at their request, does), and the note is shown to
+people, not to models.
 
 ## Uninstalling
 
