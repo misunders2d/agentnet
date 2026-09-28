@@ -299,6 +299,11 @@ If a local database or key file is damaged:
   It covers the real Provider/backend contract, relay-served phone/browser devices
   and the requirement that the relay stays one portable unit (binary/container,
   one data volume, one port). Owner choices listed there (§15) remain open.
+- **Next release scope (recorded, not implemented)**: S-W relay-served HTTPS browser/phone,
+  a People directory with event-driven presence (online = daemon connected; listing grants no
+  trust), and Pi native attention (under investigation). See
+  [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
+  remains an open request; S-R reminders unchanged.
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.

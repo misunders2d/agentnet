@@ -680,6 +680,23 @@ option, not a gate.
   no new crypto code. It is not a disconnected app, and the same bundle is what
   the relay serves in S-W.
 
+**Next release scope (recorded 2026-09-28; nothing below is implemented).**
+S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
+- **S-W** as designed below: the relay serves the page over HTTPS to a browser
+  or phone. §6's code-trust limit stands: a browser device trusts the code the
+  relay serves.
+- **People directory:** the enrolled members, each with presence online,
+  reconnecting, offline or unknown, so a newly joined member (for example
+  Vitalii) can be found without knowing their exact address. It is kept current
+  by server events on the existing push stream, not by polling. Online means a
+  daemon is connected, not that a person is present. Being listed grants no
+  trust or permission: keys, approvals and task grants work as today.
+- **Pi native attention:** under investigation (which lifecycle and idle APIs
+  Pi supports); no design or code yet.
+
+Still open, not implemented: a Chrome standalone/PWA install. S-R (reminders)
+keeps its status above. No group or identity work is in this release.
+
 **S-W: relay serves the app; phone/browser device (1:1, v1).**
 - **Build:** embedded assets, the browser engine, IndexedDB outbox, and a
   human-only capability record (the relay's capability endpoint arrives here).
