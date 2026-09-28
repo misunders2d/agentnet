@@ -294,6 +294,11 @@ If a local database or key file is damaged:
   An agent's first report does **not** dismiss it: it remains available for
   follow-ups, with no model calls merely to wait, until explicitly dismissed.
   This records design direction and acceptance examples, not implementation approval.
+- **Messenger architecture (reviewed proposal, not implemented)**: read
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) before any messenger code.
+  It covers the real Provider/backend contract, relay-served phone/browser devices
+  and the requirement that the relay stays one portable unit (binary/container,
+  one data volume, one port). Owner choices listed there (§15) remain open.
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
