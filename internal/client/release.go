@@ -69,7 +69,7 @@ func (a *Agent) notifyRelease() {
 		return
 	}
 	a.releaseTried = r.Key()
-	if err := a.notify("AgentNet", "An AgentNet update is recommended. Ask your coding agent to check it.", nil); err != nil {
+	if err := a.notify("AgentNet", "An AgentNet update is recommended. Ask your coding agent to check it.", nil, nil); err != nil {
 		a.Logf("update recommended (%s); desktop notification not shown (%v); see `agentnet version`", r.Version, err)
 		return
 	}

@@ -90,7 +90,7 @@ func TestNotifyClick(t *testing.T) {
 	t.Cleanup(func() { Close(); lastID = "" })
 
 	clicks := make(chan string, 4)
-	if err := ShowAction("AgentNet", "1 request", func() { clicks <- "first" }); err != nil {
+	if err := ShowAction("AgentNet", "1 request", nil, func() { clicks <- "first" }); err != nil {
 		t.Fatal(err)
 	}
 	first := stubPids(t, dir)[0]
@@ -104,7 +104,7 @@ func TestNotifyClick(t *testing.T) {
 		t.Fatal("click did not reach the callback")
 	}
 
-	if err := ShowAction("AgentNet", "2 requests", func() { clicks <- "second" }); err != nil {
+	if err := ShowAction("AgentNet", "2 requests", nil, func() { clicks <- "second" }); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "previous listener stopped", func() bool { return !alive(first) })
@@ -149,10 +149,74 @@ func TestNotifyCloseStopsListener(t *testing.T) {
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
 	lastID = ""
 	t.Cleanup(func() { lastID = "" })
-	if err := ShowAction("AgentNet", "1 request", func() {}); err != nil {
+	if err := ShowAction("AgentNet", "1 request", nil, func() {}); err != nil {
 		t.Fatal(err)
 	}
 	pid := stubPids(t, dir)[0]
 	Close()
 	waitUntil(t, "listener gone after Close", func() bool { return !alive(pid) })
+}
+
+func setupStub(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "notify-send"), []byte(script), 0o700)
+	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Setenv("STUB_DIR", dir)
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+	lastID = ""
+	t.Cleanup(func() { Close(); lastID = "" })
+	return dir
+}
+
+// The click command is also sent as Omarchy's persistent exec hint, as a
+// JSON argument list, so a history entry stays clickable.
+func TestNotifyExecArgvHint(t *testing.T) {
+	dir := setupStub(t, clickStub)
+	argv := []string{"/usr/bin/xdg-terminal-exec", "--dir=/a b\"c'd", "--", "/opt/agentnet", "open", "--review"}
+	if err := ShowAction("AgentNet", "2 requests", argv, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(filepath.Join(dir, "args"))
+	want := `--hint=string:omarchy-exec-argv:["/usr/bin/xdg-terminal-exec","--dir=/a b\"c'd","--","/opt/agentnet","open","--review"]|--action=default=Open|`
+	if !strings.Contains(string(args), want) {
+		t.Fatalf("notify-send args:\n%s", args)
+	}
+}
+
+// A notifier that never reports an id is stopped and its error output is
+// read only after it fully exited (run with -race).
+func TestNotifyNoIDReadsErrorsAfterExit(t *testing.T) {
+	setupStub(t, "#!/bin/sh\nwhile :; do echo 'cannot reach server' >&2; sleep 0.01; done\n")
+	old := idTimeout
+	idTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { idTimeout = old })
+	err := ShowAction("AgentNet", "1 request", nil, func() { t.Error("clicked") })
+	if err == nil || !strings.Contains(err.Error(), "cannot reach server") {
+		t.Fatalf("error: %v", err)
+	}
+	if current != nil {
+		t.Fatal("a failed notifier was kept as the listener")
+	}
+}
+
+// A click read just before Close (or a newer notification) is dropped.
+func TestNotifyStaleClickDropped(t *testing.T) {
+	dir := setupStub(t, clickStub)
+	reached, proceed := make(chan struct{}), make(chan struct{})
+	dispatchHook = func() { close(reached); <-proceed }
+	t.Cleanup(func() { dispatchHook = nil })
+	clicked := make(chan struct{}, 1)
+	if err := ShowAction("AgentNet", "1 request", nil, func() { clicked <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "trigger-"+stubPids(t, dir)[0]), nil, 0o600)
+	<-reached
+	Close()
+	close(proceed)
+	select {
+	case <-clicked:
+		t.Fatal("a click read before Close still dispatched")
+	case <-time.After(300 * time.Millisecond):
+	}
 }

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -28,48 +29,81 @@ import (
 var terminalLauncher = "xdg-terminal-exec"
 
 // reviewClick returns what clicking a review notification does for target
-// (one item id, or "" for the review list), or nil where clicks are not
-// handled: other than Linux, or no terminal launcher.
-func (a *Agent) reviewClick(target string) func() {
+// (one item id, or "" for the review list): the argument list that opens a
+// terminal running `agentnet open`, and the function that runs it. Both are
+// nil where clicks are not handled: other than Linux, or no terminal
+// launcher. The notifier sends argv to desktops that keep it with the
+// notification (Omarchy runs it on a popup or history click) and calls
+// onClick for the standard click action while the notification is live.
+func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 	if runtime.GOOS != "linux" || terminalLauncher == "" {
-		return nil
+		return nil, nil
 	}
 	term, err := exec.LookPath(terminalLauncher)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return func() {
-		if err := a.launchReview(term, self, target); err != nil {
+	home, err := filepath.Abs(a.home)
+	if err != nil {
+		return nil, nil
+	}
+	argv = []string{term, "--title=AgentNet review", "--dir=" + a.reviewDir(), "--", self, "--home", home, "open"}
+	if protocol.ValidID(target) {
+		argv = append(argv, target)
+	} else {
+		argv = append(argv, "--review")
+	}
+	return argv, func() {
+		if err := a.launch(argv); err != nil {
 			a.Logf("notification click: %v; review with `agentnet inbox --review`", err)
 		}
 	}
 }
 
-// launchReview opens a terminal running `agentnet open`. Everything is
-// passed as separate arguments; nothing is given to a shell.
-func (a *Agent) launchReview(term, self, target string) error {
-	home, err := filepath.Abs(a.home)
-	if err != nil {
-		return err
+// launch starts argv (never through a shell) in the person's graphical
+// session. A daemon run by systemd keeps the environment it started with,
+// which may lack the display and the person's PATH; systemd-run --user
+// starts argv as a transient unit with the user manager's current
+// environment, which the desktop session keeps up to date. Failures that
+// can be seen from here are returned or logged (bounded); a terminal that
+// fails after it started is only in its own logs.
+func (a *Agent) launch(argv []string) error {
+	if os.Getenv("INVOCATION_ID") != "" {
+		if sr, err := exec.LookPath("systemd-run"); err == nil {
+			// Type=exec: systemd-run returns only after the program was
+			// executed, so a missing or unrunnable launcher is reported
+			// here; later failures of the terminal go to the user journal.
+			out, err := exec.Command(sr, append([]string{"--user", "--collect", "--quiet", "--service-type=exec", "--"}, argv...)...).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("systemd-run: %v: %s", err, clip(out))
+			}
+			return nil
+		}
 	}
-	dir := a.reviewDir()
-	args := []string{"--title=AgentNet review", "--dir=" + dir, "--", self, "--home", home, "open"}
-	if protocol.ValidID(target) {
-		args = append(args, target)
-	} else {
-		args = append(args, "--review")
-	}
-	cmd := exec.Command(term, args...)
-	cmd.Dir = dir
+	cmd := exec.Command(argv[0], argv[1:]...)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go cmd.Wait()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			a.Logf("notification click: %s: %v: %s", filepath.Base(argv[0]), err, clip(out.Bytes()))
+		}
+	}()
 	return nil
+}
+
+func clip(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return s
 }
 
 // reviewDir is where the review runs: the responder's directory if one is

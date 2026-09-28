@@ -3,6 +3,7 @@ package notify
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,26 +14,40 @@ import (
 )
 
 // lastID is the server's id of this process's last notification: each new
-// one replaces it rather than stacking another banner. waiting is the
+// one replaces it rather than stacking another banner. current is the
 // notify-send still waiting for a click on it, if any.
 var (
 	mu      sync.Mutex
 	lastID  string
-	waiting *exec.Cmd
+	current *listener
 )
+
+type listener struct{ cmd *exec.Cmd }
+
+// idTimeout bounds the wait for notify-send to report the notification id.
+var idTimeout = timeout
+
+// dispatchHook, when set (tests only), runs after a click was read and
+// before it is dispatched.
+var dispatchHook func()
 
 // Show sends a silent notification through the session's freedesktop
 // notification server with notify-send (libnotify 0.7.9 or later, for
 // --print-id and --replace-id). Callers pass fixed text that does not
 // start with "-".
-func Show(title, body string) error { return ShowAction(title, body, nil) }
+func Show(title, body string) error { return ShowAction(title, body, nil, nil) }
 
-// ShowAction is Show where clicking the notification calls onClick, in its
-// own goroutine (libnotify 0.7.10 or later, for --action). It returns as
+// ShowAction is Show with a click. argv, if set, is sent as the
+// omarchy-exec-argv hint: Omarchy's notification shell stores it with the
+// notification and runs it (as an argument list, no shell) when the popup
+// or its history entry is clicked, after this process or the popup is long
+// gone. onClick, if set, is the standard freedesktop default action
+// (libnotify 0.7.10 or later): it works on any server, but only while the
+// notification is live, and runs in its own goroutine. ShowAction returns as
 // soon as the server has the notification. At most one notification waits
-// for a click: a newer one, or Close, stops the previous listener first,
-// so a replaced banner can never fire twice.
-func ShowAction(title, body string, onClick func()) error {
+// for a click: a newer one, or Close, stops the previous listener, and a
+// click it read but had not dispatched yet is dropped.
+func ShowAction(title, body string, argv []string, onClick func()) error {
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" && os.Getenv("XDG_RUNTIME_DIR") == "" {
 		return errors.New("no desktop session (neither DBUS_SESSION_BUS_ADDRESS nor XDG_RUNTIME_DIR is set)")
 	}
@@ -45,6 +60,13 @@ func ShowAction(title, body string, onClick func()) error {
 	args := []string{"--app-name=AgentNet", "--hint=boolean:suppress-sound:true", "--print-id"}
 	if lastID != "" {
 		args = append(args, "--replace-id="+lastID)
+	}
+	if len(argv) > 0 {
+		data, err := json.Marshal(argv)
+		if err != nil {
+			return err
+		}
+		args = append(args, "--hint=string:omarchy-exec-argv:"+string(data))
 	}
 	if onClick == nil {
 		out, err := run("notify-send", append(args, title, body)...)
@@ -76,11 +98,14 @@ func ShowAction(title, body string, onClick func()) error {
 	var id string
 	select {
 	case id = <-lines:
-	case <-time.After(timeout):
+	case <-time.After(idTimeout):
 	}
 	if _, err := strconv.ParseUint(strings.TrimSpace(id), 10, 32); err != nil {
+		// Stop it and let every copy finish before reading its error output.
 		cmd.Process.Kill()
-		go drain(lines, cmd)
+		for range lines {
+		}
+		cmd.Wait()
 		msg := strings.TrimSpace(stderr.String())
 		if len(msg) > 200 {
 			msg = msg[:200]
@@ -88,17 +113,27 @@ func ShowAction(title, body string, onClick func()) error {
 		return errors.New("notify-send did not report a notification id: " + msg)
 	}
 	setLastID(strings.TrimSpace(id))
-	waiting = cmd
+	l := &listener{cmd: cmd}
+	current = l
 	go func() {
 		for line := range lines {
-			if strings.TrimSpace(line) == "default" {
+			if strings.TrimSpace(line) != "default" {
+				continue
+			}
+			if dispatchHook != nil {
+				dispatchHook()
+			}
+			mu.Lock()
+			live := current == l
+			mu.Unlock()
+			if live {
 				go onClick()
 			}
 		}
 		cmd.Wait()
 		mu.Lock()
-		if waiting == cmd {
-			waiting = nil
+		if current == l {
+			current = nil
 		}
 		mu.Unlock()
 	}()
@@ -111,20 +146,13 @@ func setLastID(id string) {
 	}
 }
 
-// drain reaps a notify-send that was given up on.
-func drain(lines <-chan string, cmd *exec.Cmd) {
-	for range lines {
-	}
-	cmd.Wait()
-}
-
 // stopWaiting ends the listener of the previous notification. Callers hold
 // mu. Stopping notify-send does not matter to the banner: the next one
 // replaces it by id, and a clicked or closed one needs no listener.
 func stopWaiting() {
-	if waiting != nil {
-		waiting.Process.Kill()
-		waiting = nil
+	if current != nil {
+		current.cmd.Process.Kill()
+		current = nil
 	}
 }
 

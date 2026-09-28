@@ -1,10 +1,12 @@
 package client
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ func TestReviewClickOpensReview(t *testing.T) {
 	}
 	st := installStub(t, "answer")
 	log := stubTerminal(t)
+	t.Setenv("INVOCATION_ID", "") // not a systemd service: launched directly
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
 	setResponder(t, w.bob, "stub", st.dir, time.Minute)
@@ -50,15 +53,24 @@ func TestReviewClickOpensReview(t *testing.T) {
 	if click == nil {
 		t.Fatal("no click handler")
 	}
+	n.mu.Lock()
+	hint := n.argvs[len(n.argvs)-1]
+	n.mu.Unlock()
 	click()
 	eventually(t, "terminal started", func() bool { data, _ := os.ReadFile(log); return strings.Count(string(data), "\n") >= 9 })
 	data, _ := os.ReadFile(log)
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	self, _ := os.Executable()
 	home, _ := filepath.Abs(w.bobHome)
-	want := []string{st.dir, "--title=AgentNet review", "--dir=" + st.dir, "--", self, "--home", home, "open", q.ID}
+	// The first line is the launcher's own working directory, which does not
+	// matter: --dir sets the terminal's.
+	want := []string{lines[0], "--title=AgentNet review", "--dir=" + st.dir, "--", self, "--home", home, "open", q.ID}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("terminal started with:\n%s\nwant:\n%s", data, strings.Join(want, "\n"))
+	}
+	// The desktop gets the same command for a later (history) click.
+	if strings.Join(hint, "\n") != strings.Join(append([]string{terminalLauncher}, want[1:]...), "\n") {
+		t.Fatalf("click command sent with the notification: %q", hint)
 	}
 	time.Sleep(200 * time.Millisecond)
 	if s, _ := w.bob.store.jobState(q.ID); s != stateHeld || st.count() != 0 {
@@ -69,6 +81,9 @@ func TestReviewClickOpensReview(t *testing.T) {
 	t2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "t", Kind: envelope.KindTask})
 	waitState(t, w.bob, t2.ID, stateAwaiting)
 	eventually(t, "second notification", func() bool { return n.count() == 2 })
+	if !strings.HasSuffix(n.last(), "2 requests need your decision. Click to review them with your coding agent.") {
+		t.Fatalf("batch body: %q", n.last())
+	}
 	os.Remove(log)
 	n.lastClick()()
 	eventually(t, "terminal for the list", func() bool { data, _ := os.ReadFile(log); return strings.Contains(string(data), "--review") })
@@ -83,7 +98,7 @@ func TestReviewClickNeedsLauncher(t *testing.T) {
 	w := newWorld(t, "")
 	terminalLauncher = "definitely-not-installed-terminal"
 	t.Cleanup(func() { terminalLauncher = "" })
-	if w.bob.reviewClick("") != nil {
+	if argv, click := w.bob.reviewClick(""); argv != nil || click != nil {
 		t.Fatal("click handler without a launcher")
 	}
 }
@@ -134,5 +149,66 @@ func TestReviewOpening(t *testing.T) {
 	}
 	if _, err := w.bob.ReviewOpening("not-an-id", self); err == nil {
 		t.Fatal("invalid id accepted")
+	}
+}
+
+// Under systemd the click goes through systemd-run --user (the session's
+// current environment) as an exec-type transient unit; a launch that
+// fails is logged, not dropped.
+func TestReviewClickUnderSystemd(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("clicks are handled on Linux only")
+	}
+	stubTerminal(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "systemd-run.log")
+	os.WriteFile(filepath.Join(dir, "systemd-run"), []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> "+log+"; done\n[ -f "+dir+"/fail ] && { echo 'Failed to start transient service unit' >&2; exit 1; }\nexit 0\n"), 0o700)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("INVOCATION_ID", "0123")
+	w := newWorld(t, "")
+	var logged []string
+	var mu sync.Mutex
+	w.bob.Logf = func(f string, args ...any) { mu.Lock(); logged = append(logged, fmt.Sprintf(f, args...)); mu.Unlock() }
+	argv, click := w.bob.reviewClick("")
+	click()
+	data, _ := os.ReadFile(log)
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := append([]string{"--user", "--collect", "--quiet", "--service-type=exec", "--"}, argv...)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("systemd-run called with:\n%s", data)
+	}
+	os.WriteFile(filepath.Join(dir, "fail"), nil, 0o600)
+	click()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) == 0 || !strings.Contains(logged[len(logged)-1], "Failed to start transient service unit") {
+		t.Fatalf("launch failure not logged: %q", logged)
+	}
+}
+
+// A direct launch that exits with an error is logged with its output.
+func TestReviewClickDirectFailureLogged(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("clicks are handled on Linux only")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "xdg-terminal-exec")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho 'no terminal found' >&2\nexit 3\n"), 0o700)
+	old := terminalLauncher
+	terminalLauncher = bin
+	t.Cleanup(func() { terminalLauncher = old })
+	t.Setenv("INVOCATION_ID", "")
+	w := newWorld(t, "")
+	logged := make(chan string, 4)
+	w.bob.Logf = func(f string, args ...any) { logged <- fmt.Sprintf(f, args...) }
+	_, click := w.bob.reviewClick("")
+	click()
+	select {
+	case l := <-logged:
+		if !strings.Contains(l, "exit status 3") || !strings.Contains(l, "no terminal found") {
+			t.Fatalf("logged %q", l)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed launch not logged")
 	}
 }

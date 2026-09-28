@@ -198,7 +198,9 @@ Windows: a notification-area balloon, whose icon stays while the daemon
 runs; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
 log says so and the items still wait. On Linux with xdg-terminal-exec,
 clicking the notification opens a review in a new terminal (agentnet help
-open); clicks are not handled on macOS or Windows yet.
+open): on Omarchy also from the notification history; on other desktops only
+while the notification is shown. Clicks are not handled on macOS or Windows
+yet.
 
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read

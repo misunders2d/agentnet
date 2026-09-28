@@ -49,11 +49,11 @@ type Agent struct {
 	kick       func() // wakes the current stream's retry worker
 	wakeWorker func() // wakes the question/task worker; a no-op outside Run
 
-	notify       func(title, body string, onClick func()) error // desktop notification; onClick may be nil
-	notifyTried  map[string]bool                                // review items a notification was attempted for, this run
-	reviewTried  map[string]bool                                // review items a review notice was attempted for, this run
-	reviewGen    string                                         // review_to_gen those attempts were made under
-	releaseTried string                                         // release a notification was attempted for, this run
+	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
+	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
+	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
+	reviewGen    string                                                        // review_to_gen those attempts were made under
+	releaseTried string                                                        // release a notification was attempted for, this run
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -267,11 +267,11 @@ const maxFollowUp = 4 << 10
 // desktopNotify shows a notification unless AGENTNET_NOTIFY=off (for
 // servers and tests). onClick, if set, runs when the person clicks it
 // (Linux only for now).
-func desktopNotify(title, body string, onClick func()) error {
+func desktopNotify(title, body string, argv []string, onClick func()) error {
 	if os.Getenv("AGENTNET_NOTIFY") == "off" {
 		return errors.New("turned off by AGENTNET_NOTIFY=off")
 	}
-	return notify.ShowAction(title, body, onClick)
+	return notify.ShowAction(title, body, argv, onClick)
 }
 
 // Send is SendMessage for the common case.
