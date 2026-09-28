@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_task_probe:
-        description: "Run only the native Windows Task Scheduler probe (creates and removes a private task)"
+        description: "Run only the native Windows Task Scheduler tests (the probe's private task, and the task agentnet for the update switch; both removed afterwards)"
         type: boolean
         default: false
 permissions:
@@ -44,7 +44,7 @@ jobs:
   windows-task-probe:
     if: ${{ inputs.windows_task_probe }}
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
@@ -52,7 +52,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Task Scheduler probe (private task, removed afterwards)
-        run: go test -count=1 -timeout 300s -run TestWindowsTaskSwitchProbe -v ./itest
+      # The probe uses a private task; the update test creates the task
+      # agentnet itself (it refuses to run where one exists). Both remove
+      # what they create. Bounds: builds, task starts with a fallback
+      # principal, and the update test's slowest path (a task that cannot
+      # start: three bounded tries) fit well inside 1800 s.
+      - name: Task Scheduler probe and update switch through the task
+        run: go test -count=1 -timeout 1800s -run "TestWindowsTaskSwitchProbe|TestWindowsUpdateSwitchThroughTask" -v ./itest
         env:
           AGENTNET_WINTASK: "1"
