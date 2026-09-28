@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -27,8 +28,11 @@ import (
 // Self-update: `agentnet update` replaces this executable with an official
 // release built by scripts/build.sh, checked against that release's
 // SHA256SUMS. The origin is fixed here; nothing received (a Hub
-// recommendation, a message) chooses what is downloaded. Nothing running is
-// stopped or restarted, and no database is changed.
+// recommendation, a message) chooses what is downloaded. The new program
+// must be able to open this home's database. Afterwards this home's daemon,
+// if it runs this file, is asked to switch to it (client/restart.go): it
+// does so once no job runs. Nothing else running is stopped or restarted,
+// and no database is changed by the update itself.
 
 // executable returns this program's file. Tests replace it.
 var executable = os.Executable
@@ -55,7 +59,24 @@ const (
 	maxAsset = 256 << 20 // one release binary
 )
 
-var releaseTagPattern = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
+var releaseTagPattern = regexp.MustCompile(`^v(\d{1,6})\.(\d{1,6})\.(\d{1,6})$`)
+
+// buildPattern is a development build's stamp: a release tag followed by
+// `git describe` commits (-N-gHASH), or by +anything, and/or -dirty.
+var buildPattern = regexp.MustCompile(`^(v\d{1,6}\.\d{1,6}\.\d{1,6})(?:-\d{1,9}-g[0-9a-f]{4,40}|\+[0-9A-Za-z.]{1,64})?(?:-dirty)?$`)
+
+// devBase returns the release a development build was made after. Such a
+// build is that release plus changes, so only a newer release is an update.
+// The base is only a lower bound when stamped with git describe without
+// --tags, which skips lightweight release tags: the schema check below still
+// guards what gets installed.
+func devBase(version string) ([3]int, bool) {
+	m := buildPattern.FindStringSubmatch(version)
+	if m == nil || m[1] == version {
+		return [3]int{}, false
+	}
+	return parseRelease(m[1])
+}
 
 // parseRelease returns the numbers of a release tag vX.Y.Z.
 func parseRelease(tag string) ([3]int, bool) {
@@ -95,22 +116,27 @@ func assetName() string {
 func runUpdate(ctx context.Context, home string, args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	check := fs.Bool("check", false, "only show what would be installed")
+	status := fs.Bool("status", false, "show whether this home's daemon switched after the last update")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *status {
+		return updateStatus(home)
 	}
 	if fs.NArg() > 1 {
 		return errors.New("usage: update [--check] [vX.Y.Z]")
 	}
 	current := protocol.Version
 	cur, isRelease := parseRelease(current)
+	base, isDev := devBase(current)
 	target := fs.Arg(0)
 	switch {
 	case target != "":
 		if _, ok := parseRelease(target); !ok {
 			return fmt.Errorf("%q is not a release version (vX.Y.Z)", target)
 		}
-	case !isRelease:
-		return fmt.Errorf("this is a development build (%s); name the release to install: agentnet update vX.Y.Z", current)
+	case !isRelease && !isDev:
+		return fmt.Errorf("this is a development build (%s) not made from a release; name the release to install: agentnet update vX.Y.Z", current)
 	default:
 		latest, err := latestRelease(ctx)
 		if err != nil {
@@ -125,6 +151,9 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	}
 	if isRelease && olderRelease(tv, cur) {
 		return fmt.Errorf("%s is older than this %s; downgrades are not supported (databases only move forward; see agentnet help update)", target, current)
+	}
+	if isDev && !olderRelease(base, tv) {
+		return fmt.Errorf("%s is not newer than %s, the release this development build (%s) was made after; installing it could take code and database backwards, so nothing was changed", target, releaseName(base), current)
 	}
 	started, err := executable()
 	if err != nil {
@@ -162,6 +191,10 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSchema(ctx, home, staged, target, isRelease && olderRelease(cur, tv)); err != nil {
+		os.Remove(staged)
+		return err
+	}
 	if err := replaceExecutable(exe, staged); err != nil {
 		os.Remove(staged)
 		return err
@@ -170,9 +203,104 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	if !strings.HasSuffix(protoLine, fmt.Sprintf("(protocol %d)", protocol.ProtocolVersion)) {
 		fmt.Printf("note: the protocol generation changed; run agentnet doctor after restarting to see whether your Hub matches\n")
 	}
-	reportRunning(home, exe)
+	asked := switchDaemon(home, exe, current, target)
+	reportRunning(home, exe, asked)
 	return nil
 }
+
+// updateStatus shows what became of the last switch request of this home.
+func updateStatus(home string) error {
+	if pending, err := client.PendingUpdateSwitch(home); err == nil && pending != "" {
+		fmt.Printf("switch to agentnet %s requested: pending (the daemon switches once no job runs)\n", pending)
+		return nil
+	}
+	act, ok, err := client.ReadUpdateActivation(home)
+	switch {
+	case err != nil:
+		return err
+	case !ok:
+		fmt.Println("no switch was requested in this home")
+	case act.Result == client.ActivationRunning:
+		fmt.Printf("the daemon runs agentnet %s since %s (process %d)\n", act.Running, act.At.Format(time.RFC3339), act.PID)
+	default:
+		fmt.Printf("switch to agentnet %s: %s at %s: %s\n", act.To, act.Result, act.At.Format(time.RFC3339), act.Detail)
+	}
+	return nil
+}
+
+func releaseName(v [3]int) string { return fmt.Sprintf("v%d.%d.%d", v[0], v[1], v[2]) }
+
+var schemaLine = regexp.MustCompile(`^schema (\d{1,5})$`)
+
+// checkSchema refuses a program that could not open this home's database:
+// one that supports fewer schema steps than the database has. A program too
+// old to say (it predates `version --schema`) is accepted only as a newer
+// release over a release, where steps only grow.
+func checkSchema(ctx context.Context, home, staged, target string, releaseForward bool) error {
+	have, found, err := client.HomeSchema(home)
+	if err != nil {
+		return fmt.Errorf("cannot read the schema of this home's database (%v); nothing was changed", err)
+	}
+	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(vctx, staged, "version", "--schema").Output()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	supports := -1
+	if len(lines) == 2 {
+		if m := schemaLine.FindStringSubmatch(strings.TrimSpace(lines[1])); m != nil {
+			supports, _ = strconv.Atoi(m[1])
+		}
+	}
+	switch {
+	case supports >= 0 && found && supports < have:
+		return fmt.Errorf("agentnet %s opens home databases up to schema %d, but this home's is at %d; installing it would leave the daemon unable to start, so nothing was changed", target, supports, have)
+	case supports < 0 && !releaseForward:
+		return fmt.Errorf("agentnet %s does not say which home databases it can open, so it cannot be checked against this one; nothing was changed", target)
+	}
+	return nil
+}
+
+// switchDaemon asks this home's running daemon to switch to exe, now target,
+// and reports only what it observes: a switch it has seen done, pending
+// (a job is running), or what stopped it. It reports whether it asked.
+func switchDaemon(home, exe, from, target string) bool {
+	if st, err := os.Stat(home); err != nil || !st.IsDir() {
+		return false
+	}
+	if release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); err == nil {
+		release()
+		fmt.Printf("this home's daemon is not running; started, it runs agentnet %s\n", target)
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return false // not yet: reportRunning says to restart it
+	}
+	r := client.UpdateRequest{ID: protocol.NewID(), Exe: exe, From: from, To: target, At: time.Now()}
+	if err := client.RequestUpdateSwitch(home, r); err != nil {
+		fmt.Printf("could not ask this home's daemon to switch (%v); restart it to run agentnet %s\n", err, target)
+		return false
+	}
+	deadline := time.Now().Add(switchWait)
+	for time.Now().Before(deadline) {
+		if act, ok, _ := client.ReadUpdateActivation(home); ok && act.ID == r.ID {
+			switch {
+			case act.Result == client.ActivationRunning && act.Running == target:
+				fmt.Printf("this home's daemon now runs agentnet %s (seen: it restarted as process %d); an open messenger page reconnects at the same address\n", target, act.PID)
+			case act.Result == client.ActivationFailed:
+				fmt.Printf("this home's daemon stopped to switch, but agentnet %s did not take over: %s\n", target, act.Detail)
+			default:
+				fmt.Printf("this home's daemon did not switch: %s\n", act.Detail)
+			}
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	fmt.Printf("asked this home's daemon to switch to agentnet %s: pending. It starts no new job and switches once the running one has finished (agentnet inbox shows it); agentnet update --status tells whether it did\n", target)
+	return true
+}
+
+// switchWait bounds how long update waits to see the daemon switch.
+var switchWait = 20 * time.Second
 
 // versionLine is what `agentnet version` prints for version v.
 func versionLine(v string) string {
@@ -338,8 +466,8 @@ func replaceExecutable(exe, staged string) error {
 
 // reportRunning says what still runs the previous program. It stops
 // nothing: restarting interrupts running jobs, so it is the person's call.
-func reportRunning(home, exe string) {
-	if st, err := os.Stat(home); err == nil && st.IsDir() {
+func reportRunning(home, exe string, asked bool) {
+	if st, err := os.Stat(home); err == nil && st.IsDir() && !asked {
 		if release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); err == nil {
 			release()
 		} else {

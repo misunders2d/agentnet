@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -55,6 +56,15 @@ type Agent struct {
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
 	reviewGen    string                                                        // review_to_gen those attempts were made under
 	releaseTried string                                                        // release a notification was attempted for, this run
+
+	exe       string                       // the daemon's program file as started (RunOptions.Executable)
+	canSwitch func() (ok bool, why string) // RunOptions.CanSwitch
+	stopRun   context.CancelFunc           // stops the current Run (switching for an update)
+	update    struct {
+		sync.Mutex
+		pending   *UpdateRequest // requested: no new job starts
+		switching *UpdateRequest // the daemon is stopping for it
+	}
 }
 
 func paths(home string) (identityPath, dbPath string) {

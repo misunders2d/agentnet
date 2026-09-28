@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -88,18 +89,30 @@ func listenLoopback(addr string) (net.Listener, error) {
 // the daemon that owns a's home. The address with its token goes
 // only to an owner-only file (agentnet ui prints it), never to the log.
 func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...any)) (stop func(), err error) {
-	ln, err := listenLoopback(listen)
-	if err != nil {
-		return nil, err
+	var ln net.Listener
+	token := ""
+	if prev, prevToken := takeUIHandoff(home, listen); prev != "" {
+		if ln, err = listenLoopback(prev); err == nil {
+			token = prevToken
+		} else {
+			logf("messenger page: the previous address %s is taken; serving on a new one (run `agentnet ui`)", prev)
+			ln = nil
+		}
+	}
+	if ln == nil {
+		if ln, err = listenLoopback(listen); err != nil {
+			return nil, err
+		}
+		token = protocol.NewID() + protocol.NewID()
 	}
 	addr := ln.Addr().String()
-	token := protocol.NewID() + protocol.NewID()
 	path := filepath.Join(home, uiURLFile)
 	if err := secfile.Write(path, []byte("http://"+addr+"/?t="+token+"\n")); err != nil {
 		ln.Close()
 		return nil, err
 	}
-	srv := &http.Server{Handler: ui.New(ui.NewLive(a), addr, token).Handler(), ReadHeaderTimeout: 10 * time.Second}
+	page := ui.New(ui.NewLive(a), addr, token)
+	srv := &http.Server{Handler: page.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 			logf("messenger page stopped: %v", err)
@@ -107,7 +120,53 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 	}()
 	logf("messenger page on http://%s (run `agentnet ui` for the address to open)", addr)
 	return func() {
+		if a != nil {
+			if r := a.UpdateSwitching(); r != nil {
+				// Tell open pages, let them receive it, and leave the address
+				// and token for the program that takes this daemon's place.
+				page.Restarting()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				srv.Shutdown(ctx)
+				cancel()
+				h, _ := json.Marshal(uiHandoff{ID: r.ID, Addr: addr, Token: token})
+				if err := secfile.Write(filepath.Join(home, uiHandoffFile), h); err != nil {
+					logf("messenger page: the address will change after the update: %v", err)
+				}
+			}
+		}
 		srv.Close()
 		os.Remove(path)
 	}, nil
+}
+
+// uiHandoffFile carries the page's address and token from a daemon that
+// stopped for an update to the program started in its place.
+const uiHandoffFile = "ui-handoff.json"
+
+type uiHandoff struct {
+	ID    string `json:"id"` // the update request it belongs to
+	Addr  string `json:"addr"`
+	Token string `json:"token"`
+}
+
+// takeUIHandoff returns the address and token to keep serving the page at.
+// Only the program started to complete that very update gets them, and only
+// once: the file is removed whatever it says.
+func takeUIHandoff(home, listen string) (addr, token string) {
+	path := filepath.Join(home, uiHandoffFile)
+	data, err := secfile.Read(path)
+	os.Remove(path)
+	if err != nil {
+		return "", ""
+	}
+	var h uiHandoff
+	if json.Unmarshal(data, &h) != nil || h.ID == "" || os.Getenv(client.UpdateRestartEnv) != h.ID || len(h.Token) < 32 {
+		return "", ""
+	}
+	lh, lp, err1 := net.SplitHostPort(listen)
+	hh, hp, err2 := net.SplitHostPort(h.Addr)
+	if err1 != nil || err2 != nil || lh != hh || (lp != "0" && lp != hp) {
+		return "", "" // the daemon now asks for another address
+	}
+	return h.Addr, h.Token
 }

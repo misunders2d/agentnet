@@ -309,8 +309,8 @@ If a local database or key file is damaged:
   grants no trust). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
   remains an open request; S-R reminders unchanged. One-command `agentnet update` (latest stable,
-  same home, daemon and page switch safely) is a recorded owner requirement, not implemented
-  ([§19.2b](MESSENGER_ARCHITECTURE.md#192b-owner-requirement-one-command-update-2026-09-28-not-implemented)).
+  same home, daemon and page switch safely): in source for Linux/macOS, Windows pending, not released
+  ([§19.2b](MESSENGER_ARCHITECTURE.md#19-updates-and-versions)).
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.

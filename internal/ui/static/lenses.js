@@ -37,6 +37,7 @@ function writeDialog(t, m) {
       else await api("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: last ? last.id : "" });
     },
   });
+  state.dialogRestore = { type: "write", msg: m ? m.id : null };
 }
 
 // ---- Comic: a thread is an issue, its messages are panels ----------------------

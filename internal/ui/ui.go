@@ -58,6 +58,7 @@ type Overview struct {
 	Quarantine []QuarantineItem `json:"quarantine"`
 	Release    string           `json:"release,omitempty"` // a recommended build other than this one
 	Seq        uint64           `json:"seq"`
+	Version    string           `json:"version"` // the program serving the page (an update changes it)
 }
 
 // Me describes this installation.

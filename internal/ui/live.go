@@ -30,7 +30,7 @@ func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 // Overview implements Provider.
 func (l *Live) Overview() (Overview, error) {
 	seq, _ := l.a.Changed()
-	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq,
+	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, Quarantine: []QuarantineItem{}}
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir

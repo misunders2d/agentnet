@@ -2,7 +2,7 @@
 # Build agentnet for the usual laptop and server platforms into dist/.
 # Usage: scripts/build.sh [VERSION]
 set -eu
-version=${1:-$(git describe --always --dirty 2>/dev/null || echo dev)}
+version=${1:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 cd "$(dirname "$0")/.."
 mkdir -p dist
 for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do

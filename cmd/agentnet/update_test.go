@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -36,6 +39,9 @@ func TestMain(m *testing.M) {
 				}
 			}
 			fmt.Printf("agentnet %s (protocol %d)\n", v, protocol.ProtocolVersion)
+			if n := os.Getenv("AGENTNET_FAKE_SCHEMA"); n != "" && len(os.Args) > 2 && os.Args[2] == "--schema" {
+				fmt.Printf("schema %s\n", n)
+			}
 		case "sleep":
 			time.Sleep(30 * time.Second)
 		}
@@ -323,7 +329,7 @@ func TestUpdateReportsRunning(t *testing.T) {
 	r, w, _ := os.Pipe()
 	stdout := os.Stdout
 	os.Stdout = w
-	reportRunning(home, exe)
+	reportRunning(home, exe, false)
 	os.Stdout = stdout
 	w.Close()
 	out, _ := io.ReadAll(r)
@@ -360,5 +366,151 @@ func TestUpdateRefusesFileChangedBeforeLock(t *testing.T) {
 	}
 	if l := leftovers(t, exe); len(l) != 0 {
 		t.Fatalf("staged files left: %v", l)
+	}
+}
+
+// updateIn runs update for home, capturing what it prints.
+func updateIn(t *testing.T, home string, args ...string) (string, error) {
+	t.Helper()
+	r, w, _ := os.Pipe()
+	stdout := os.Stdout
+	os.Stdout = w
+	err := runUpdate(context.Background(), home, args)
+	os.Stdout = stdout
+	w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out), err
+}
+
+// A development build updates only to a release newer than the one it was
+// made after, and only to a program that says it can open this home; an
+// equal release is never called an update.
+func TestUpdateFromDevelopmentBuilds(t *testing.T) {
+	for _, c := range []struct {
+		current, latest, schema string
+		args                    []string
+		want                    string // "" installs
+	}{
+		{"v9.9.8+0760ccc", "v9.9.8", "999", nil, "not newer than v9.9.8"},
+		{"v9.9.8-28-gcc5d858-dirty", "v9.9.8", "999", nil, "not newer than v9.9.8"},
+		{"v9.9.8+0760ccc", "v9.9.9", "999", []string{"v9.9.7"}, "not newer than v9.9.8"},
+		{"v0.1.50-143-gcc5d858", "v9.9.9", "", nil, "does not say which home databases"},
+		{"cc5d858", "v9.9.9", "999", nil, "not made from a release"},
+		{"v9.9.8+0760ccc", "v9.9.9", "999", nil, ""},
+		{"v9.9.8-28-gcc5d858-dirty", "v9.9.9", "999", nil, ""},
+	} {
+		fakeReleaseServer(t, &releaseStub{latest: c.latest, asset: selfBytes(t)})
+		exe, before := installed(t, c.current)
+		t.Setenv("AGENTNET_FAKE_VERSION", c.latest)
+		t.Setenv("AGENTNET_FAKE_SCHEMA", c.schema)
+		_, err := updateIn(t, filepath.Join(t.TempDir(), "no-home"), c.args...)
+		switch {
+		case c.want == "" && (err != nil || unchanged(exe, before)):
+			t.Errorf("%s -> %s: not installed (%v)", c.current, c.latest, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want) || !unchanged(exe, before)):
+			t.Errorf("%s -> %s %v: %v (changed: %v)", c.current, c.latest, c.args, err, !unchanged(exe, before))
+		}
+		if l := leftovers(t, exe); len(l) != 0 {
+			t.Errorf("staged files left: %v", l)
+		}
+	}
+}
+
+// homeWithSchema makes a home whose database is at schema version n.
+func homeWithSchema(t *testing.T, n int) string {
+	t.Helper()
+	home := t.TempDir()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", n)); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// A program that cannot open this home's database is never installed.
+func TestUpdateChecksTheHomeSchema(t *testing.T) {
+	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
+	home := homeWithSchema(t, 50)
+	for _, c := range []struct {
+		schema string
+		ok     bool
+	}{{"40", false}, {"50x", false}, {"99999999", false}, {"60", true}} {
+		exe, before := installed(t, "v9.9.8+0760ccc")
+		t.Setenv("AGENTNET_FAKE_VERSION", "v9.9.9")
+		t.Setenv("AGENTNET_FAKE_SCHEMA", c.schema)
+		_, err := updateIn(t, home)
+		if c.ok != (err == nil) || c.ok == unchanged(exe, before) {
+			t.Errorf("target schema %s against 50: %v", c.schema, err)
+		}
+	}
+	if v, _, _ := client.HomeSchema(home); v != 50 {
+		t.Fatalf("the check changed the database: schema %d", v)
+	}
+}
+
+// With this home's daemon running, update asks it to switch and says only
+// what it has seen: done, or pending while a job runs.
+func TestUpdateAsksTheDaemonToSwitch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the daemon does not switch on Windows yet")
+	}
+	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9", asset: selfBytes(t)})
+	old := switchWait
+	switchWait = 2 * time.Second
+	t.Cleanup(func() { switchWait = old })
+	home := t.TempDir()
+	release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")) // the daemon
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	// Pending: nobody completes the request.
+	installed(t, "v9.9.8")
+	t.Setenv("AGENTNET_FAKE_VERSION", "v9.9.9")
+	out, err := updateIn(t, home)
+	if err != nil || !strings.Contains(out, "switch to agentnet v9.9.9: pending") || strings.Contains(out, "now runs") {
+		t.Fatalf("pending: %v\n%s", err, out)
+	}
+	if out, _ := updateIn(t, home, "--status"); !strings.Contains(out, "requested: pending") {
+		t.Fatalf("status: %s", out)
+	}
+
+	// Done: a stand-in daemon completes the request it finds.
+	os.Remove(filepath.Join(home, "update-request.json"))
+	exe, _ := installed(t, "v9.9.8")
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			data, err := os.ReadFile(filepath.Join(home, "update-request.json"))
+			if err != nil {
+				continue
+			}
+			var r client.UpdateRequest
+			json.Unmarshal(data, &r)
+			if r.Exe != exe || r.To != "v9.9.9" {
+				continue
+			}
+			os.Remove(filepath.Join(home, "update-request.json"))
+			client.RecordUpdateActivation(home, client.UpdateActivation{ID: r.ID, To: r.To, Result: client.ActivationRunning, Running: r.To, PID: 4242})
+			return
+		}
+	}()
+	out, err = updateIn(t, home)
+	if err != nil || !strings.Contains(out, "now runs agentnet v9.9.9 (seen: it restarted as process 4242)") {
+		t.Fatalf("done: %v\n%s", err, out)
+	}
+	if out, _ := updateIn(t, home, "--status"); !strings.Contains(out, "runs agentnet v9.9.9") {
+		t.Fatalf("status after: %s", out)
 	}
 }

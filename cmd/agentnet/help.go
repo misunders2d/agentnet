@@ -691,32 +691,46 @@ Windows (runs at logon, PowerShell):
 A responder harness (e.g. claude) must be on the PATH the daemon sees.`,
 
 	"update": `Usage: agentnet update [--check] [vX.Y.Z]
+       agentnet update --status
 
 Install an official release of agentnet over this program's file: the
 latest release by default, or the one named. It downloads the file for this
 system (agentnet-OS-ARCH, .exe on Windows) from
 https://github.com/misunders2d/agentnet/releases, checks it against that
-release's SHA256SUMS, runs it to confirm its version, and only then puts it
-in place; the previous file is kept next to it as <file>.old. If the
-download or any check fails, the installed file is not touched. Only that
+release's SHA256SUMS, runs it to confirm its version and that it can open
+this home's database, and only then puts it in place; the previous file is
+kept next to it as <file>.old. If the download or any check fails, the
+installed file is not touched. Only that
 address is used: a version your
 Hub's operator recommends is advice, never a download location. The trust is
 the release's HTTPS and checksum; there is no separate signature.
 
-  --check   show the current and target versions and the file; change nothing
+  --check    show the current and target versions and the file; change nothing
+  --status   say whether this home's daemon switched after the last update
 
 - Same version: nothing to do. Older versions are refused: databases only
-  move forward. A development build (not vX.Y.Z) must name the release.
+  move forward. A development build stamped from a release (vX.Y.Z-N-gHASH
+  or vX.Y.Z+...) takes only a release newer than vX.Y.Z, and only one that
+  says it can open this home's database; other development builds must name
+  the release.
 - The file replaced is the real file behind a symlink. The directory must be
   writable; a copy inside a container is refused (update the image). One
   update of a file runs at a time, and it stops without changes if the file
   no longer reports this program's version (another update got there first).
-- Nothing running is stopped: a daemon (of any home) or Hub keeps the program
-  it started with until you restart it, preferably when no job is running.
-  The command says whether this home's daemon is running and, on Linux,
-  which processes still run the previous file. Restart: systemctl --user
-  restart agentnet (Linux service), launchctl unload/load (macOS), schtasks
-  /end then /run /tn agentnet (Windows).
+- This home's daemon switches (Linux, macOS): if it runs the updated file,
+  it is asked to start no new job, let a running one finish and store its
+  result, and restart in place as the new version (same process, so a
+  service manager keeps it). An open messenger page reconnects at the same
+  address and login and reloads, keeping unsent text. The command says what
+  it saw: switched, or pending while a job runs (then --status).
+- Nothing else is stopped: another home's daemon or a Hub keeps the program
+  it started with until you restart it; on Linux the command lists processes
+  still running the previous file. On Windows the daemon does not switch
+  yet: restart it when no job runs (schtasks /end, then /run /tn agentnet).
+- Copies made before this existed: v0.2.1 and earlier have no update
+  command (install the new release once by hand); older development builds
+  can install a named release but not switch their daemon (restart it once,
+  and reload an open page).
 - Replacing: on Linux and macOS the previous file is hard-linked to
   <file>.old and the new one renamed over the file, so the file is always
   there. Windows (which can rename a running .exe but not overwrite it) and
@@ -734,8 +748,9 @@ updating unless they have already authorized it.
 
 Building from source instead: stop the daemon, then
   cd agentnet && git pull
-  go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe --always --dirty)" -o ~/.local/bin/agentnet ./cmd/agentnet
-and start it again (such a build reports a git revision, not vX.Y.Z).
+  go build -trimpath -ldflags "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe --tags --always --dirty)" -o ~/.local/bin/agentnet ./cmd/agentnet
+and start it again (such a build reports the release it follows and a git
+revision, e.g. v0.2.1-28-gcc5d858, not vX.Y.Z).
 
 Hub: back it up (agentnet help "hub backup"), then
   git pull && docker compose up -d --build        # or rebuild and restart hub serve`,

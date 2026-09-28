@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 //go:embed static
@@ -24,17 +25,24 @@ const (
 
 // Server serves the page and its API for one Provider.
 type Server struct {
-	p     Provider
-	host  string // the exact Host header accepted, e.g. 127.0.0.1:43127
-	token string
+	p          Provider
+	host       string // the exact Host header accepted, e.g. 127.0.0.1:43127
+	token      string
+	restarting chan struct{} // closed when the daemon stops to switch programs
+	once       sync.Once
 }
 
 // New returns a server that accepts only requests addressed to host (the
 // listener's address) and authenticated by token: once as ?t= on the page,
 // which sets an HttpOnly cookie, then by that cookie.
 func New(p Provider, host, token string) *Server {
-	return &Server{p: p, host: host, token: token}
+	return &Server{p: p, host: host, token: token, restarting: make(chan struct{})}
 }
+
+// Restarting tells open pages, with a content-free event, that the daemon is
+// stopping to switch to an updated program and will serve them again at the
+// same address. The page then reconnects for a bounded time.
+func (s *Server) Restarting() { s.once.Do(func() { close(s.restarting) }) }
 
 // Handler is the whole site.
 func (s *Server) Handler() http.Handler {
@@ -117,6 +125,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache") // an updated daemon serves a new page at the same address
 	w.Write(data)
 }
 
@@ -135,6 +144,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }
 
@@ -241,6 +251,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		fl.Flush()
 		select {
 		case <-next:
+		case <-s.restarting:
+			fmt.Fprint(w, "event: restart\ndata: \n\n")
+			fl.Flush()
+			return
 		case <-r.Context().Done():
 			return
 		}

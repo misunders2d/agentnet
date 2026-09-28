@@ -44,6 +44,14 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
+	a.exe, a.canSwitch = opts.Executable, opts.CanSwitch
+	a.update.Lock()
+	a.update.pending, a.update.switching = nil, nil
+	a.update.Unlock()
+	a.settleUpdate()
+	ctx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	a.stopRun = stopRun
 	stopWorker, err := a.startWorker(ctx)
 	if err != nil {
 		return err
@@ -70,10 +78,16 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	a.adQuery = "?ad=" + ad.Encode()
 	a.Logf("session %s#%s", a.Address, ad.Session)
 	backoff := time.Second
+	stopped := func() error { // ctx ended: a stop, or a switch for an update
+		if r := a.UpdateSwitching(); r != nil {
+			return &RestartForUpdate{Request: *r}
+		}
+		return nil
+	}
 	for {
 		healthy, err := a.streamOnce(ctx)
 		if ctx.Err() != nil {
-			return nil
+			return stopped()
 		}
 		if errors.Is(err, ErrRevoked) {
 			return err
@@ -85,7 +99,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		a.Logf("hub stream ended (%v); reconnecting in %s", err, wait.Round(time.Millisecond))
 		select {
 		case <-ctx.Done():
-			return nil
+			return stopped()
 		case <-time.After(wait):
 		}
 		backoff = min(backoff*2, maxBackoff)

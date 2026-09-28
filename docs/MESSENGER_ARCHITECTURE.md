@@ -1024,7 +1024,7 @@ inferred from a build string.
 - **Unchanged:** schema migration with `*.vN.bak` on the next start; identity
   keys, history, approvals and grants in the same home; manual downgrade.
 
-### 19.2b Owner requirement: one-command update (2026-09-28; not implemented)
+### 19.2b Owner requirement: one-command update (2026-09-28; Linux/macOS in source, Windows pending)
 
 - **Requirement.** One `agentnet update`, with no agent, script, curl or manual
   restart sequence, installs the latest *published stable* release from the
@@ -1043,11 +1043,38 @@ inferred from a build string.
   the file (its daemon still needs one restart), and a page loaded from an
   older build reloads before it uses the new UI, with drafts kept or clearly
   lost.
-- **Known gap.** Development builds are stamped with
+- **Stamps.** Development builds used to be stamped with
   `git describe --always --dirty`, which ignores the lightweight release tags
-  (v0.2.x): a build after v0.2.1 reports `v0.1.50-N-g…`. A dev stamp is
-  therefore not a reliable lower bound, and comparing it with the latest
-  release alone could install older code over a newer schema.
+  (v0.2.x): a build after v0.2.1 reports `v0.1.50-N-g…`. The build line and
+  `scripts/build.sh` now use `--tags`. Because old stamps remain installed, a
+  stamp is only a lower bound, and the schema check below is what keeps older
+  code off a newer database.
+- **In source (not released, not installed):**
+  - resolution: a release takes only a newer release; a development build
+    stamped from a release (`vX.Y.Z-N-gHASH`, `vX.Y.Z+…`) only one newer than
+    `vX.Y.Z` (an equal release is refused, not called an update); other dev
+    builds name the release;
+  - schema check: the target must report (`version --schema`) that it opens
+    the home database's schema, read read-only; a target too old to say is
+    accepted only as a newer release over a release;
+  - switch (Linux, macOS): an owner-only request in the home plus the local
+    wake-up. The daemon acts only for the program file it started from,
+    starts no new job, waits until the running job has stored its result,
+    checks the file reports the version, stops cleanly and re-executes the
+    file in place (same process). The program that starts records the
+    outcome once and clears the request (no loops, nothing left pending); a
+    daemon that cannot switch records "not applied" with the reason and keeps
+    serving;
+  - page: a content-free `restart` event, the same address and token for the
+    program started for that update only, bounded reconnection (also after a
+    missed event), and a reload on a new version that keeps every unsent text
+    (conversation drafts, composer, open dialogs) or, without storage, asks;
+  - `agentnet update` reports only what it observed (switched, pending, not
+    applied, failed); `--status` later.
+  - Windows: the daemon does not switch yet (core is probing a scheduled-task
+    restart); update says to restart it.
+  - Evidence: `itest/update_switch_test.go` (Linux, real binaries, local
+    release server), client switch tests, updater tests, page checks.
 
 ### 19.3 Proposed lifecycle for later work (all unimplemented)
 

@@ -44,6 +44,9 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 		for a.reviewAttention(ctx); a.runNext(ctx, wake); a.reviewAttention(ctx) {
 		}
 		a.notifyRelease()
+		if r := a.updatePending(); r != nil && a.UpdateSwitching() == nil {
+			a.switchForUpdate(ctx, *r) // no job runs now: its result is stored
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -56,6 +59,9 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 	if ctx.Err() != nil {
 		return false
+	}
+	if a.checkUpdateRequest(); a.updatePending() != nil {
+		return false // switching for an update: no new job starts
 	}
 	r, err := a.Responder()
 	if err != nil || r == nil {

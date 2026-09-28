@@ -216,17 +216,41 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
 
-From a release build, `agentnet update` installs the latest official release
-(or `agentnet update vX.Y.Z` a named one) over the program's file: it
-downloads this system's asset from the project's GitHub releases, checks it
-against that release's `SHA256SUMS`, runs it to confirm its version, keeps the
-previous file as `<file>.old`, and stops nothing. A failed download or check
-leaves the installed file untouched. On Windows and on filesystems without
-hard links the replacement is two renames; if the machine stops between them,
-or undoing a failed second rename fails, rename `<file>.old` back. Then restart the daemon when
-no job is running and run `agentnet doctor`. Older versions are refused, a
-development build must name the release, and a copy inside a container should
-be updated through its image. Built from source: stop the daemon (Windows
+`agentnet update` installs the latest official release (or `agentnet update
+vX.Y.Z` a named one) over the program's file: it downloads this system's
+asset from the project's GitHub releases, checks it against that release's
+`SHA256SUMS`, runs it to confirm its version, checks that it can open this
+home's database, and keeps the previous file as `<file>.old`. Anything
+failing leaves the installed file untouched.
+
+Then, on Linux and macOS, it asks this home's daemon, if that daemon runs the
+updated file, to switch: the daemon starts no new job, lets a running one
+finish and store its result, and restarts in place as the new version (the
+same process, so a systemd or launchd service keeps it). An open messenger
+page reconnects at the same address with the same login and reloads itself,
+keeping unsent text. `agentnet update` reports what it saw: the daemon runs
+the new version, or the switch is pending while a job runs (`agentnet update
+--status` tells later). Other homes' daemons and a Hub keep the program they
+started with until restarted. On Windows the daemon does not switch yet:
+restart it (`schtasks /end`, then `/run /tn agentnet`) when no job runs.
+
+Which release is installed: a release build takes only a newer release. A
+development build stamped from a release (`vX.Y.Z-N-gHASH` or `vX.Y.Z+…`)
+takes only a release newer than `vX.Y.Z`, and only one that says it can open
+this home's database; a build not stamped from a release must name the
+release. Older versions are refused, and a copy inside a container should be
+updated through its image.
+
+The first time from an older copy: releases up to v0.2.1 have no `agentnet
+update`, so install the new release once as in "A laptop, in four steps".
+Development builds made before the switch existed can install a named
+release (`agentnet update vX.Y.Z`) but cannot ask their daemon to switch:
+restart it once yourself, and reload an open messenger page (a page from such
+a build does not reconnect by itself, and its unsent text is not kept).
+
+On Windows and on filesystems without hard links the replacement is two
+renames; if the machine stops between them, or undoing a failed second rename
+fails, rename `<file>.old` back. Built from source: stop the daemon (Windows
 cannot replace a running `.exe`), `git pull`, rebuild into the same place,
 start it again and run `agentnet doctor`. For the Hub:
 back it up, then `git pull && docker compose up -d --build` (or rebuild and
@@ -236,13 +260,13 @@ generation; a mismatch names the side to update. Downgrading is manual:
 stop the daemon, restore the previous binary, and restore the database from
 the `*.vN.bak` file or a full-home backup. Rolling back the database restores
 consistent keys and history with the older binary, at the cost of any messages
-or attachments received after the backup was made. Releases before the one
-that added `agentnet update` have no self-update (`agentnet help update`).
+or attachments received after the backup was made.
 
 Build with the version stamp (`scripts/build.sh`, or `go build -ldflags
 "-X github.com/misunders2d/agentnet/internal/protocol.Version=$(git describe
---always --dirty)"`) so `agentnet version` names the revision; a plain `go
-build` reports `dev`.
+--tags --always --dirty)"`) so `agentnet version` names the release it was
+made after and the revision (`--tags`: release tags are lightweight); a plain
+`go build` reports `dev`.
 
 **Recommending a client version.** A Hub admin runs `agentnet admin release
 set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running

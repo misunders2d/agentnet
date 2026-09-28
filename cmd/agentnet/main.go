@@ -56,6 +56,11 @@ func run(args []string) error {
 		return runHub(ctx, rest)
 	case "version":
 		fmt.Printf("agentnet %s (protocol %d)\n", protocol.Version, protocol.ProtocolVersion)
+		if len(rest) == 1 && rest[0] == "--schema" {
+			// For agentnet update: which home databases this program can open.
+			fmt.Printf("schema %d\n", client.SchemaSteps())
+			return nil
+		}
 		// A saved recommendation goes to stderr, so the line above stays
 		// parseable; nothing is created and the Hub is not contacted.
 		if r, ok := client.LocalRelease(*home); ok && r.Version != protocol.Version {
@@ -222,6 +227,14 @@ func run(args []string) error {
 			return err
 		}
 		a.Logf = log.Printf
+		// The program file as started: an update replaces it, and only an
+		// update of this file switches this daemon to the new one.
+		if exe, err := os.Executable(); err == nil {
+			if exe, err = filepath.EvalSymlinks(exe); err == nil {
+				opts.Executable = exe
+			}
+		}
+		opts.CanSwitch = canSwitchInPlace
 		if *uiAddr != "" {
 			opts.Owned = func() (func(), error) {
 				stop, err := startDaemonUI(a, *home, *uiAddr, log.Printf)
@@ -231,7 +244,13 @@ func run(args []string) error {
 				return stop, nil
 			}
 		}
-		return a.Run(ctx, opts)
+		err := a.Run(ctx, opts)
+		var rs *client.RestartForUpdate
+		if errors.As(err, &rs) {
+			a.Close()
+			return restartForUpdate(*home, opts.Executable, rs.Request)
+		}
+		return err
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")

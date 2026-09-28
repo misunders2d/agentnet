@@ -205,7 +205,7 @@ func (f *Fixture) view(t *fxThread, m *Message) Message {
 func (f *Fixture) Overview() (Overview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	o := Overview{Demo: true, Me: f.me, Seq: f.seq, Threads: []ThreadSummary{}, Review: []ReviewItem{},
+	o := Overview{Demo: true, Me: f.me, Seq: f.seq, Version: "demo", Threads: []ThreadSummary{}, Review: []ReviewItem{},
 		Quarantine: append([]QuarantineItem{}, f.quar...)}
 	for _, t := range f.threads {
 		first, last := t.msgs[0], t.msgs[len(t.msgs)-1]

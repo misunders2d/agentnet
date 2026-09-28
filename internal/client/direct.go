@@ -35,6 +35,14 @@ type RunOptions struct {
 	// home (the messenger page). It runs once the home lock is held and the
 	// worker is listening; its stop runs when the daemon ends.
 	Owned func() (stop func(), err error)
+	// Executable is this daemon's program file, resolved when it started,
+	// before an update could replace it. Only an update of this exact file
+	// switches the daemon (restart.go); empty never switches.
+	Executable string
+	// CanSwitch, if set, says whether this daemon can be switched in place
+	// and why not. A daemon that cannot is never stopped for an update: the
+	// request is recorded as not applied, with the reason.
+	CanSwitch func() (ok bool, why string)
 }
 
 // Direct delivery limits. Variables so tests can shorten them.

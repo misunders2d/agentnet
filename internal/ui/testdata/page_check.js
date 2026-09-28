@@ -17,7 +17,10 @@ class Elem {
   append(...k) { this.children.push(...k.map(asNode)); }
   replaceChildren(...k) { this.children = k.map(asNode); }
   replaceWith() {}
-  setAttribute(k, v) { this.attrs[k] = String(v); }
+  setAttribute(k, v) {
+    this.attrs[k] = String(v);
+    if (k === "id") { this.id = String(v); byId[this.id] = this; }
+  }
   getAttribute(k) { return this.attrs[k] ?? null; }
   addEventListener() {}
   removeEventListener() {}
@@ -26,7 +29,18 @@ class Elem {
   showModal() { this.open = true; }
   close() { this.open = false; }
   querySelector() { return null; }
-  querySelectorAll() { return []; }
+  // Only what the page asks for: a dialog's text fields.
+  querySelectorAll(sel) {
+    if (sel !== "input[type=text], textarea, select") return [];
+    const out = [];
+    const walk = (n) => {
+      if (!(n instanceof Elem)) return;
+      if ((n.tagName === "input" && n.attrs.type === "text") || n.tagName === "textarea" || n.tagName === "select") out.push(n);
+      n.children.forEach(walk);
+    };
+    this.children.forEach(walk);
+    return out;
+  }
   closest() { return null; }
   getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; }
   get lastElementChild() { return this.children[this.children.length - 1] || null; }
@@ -48,6 +62,8 @@ function strayText(n, out = []) {
 }
 const hasTag = (n, tag) => n instanceof Elem && (n.tagName === tag || n.children.some((c) => hasTag(c, tag)));
 const byId = {};
+let appElem;
+appElem = new Elem("div");
 const radios = ["message", "question", "task"].map((v) => Object.assign(new Elem("input"), { value: v, checked: v === "message" }));
 const document = {
   body: new Elem("body"),
@@ -55,7 +71,7 @@ const document = {
   createElement: (tag) => new Elem(tag),
   createElementNS: (ns, tag) => new Elem(tag),
   createTextNode: (text) => ({ text }),
-  querySelector: (sel) => (sel === 'input[name="kind"]:checked' ? radios.find((r) => r.checked) : null),
+  querySelector: (sel) => (sel === 'input[name="kind"]:checked' ? radios.find((r) => r.checked) : sel === ".app" ? appElem : null),
   querySelectorAll: (sel) => (sel === 'input[name="kind"]' ? radios : []),
   addEventListener() {},
 };
@@ -72,18 +88,21 @@ const threads = {
 const overview = { demo: false, me: { address: "me/laptop", fingerprint: "SHA256:me" }, threads: [], review: [], quarantine: [], seq: 0 };
 
 // fetch answers at once, except the paths listed in hold: those wait for
-// release(path) so a test can act while a request is on its way.
+// release(path) so a test can act while a request is on its way. While
+// down is set, every request fails as if the daemon were gone.
+let down = false;
 const calls = [];
 const hold = {};
 const held = {};
 function release(p) { const r = held[p].shift(); r(); }
 function fetch(url, opts) {
+  if (down) return Promise.reject(new TypeError("Failed to fetch"));
   const u = new URL(url, "http://127.0.0.1");
   const body = opts && opts.body ? JSON.parse(opts.body) : undefined;
   calls.push({ path: u.pathname, body });
   let data = {};
   if (u.pathname === "/api/thread") data = threads[u.searchParams.get("id")];
-  else if (u.pathname === "/api/overview") data = overview;
+  else if (u.pathname === "/api/overview") data = Object.assign({ version: serving }, overview);
   else if (u.pathname === "/api/send") data = { id: "new", state: "delivered" };
   else if (u.pathname === "/api/refresh") data = { text: "Connection unknown" };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
@@ -91,17 +110,35 @@ function fetch(url, opts) {
   return Promise.resolve(resp);
 }
 
+let serving = "v1"; // the version the daemon reports
+const streams = [];  // every event stream the page opened
+class FakeEventSource {
+  constructor() { this.handlers = {}; this.closed = false; streams.push(this); }
+  addEventListener(ev, f) { this.handlers[ev] = f; }
+  close() { this.closed = true; }
+  fire(ev) { if (ev === "error") this.onerror(); else this.handlers[ev]({ data: "" }); }
+}
+const store = new Map();
+let storageBroken = false;
+const sessionStorage = {
+  getItem: (k) => { if (storageBroken) throw new Error("denied"); return store.has(k) ? store.get(k) : null; },
+  setItem: (k, v) => { if (storageBroken) throw new Error("denied"); store.set(k, String(v)); },
+  removeItem: (k) => { store.delete(k); },
+};
+let reloads = 0;
 const ctx = vm.createContext({
-  document, fetch, console, setTimeout, clearTimeout, URL,
+  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage,
   window: { innerHeight: 800, matchMedia: () => ({ matches: false }), addEventListener() {} },
   localStorage: { getItem: () => null, setItem() {} },
-  EventSource: class { addEventListener() {} close() {} },
+  location: { reload() { reloads++; } },
+  EventSource: FakeEventSource,
 });
 for (const f of ["lenses.js", "app.js"]) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8"), ctx, { filename: f });
 
 const run = (code) => vm.runInContext(code, ctx);
 const $ = (id) => document.getElementById(id);
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const sends = () => calls.filter((c) => c.path === "/api/send" || (c.path === "/api/act" && c.body.do !== "read"));
 let failed = 0;
 function check(ok, what) {
@@ -313,6 +350,73 @@ const ev = { preventDefault() {} };
   calls.length = 0;
   await run("dismissReports")("hub/ops");
   check(calls.filter((c) => c.path === "/api/act").map((c) => c.body.id).join() === "mix", "dismiss reaches the report in a conversation");
+
+  // Update switch: after the restart notice the page reconnects on its own
+  // for a bounded time; a missed notice gets a couple of quick tries; if the
+  // daemon never returns, the page says so and stops trying.
+  overview.threads = threads; overview.review = [];
+  run("recovery").update = [0, 0, 0]; run("recovery").missed = [0, 0];
+  run("listen")();
+  let es = streams[streams.length - 1];
+  down = true;
+  calls.length = 0;
+  es.fire("restart");
+  await tick(); await tick();
+  check(!$("updating").hidden && es.closed, "the restart notice shows that AgentNet is switching");
+  down = false;
+  await pause(20);
+  check(streams.length >= 2 && !streams[streams.length - 1].closed && $("updating").hidden && $("lost").hidden,
+    "the page reconnected to the restarted daemon");
+  es = streams[streams.length - 1];
+  down = true;
+  es.fire("error");
+  down = false;
+  await pause(20);
+  check(!streams[streams.length - 1].closed && $("lost").hidden && streams[streams.length - 1] !== es, "a missed restart notice still reconnects");
+  es = streams[streams.length - 1];
+  down = true;
+  calls.length = 0;
+  const before = streams.length;
+  es.fire("restart");
+  await pause(40);
+  check(streams.length === before && !$("lost").hidden && $("updating").hidden, "a daemon that does not return: the page says so and stops");
+  down = false;
+  await run("reconnect")();
+
+  // A new version: every unsent text is kept across the reload, including
+  // an open dialog's fields but never its consent boxes; nothing reloads
+  // while a send is on its way; without storage the page asks instead.
+  await run('openThread("a1")');
+  $("body").value = "unsent to alice";
+  run("state").drafts["c1"] = { text: "carol draft", kind: "task", answering: null };
+  run("writeDialog")(run("state.data"), null);
+  byId["write-body"].value = "zoom text";
+  byId["write-kind"].value = "question";
+  run("state").sending = true;
+  serving = "v2";
+  reloads = 0;
+  await run("loadOverview()");
+  check(reloads === 0, "no reload while a send is on its way");
+  run("state").sending = false;
+  run("updated")(run("state.newVersion"));
+  check(reloads === 1 && store.has("agentnet-reload"), "reloads once the send is done, with unsent text kept");
+  // What the reloaded page gets back.
+  run("state").drafts = {}; run("state").thread = null; run("state").data = null; run("state").draftKey = null;
+  run("state").version = ""; run("state").newVersion = ""; // a fresh page learns its version again
+  $("body").value = ""; $("dialog").open = false;
+  await run("restoreAfterReload()");
+  check($("body").value === "unsent to alice" && run("state.drafts")["c1"].text === "carol draft" && run("state.drafts")["c1"].kind === "task",
+    "drafts are back after the reload");
+  check($("dialog").open && byId["write-body"].value === "zoom text" && byId["write-kind"].value === "question",
+    "the open dialog is back with its text: " + byId["write-body"].value);
+  check(!store.has("agentnet-reload"), "kept text is restored once");
+  run("newConversationDialog")("admin/zenbook");
+  byId["new-body"].value = "new conversation text";
+  storageBroken = true;
+  reloads = 0;
+  run("updated")("v3");
+  check(reloads === 0 && !$("reload").hidden && !$("updating").hidden, "without storage the page asks instead of reloading");
+  storageBroken = false;
 
   if (failed) process.exit(1);
   console.log("page logic ok");

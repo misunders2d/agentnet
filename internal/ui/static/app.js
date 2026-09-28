@@ -5,7 +5,8 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {} };
+  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {},
+  version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
 // present flattens children and drops the ones a condition left out (false,
@@ -76,6 +77,8 @@ function avatar(addr, cls) {
 async function loadOverview() {
   const o = await api("/api/overview");
   state.overview = o;
+  if (!state.version) state.version = o.version;
+  else if (o.version && o.version !== state.version) updated(o.version);
   $("demo").hidden = !o.demo;
   $("me").textContent = o.me.address;
   $("me").title = "Key " + o.me.fingerprint;
@@ -617,10 +620,12 @@ function decide(a, m, t) {
   }
   if (a === "decline") {
     const reason = el("textarea", { id: "reason", rows: "3", placeholder: "Optional, sent to " + m.from });
-    return dialog({
+    dialog({
       title: "Decline this " + m.kind + "?", body: [from, quote, el("label", { for: "reason", class: "field-label" }, "Reason"), reason],
       ok: "Decline", run: () => act({ do: "decline", id: m.id, reason: reason.value }),
     });
+    state.dialogRestore = { type: "decline", msg: m.id };
+    return;
   }
   if (a === "approve") return approvalDialog(t);
   if (a === "resolve" && isReport(m)) {
@@ -678,6 +683,7 @@ function trustDialog(t) {
 function dialog({ title, body, ok, run, gate, focus }) {
   const d = $("dialog");
   if (d.open) d.close();
+  state.dialogRestore = null; // text dialogs say how to reopen them after an update
   $("dialog-title").textContent = title;
   fill($("dialog-body"), ...body);
   $("dialog-error").textContent = "";
@@ -689,6 +695,7 @@ function dialog({ title, body, ok, run, gate, focus }) {
   okBtn.onclick = async () => {
     if (busy) return;
     busy = true;
+    state.dialogBusy = true;
     okBtn.disabled = true;
     try {
       await run();
@@ -698,6 +705,8 @@ function dialog({ title, body, ok, run, gate, focus }) {
       okBtn.disabled = !!gate && !gate.checked;
     } finally {
       busy = false;
+      state.dialogBusy = false;
+      if (state.newVersion) updated(state.newVersion);
     }
   };
   d.showModal();
@@ -723,6 +732,7 @@ function newConversationDialog(prefill) {
       openThread(r.id);
     },
   });
+  state.dialogRestore = { type: "new", prefill: typeof prefill === "string" ? prefill : undefined };
 }
 
 // ---- composer ------------------------------------------------------------------
@@ -812,6 +822,7 @@ async function send(ev) {
   } finally {
     state.sending = false;
     syncComposer();
+    if (state.newVersion) updated(state.newVersion);
   }
 }
 
@@ -838,10 +849,110 @@ function listen() {
     state.seq = seq;
     refetch(first);
   });
+  // The daemon is stopping to switch to its updated program and will serve
+  // this page again at the same address.
+  es.addEventListener("restart", () => {
+    es.close();
+    state.updating = true;
+    $("updating").hidden = false;
+    $("lost").hidden = true;
+    recover(recovery.update);
+  });
   es.onerror = () => {
     es.close();
+    if (state.updating) return; // already reconnecting
     $("lost").hidden = false;
+    recover(recovery.missed); // a switch whose notice was missed comes back quickly
   };
+}
+
+// recovery: waits (ms) between reconnection attempts, bounded. They happen
+// only after the stream breaks; otherwise the page never asks.
+const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000] };
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function recover(schedule) {
+  for (const wait of schedule) {
+    await pause(wait);
+    if (await reconnect()) return;
+  }
+  if (state.updating) {
+    state.updating = false;
+    $("updating").hidden = true;
+    $("lost").hidden = false;
+    announce("AgentNet did not come back at this address. Run agentnet ui for the address to open, or agentnet update --status.");
+  }
+}
+
+// reconnect loads the page's data again and listens; it reports success.
+async function reconnect() {
+  try {
+    await loadOverview();
+    if (state.thread) await loadThread(false);
+  } catch (e) {
+    return false;
+  }
+  state.updating = false;
+  $("lost").hidden = true;
+  if (!state.newVersion) $("updating").hidden = true;
+  listen();
+  return true;
+}
+
+// updated: the daemon now runs another version. The page reloads to use
+// it, keeping every unsent text, but never while a send or a confirmation
+// is on its way, and only if what it keeps is stored.
+function updated(v) {
+  state.newVersion = v;
+  if (state.sending || state.dialogBusy) return; // retried when they finish
+  if (keepForReload()) { location.reload(); return; }
+  $("updating").hidden = false;
+  $("updating-text").textContent = "AgentNet was updated to " + v + ". Reload to use it; this browser could not keep your unsent text for the reload, so copy it first.";
+  $("reload").hidden = false;
+}
+
+const reloadKey = "agentnet-reload";
+
+// keepForReload stores unsent text: every conversation's draft, the
+// composer, and an open dialog's fields (not its consent boxes).
+function keepForReload() {
+  keepDraft();
+  const drafts = {};
+  for (const [k, d] of Object.entries(state.drafts)) drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null };
+  const fields = {};
+  if (state.dialogRestore && $("dialog").open) {
+    for (const f of $("dialog-body").querySelectorAll("input[type=text], textarea, select")) if (f.id) fields[f.id] = f.value;
+  }
+  const keep = { drafts, thread: state.thread, lens: state.lens, dialog: state.dialogRestore && $("dialog").open ? state.dialogRestore : null, fields };
+  try {
+    const text = JSON.stringify(keep);
+    sessionStorage.setItem(reloadKey, text);
+    return sessionStorage.getItem(reloadKey) === text;
+  } catch (e) {
+    return false;
+  }
+}
+
+// restoreAfterReload puts back what keepForReload stored, once.
+async function restoreAfterReload() {
+  let keep = null;
+  try {
+    keep = JSON.parse(sessionStorage.getItem(reloadKey) || "null");
+    sessionStorage.removeItem(reloadKey);
+  } catch (e) { /* nothing kept */ }
+  if (!keep) return false;
+  for (const [k, d] of Object.entries(keep.drafts || {})) state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null };
+  if (keep.lens) setLens(keep.lens);
+  if (keep.thread) await openThread(keep.thread);
+  const r = keep.dialog;
+  if (r) {
+    const m = r.msg && state.data ? state.data.messages.find((x) => x.id === r.msg) : null;
+    if (r.type === "new") newConversationDialog(r.prefill);
+    else if (r.type === "write" && state.data) writeDialog(state.data, m);
+    else if (r.type === "decline" && m) decide("decline", m, state.data);
+    for (const [id, v] of Object.entries(keep.fields || {})) { const f = document.getElementById(id); if (f) f.value = v; }
+  }
+  return true;
 }
 
 // refetch loads what the page shows once per burst of changes: changes
@@ -914,19 +1025,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   $("reconnect").addEventListener("click", async () => {
-    try {
-      await loadOverview();
-      if (state.thread) await loadThread(false);
-      $("lost").hidden = true;
-      listen();
-    } catch (e) { announce("Still not connected. If the daemon restarted, run agentnet ui for the new address."); }
+    if (!(await reconnect())) announce("Still not connected. If the daemon restarted, run agentnet ui for the new address.");
   });
+  $("reload").addEventListener("click", () => location.reload());
+  $("dialog").addEventListener("close", () => { state.dialogRestore = null; });
   window.addEventListener("focus", () => { // a missed change is caught when the person comes back
     if (!$("lost").hidden) return;
     refetch(false);
   });
-  loadOverview().then((o) => {
+  loadOverview().then(async (o) => {
     setLens(saved);
+    if (await restoreAfterReload()) return; // back after an update, with what was unsent
     // Open the latest conversation; reports are not conversations.
     const first = o.threads.find((t) => !t.notice_only && (t.count > 1 || t.review || t.running || t.waiting)) ||
       o.threads.find((t) => !t.notice_only);
