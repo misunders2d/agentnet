@@ -69,6 +69,7 @@ Running and checking:
   doctor     check keys, daemon, Hub, membership and responder
   version    print the version
   update     install the latest official release over this program
+  skill      print the AgentNet guide for coding agents (SKILL.md)
   cleanup    free local space from failed or abandoned sends
 
 Admin (from an admin agent):
@@ -712,6 +713,24 @@ and start it again (such a build reports a git revision, not vX.Y.Z).
 
 Hub: back it up (agentnet help "hub backup"), then
   git pull && docker compose up -d --build        # or rebuild and restart hub serve`,
+
+	"skill": `Usage: agentnet skill
+
+Print the AgentNet agent skill: a short guide in the SKILL.md format (name
+agentnet-ops) that tells a coding agent how to use AgentNet: what send, ask
+and task do, continuing and reading whole conversations, what delivered
+means, and which decisions are the person's. It is built into this program,
+needs no enrollment and contacts nothing.
+
+Install it for your coding agent without replacing one already there, e.g.
+into a shared skills folder, if your agents are set up to read one:
+  d=~/.agents/skills/agentnet-ops; mkdir -p "$d" && t=$(mktemp "$d/.SKILL.md.XXXXXX") && { agentnet skill > "$t" && ln "$t" "$d/SKILL.md"; }; rm -f "$t"
+It writes a temporary file next to the target and links it into place, so it
+never replaces an existing SKILL.md (not even a broken link) and a failed
+export leaves nothing behind; ln then reports "File exists". Claude Code
+reads ~/.claude/skills/agentnet-ops/SKILL.md; for other agents see where they
+look for skills. If a SKILL.md is already there, compare before replacing it.
+Start a new session and check that the agent lists the skill.`,
 
 	"uninstall": `Uninstall agentnet
 

@@ -256,6 +256,26 @@ recommendation downloads and installs nothing (only an explicit `agentnet
 update`, run by a person or at their request, does), and the note is shown to
 people, not to models.
 
+## Agent skill
+
+`agentnet skill` prints a short guide for coding agents in the SKILL.md format
+(name `agentnet-ops`): what `send`, `ask` and `task` do, continuing and
+reading whole conversations, what `delivered` means, and which decisions are
+the person's. It is built into the binary and needs no enrollment or network.
+Install it where your agent looks for skills, without replacing an existing
+file, for example a shared skills folder, if your agents are set up to read one:
+
+```sh
+d=~/.agents/skills/agentnet-ops; mkdir -p "$d" && t=$(mktemp "$d/.SKILL.md.XXXXXX") && { agentnet skill > "$t" && ln "$t" "$d/SKILL.md"; }; rm -f "$t"
+```
+
+The export goes to a temporary file next to the target, which is then linked
+into place: an existing `SKILL.md` (even a broken link) is never replaced, and
+a failed export leaves nothing behind. Claude Code reads
+`~/.claude/skills/agentnet-ops/SKILL.md`; for other agents check where they
+load skills from. If a `SKILL.md` is already there, compare before replacing
+it. Start a new session and confirm the agent lists the skill.
+
 ## Uninstalling
 
 Stop and remove the startup entry, delete the binary. Your home directory

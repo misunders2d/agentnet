@@ -64,6 +64,8 @@ func run(args []string) error {
 		return nil
 	case "update":
 		return runUpdate(ctx, *home, rest)
+	case "skill":
+		return runSkill(os.Stdout, rest)
 	case "join":
 		return runJoin(ctx, *home, rest)
 	case "hook":
