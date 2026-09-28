@@ -252,7 +252,7 @@ backup is left there (Pi would load it). A Pi session is told when it
 starts, when you send a prompt, once before a run finishes, and while it is
 idle: a short notice that the next turn also sees; no model turn is started.
 It watches the AgentNet home for changes (no polling) only while Pi runs.
-A notice counts as seen once Pi has been handed it.
+A notice counts as seen once it is in the Pi session.
 
 Antigravity hooks, and hooks on Windows, are not supported; use agentnet
 inbox and agentnet conversation there.`,

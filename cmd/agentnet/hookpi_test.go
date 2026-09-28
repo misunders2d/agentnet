@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,54 +95,103 @@ func TestHookPiWithoutAgentIsSilent(t *testing.T) {
 	}
 }
 
-// piStub stands in for agentnet: it logs each call's event and answers
-// every non-Ack event with one arrival, slowly, so overlapping calls would
-// show in the log.
+// piStub stands in for agentnet. It logs each call, and per the mode file
+// answers every non-Ack event with one arrival (unless after >= 7), hangs, or
+// writes far too much.
 const piStub = `#!/bin/sh
+d="$STUB_DIR"
 in=$(cat)
-printf '%s\n' "$in" >> "$STUB_LOG"
+printf '%s\n' "$in" >> "$d/calls.log"
 case "$in" in *'"Ack"'*) exit 0 ;; esac
-sleep 0.2
+case "$(cat "$d/mode" 2>/dev/null)" in
+hang) echo $$ > "$d/hung.pid"; exec sleep 60 ;;
+huge) head -c 200000 /dev/zero | tr '\0' x; exit 0 ;;
+esac
+after=$(printf '%s' "$in" | sed -n 's/.*"after":\([0-9]*\).*/\1/p')
+[ "${after:-0}" -ge 7 ] && exit 0
 printf '%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m1 message from bob/desk","ack":{"pos":7,"has_pos":true,"release":""}}'
 `
 
 // piHarness loads the extension in Node with a stand-in for Pi's extension
-// API, drives Pi's events, and prints what the extension did.
+// API and drives Pi's events step by step, printing what happened.
 const piHarness = `
 import * as fs from "node:fs";
-const handlers = {};
-const calls = [];
-const pi = {
-  on: (ev, fn) => { handlers[ev] = fn; },
-  sendMessage: (m, o) => calls.push({ sendMessage: { display: m.display, customType: m.customType, triggerTurn: o.triggerTurn, deliverAs: o.deliverAs } }),
-};
-const mod = await import(process.argv[2]);
-mod.default(pi);
+const [ext, home, dir] = process.argv.slice(2);
+const h = {};
+const sent = [];
+const notes = [];
+const pi = { on: (ev, fn) => { h[ev] = fn; }, sendMessage: (m, o) => sent.push({ details: m.details, options: o }) };
+(await import(ext)).default(pi);
 const out = (x) => console.log(JSON.stringify(x));
-if (!handlers.session_start) { out({ registered: false }); process.exit(0); }
-let idle = false;
-const ctx = { hasUI: true, isIdle: () => idle, sessionManager: { getSessionId: () => "S1" },
-  ui: { notify: (t, k) => calls.push({ notify: t }) } };
-await handlers.session_start({}, ctx);
-// A prompt and an idle arrival at the same time.
+if (!h.session_start) { out({ registered: false }); process.exit(0); }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mode = (m) => fs.writeFileSync(dir + "/mode", m);
+const acks = () => fs.readFileSync(dir + "/calls.log", "utf8").split("\n").filter((l) => l.includes('"Ack"')).length;
+const lastAfter = () => { const ls = fs.readFileSync(dir + "/calls.log", "utf8").trim().split("\n").filter((l) => !l.includes('"Ack"')); return JSON.parse(ls[ls.length - 1]).after; };
+let idle = false, branch = [];
+const ctx = { hasUI: true, isIdle: () => idle, ui: { notify: (t) => notes.push(t) },
+  sessionManager: { getSessionId: () => "S1", getBranch: () => branch } };
+mode("ok");
+await h.session_start({}, ctx);
+out({ step: "start", acks: acks(), sent: sent.length, triggerTurn: sent[0]?.options?.triggerTurn });
+const r1 = await h.before_agent_start({});
+await sleep(100);
+out({ step: "prompt", message: !!r1?.message, acks: acks() });
+const r2 = await h.before_agent_start({});
+out({ step: "prompt-pending", message: !!r2?.message, after: lastAfter() });
+await h.message_end({ message: { role: "custom", customType: "agentnet", details: r1.message.details } });
+await sleep(300);
+out({ step: "admitted", acks: acks() });
 idle = true;
-const prompt = handlers.before_agent_start({});
-fs.writeFileSync(process.argv[3] + "/agent.db-wal", "x");
-out({ prompt: await prompt });
-await new Promise((r) => setTimeout(r, 1500));
-out({ settle1: await handlers.agent_before_settle({}) });
-out({ settle2: await handlers.agent_before_settle({}) });
-await handlers.session_shutdown({});
-fs.writeFileSync(process.argv[3] + "/agent.db-wal", "y");
-await new Promise((r) => setTimeout(r, 900));
-out({ calls });
+fs.writeFileSync(home + "/agent.db-wal", "x");
+await sleep(1200);
+out({ step: "idle", notes, acks: acks(), idleSent: sent.length });
+idle = false;
+const s1 = await h.agent_before_settle({});
+await sleep(100);
+out({ step: "settle", continue: s1?.continue, acks: acks() });
+branch = [{ type: "custom_message", customType: "agentnet", details: s1.entries[0].details }];
+await h.turn_start({}, ctx);
+await sleep(300);
+out({ step: "settle-admitted", acks: acks() });
+const r3 = await h.before_agent_start({});
+await h.agent_settled({}, { sessionManager: { getBranch: () => [] } });
+const r4 = await h.before_agent_start({});
+out({ step: "dropped", first: !!r3?.message, again: !!r4?.message, after: lastAfter() });
+await h.agent_settled({}, { sessionManager: { getBranch: () => [] } });
+mode("hang");
+let t0 = Date.now();
+const r5 = await h.before_agent_start({});
+out({ step: "hang", ms: Date.now() - t0, message: !!r5 });
+mode("huge");
+const r6 = await h.before_agent_start({});
+mode("ok");
+const r7 = await h.before_agent_start({});
+out({ step: "recover", huge: !!r6, message: !!r7 });
+await h.agent_settled({}, { sessionManager: { getBranch: () => [] } });
+mode("hang");
+fs.rmSync(dir + "/hung.pid", { force: true });
+const p = h.before_agent_start({});
+await sleep(150);
+await h.session_shutdown({});
+await sleep(50); // well before the hook timeout: only shutdown can have stopped it
+let alive = true;
+try { process.kill(Number(fs.readFileSync(dir + "/hung.pid", "utf8")), 0); } catch { alive = false; }
+out({ step: "shutdown", hungAlive: alive });
+await p;
+fs.writeFileSync(home + "/agent.db-wal", "y");
+await sleep(900);
+out({ step: "after-shutdown", notes: notes.length });
 `
 
-// The extension, run by Node against a stand-in Pi API: it asks at session
-// start, prompt, idle and end of run; acknowledges only after handing text
-// over; never overlaps two calls; continues a run once; stops watching at
-// shutdown; and stays silent in AgentNet's background sessions. This checks
-// the extension's own logic, not that Pi itself loads it.
+// The extension, run by Node against a stand-in Pi API (this checks its own
+// logic, not that Pi itself loads it): acknowledgement only once the notice
+// is in the session (at once for idle and start, at message_end for a
+// prompt, once the entry is in the branch for the end of a run); pending
+// notices are not shown twice and unconfirmed ones are offered again after
+// the run; a hung or oversized hook call is cut off and later calls work;
+// shutdown stops a running call and the watcher; background sessions do
+// nothing.
 func TestPiExtensionWithStandInAPI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stand-in agentnet is a shell script")
@@ -158,95 +208,74 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	os.MkdirAll(home, 0o700)
 	stub := filepath.Join(dir, "agentnet")
 	os.WriteFile(stub, []byte(piStub), 0o700)
-	log := filepath.Join(dir, "calls.log")
 	bin, _ := json.Marshal(stub)
 	h, _ := json.Marshal(home)
 	ext := bytes.Replace(piExtension, []byte(`"__AGENTNET_BIN__"`), bin, 1)
 	ext = bytes.Replace(ext, []byte(`"__AGENTNET_HOME__"`), h, 1)
+	ext = bytes.Replace(ext, []byte("const HOOK_TIMEOUT_MS = 10000;"), []byte("const HOOK_TIMEOUT_MS = 300;"), 1)
 	os.WriteFile(filepath.Join(dir, "agentnet.ts"), ext, 0o600)
 	os.WriteFile(filepath.Join(dir, "harness.mjs"), []byte(piHarness), 0o600)
 
-	run := func(background string) []map[string]json.RawMessage {
+	run := func(background string) map[string]map[string]any {
 		t.Helper()
-		cmd := exec.Command(node, filepath.Join(dir, "harness.mjs"), filepath.Join(dir, "agentnet.ts"), home)
-		cmd.Env = append(os.Environ(), "STUB_LOG="+log, "AGENTNET_BACKGROUND="+background)
+		os.Remove(filepath.Join(dir, "calls.log"))
+		os.WriteFile(filepath.Join(dir, "calls.log"), nil, 0o600)
+		cmd := exec.Command(node, filepath.Join(dir, "harness.mjs"), filepath.Join(dir, "agentnet.ts"), home, dir)
+		cmd.Env = append(os.Environ(), "STUB_DIR="+dir, "AGENTNET_BACKGROUND="+background)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("node: %v\n%s", err, out)
 		}
-		var lines []map[string]json.RawMessage
+		steps := map[string]map[string]any{}
 		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			var m map[string]json.RawMessage
+			var m map[string]any
 			if json.Unmarshal([]byte(l), &m) == nil {
-				lines = append(lines, m)
+				name, _ := m["step"].(string)
+				if name == "" {
+					name = "registered"
+				}
+				steps[name] = m
 			}
 		}
-		return lines
+		return steps
 	}
 
-	lines := run("")
-	got := map[string]string{}
-	for _, l := range lines {
-		for k, v := range l {
-			got[k] = string(v)
+	s := run("")
+	check := func(step, key string, want any) {
+		t.Helper()
+		if got := s[step][key]; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s.%s = %v, want %v (all: %v)", step, key, got, want, s[step])
 		}
 	}
-	if !strings.Contains(got["prompt"], `"customType":"agentnet"`) || !strings.Contains(got["prompt"], "m1 message from bob/desk") {
-		t.Fatalf("prompt context: %s", got["prompt"])
+	check("start", "acks", 1) // in the session at once
+	check("start", "triggerTurn", false)
+	check("prompt", "message", true)
+	check("prompt", "acks", 1) // not yet: Pi adds it after the handler returns
+	check("prompt-pending", "message", false)
+	check("prompt-pending", "after", 7)
+	check("admitted", "acks", 2)
+	check("idle", "acks", 3)
+	check("idle", "notes", "[AgentNet: 1 new]")
+	check("settle", "continue", true)
+	check("settle", "acks", 3)
+	check("settle-admitted", "acks", 4)
+	check("dropped", "first", true)
+	check("dropped", "again", true)
+	check("dropped", "after", 0)
+	check("hang", "message", false)
+	if ms, _ := s["hang"]["ms"].(float64); ms > 3000 {
+		t.Errorf("a hung hook call held the prompt for %v ms", ms)
 	}
-	if !strings.Contains(got["settle1"], `"continue":true`) || !strings.Contains(got["settle1"], `"type":"custom_message"`) {
-		t.Fatalf("end of run: %s", got["settle1"])
-	}
-	for _, want := range []string{`"notify":"AgentNet: 1 new"`, `"triggerTurn":false`, `"deliverAs":"nextTurn"`} {
-		if !strings.Contains(got["calls"], want) {
-			t.Fatalf("idle notice lacks %s: %s", want, got["calls"])
-		}
-	}
+	check("recover", "huge", false)
+	check("recover", "message", true)
+	check("shutdown", "hungAlive", false)
+	check("after-shutdown", "notes", 1)
 
-	data, _ := os.ReadFile(log)
-	var events []string
-	var stopActive []bool
-	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		var in struct {
-			Event string `json:"hook_event_name"`
-			Stop  bool   `json:"stop_hook_active"`
-			Pos   int64  `json:"pos"`
-		}
-		json.Unmarshal([]byte(l), &in)
-		events = append(events, in.Event)
-		if in.Event == "Stop" {
-			stopActive = append(stopActive, in.Stop)
-		}
-		if in.Event == "Ack" && in.Pos != 7 {
-			t.Fatalf("ack position %d", in.Pos)
-		}
+	s = run("1")
+	if v, ok := s["registered"]["registered"]; !ok || v != false {
+		t.Fatalf("background session registered handlers: %v", s)
 	}
-	// Every shown notice is acknowledged right after it, never interleaved.
-	for i, ev := range events {
-		if ev != "Ack" && (i+1 >= len(events) || events[i+1] != "Ack") && !(ev == "Stop" && len(stopActive) > 1 && i == len(events)-1) {
-			t.Fatalf("calls overlapped or a shown notice was not acknowledged: %v", events)
-		}
-	}
-	want := []string{"SessionStart", "UserPromptSubmit", "Idle", "Stop"}
-	var asked []string
-	for _, ev := range events {
-		if ev != "Ack" {
-			asked = append(asked, ev)
-		}
-	}
-	if strings.Join(asked[:4], ",") != strings.Join(want, ",") || len(asked) != 5 || asked[4] != "Stop" {
-		t.Fatalf("events %v", events)
-	}
-	if len(stopActive) != 2 || stopActive[0] || !stopActive[1] {
-		t.Fatalf("end-of-run continuation not guarded: %v", stopActive)
-	}
-
-	os.Remove(log)
-	lines = run("1")
-	if len(lines) != 1 || string(lines[0]["registered"]) != "false" {
-		t.Fatalf("background session registered handlers: %v", lines)
-	}
-	if _, err := os.Stat(log); !os.IsNotExist(err) {
+	if data, _ := os.ReadFile(filepath.Join(dir, "calls.log")); len(data) != 0 {
 		t.Fatal("background session called agentnet")
 	}
 }
