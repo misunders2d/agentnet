@@ -38,6 +38,7 @@ func (l *Live) Overview() (Overview, error) {
 	if r, ok := l.a.Release(); ok && r.Version != protocol.Version {
 		o.Release = r.Version
 	}
+	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 	threads, err := l.a.Threads()
 	if err != nil {
 		return o, err
@@ -75,6 +76,30 @@ func (l *Live) Overview() (Overview, error) {
 		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: reason, At: x.ReceivedAt})
 	}
 	return o, nil
+}
+
+// directoryOf turns the daemon's member view into the page's directory:
+// presence only while the view is current, and without this installation.
+func directoryOf(v client.MemberView, self string) Directory {
+	d := Directory{Status: DirectoryUnknown, Members: []DirMember{}}
+	switch v.Listed {
+	case client.MembersListed:
+		d.Status = DirectoryListed
+	case client.MembersNotListed:
+		d.Status = DirectoryNotListed
+	}
+	d.Current, d.At, d.Truncated = v.Current, v.At, v.Members.Truncated
+	for _, m := range v.Members.Members {
+		if m.Address == self {
+			continue
+		}
+		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0)}
+		if v.Current {
+			e.Presence = m.Presence
+		}
+		d.Members = append(d.Members, e)
+	}
+	return d
 }
 
 // Thread implements Provider.

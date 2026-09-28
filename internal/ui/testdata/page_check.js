@@ -418,6 +418,45 @@ const ev = { preventDefault() {} };
   check(reloads === 0 && !$("reload").hidden && !$("updating").hidden, "without storage the page asks instead of reloading");
   storageBroken = false;
 
+  // Directory: who the server lists, found without any history; presence
+  // only while the server's view is current; choosing opens, never sends.
+  const textOf = (n) => n instanceof Object && n.children ? n.children.map(textOf).join(" ") : String((n && n.text) || "");
+  overview.threads = [sum("t1", "bob/desk", { title: "port?", count: 2 })];
+  overview.review = [];
+  overview.directory = { status: "listed", current: true, at: "2026-09-28T12:00:00Z", truncated: false, members: [
+    { address: "vitalii/laptop", presence: "connected", joined: "2026-09-28T11:59:00Z" },
+    { address: "bob/desk", presence: "reconnecting", joined: "2026-09-01T00:00:00Z" },
+  ] };
+  await run("loadOverview()");
+  let found = run("searchKnown")("vitalii", overview.threads, run("directory")());
+  check(found.listed.length === 1 && found.listed[0].address === "vitalii/laptop" && found.agents.length === 0,
+    "search finds someone the server lists, with no conversation yet");
+  found = run("searchKnown")("bob", overview.threads, run("directory")());
+  check(found.agents.length === 1 && found.listed.length === 0, "a contact is not listed twice");
+  check(run("presenceOf")("vitalii/laptop") === "online" && run("presenceOf")("bob/desk") === "reconnecting", "presence while current");
+  const section = run("directorySection")(overview.threads);
+  check(section.length > 0 && JSON.stringify(section).includes("vitalii") && !JSON.stringify(section).includes('"bob/desk"'),
+    "the directory lists only agents without a conversation");
+  calls.length = 0;
+  run("chooseMember")("vitalii/laptop");
+  check($("dialog").open && byId["new-to"] && byId["new-to"].value === "vitalii/laptop" && !calls.some((c) => c.path === "/api/send" || c.path === "/api/act"),
+    "choosing a new agent opens a new conversation to them and sends nothing");
+  $("dialog").open = false;
+  run("chooseMember")("bob/desk");
+  check(run("state.expanded") === "bob/desk" && !$("dialog").open, "choosing a contact opens the contact");
+  // Not current: presence is not said at all.
+  overview.directory = Object.assign({}, overview.directory, { current: false,
+    members: overview.directory.members.map((m) => Object.assign({}, m, { presence: "" })) });
+  await run("loadOverview()");
+  check(run("presenceOf")("vitalii/laptop") === null, "no presence without the server");
+  const note = run("directoryNote")(run("directory")());
+  check(note.includes("not known") && !/\bonline\b(?! is not known)/.test(note.replace("who is online is not known", "")), "not current is said plainly: " + note);
+  check(run("directoryNote")({ status: "not_listed", members: [] }).includes("older AgentNet"), "an older server is explained");
+  check(run("directoryNote")({ status: "listed", current: true, truncated: true, members: [] }).includes("1,000"), "a truncated list is said");
+  check(run("directoryNote")({ status: "unknown", members: [] }).includes("Not connected"), "unknown before the first connection");
+  check(run("zoomDirectory")(overview.threads) !== null, "Zoom shows the same directory");
+  delete overview.directory;
+
   if (failed) process.exit(1);
   console.log("page logic ok");
 })().catch((e) => { console.error(e); process.exit(1); });

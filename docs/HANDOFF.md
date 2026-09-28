@@ -300,16 +300,18 @@ If a local database or key file is damaged:
   and the requirement that the relay stays one portable unit (binary/container,
   one data volume, one port). Owner choices listed there (§15) remain open.
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
-  conversations, and separated review reports are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
-  a People directory with event-driven presence (online = daemon connected; listing grants no
-  trust), Pi native attention (under investigation), and contacts and conversations (reviewed
+  conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
+  a People directory with event-driven presence (online = daemon connected, shown only while this daemon
+  is connected to the relay; listing grants no trust; choosing a member opens a draft, never sends), Pi native attention (under investigation), and contacts and conversations (reviewed
   direction, corrected by the owner: one row per exact address holding separate conversations,
   never merged; grouped remote notices; no remote approval), and one search for agents and
   conversations (people once human identity exists; kinds shown, opens exactly the chosen item,
   grants no trust). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
   remains an open request; S-R reminders unchanged. One-command `agentnet update` (latest stable,
-  same home, daemon and page switch safely): in source for Linux/macOS, Windows pending, not released
+  same home, daemon and page switch safely): in source, not released; Windows switches only a daemon
+  started by the scheduled task `\agentnet` (native test passed in Actions run 36458378377; a standalone
+  daemon is not stopped, an explicit limit)
   ([§19.2b](MESSENGER_ARCHITECTURE.md#19-updates-and-versions)).
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.

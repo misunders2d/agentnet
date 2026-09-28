@@ -682,8 +682,8 @@ option, not a gate.
 
 **Next release scope (recorded 2026-09-28).** Implemented so far: the v1
 navigation part of contacts and conversations, search of known agents and
-conversations, and separated review notices (see "In this build" below). The
-rest is not implemented.
+conversations, separated review notices (see "In this build" below), and the
+People directory (below). The rest is not implemented.
 S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
 - **S-W** as designed below: the relay serves the page over HTTPS to a browser
   or phone. §6's code-trust limit stands: a browser device trusts the code the
@@ -694,6 +694,19 @@ S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
   by server events on the existing push stream, not by polling. Online means a
   daemon is connected, not that a person is present. Being listed grants no
   trust or permission: keys, approvals and task grants work as today.
+  - *In this build:* the relay lists members (`GET /v1/agents`, newest first,
+    at most 1,000) and pushes changes on the stream; the page shows them
+    through the same Provider in Classic, Comic and Zoom. Members that are not
+    yet contacts appear under "Also on your server" and in search as kind
+    Agent (exact address, when they joined); contacts show presence beside
+    their name. Presence is shown only while this daemon is connected to the
+    relay; otherwise the list is marked as of its time and presence as not
+    known. A relay that does not list members is named as needing an update;
+    a cut list says so. Choosing a member opens the existing contact or a new
+    conversation draft addressed to them; it never sends, pins, trusts or
+    grants. Evidence: `internal/ui` live test on a real test relay (arrival,
+    connect, disconnect, revoke, relay gone), page checks, and a real
+    browser on synthetic homes with no reload.
 - **Pi native attention:** under investigation (which lifecycle and idle APIs
   Pi supports); no design or code yet.
 - **Contacts and conversations** (reviewed direction below, corrected by the
@@ -1024,7 +1037,7 @@ inferred from a build string.
 - **Unchanged:** schema migration with `*.vN.bak` on the next start; identity
   keys, history, approvals and grants in the same home; manual downgrade.
 
-### 19.2b Owner requirement: one-command update (2026-09-28; Linux/macOS in source, Windows pending)
+### 19.2b Owner requirement: one-command update (2026-09-28; in source, not released)
 
 - **Requirement.** One `agentnet update`, with no agent, script, curl or manual
   restart sequence, installs the latest *published stable* release from the
@@ -1078,11 +1091,18 @@ inferred from a build string.
     the helper holds it; the helper waits for it to be gone and its lock
     free, checks the task again, runs `schtasks /run` a bounded few times,
     and records a failure if no start completes the request. A daemon
-    started any other way is not stopped (explicit limit). The native
-    product test (`itest/update_switch_windows_test.go`, opt-in
-    `AGENTNET_WINTASK=1`) has not run yet; before it does, this is unproven.
+    started any other way, such as a standalone daemon in a console, is not
+    stopped (explicit limit).
   - Evidence: `itest/update_switch_test.go` (Linux, real binaries, local
-    release server), client switch tests, updater tests, page checks.
+    release server), client switch tests, updater tests, page checks. The
+    native Windows product test (`itest/update_switch_windows_test.go`,
+    opt-in `AGENTNET_WINTASK=1`, the real program and a real scheduled task)
+    passed on `windows-latest` in GitHub Actions run 36458378377 (job
+    `windows-task-probe`, `TestWindowsUpdateSwitchThroughTask` 42.71s) at
+    `77cc1f1`, whose update-switch code is identical to `af144f0`: switch
+    through the task, lost helper, task that cannot start, console daemon
+    not stopped. Not covered on Windows: a switch that waits for a busy job
+    (Linux and shared-code evidence only) and a real Windows browser.
 
 ### 19.3 Proposed lifecycle for later work (all unimplemented)
 

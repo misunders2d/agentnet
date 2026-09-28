@@ -16,12 +16,17 @@ import (
 // liveWorld enrolls alice (admin) and bob on a local Hub and runs bob's
 // daemon; the page's Provider is over bob's real store.
 func liveWorld(t *testing.T) (alice, bob *client.Agent, live *Live) {
+	alice, bob, live, _ = liveWorldHub(t)
+	return alice, bob, live
+}
+
+func liveWorldHub(t *testing.T) (alice, bob *client.Agent, live *Live, hub *testhub.Proc) {
 	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 	dir := filepath.Join(t.TempDir(), "hub")
-	testhub.Start(t, dir, "127.0.0.1:0", "")
+	hub = testhub.Start(t, dir, "127.0.0.1:0", "")
 	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +45,7 @@ func liveWorld(t *testing.T) (alice, bob *client.Agent, live *Live) {
 	done := make(chan struct{})
 	go func() { bob.Run(run, client.RunOptions{}); close(done) }()
 	t.Cleanup(func() { stop(); <-done; bob.Close() })
-	return alice, bob, NewLive(bob)
+	return alice, bob, NewLive(bob), hub
 }
 
 func waitReview(t *testing.T, l *Live) Overview {
@@ -123,5 +128,95 @@ func TestLiveTrustNeedsTheComparedKey(t *testing.T) {
 	}
 	if _, err := live.Act(Action{Do: DoTrust, ID: alice.Address, Key: alice.Self().Fingerprint()}); err != nil {
 		t.Fatalf("trust with the compared key: %v", err)
+	}
+}
+
+// waitDirectory waits, without asking the Hub, for bob's pushed directory to
+// satisfy ok; each change arrives on the change feed.
+func waitDirectory(t *testing.T, l *Live, what string, ok func(Directory) bool) Directory {
+	t.Helper()
+	deadline := time.After(20 * time.Second)
+	for {
+		_, changed := l.Changed()
+		o, err := l.Overview()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok(o.Directory) {
+			return o.Directory
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("%s: directory %+v", what, o.Directory)
+		}
+	}
+}
+
+func member(d Directory, addr string) (DirMember, bool) {
+	for _, m := range d.Members {
+		if m.Address == addr {
+			return m, true
+		}
+	}
+	return DirMember{}, false
+}
+
+// The page's directory follows the server's pushed member list: someone
+// who just joined appears (no history needed), presence follows their
+// daemon, a revoked agent disappears, and without the server connection
+// presence is unknown rather than stale. This installation is not listed.
+func TestLiveDirectoryFollowsTheServer(t *testing.T) {
+	alice, bob, live, hub := liveWorldHub(t)
+	d := waitDirectory(t, live, "first list", func(d Directory) bool { return d.Status == DirectoryListed && d.Current })
+	if _, ok := member(d, bob.Address); ok {
+		t.Fatal("this installation is listed")
+	}
+	if m, ok := member(d, alice.Address); !ok || m.Presence != "offline" {
+		t.Fatalf("alice (no daemon): %+v %v", m, ok)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	code, err := alice.Invite(ctx, "vitalii", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vitalii, err := client.Join(ctx, filepath.Join(t.TempDir(), "vitalii"), code, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vitalii.Close()
+	waitDirectory(t, live, "newcomer listed", func(d Directory) bool { _, ok := member(d, vitalii.Address); return ok })
+	if th, _ := live.Overview(); len(th.Threads) != 0 {
+		t.Fatal("listing someone created a conversation")
+	}
+
+	vitalii.Logf = t.Logf
+	run, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { vitalii.Run(run, client.RunOptions{}); close(done) }()
+	waitDirectory(t, live, "newcomer online", func(d Directory) bool { m, _ := member(d, vitalii.Address); return m.Presence == "connected" })
+	stop()
+	<-done
+	waitDirectory(t, live, "newcomer away", func(d Directory) bool {
+		m, _ := member(d, vitalii.Address)
+		return m.Presence == "reconnecting" || m.Presence == "offline"
+	})
+
+	if err := alice.Revoke(ctx, vitalii.Address); err != nil {
+		t.Fatal(err)
+	}
+	waitDirectory(t, live, "revoked gone", func(d Directory) bool { _, ok := member(d, vitalii.Address); return !ok })
+
+	hub.Stop()
+	d = waitDirectory(t, live, "server gone", func(d Directory) bool { return !d.Current })
+	for _, m := range d.Members {
+		if m.Presence != "" {
+			t.Fatalf("presence shown without the server: %+v", m)
+		}
+	}
+	if d.Status != DirectoryListed || d.At.IsZero() {
+		t.Fatalf("after losing the server: %+v", d)
 	}
 }

@@ -18,6 +18,7 @@ type Fixture struct {
 	peers    map[string]*fxPeer
 	threads  []*fxThread
 	quar     []QuarantineItem
+	dir      Directory
 	nextID   int
 	now      func() time.Time
 	seq      uint64
@@ -119,6 +120,17 @@ func NewFixture(now func() time.Time) *Fixture {
 			Body: n.body, Detail: "review notice: requests wait for a person's decision on hub/ops; decide there. Nothing here runs or can be accepted"})
 	}
 
+	// Who the server lists: the peers above, and someone who just joined and
+	// has not written yet.
+	f.dir = Directory{Status: DirectoryListed, Current: true, At: t, Members: []DirMember{
+		{Address: "vitalii/laptop", Presence: "connected", Joined: ago(30)},
+		{Address: "hub/ops", Presence: "connected", Joined: ago(3000)},
+		{Address: "erin/lab", Presence: "offline", Joined: ago(4000)},
+		{Address: "dave/srv", Presence: "offline", Joined: ago(5000)},
+		{Address: "carol/ci", Presence: "reconnecting", Joined: ago(6000)},
+		{Address: "bob/desk", Presence: "connected", Joined: ago(7000)},
+	}}
+
 	erin := f.thread("erin/lab")
 	f.add(erin, &Message{Dir: "in", Kind: KindMessage, At: ago(2880),
 		Body: "I'm reinstalling this machine next week, so expect a new key from me."})
@@ -205,7 +217,7 @@ func (f *Fixture) view(t *fxThread, m *Message) Message {
 func (f *Fixture) Overview() (Overview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	o := Overview{Demo: true, Me: f.me, Seq: f.seq, Version: "demo", Threads: []ThreadSummary{}, Review: []ReviewItem{},
+	o := Overview{Demo: true, Me: f.me, Seq: f.seq, Version: "demo", Directory: f.directory(), Threads: []ThreadSummary{}, Review: []ReviewItem{},
 		Quarantine: append([]QuarantineItem{}, f.quar...)}
 	for _, t := range f.threads {
 		first, last := t.msgs[0], t.msgs[len(t.msgs)-1]
@@ -240,6 +252,28 @@ func (f *Fixture) Overview() (Overview, error) {
 	}
 	sort.SliceStable(o.Threads, func(i, j int) bool { return o.Threads[i].LastAt.After(o.Threads[j].LastAt) })
 	return o, nil
+}
+
+// directory is a copy of the demo directory, presence only while current,
+// as the live provider gives it.
+func (f *Fixture) directory() Directory {
+	d := f.dir
+	d.Members = make([]DirMember, len(f.dir.Members))
+	for i, m := range f.dir.Members {
+		if !d.Current {
+			m.Presence = ""
+		}
+		d.Members[i] = m
+	}
+	return d
+}
+
+// SetDirectory replaces the demo directory (tests).
+func (f *Fixture) SetDirectory(d Directory) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dir = d
+	f.bump()
 }
 
 // Thread implements Provider.

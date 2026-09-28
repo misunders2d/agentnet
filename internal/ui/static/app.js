@@ -5,7 +5,7 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {},
+  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -130,14 +130,95 @@ function contactsOf(threads) {
 
 // searchKnown finds known agents (by address) and conversations or single
 // messages (by their first and latest lines). It never invents people.
-function searchKnown(q, threads) {
+function searchKnown(q, threads, dir) {
   q = q.trim().toLowerCase();
-  if (!q) return { agents: [], conversations: [] };
+  if (!q) return { agents: [], conversations: [], listed: [] };
   const agents = contactsOf(threads).filter((c) => c.peer.toLowerCase().includes(q));
+  const known = new Set(threads.map((t) => t.peer));
+  // Agents the server lists that there is no conversation with yet.
+  const listed = ((dir && dir.members) || []).filter((m) => !known.has(m.address) && m.address.toLowerCase().includes(q));
   const conversations = threads.filter((t) => !t.notice_only &&
     (t.title.toLowerCase().includes(q) || t.last.toLowerCase().includes(q)))
     .sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
-  return { agents, conversations };
+  return { agents, conversations, listed };
+}
+
+// ---- directory --------------------------------------------------------------------
+//
+// Who the server lists as enrolled, pushed by the daemon with presence: only
+// for finding someone. Choosing one opens their contact or a new
+// conversation to them; nothing is sent, trusted or approved by choosing.
+
+const presenceWord = { connected: "online", reconnecting: "reconnecting", offline: "offline" };
+const presenceTitle = "Whether the server sees their AgentNet running now; it does not mean a person is there.";
+
+function directory() {
+  return (state.overview && state.overview.directory) || { status: "unknown", members: [] };
+}
+
+// presenceOf is an address's presence, only while the server's view is
+// current; otherwise nothing is said.
+function presenceOf(addr) {
+  const d = directory();
+  if (!d.current) return null;
+  const m = d.members.find((x) => x.address === addr);
+  return m && m.presence ? presenceWord[m.presence] || null : null;
+}
+
+function presenceBadge(addr) {
+  const p = presenceOf(addr);
+  return p && el("span", { class: "presence-dot " + p, title: presenceTitle }, p);
+}
+
+// directoryNote says plainly what the list is and what it is not.
+function directoryNote(d) {
+  if (d.status === "not_listed") return "Your server does not list its members: it runs an older AgentNet, which its operator can update.";
+  if (d.status !== "listed") return "Not connected to your server yet, so who is on it is not known.";
+  const notes = [];
+  if (!d.current) notes.push("Not connected to your server now: this list is from " + when(d.at) + ", and who is online is not known.");
+  if (d.truncated) notes.push("The server lists only the 1,000 most recently joined agents; others are not shown.");
+  return notes.join(" ");
+}
+
+// chooseMember opens someone the server lists: their contact if there is
+// one, otherwise a new conversation to them (nothing is sent until Send).
+function chooseMember(addr) {
+  clearSearch();
+  if (state.overview.threads.some((t) => t.peer === addr)) {
+    if (state.lens === "zoom") { Zoom.go(1, { peer: addr }); return; }
+    state.expanded = addr;
+    rerenderContacts();
+    return;
+  }
+  newConversationDialog(addr);
+}
+
+function memberRow(m) {
+  const recent = Date.now() - new Date(m.joined) < 7 * 24 * 3600e3;
+  return el("li", {}, el("button", { type: "button", class: "result member", onclick: () => chooseMember(m.address) },
+    el("span", { class: "result-kind" }, "Agent"),
+    el("span", { class: "result-main" }, who(m.address),
+      el("span", { class: "hint" }, recent ? "joined " + when(m.joined) : "no conversation yet")),
+    presenceBadge(m.address)));
+}
+
+// directorySection lists the agents the server has that there is no
+// conversation with yet, newest first, a few at a time.
+function directorySection(threads) {
+  const d = directory();
+  const known = new Set(threads.map((t) => t.peer));
+  const others = d.members.filter((m) => !known.has(m.address));
+  const note = directoryNote(d);
+  if (!others.length && !note) return [];
+  const open = !!state.directoryOpen;
+  const shown = open ? others : others.slice(0, 5);
+  return [
+    el("li", { class: "result-head" }, others.length ? "Also on your server (" + others.length + ")" : "On your server"),
+    note && el("li", { class: "hint dir-note" }, note),
+    ...shown.map(memberRow),
+    others.length > shown.length && el("li", {}, el("button", { type: "button", class: "singles-toggle",
+      onclick: () => { state.directoryOpen = true; rerenderContacts(); } }, "Show all " + others.length)),
+  ];
 }
 
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
@@ -285,7 +366,8 @@ function renderThreads(threads) {
   if (state.query.trim()) return renderSearch(threads);
   $("list-title").textContent = "Contacts";
   if (!threads.length) {
-    fill(list, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button."));
+    fill(list, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button, or with someone below."),
+      directorySection(threads));
     return;
   }
   fill(list, ...contactsOf(threads).map((c) => {
@@ -294,7 +376,7 @@ function renderThreads(threads) {
       onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
       avatar(c.peer),
       el("span", { class: "conv-main" },
-        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), el("span", { class: "conv-time" }, when(c.lastAt))),
+        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), presenceBadge(c.peer), el("span", { class: "conv-time" }, when(c.lastAt))),
         el("span", { class: "conv-bottom" },
           el("span", { class: "conv-last" }, c.last || (c.reports.length ? "Reports only" : "")),
           c.keyChanged && el("span", { class: "conv-flag danger" }, "Key changed"), counts(c)),
@@ -302,24 +384,26 @@ function renderThreads(threads) {
           c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · "))));
     return el("li", { class: "contact-item" + (expanded ? " open" : "") }, head,
       expanded && el("div", { class: "contact-body" }, contactBody(c, (id) => openThread(id))));
-  }));
+  }), directorySection(threads));
 }
 
 function renderSearch(threads) {
-  const { agents, conversations } = searchKnown(state.query, threads);
+  const { agents, conversations, listed } = searchKnown(state.query, threads, directory());
   $("list-title").textContent = "Search results";
   const shown = conversations.slice(0, 30);
   const kind = (t) => t.count > 1 ? "Conversation" : "Message";
-  if (!agents.length && !conversations.length) {
-    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."));
+  if (!agents.length && !conversations.length && !listed.length) {
+    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."),
+      directoryNote(directory()) && el("li", { class: "hint dir-note" }, directoryNote(directory())));
     return;
   }
   fill($("conv-list"),
-    agents.length > 0 && el("li", { class: "result-head" }, plural(agents.length, "agent", "agents")),
+    agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
     ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result",
       onclick: () => { state.expanded = c.peer; clearSearch(); } },
       el("span", { class: "result-kind" }, "Agent"), el("span", { class: "result-main" }, who(c.peer),
-        el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), counts(c)))),
+        el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), presenceBadge(c.peer), counts(c)))),
+    ...listed.map(memberRow),
     conversations.length > 0 && el("li", { class: "result-head" }, plural(conversations.length, "conversation or message", "conversations or messages")),
     ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result",
       onclick: () => { state.expanded = t.peer; clearSearch(); openThread(t.id); } },

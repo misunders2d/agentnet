@@ -59,6 +59,7 @@ type Overview struct {
 	Release    string           `json:"release,omitempty"` // a recommended build other than this one
 	Seq        uint64           `json:"seq"`
 	Version    string           `json:"version"` // the program serving the page (an update changes it)
+	Directory  Directory        `json:"directory"`
 }
 
 // Me describes this installation.
@@ -84,6 +85,39 @@ type ThreadSummary struct {
 	KeyChanged bool      `json:"key_changed"`
 	Notices    int       `json:"notices"`     // open review notices (reports from another machine)
 	NoticeOnly bool      `json:"notice_only"` // the thread is only review notices: not a conversation
+}
+
+// Directory is who else the server (Hub) lists as enrolled, for finding
+// someone new. Being listed trusts, approves or contacts no one, and the
+// person label in an address is the name an admin gave the invite, not a
+// verified identity.
+type Directory struct {
+	// Status is DirectoryUnknown (not connected to the server since the
+	// daemon started), DirectoryListed or DirectoryNotListed (an older
+	// server that does not list its members).
+	Status string `json:"status"`
+	// Current: the presence below is the server's view now. Otherwise the
+	// list is as of At and every presence is unknown ("").
+	Current   bool        `json:"current"`
+	At        time.Time   `json:"at,omitzero"`
+	Truncated bool        `json:"truncated"` // more agents are enrolled than listed
+	Members   []DirMember `json:"members"`   // newest first, this installation left out
+}
+
+// Directory statuses.
+const (
+	DirectoryUnknown   = "unknown"
+	DirectoryListed    = "listed"
+	DirectoryNotListed = "not_listed"
+)
+
+// DirMember is one listed agent. Presence is "connected", "reconnecting",
+// "offline", or "" when not current: whether the server sees that agent's
+// daemon, never whether a person is there.
+type DirMember struct {
+	Address  string    `json:"address"`
+	Presence string    `json:"presence"`
+	Joined   time.Time `json:"joined"`
 }
 
 // ReviewItem is a received item waiting for the person. Notice marks a

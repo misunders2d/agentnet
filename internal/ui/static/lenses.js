@@ -225,6 +225,12 @@ const Comic = {
   },
 };
 
+// zoomDirectory is the directory list the sidebar shows, below the people.
+function zoomDirectory(threads) {
+  const rows = directorySection(threads);
+  return rows.length ? el("ul", { class: "zoom-dir" }, rows) : null;
+}
+
 // ---- Zoom: everyone → one person → one thread → one message ---------------------
 
 const Zoom = {
@@ -295,7 +301,10 @@ const Zoom = {
   everyone() {
     const o = state.overview;
     const list = contactsOf(o.threads);
-    if (!list.length) return el("p", { class: "hint" }, "No conversations yet. Start one from the classic view with the + button.");
+    if (!list.length) {
+      return el("div", { class: "zoom-people" }, el("p", { class: "hint" }, "No conversations yet: start one with someone on your server."),
+        zoomDirectory(o.threads));
+    }
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 100 100");
     svg.setAttribute("preserveAspectRatio", "none");
@@ -313,7 +322,7 @@ const Zoom = {
       svg.append(l);
     });
     const nodes = list.map((p, i) => {
-      const status = [plural(p.conversations.length, "conversation", "conversations"),
+      const status = [presenceOf(p.peer), plural(p.conversations.length, "conversation", "conversations"),
         p.review && p.review + " need" + (p.review === 1 ? "s" : "") + " you", p.keyChanged && "key changed",
         p.unread && p.unread + " new", p.notices && plural(p.notices, "report", "reports")].filter(Boolean).join(" · ");
       const node = el("button", { type: "button", class: "node" + (p.review ? " glow" : "") + (p.keyChanged ? " danger" : ""),
@@ -329,8 +338,10 @@ const Zoom = {
       el("span", { class: "node-status" }, o.me.address));
     me.style.left = "50%";
     me.style.top = "50%";
-    return el("div", { class: "network" }, svg, me, nodes,
-      el("p", { class: "zoom-hint" }, "Glowing people have something waiting for your decision."));
+    return el("div", { class: "zoom-people" },
+      el("div", { class: "network" }, svg, me, nodes,
+        el("p", { class: "zoom-hint" }, "Glowing people have something waiting for your decision.")),
+      zoomDirectory(o.threads));
   },
 
   // Level 1: one contact: its reports and its separate conversations, as a
