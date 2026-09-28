@@ -309,3 +309,23 @@ func TestTaskGrantPinChangeDemotes(t *testing.T) {
 		t.Fatalf("new key pinned: %s", s)
 	}
 }
+
+// Revoking wakes a running daemon, so tasks moved back to awaiting are
+// announced at once rather than at the next Hub ping.
+func TestRevokeTasksWakesDaemon(t *testing.T) {
+	w := newWorld(t, "")
+	notes := fakeNotify(w.bob)
+	w.bob.store.pin(w.alice.Self())
+	fp, _ := w.bob.GrantTasks(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{}) // no responder: pending tasks stay put
+	task := taskFrom(w.alice.Address, w.bob.Address)
+	if err := w.bob.store.addInbox(task, fp); err != nil { // no wake-up
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	before := notes.count()
+	if _, err := w.bob.RevokeTasks(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "review notification after revoke", func() bool { return notes.count() > before })
+}

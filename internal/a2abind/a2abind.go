@@ -46,7 +46,7 @@ func New(agent *client.Agent, peer, baseURL, token string) *Adapter {
 	card := &a2a.AgentCard{
 		Name: "AgentNet peer " + peer,
 		Description: "Local A2A access to the AgentNet agent " + peer + ". Requests travel as end-to-end " +
-			"encrypted AgentNet messages from " + agent.Address + ". Tasks run on the peer only after its user accepts them.",
+			"encrypted AgentNet messages from " + agent.Address + ". Tasks run on the peer only after its user accepts them, or under a task grant its user gave this agent's key.",
 		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(baseURL, a2a.TransportProtocolHTTPJSON)},
 		DefaultInputModes:   []string{"text/plain"},
 		DefaultOutputModes:  []string{"text/plain"},

@@ -375,7 +375,8 @@ the harness not to change anything, but it is not a sandbox of its own:
           that need bash, edit or extension tools cannot work there.
 Before approving a sender, check that what your settings already allow is
 what you would let their questions trigger. Tasks run with the harness's
-normal permissions and only after you accept them. If a question needs an
+normal permissions and only after you accept them (or under a task grant you
+gave that sender's key: agentnet help approve). If a question needs an
 action the harness may not take, it answers AGENTNET: NEEDS-HUMAN instead.
 Antigravity can read and reply by hand but is not an automatic responder.
 

@@ -96,7 +96,11 @@ func (a *Agent) GrantTasks(address string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fp, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	notifyDaemon(a.home) // tasks it moved back to awaiting need the person
+	return fp, nil
 }
 
 // AcceptAlways accepts task id once and, in the same transaction, grants
@@ -173,7 +177,11 @@ func (a *Agent) RevokeTasks(address string) (running []string, err error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return running, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	notifyDaemon(a.home) // tasks moved back to awaiting need the person
+	return running, nil
 }
 
 // Grant is one approval, as TaskGrants and Approvals list them.
