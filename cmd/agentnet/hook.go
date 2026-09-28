@@ -52,7 +52,6 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		Pos            int64  `json:"pos"`     // Ack (pi)
 		HasPos         bool   `json:"has_pos"` // Ack (pi)
 		Release        string `json:"release"` // Ack (pi)
-		After          int64  `json:"after"`   // pi: already handed over, awaiting Ack
 	}
 	if err := json.NewDecoder(io.LimitReader(stdin, 64<<20)).Decode(&in); err != nil {
 		return nil
@@ -72,11 +71,7 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		a.AckAttention("pi", in.SessionID, in.Pos, in.HasPos, in.Release)
 		return nil
 	}
-	ev := client.HookEvent{Harness: args[0], Session: in.SessionID, Event: in.HookEventName, StopActive: in.StopHookActive}
-	if pi {
-		ev.After = in.After
-	}
-	at, err := a.Attention(ev)
+	at, err := a.Attention(client.HookEvent{Harness: args[0], Session: in.SessionID, Event: in.HookEventName, StopActive: in.StopHookActive})
 	if err != nil || at.Text == "" {
 		if err == nil {
 			at.Commit() // records a new session's starting point

@@ -22,7 +22,6 @@ type HookEvent struct {
 	Session    string // the harness's session id
 	Event      string // SessionStart, UserPromptSubmit, PostToolUse, Idle (pi) or Stop
 	StopActive bool   // Stop only: the turn already continued because of a Stop hook
-	After      int64  // pi: arrivals up to here were already handed over and await Ack; list only later ones
 }
 
 // Attention is what to tell the session. Commit records it as shown; call
@@ -140,17 +139,13 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 		text, err := a.overview()
 		return at(text, top), err
 	}
-	from := pos
-	if ev.After > from {
-		from = ev.After // handed over, not yet acknowledged: not shown again
-	}
-	items, err := a.store.arrivalsAfter(from, attentionItems+1)
+	items, err := a.store.arrivalsAfter(pos, attentionItems+1)
 	if err != nil {
 		return Attention{}, err
 	}
 	more := 0
 	if len(items) > attentionItems {
-		n, err := a.store.countArrivalsAfter(from)
+		n, err := a.store.countArrivalsAfter(pos)
 		if err != nil {
 			return Attention{}, err
 		}

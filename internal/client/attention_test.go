@@ -404,11 +404,6 @@ func TestAttentionAckedLater(t *testing.T) {
 	if !strings.Contains(first.Text, "a1") || !strings.Contains(first.Text, "a2") {
 		t.Fatalf("idle notice: %q", first.Text)
 	}
-	// Handed over and awaiting acknowledgement: not listed again meanwhile.
-	pos, _, _ = first.Ack()
-	if pending, _ := w.alice.Attention(HookEvent{Harness: "pi", Session: "P", Event: "Idle", After: pos}); pending.Text != "" {
-		t.Fatalf("pending notice listed again: %q", pending.Text)
-	}
 	// Not acknowledged (not shown): offered again, nothing recorded.
 	if again := ask("UserPromptSubmit"); again.Text == "" || !strings.Contains(again.Text, "a1") {
 		t.Fatalf("unacknowledged notice not offered again: %q", again.Text)

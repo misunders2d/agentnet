@@ -88,12 +88,12 @@ export default function (pi: any) {
 	let seq = 0;
 	// Notices returned to Pi but not yet seen in the session, by token. Pi
 	// adds a returned message or entry only after the handler has returned,
-	// so each is acknowledged when it shows up in the session; until then later
-	// checks list only newer arrivals (after), and an unconfirmed notice is
-	// dropped when the run settles, so it is offered again.
+	// so each is acknowledged when it shows up in the session, and one still
+	// unconfirmed when the run settles is dropped, so it is offered again.
+	// While any is pending, no new check runs (deferred): acknowledging a
+	// newer notice would also mark the pending one's arrivals as seen.
 	const pending = new Map<string, Ack>();
-
-	const after = () => Math.max(0, ...[...pending.values()].map((a) => (a.has_pos ? a.pos ?? 0 : 0)));
+	let deferred = false;
 
 	function acknowledge(sid: string, ack: Ack) {
 		lock = lock.then(() => hook({ session_id: sid, hook_event_name: "Ack", ...ack })).catch(() => {});
@@ -127,7 +127,11 @@ export default function (pi: any) {
 		const sid = session;
 		const run = lock.then(async () => {
 			if (!sid || gen !== generation) return;
-			const r = await hook({ session_id: sid, hook_event_name: event, after: after(), ...extra });
+			if (pending.size > 0) {
+				deferred = true; // checked again once the run settles
+				return;
+			}
+			const r = await hook({ session_id: sid, hook_event_name: event, ...extra });
 			if (!r?.text || gen !== generation) return; // replaced or shut down meanwhile: not shown, not acknowledged
 			const token = `${sid}:${++seq}`;
 			const how = show(r.text, { token });
@@ -153,8 +157,7 @@ export default function (pi: any) {
 		try {
 			watcher = fs.watch(HOME, (_ev, name) => {
 				if (name && !String(name).startsWith("agent.db")) return;
-				if (timer) clearTimeout(timer);
-				timer = setTimeout(idle, 500);
+				soon();
 			});
 			watcher.on("error", stopWatching); // e.g. the home was removed; the next prompt tries again
 		} catch {
@@ -162,9 +165,17 @@ export default function (pi: any) {
 		}
 	}
 
+	function soon() {
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(idle, 500);
+	}
+
 	// Pi adds a custom message sent while it is idle to the session before
 	// sendMessage returns (no turn is started), so it is acknowledged at once.
-	function note(text: string, details: object): "now" {
+	// Once a run has started (also while the hook was being awaited) Pi only
+	// queues it until the turn ends, so then nothing is sent or acknowledged.
+	function note(ctx: any, text: string, details: object): "now" | false {
+		if (!ctx?.isIdle?.()) return false;
 		pi.sendMessage({ customType: KIND, content: text, display: true, details }, { triggerTurn: false });
 		return "now";
 	}
@@ -174,9 +185,10 @@ export default function (pi: any) {
 		const ctx = ctxRef;
 		if (!ctx || !ctx.isIdle()) return; // the run's own boundaries will tell it
 		transaction("Idle", {}, (text, details) => {
+			if (!ctx.isIdle()) return false; // a run started meanwhile: it will be told
 			const lines = text.split("\n").filter((l) => l.startsWith("- ")).length;
 			ctx.ui.notify(lines > 0 ? `AgentNet: ${lines} new` : "AgentNet: new activity", "info");
-			return note(text, details);
+			return note(ctx, text, details);
 		});
 	}
 
@@ -184,12 +196,13 @@ export default function (pi: any) {
 		stopWatching();
 		stopChildren();
 		pending.clear();
+		deferred = false;
 		generation++;
 		ctxRef = ctx;
 		session = ctx.sessionManager.getSessionId();
 		continued = false;
 		watch();
-		await transaction("SessionStart", {}, note);
+		await transaction("SessionStart", {}, (text, details) => note(ctx, text, details));
 	});
 
 	pi.on("before_agent_start", async () => {
@@ -219,7 +232,11 @@ export default function (pi: any) {
 	});
 
 	pi.on("turn_start", async (_event: unknown, ctx: any) => reconcile(ctx, false));
-	pi.on("agent_settled", async (_event: unknown, ctx: any) => reconcile(ctx, true));
+	pi.on("agent_settled", async (_event: unknown, ctx: any) => {
+		reconcile(ctx, true);
+		if (deferred && watcher) soon(); // what was not checked during the run
+		deferred = false;
+	});
 
 	pi.on("session_shutdown", async () => {
 		generation++;

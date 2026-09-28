@@ -96,8 +96,10 @@ func TestHookPiWithoutAgentIsSilent(t *testing.T) {
 }
 
 // piStub stands in for agentnet. It logs each call, and per the mode file
-// answers every non-Ack event with one arrival (unless after >= 7), hangs, or
-// writes far too much.
+// answers every non-Ack event with one arrival at position 7, hangs, writes
+// far too much, or answers slowly (after marking the call in flight). A
+// caller that asks to skip past position 7 (the earlier "after") gets the
+// newer arrival at position 8.
 const piStub = `#!/bin/sh
 d="$STUB_DIR"
 in=$(cat)
@@ -106,10 +108,11 @@ case "$in" in *'"Ack"'*) exit 0 ;; esac
 case "$(cat "$d/mode" 2>/dev/null)" in
 hang) echo $$ > "$d/hung.pid"; exec sleep 60 ;;
 huge) head -c 200000 /dev/zero | tr '\0' x; exit 0 ;;
+slow) : > "$d/inflight"; sleep 0.3 ;;
 esac
-after=$(printf '%s' "$in" | sed -n 's/.*"after":\([0-9]*\).*/\1/p')
-[ "${after:-0}" -ge 7 ] && exit 0
-printf '%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m1 message from bob/desk","ack":{"pos":7,"has_pos":true,"release":""}}'
+pos=7
+case "$in" in *'"after":'[1-9]*) pos=8 ;; esac
+printf '%s%s%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m1 message from bob/desk","ack":{"pos":' "$pos" ',"has_pos":true,"release":""}}'
 `
 
 // piHarness loads the extension in Node with a stand-in for Pi's extension
@@ -126,19 +129,31 @@ const out = (x) => console.log(JSON.stringify(x));
 if (!h.session_start) { out({ registered: false }); process.exit(0); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mode = (m) => fs.writeFileSync(dir + "/mode", m);
-const acks = () => fs.readFileSync(dir + "/calls.log", "utf8").split("\n").filter((l) => l.includes('"Ack"')).length;
-const lastAfter = () => { const ls = fs.readFileSync(dir + "/calls.log", "utf8").trim().split("\n").filter((l) => !l.includes('"Ack"')); return JSON.parse(ls[ls.length - 1]).after; };
-let idle = false, branch = [];
+const log = () => fs.readFileSync(dir + "/calls.log", "utf8").split("\n").filter((l) => l);
+const acks = () => log().filter((l) => l.includes('"Ack"')).length;
+const reads = () => log().filter((l) => !l.includes('"Ack"')).length;
+let idle = true, branch = []; // idle when the session starts
 const ctx = { hasUI: true, isIdle: () => idle, ui: { notify: (t) => notes.push(t) },
   sessionManager: { getSessionId: () => "S1", getBranch: () => branch } };
 mode("ok");
 await h.session_start({}, ctx);
 out({ step: "start", acks: acks(), sent: sent.length, triggerTurn: sent[0]?.options?.triggerTurn });
+idle = false;
 const r1 = await h.before_agent_start({});
 await sleep(100);
 out({ step: "prompt", message: !!r1?.message, acks: acks() });
+let n = reads();
 const r2 = await h.before_agent_start({});
-out({ step: "prompt-pending", message: !!r2?.message, after: lastAfter() });
+out({ step: "prompt-pending", message: !!r2?.message, reads: reads() - n });
+// Still pending (position 7): no check runs, so no newer notice (position 8)
+// can be admitted and acknowledged over it.
+n = reads();
+const s0 = await h.agent_before_settle({});
+branch = s0?.entries ? [{ type: "custom_message", customType: "agentnet", details: s0.entries[0].details }] : [];
+await h.turn_start({}, ctx);
+await sleep(300);
+out({ step: "settle-pending", entries: !!s0?.entries, reads: reads() - n, acks: acks(), pos8: log().some((l) => l.includes('"pos":8')) });
+branch = [];
 await h.message_end({ message: { role: "custom", customType: "agentnet", details: r1.message.details } });
 await sleep(300);
 out({ step: "admitted", acks: acks() });
@@ -146,7 +161,16 @@ idle = true;
 fs.writeFileSync(home + "/agent.db-wal", "x");
 await sleep(1200);
 out({ step: "idle", notes, acks: acks(), idleSent: sent.length });
+// A run starts while the idle check is being answered: nothing is shown or
+// acknowledged (Pi would only queue the message until the turn ends).
+mode("slow");
+let sent0 = sent.length;
+fs.writeFileSync(home + "/agent.db-wal", "z");
+for (let i = 0; i < 150 && !fs.existsSync(dir + "/inflight"); i++) await sleep(20);
 idle = false;
+await sleep(800);
+out({ step: "delayed-idle", inflight: fs.existsSync(dir + "/inflight"), notes: notes.length, acks: acks(), sent: sent.length - sent0 });
+mode("ok");
 const s1 = await h.agent_before_settle({});
 await sleep(100);
 out({ step: "settle", continue: s1?.continue, acks: acks() });
@@ -155,9 +179,17 @@ await h.turn_start({}, ctx);
 await sleep(300);
 out({ step: "settle-admitted", acks: acks() });
 const r3 = await h.before_agent_start({});
+// The run settles without it: dropped, and what was deferred during the run
+// is checked once Pi is idle.
+idle = true;
+n = reads();
+let notes0 = notes.length;
 await h.agent_settled({}, { sessionManager: { getBranch: () => [] } });
+await sleep(900);
+out({ step: "dropped", first: !!r3?.message, recheck: reads() - n, recheckNotes: notes.length - notes0 });
+idle = false;
 const r4 = await h.before_agent_start({});
-out({ step: "dropped", first: !!r3?.message, again: !!r4?.message, after: lastAfter() });
+out({ step: "reoffered", again: !!r4?.message });
 await h.agent_settled({}, { sessionManager: { getBranch: () => [] } });
 mode("hang");
 let t0 = Date.now();
@@ -187,11 +219,13 @@ out({ step: "after-shutdown", notes: notes.length });
 // The extension, run by Node against a stand-in Pi API (this checks its own
 // logic, not that Pi itself loads it): acknowledgement only once the notice
 // is in the session (at once for idle and start, at message_end for a
-// prompt, once the entry is in the branch for the end of a run); pending
-// notices are not shown twice and unconfirmed ones are offered again after
-// the run; a hung or oversized hook call is cut off and later calls work;
-// shutdown stops a running call and the watcher; background sessions do
-// nothing.
+// prompt, once the entry is in the branch for the end of a run); while one
+// is pending no other check runs, so a newer notice is never acknowledged
+// over it, and what was deferred is checked once the run has settled;
+// unconfirmed notices are offered again after the run; an idle notice whose
+// answer arrives after a run has started is neither shown nor acknowledged;
+// a hung or oversized hook call is cut off and later calls work; shutdown
+// stops a running call and the watcher; background sessions do nothing.
 func TestPiExtensionWithStandInAPI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stand-in agentnet is a shell script")
@@ -212,7 +246,7 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	h, _ := json.Marshal(home)
 	ext := bytes.Replace(piExtension, []byte(`"__AGENTNET_BIN__"`), bin, 1)
 	ext = bytes.Replace(ext, []byte(`"__AGENTNET_HOME__"`), h, 1)
-	ext = bytes.Replace(ext, []byte("const HOOK_TIMEOUT_MS = 10000;"), []byte("const HOOK_TIMEOUT_MS = 300;"), 1)
+	ext = bytes.Replace(ext, []byte("const HOOK_TIMEOUT_MS = 10000;"), []byte("const HOOK_TIMEOUT_MS = 1000;"), 1)
 	os.WriteFile(filepath.Join(dir, "agentnet.ts"), ext, 0o600)
 	os.WriteFile(filepath.Join(dir, "harness.mjs"), []byte(piHarness), 0o600)
 
@@ -252,16 +286,25 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	check("prompt", "message", true)
 	check("prompt", "acks", 1) // not yet: Pi adds it after the handler returns
 	check("prompt-pending", "message", false)
-	check("prompt-pending", "after", 7)
+	check("prompt-pending", "reads", 0) // deferred while one is pending
+	check("settle-pending", "reads", 0)
+	check("settle-pending", "entries", false)
+	check("settle-pending", "acks", 1)
+	check("settle-pending", "pos8", false) // never acknowledged over the pending 7
 	check("admitted", "acks", 2)
 	check("idle", "acks", 3)
 	check("idle", "notes", "[AgentNet: 1 new]")
+	check("delayed-idle", "inflight", true)
+	check("delayed-idle", "notes", 1) // no notice once a run has started
+	check("delayed-idle", "sent", 0)
+	check("delayed-idle", "acks", 3) // and nothing acknowledged
 	check("settle", "continue", true)
 	check("settle", "acks", 3)
 	check("settle-admitted", "acks", 4)
 	check("dropped", "first", true)
-	check("dropped", "again", true)
-	check("dropped", "after", 0)
+	check("dropped", "recheck", 1) // the deferred check, once idle
+	check("dropped", "recheckNotes", 1)
+	check("reoffered", "again", true)
 	check("hang", "message", false)
 	if ms, _ := s["hang"]["ms"].(float64); ms > 3000 {
 		t.Errorf("a hung hook call held the prompt for %v ms", ms)
@@ -269,7 +312,7 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	check("recover", "huge", false)
 	check("recover", "message", true)
 	check("shutdown", "hungAlive", false)
-	check("after-shutdown", "notes", 1)
+	check("after-shutdown", "notes", 2)
 
 	s = run("1")
 	if v, ok := s["registered"]["registered"]; !ok || v != false {
