@@ -301,7 +301,8 @@ If a local database or key file is damaged:
   one data volume, one port). Owner choices listed there (§15) remain open.
 - **Next release scope (recorded, not implemented)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected; listing grants no
-  trust), and Pi native attention (under investigation). See
+  trust), Pi native attention (under investigation), and contact-first history (reviewed
+  recommendation: one entry per exact address, grouped remote notices, no remote approval). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
   remains an open request; S-R reminders unchanged.
 - **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
