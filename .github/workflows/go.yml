@@ -24,6 +24,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Browser wire tests need WebCrypto; Pi extension tests load TypeScript.
+      # Do not let the runner's default Node silently skip these checks.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
       - run: go vet ./...
       - name: test (real binaries and processes on this OS)
         run: go test -count=1 -timeout 900s ./...
