@@ -262,6 +262,12 @@ const Comic = {
   },
 };
 
+// zoomReminders are the pending reminders on the everyone level.
+function zoomReminders() {
+  const items = remindersSection();
+  return items.length ? el("section", { class: "zoom-reminders" }, el("ul", { class: "thread-list" }, items)) : null;
+}
+
 // agentNodes are a person's agents, each joined to them by a line: the
 // device that runs it and the DMs it was invited into here (open picks one).
 function agentNodes(p, open) {
@@ -430,7 +436,7 @@ const Zoom = {
     const people = this.people();
     const devices = people && el("h3", { class: "zoom-group" }, "Devices: messages per installation");
     if (!list.length) {
-      return el("div", { class: "zoom-people" }, people, devices,
+      return el("div", { class: "zoom-people" }, zoomReminders(), people, devices,
         el("p", { class: "hint" }, "No conversations yet: start one with someone on your server."), zoomDirectory(o.threads));
     }
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -466,7 +472,7 @@ const Zoom = {
       el("span", { class: "node-status" }, o.me.address));
     me.style.left = "50%";
     me.style.top = "50%";
-    return el("div", { class: "zoom-people" }, people, devices,
+    return el("div", { class: "zoom-people" }, zoomReminders(), people, devices,
       el("div", { class: "network" }, svg, me, nodes,
         el("p", { class: "zoom-hint" }, "Glowing contacts have something waiting for your decision.")),
       zoomDirectory(o.threads));

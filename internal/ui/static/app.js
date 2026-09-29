@@ -98,6 +98,104 @@ async function loadOverview() {
   return o;
 }
 
+// ---- reminders ("remind me later") ---------------------------------------------------------
+//
+// Personal and local: a reminder only asks for the person's attention at a
+// time they chose. It changes nothing about the message and nobody else
+// sees it. A reply to that message ends it; so do Done and Cancel.
+
+const canRemind = () => !!(state.overview && state.overview.remind);
+const reminderOf = (id) => ((state.overview && state.overview.reminders) || []).find((r) => r.message === id);
+
+function dueText(iso) {
+  const d = new Date(iso), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return "today " + time;
+  if (d.toDateString() === new Date(+now + 864e5).toDateString()) return "tomorrow " + time;
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + " " + time;
+}
+
+// localInput is d as a datetime-local input's value (this computer's time).
+const localInput = (d) => new Date(+d - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
+
+// reminderLine is a received message's reminder: set one, or the one it
+// has, with its time, and change, done and cancel.
+function reminderLine(m) {
+  if (!canRemind() || m.dir !== "in" || m.event) return null;
+  const r = reminderOf(m.id);
+  if (!r) return el("button", { type: "button", class: "text-btn", onclick: () => remindDialog(m) }, "Remind me…");
+  const act = (path) => () => remindAct(path, m.id).catch((e) => announce(e.message));
+  return el("span", { class: "reminder" + (r.overdue ? " overdue" : "") },
+    (r.overdue ? "Reminder due since " : "Reminder ") + dueText(r.due) + " · ",
+    el("button", { type: "button", class: "text-btn", onclick: () => remindDialog(m, r) }, "Change…"), " · ",
+    el("button", { type: "button", class: "text-btn", onclick: act("/api/remind/done") }, "Done"), " · ",
+    el("button", { type: "button", class: "text-btn", onclick: act("/api/remind/cancel") }, "Cancel"));
+}
+
+async function remindAct(path, id, due) {
+  const r = await api(path, due === undefined ? { id } : { id, due });
+  if (r.note) announce(r.note);
+  await loadOverview();
+  if (state.dm) await loadDM();
+  else if (state.thread) await loadThread();
+}
+
+// remindDialog sets or moves a reminder: a few times, or one chosen.
+function remindDialog(m, r) {
+  const now = new Date();
+  const presets = [["In 30 minutes", new Date(+now + 30 * 60e3)], ["In 2 hours", new Date(+now + 2 * 3600e3)],
+    ["Tomorrow at 9:00", new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0)]];
+  const choices = presets.map(([label, d], i) => choice("radio", "remind-when", String(i), label + " (" + dueText(d.toISOString()) + ")"));
+  const custom = choice("radio", "remind-when", "custom", "At a time I choose:");
+  const at = el("input", { type: "datetime-local", id: "remind-at" });
+  at.value = localInput(new Date(+now + 3600e3));
+  at.addEventListener("input", () => { custom.input.checked = true; });
+  dialog({
+    title: r ? "Move the reminder" : "Remind me later",
+    body: [el("p", {}, "About: " + firstLine(m.body, 90)),
+      r && el("p", { class: "hint" }, "Now " + (r.overdue ? "due since " : "at ") + dueText(r.due) + "."),
+      el("fieldset", { class: "choices" }, el("legend", {}, "When"), choices.map((c) => c.row), custom.row, at),
+      el("p", { class: "hint" }, "It only reminds you, on this computer: nothing is sent, and the message stays as it is. It ends when you reply to this message, or mark it done.")],
+    ok: r ? "Move" : "Remind me",
+    run: async () => {
+      const pick = [...choices, custom].find((c) => c.input.checked);
+      if (!pick) throw new Error("Choose when.");
+      const due = pick === custom ? new Date(at.value) : presets[Number(pick.input.value)][1];
+      if (isNaN(+due) || +due <= Date.now()) throw new Error("Choose a time in the future.");
+      await remindAct("/api/remind", m.id, Math.floor(+due / 1000));
+    },
+  });
+}
+
+// openReminder opens the message a reminder is about.
+async function openReminder(r) {
+  if (state.lens === "zoom") {
+    await Zoom.go(2, r.conv ? { dm: r.conv } : { thread: r.message, peer: r.from, person: null });
+    return;
+  }
+  if (r.conv) {
+    await openDM(r.conv);
+    flash(r.message);
+  } else {
+    await openThread(r.message, r.message);
+  }
+}
+
+// remindersSection lists the pending reminders at the top of the list,
+// overdue ones first (they stay until they end).
+function remindersSection() {
+  const rs = canRemind() ? state.overview.reminders || [] : [];
+  if (!rs.length) return [];
+  const sorted = [...rs].sort((a, b) => (b.overdue - a.overdue) || a.due.localeCompare(b.due));
+  const overdue = rs.filter((r) => r.overdue).length;
+  return [el("li", { class: "result-head" }, "Reminders" + (overdue ? " · " + overdue + " due" : "")),
+    ...sorted.map((r) => el("li", {}, el("button", { type: "button", class: "conv-item reminder-item" + (r.overdue ? " overdue" : ""), onclick: () => openReminder(r) },
+      el("span", { class: "conv-main" },
+        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, r.title || "A message"),
+          el("span", { class: "conv-time" }, (r.overdue ? "due " : "") + dueText(r.due))),
+        el("span", { class: "conv-sub" }, "From " + r.from)))))];
+}
+
 // ---- notifications (browser device) -----------------------------------------------------
 //
 // Off until the person turns them on, here. The service worker shows each
@@ -779,6 +877,7 @@ function dmMsg(m, t, prev) {
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
       el("div", { class: "foot" }, !held && !acts.length && m.state_text && el("span", {}, m.state_text),
         !t.frozen && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
+        reminderLine(m),
         dmDetails(m))));
 }
 
@@ -1029,14 +1128,15 @@ function renderThreads(threads) {
   $("list-title").textContent = "Contacts";
   const people = peopleSection();
   const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices: messages per installation");
+  const reminders = remindersSection();
   if (!threads.length) {
-    fill(list, people, devices, el("li", { class: "hint empty-list" }, state.overview.device
+    fill(list, reminders, people, devices, el("li", { class: "hint empty-list" }, state.overview.device
       ? "No messages from devices here. Start a DM with a person above."
       : "No conversations yet. Start one with the + button, or with someone below."),
       directorySection(threads));
     return;
   }
-  fill(list, people, devices, ...contactsOf(threads).map((c) => {
+  fill(list, reminders, people, devices, ...contactsOf(threads).map((c) => {
     const expanded = state.expanded === c.peer;
     const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(expanded),
       onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
@@ -1314,7 +1414,7 @@ function renderMsg(m, byId, prev, t) {
 
   const footText = !needs && !working ? m.state_text : "";
   const waiting = m.next && m.next.startsWith("Waiting on") ? m.next : "";
-  const parts = [waiting && el("span", { class: "waiting" }, waiting), footText && el("span", {}, footText), details(m)]
+  const parts = [waiting && el("span", { class: "waiting" }, waiting), footText && el("span", {}, footText), reminderLine(m), details(m)]
     .filter(Boolean).flatMap((p, i) => i ? [el("span", { class: "sep", "aria-hidden": "true" }, "·"), p] : [p]);
 
   const col = el("div", { class: "col" }, meta, bubble,

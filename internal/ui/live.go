@@ -42,6 +42,9 @@ func (l *Live) Overview() (Overview, error) {
 	if n, err := l.notifyView(); err == nil {
 		o.Notify = n
 	}
+	if rs, err := l.reminders(); err == nil {
+		o.Reminders, o.Remind = rs, true
+	}
 	if err := l.dmOverview(&o); err != nil {
 		return o, err
 	}

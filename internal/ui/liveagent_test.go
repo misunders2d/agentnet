@@ -442,3 +442,97 @@ func TestLiveAlerts(t *testing.T) {
 		t.Fatalf("off keeps the choices: %+v", p)
 	}
 }
+
+// "Remind me later" from the daemon's page (S-R), through the client's
+// reminders: on a received DM message and a received device message, not
+// on one's own; only in the future; overdue once past its time, until it
+// ends; a reply to that message ends it, and the message's own state
+// never changes.
+func TestLiveReminders(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
+	bob, err := client.Join(ctx, filepath.Join(t.TempDir(), "bob"), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bob.Close() })
+	runDaemon(t, alice)
+	runDaemon(t, bob)
+	alice.CreatePerson(ctx, "Alice")
+	pb := NewLive(bob)
+	pb.CreatePerson("Bob")
+	eventually := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	var conv string
+	eventually("alice's DM with bob", func() bool { conv, err = alice.CreateDM(ctx, bob.Address); return err == nil })
+	q, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Kind: "question", Body: "can you check the budget?\nsecond line"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := alice.Send(ctx, bob.Address, "a device message", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually("both at bob", func() bool {
+		d, err := pb.DM(conv)
+		_, terr := pb.Thread(dev.ID)
+		return err == nil && len(d.Messages) == 1 && terr == nil
+	})
+	mine, _ := pb.SendDM(DMDraft{Conv: conv, Body: "my own"})
+
+	o, _ := pb.Overview()
+	if !o.Remind || len(o.Reminders) != 0 {
+		t.Fatalf("before any reminder: %v %v", o.Remind, o.Reminders)
+	}
+	if err := pb.SetReminder(mine.ID, time.Now().Add(time.Hour)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a reminder on one's own message: %v", err)
+	}
+	if err := pb.SetReminder(q.ID, time.Now().Add(-time.Minute)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a reminder in the past: %v", err)
+	}
+	if err := pb.SetReminder(q.ID, time.Now().Add(1500*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pb.SetReminder(dev.ID, time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	o, _ = pb.Overview()
+	if len(o.Reminders) != 2 || o.Reminders[0].Message != q.ID || o.Reminders[0].Conv != conv || o.Reminders[0].Title != "can you check the budget?" ||
+		o.Reminders[0].From != alice.Address || o.Reminders[1].Message != dev.ID || o.Reminders[1].Conv != "" || o.Reminders[1].Title != "a device message" {
+		t.Fatalf("reminders: %+v", o.Reminders)
+	}
+	eventually("the DM reminder overdue", func() bool { o, _ = pb.Overview(); return o.Reminders[0].Overdue })
+	if d, _ := pb.DM(conv); d.Messages[0].State != "conv_held" {
+		t.Fatalf("the reminded question changed: %+v", d.Messages[0])
+	}
+	// Done and cancel end it; again is not found.
+	if err := pb.CancelReminder(dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pb.DoneReminder(dev.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("done after cancel: %v", err)
+	}
+	// A reply to that very message ends it (still overdue until then).
+	if _, err := pb.SendDM(DMDraft{Conv: conv, Body: "not today", ReplyTo: q.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually("the reply ends the reminder", func() bool { o, _ = pb.Overview(); return len(o.Reminders) == 0 })
+	if r, ok, _ := bob.Reminder(q.ID); !ok || r.State != client.ReminderReplied {
+		t.Fatalf("after the reply: %+v %v", r, ok)
+	}
+}

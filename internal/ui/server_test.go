@@ -274,3 +274,18 @@ func TestAlertClickAndControls(t *testing.T) {
 		t.Fatal("the overview offers alerts it does not have")
 	}
 }
+
+// Reminders exist only where the provider has them.
+func TestRemindersAbsentWithoutProvider(t *testing.T) {
+	ts, _ := newTestServer(t)
+	for _, p := range []string{"/api/remind", "/api/remind/done", "/api/remind/cancel"} {
+		if r := do(t, ts, "POST", p, `{"id":"x"}`, post(ts)); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %d", p, r.StatusCode)
+		}
+	}
+	var o map[string]any
+	json.NewDecoder(do(t, ts, "GET", "/api/overview", "", authed(ts, nil)).Body).Decode(&o)
+	if o["remind"] != false {
+		t.Fatalf("the overview offers reminders it does not have: %v", o["remind"])
+	}
+}

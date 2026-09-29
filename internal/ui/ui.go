@@ -63,12 +63,16 @@ type Overview struct {
 	// Human DMs, when the provider holds them (Persons): this installation's
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
-	Persons bool         `json:"persons"`
-	Agents  bool         `json:"agents"`           // agents can be invited into DMs here (Participants)
-	Notify  *NotifyView  `json:"notify,omitempty"` // optional DM alerts, where the provider has them (Alerts)
-	Person  *PersonView  `json:"person,omitempty"`
-	People  []PersonView `json:"people"`
-	DMs     []DMSummary  `json:"dms"`
+	Persons bool        `json:"persons"`
+	Agents  bool        `json:"agents"`           // agents can be invited into DMs here (Participants)
+	Notify  *NotifyView `json:"notify,omitempty"` // optional DM alerts, where the provider has them (Alerts)
+	// Reminders are the pending "remind me later" reminders, soonest
+	// first (Reminders providers only; absent elsewhere).
+	Reminders []ReminderView `json:"reminders,omitempty"`
+	Remind    bool           `json:"remind"` // reminders can be set here
+	Person    *PersonView    `json:"person,omitempty"`
+	People    []PersonView   `json:"people"`
+	DMs       []DMSummary    `json:"dms"`
 }
 
 // Persons is implemented by providers that hold human DMs.
@@ -188,6 +192,26 @@ func AgentActions(kind, state string) []string {
 		return []string{DoAccept}
 	}
 	return nil
+}
+
+// ReminderView is a pending reminder on a received message (S-R): it only
+// asks for the person's attention, and nobody else sees it.
+type ReminderView struct {
+	Message string    `json:"message"`
+	Conv    string    `json:"conv,omitempty"` // its DM; "" for a device conversation
+	From    string    `json:"from"`
+	Title   string    `json:"title"` // the message's first line
+	Due     time.Time `json:"due"`
+	Overdue bool      `json:"overdue"` // past its time, until it ends
+}
+
+// Reminders is implemented by providers where received messages can take
+// a reminder. A reminder ends when the message is replied to, or when the
+// person marks it done or cancels it.
+type Reminders interface {
+	SetReminder(id string, due time.Time) error
+	DoneReminder(id string) error
+	CancelReminder(id string) error
 }
 
 // NotifyView is what the page shows about optional DM alerts

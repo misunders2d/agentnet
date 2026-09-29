@@ -647,3 +647,9 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .zoom-agents .agent-node::before { display: none; }
 .mini-chat .event-line { list-style: none; }
 .notify-line .text-btn { font-size: inherit; }
+/* Reminders: personal, attention only. */
+.reminder { font-size: 12.5px; color: var(--muted); }
+.reminder.overdue { color: var(--attn); font-weight: 600; }
+.reminder-item.overdue .conv-time { color: var(--attn); font-weight: 650; }
+.zoom-reminders { width: min(720px, 100%); justify-self: center; }
+input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--text); }

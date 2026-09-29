@@ -792,6 +792,50 @@ const ev = { preventDefault() {} };
   check(run("state.dm") === "d2", "a DM not here opens nothing else");
   delete overview.notify;
 
+  // Reminders ("remind me later", the daemon's page): on received messages
+  // only; a few times or one chosen, only in the future; listed with the
+  // overdue first; done and cancel by the message's id.
+  const soon = new Date(Date.now() + 3600e3).toISOString(), past = new Date(Date.now() - 600e3).toISOString();
+  Object.assign(overview, { remind: true, reminders: [
+    { message: "m3", conv: "d2", from: "alice/desk", title: "can you check?", due: soon, overdue: false },
+    { message: "a1", conv: "", from: "alice/desk", title: "hi from alice", due: past, overdue: true }] });
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.indexOf("Reminders · 1 due") >= 0 && side.indexOf("hi from alice") < side.indexOf("can you check?"),
+    "reminders head the list, the overdue one first: " + side.slice(0, 200));
+  await run('openDM("d2")');
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("Reminder today") && tl.includes("Change…") && tl.includes("Done") && (tl.match(/Remind me…/g) || []).length === 0,
+    "the reminded message shows its reminder; sent messages offer none: " + tl);
+  calls.length = 0;
+  const m3 = dmThreads.d2.messages.find((x) => x.id === "m3");
+  run("remindDialog")(m3);
+  await $("dialog-ok").onclick();
+  check(!calls.some((c) => c.path === "/api/remind") && $("dialog-error").textContent.includes("Choose when"), "a time must be chosen");
+  byId["remind-when:custom"].checked = true;
+  byId["remind-at"].value = "2020-01-01T09:00";
+  await $("dialog-ok").onclick();
+  check(!calls.some((c) => c.path === "/api/remind") && $("dialog-error").textContent.includes("future"), "only in the future");
+  byId["remind-when:custom"].checked = false;
+  byId["remind-when:0"].checked = true;
+  await $("dialog-ok").onclick();
+  const set = calls.find((c) => c.path === "/api/remind");
+  check(set && set.body.id === "m3" && Math.abs(set.body.due - (Date.now() / 1000 + 1800)) < 120, "in 30 minutes, for that message: " + JSON.stringify(set && set.body));
+  calls.length = 0;
+  run("remindAct")("/api/remind/done", "m3");
+  await tick();
+  check(calls.some((c) => c.path === "/api/remind/done" && c.body.id === "m3"), "done names the message");
+  await run('openThread("b1")');
+  check(JSON.stringify($("timeline").children.map(textOf)).includes("Remind me…"), "a received device message offers a reminder");
+  await run("openReminder")(overview.reminders[1]);
+  check(run("state.thread") === "a1" && run("state.dm") === null, "a device-message reminder opens its conversation");
+  overview.remind = false;
+  delete overview.reminders;
+  await run("loadOverview()");
+  await run('openDM("d2")');
+  check(!JSON.stringify($("timeline").children.map(textOf)).includes("Remind me"), "no reminders where the page has none (the browser device)");
+  delete overview.remind;
+
   // Search finds people by the name they give or their device, and DMs by
   // their lines or the person; each result says its kind and opens exactly it.
   overview.people = [alicePerson, { label: "Vitalii", address: "vitalii/laptop", state: "listed" }];

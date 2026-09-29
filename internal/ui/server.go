@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -63,6 +64,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
+	mux.HandleFunc("POST /api/remind", s.remind)
+	mux.HandleFunc("POST /api/remind/{what}", s.remind)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -258,6 +261,35 @@ func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
 		err = p.NotifySeen(v.Conv, v.IDs)
 	default:
 		err = NotFound("no such alert control")
+	}
+	writeResult(w, map[string]string{"note": note}, err)
+}
+
+// remind sets (or moves) a reminder, or marks it done or cancels it.
+func (s *Server) remind(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Reminders)
+	if !ok {
+		writeErr(w, NotFound("reminders are not available here"))
+		return
+	}
+	var v struct {
+		ID  string `json:"id"`
+		Due int64  `json:"due"` // unix seconds
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	var err error
+	note := ""
+	switch r.PathValue("what") {
+	case "":
+		err, note = p.SetReminder(v.ID, time.Unix(v.Due, 0)), "Reminder set."
+	case "done":
+		err, note = p.DoneReminder(v.ID), "Reminder done."
+	case "cancel":
+		err, note = p.CancelReminder(v.ID), "Reminder cancelled."
+	default:
+		err = NotFound("no such reminder control")
 	}
 	writeResult(w, map[string]string{"note": note}, err)
 }
