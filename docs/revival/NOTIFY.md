@@ -293,11 +293,25 @@ Built: `internal/client/alerts.go`; client schema step 18.
   token (a command line is readable by other local users), so it opens
   where the browser still holds the page's session cookie; otherwise the
   person runs `agentnet ui`. The page must honour `#conv=` (frontend).
-  macOS (osascript) and Windows (the shell notification icon) have no click
-  callback in `internal/notify`: there the alert is a banner only, an
-  interim state that does not close the click-to-chat release acceptance.
-  That gap stays open and explicit until a supported click route exists;
-  proof per OS is a native run, not a cross-compile.
+  **Windows:** the notification-area icon names a callback message; the
+  daemon's message-only window runs a message loop on the notifier's own
+  thread, and only `NIN_BALLOONUSERCLICK` for the current notification's
+  icon runs its action (each notification gets an icon id of its own, 1 to
+  65535 then 1 again, never 0, so a late click on a replaced or closed one
+  is ignored and never opens another conversation). The action opens the
+  page with `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler
+  http://127.0.0.1:PORT/#conv=ID` (one argument, no shell, no token); a
+  reminder or review on a direct message runs `agentnet open ID` in a new
+  console. Tested: the id rule and one-shot dispatch (all platforms), the
+  window procedure with synthetic callback messages (Windows); NOT yet
+  proven: that the Shell sends the click when a person clicks the Windows
+  10/11 banner, a click from the Windows 10 Notification Center after it
+  timed out, and that the URL handler keeps the `#conv=` fragment. Those
+  need a real Windows desktop.
+  **macOS** (osascript) has no click callback: the alert is a banner only.
+  A click needs an app bundle with a UNUserNotificationCenter delegate (a
+  signed helper app, a macOS build step and its distribution): an open,
+  explicit gap that does not close the click-to-chat release acceptance.
 
 ## 9. Tests the core owns
 

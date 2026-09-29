@@ -28,14 +28,19 @@ import (
 // never logged.
 const uiURLFile = "ui-url"
 
+// pageOS is the platform whose page command is built (tests change it).
+var pageOS = runtime.GOOS
+
 // convPageCommand returns the command that opens this daemon's messenger
-// page on a conversation ("" : the page itself), for a click on a DM alert:
-// the page's address without its token (a command line can be read by
-// other local users), so it opens where the browser still holds the page's
-// session and otherwise asks for `agentnet ui`. Linux only (xdg-open), as
-// only the Linux notifier takes clicks; nil elsewhere or with no page.
+// page on a conversation ("" : the page itself), for a click on a DM alert
+// or reminder: the page's address without its token (a command line can be
+// read by other local users), so it opens where the browser still holds the
+// page's session and otherwise asks for `agentnet ui`. Linux: xdg-open.
+// Windows: the system's URL handler (rundll32 url.dll,FileProtocolHandler
+// from System32, the address as one argument, no shell). nil where the
+// notifier takes no clicks (macOS) or with no page.
 func convPageCommand(home, conv string) []string {
-	if runtime.GOOS != "linux" {
+	if pageOS != "linux" && pageOS != "windows" {
 		return nil
 	}
 	data, err := secfile.Read(filepath.Join(home, uiURLFile))
@@ -49,6 +54,13 @@ func convPageCommand(home, conv string) []string {
 	page := url.URL{Scheme: "http", Host: u.Host, Path: "/"}
 	if protocol.ValidHash(conv) {
 		page.Fragment = "conv=" + conv
+	}
+	if pageOS == "windows" {
+		root := os.Getenv("SystemRoot")
+		if root == "" {
+			root = `C:\Windows`
+		}
+		return []string{root + `\System32\rundll32.exe`, "url.dll,FileProtocolHandler", page.String()}
 	}
 	return []string{"xdg-open", page.String()}
 }

@@ -212,3 +212,25 @@ func TestReviewClickDirectFailureLogged(t *testing.T) {
 		t.Fatal("failed launch not logged")
 	}
 }
+
+// On Windows a review click runs agentnet open in a console of its own
+// (no terminal launcher, no shell); on macOS there is none.
+func TestReviewClickOnWindows(t *testing.T) {
+	w := newWorld(t, "")
+	old := clickOS
+	t.Cleanup(func() { clickOS = old })
+	self, _ := os.Executable()
+	home, _ := filepath.Abs(w.bob.home)
+	clickOS = "windows"
+	id := strings.Repeat("a", 32)
+	for target, last := range map[string]string{id: id, "": "--review"} {
+		argv, onClick := w.bob.reviewClick(target)
+		if strings.Join(argv, "|") != strings.Join([]string{self, "--home", home, "open", last}, "|") || onClick == nil {
+			t.Fatalf("windows click for %q: %q", target, argv)
+		}
+	}
+	clickOS = "darwin"
+	if argv, onClick := w.bob.reviewClick(id); argv != nil || onClick != nil {
+		t.Fatalf("a click on macOS: %q", argv)
+	}
+}

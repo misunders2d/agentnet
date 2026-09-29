@@ -28,19 +28,28 @@ import (
 // replace it; "" turns clicks off.
 var terminalLauncher = "xdg-terminal-exec"
 
+// clickOS is the platform whose click routes are built (tests change it).
+var clickOS = runtime.GOOS
+
 // reviewClick returns what clicking a review notification does for target
-// (one item id, or "" for the review list): the argument list that opens a
-// terminal running `agentnet open`, and the function that runs it. Both are
-// nil where clicks are not handled: other than Linux, or no terminal
-// launcher. The notifier sends argv to desktops that keep it with the
-// notification (Omarchy runs it on a popup or history click) and calls
-// onClick for the standard click action while the notification is live.
+// (one item id, or "" for the review list): the argument list that runs
+// `agentnet open` where the person sees it, and the function that runs it.
+// On Linux that is a terminal (the default-terminal launcher); on Windows a
+// new console of its own. Both are nil where clicks are not handled (macOS)
+// or on Linux without a terminal launcher. The notifier sends argv to
+// desktops that keep it with the notification (Omarchy runs it on a popup
+// or history click) and calls onClick for the standard click action while
+// the notification is live (on Windows, only for a real click on it).
 func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
-	if runtime.GOOS != "linux" || terminalLauncher == "" {
-		return nil, nil
-	}
-	term, err := exec.LookPath(terminalLauncher)
-	if err != nil {
+	var term string
+	switch {
+	case clickOS == "windows":
+	case clickOS == "linux" && terminalLauncher != "":
+		var err error
+		if term, err = exec.LookPath(terminalLauncher); err != nil {
+			return nil, nil
+		}
+	default:
 		return nil, nil
 	}
 	self, err := os.Executable()
@@ -51,7 +60,10 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 	if err != nil {
 		return nil, nil
 	}
-	argv = []string{term, "--title=AgentNet review", "--dir=" + a.reviewDir(), "--", self, "--home", home, "open"}
+	argv = []string{self, "--home", home, "open"}
+	if term != "" {
+		argv = append([]string{term, "--title=AgentNet review", "--dir=" + a.reviewDir(), "--"}, argv...)
+	}
 	if protocol.ValidID(target) {
 		argv = append(argv, target)
 	} else {
@@ -85,6 +97,12 @@ func (a *Agent) launch(argv []string) error {
 		}
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	if self, err := os.Executable(); err == nil && argv[0] == self {
+		// agentnet itself (on Windows, where no terminal launcher is
+		// used): in a console of its own, in the review directory.
+		cmd.Dir = a.reviewDir()
+		cmd.SysProcAttr = ownConsole()
+	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {

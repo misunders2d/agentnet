@@ -129,27 +129,34 @@ func TestUIDemoServesAndStops(t *testing.T) {
 }
 
 // A DM alert's click opens the page on that conversation without the
-// page's token (a command line is readable by other local users); Linux
-// only, and nothing without a page.
+// page's token (a command line is readable by other local users): on Linux
+// with xdg-open, on Windows with the system URL handler from System32 (one
+// argument, no shell); none on macOS, and nothing without a page.
 func TestConvPageCommand(t *testing.T) {
 	home := t.TempDir()
 	conv := strings.Repeat("ab", 32)
+	old := pageOS
+	t.Cleanup(func() { pageOS = old })
+	pageOS = "linux"
 	if argv := convPageCommand(home, conv); argv != nil {
 		t.Fatalf("a command with no page: %v", argv)
 	}
 	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:4567/?t=SECRETTOKEN\n")); err != nil {
 		t.Fatal(err)
 	}
-	argv := convPageCommand(home, conv)
-	if runtime.GOOS != "linux" {
-		if argv != nil {
-			t.Fatalf("a click command on %s: %v", runtime.GOOS, argv)
+	t.Setenv("SystemRoot", `C:\Windows`)
+	for osName, want := range map[string][]string{
+		"linux":   {"xdg-open", "http://127.0.0.1:4567/#conv=" + conv},
+		"windows": {`C:\Windows\System32\rundll32.exe`, "url.dll,FileProtocolHandler", "http://127.0.0.1:4567/#conv=" + conv},
+		"darwin":  nil,
+	} {
+		pageOS = osName
+		argv := convPageCommand(home, conv)
+		if strings.Join(argv, "|") != strings.Join(want, "|") || strings.Contains(strings.Join(argv, " "), "SECRET") {
+			t.Errorf("%s: click command %q", osName, argv)
 		}
-		return
 	}
-	if len(argv) != 2 || argv[0] != "xdg-open" || argv[1] != "http://127.0.0.1:4567/#conv="+conv || strings.Contains(strings.Join(argv, " "), "SECRET") {
-		t.Fatalf("click command: %v", argv)
-	}
+	pageOS = "linux"
 	if argv := convPageCommand(home, "not-a-conversation"); len(argv) != 2 || argv[1] != "http://127.0.0.1:4567/" {
 		t.Fatalf("page command: %v", argv)
 	}

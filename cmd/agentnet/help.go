@@ -205,8 +205,9 @@ runs; AGENTNET_NOTIFY=off turns it off). If none can be shown, the daemon
 log says so and the items still wait. On Linux with xdg-terminal-exec,
 clicking the notification opens a review in a new terminal (agentnet help
 open): on Omarchy also from the notification history; on other desktops only
-while the notification is shown. Clicks are not handled on macOS or Windows
-yet.
+while the notification is shown. On Windows a click on the notification
+opens the same review in a new console window (not yet proven on a real
+Windows desktop). Clicks are not handled on macOS.
 
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
@@ -404,7 +405,7 @@ the processes it started are stopped; on Windows only the harness itself.`,
        agentnet open --review
 
 What clicking an AgentNet review notification runs, in a new terminal (Linux,
-with xdg-terminal-exec). It starts your chosen coding agent (agentnet
+with xdg-terminal-exec) or a new console window (Windows). It starts your chosen coding agent (agentnet
 responder show) interactively, in a new session in the responder directory,
 with a prompt to show and summarize item ID (its whole conversation) or
 everything waiting for your decision. For a review notice from another
@@ -425,8 +426,8 @@ tomorrow) or a date and time (2026-09-30 09:00), within ten years. Setting
 it again moves it.
 
 At that time the running daemon shows one notification without content (on
-Linux a click opens the message's thread, or the DM on the page served with
-daemon --ui). A reminder only asks for your attention: it never answers,
+Linux and Windows a click opens the message's thread, or the DM on the page
+served with daemon --ui; not on macOS). A reminder only asks for your attention: it never answers,
 accepts, declines or runs anything, nothing is sent, and the message's own
 state does not change. It is personal to this installation.
 
