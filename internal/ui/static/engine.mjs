@@ -994,15 +994,18 @@ export class Engine {
   }
 
   // convEvents are the participation records of conv held here, received
-  // and sent, oldest first.
+  // and sent, oldest first: a set by record hash, as the core keeps them
+  // (the same signed record in another message is one record).
   async convEvents(conv) {
     const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))]
       .filter((m) => m.conv === conv && m.sub === "event").sort((a, b) => a.at - b.at);
-    const out = [];
+    const out = [], seen = new Set();
     for (const m of rows) {
       try {
         const e = wire.parseEvent(m.body);
-        out.push({ e, hash: await wire.eventHash(e) });
+        const hash = await wire.eventHash(e);
+        if (!seen.has(hash)) out.push({ e, hash });
+        seen.add(hash);
       } catch (err) { /* admitted records parse; nothing else counts */ }
     }
     return out;

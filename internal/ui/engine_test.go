@@ -477,6 +477,33 @@ func TestBrowserEngineJourney(t *testing.T) {
 	if request["state"] != "" || request["to"] != eve.addr || request["pid"] != evePID || strings.Contains(fmt.Sprint(request["state_text"]), "Held") {
 		t.Fatalf("a request to eve's own agent as the browser shows it: %v", request)
 	}
+	// The same signed record in two messages (other envelope ids and
+	// logical ids) is one record, as the core keeps it: Eve's accept of her
+	// own agent, twice, is one decision (active, not a conflict), and the
+	// non-host accept again is still one record not counted.
+	evAccept := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: evePID, Type: protocol.EventAccept, Prev: ev.Hash(), TS: time.Now().Unix(),
+		Author: ev.Author}
+	evAccept.Sign(eve.id.Sign)
+	for _, e := range []protocol.ParticipationEvent{evAccept, evAccept, selfAccept} {
+		eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Sub: envelope.SubEvent, Body: string(marshalBytes(t, e)), Conv: root.ID(),
+			LID: protocol.NewID(), Root: rootJSON, PID: e.PID})
+	}
+	agentByPID := func(pid string) map[string]any {
+		for _, x := range w.api("/api/dm?id="+root.ID(), nil)["agents"].([]any) {
+			if x.(map[string]any)["pid"] == pid {
+				return x.(map[string]any)
+			}
+		}
+		return nil
+	}
+	w.until("eve's own agent accepted", func() bool { a := agentByPID(evePID); return a != nil && a["state"] != "invited" })
+	w.until("all three copies stored", func() bool { return len(w.api("/api/dm?id="+root.ID(), nil)["messages"].([]any)) == 9 })
+	if a := agentByPID(evePID); a["state"] != "active" || a["held"] != float64(0) {
+		t.Fatalf("one accept sent twice: %v", a)
+	}
+	if a := agentByPID(named.PID); a["state"] != "invited" || a["held"] != float64(2) {
+		t.Fatalf("a record not counted, sent again: %v", a)
+	}
 	n0 = inbox()
 
 	// A root Eve did not make, from Eve: held until proven, never admitted.
