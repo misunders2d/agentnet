@@ -42,6 +42,37 @@ async function handle(req) {
     if (req.body_bytes) m.body = "x".repeat(req.body_bytes);
     return { envelope: await wire.seal(m, keys, to) };
   }
+  case "roster": {
+    const r = await wire.newRoster(keys, address, req.label);
+    return { json: wire.rosterJSON(r), hash: await wire.rosterHash(r) };
+  }
+  case "parseRoster": {
+    const r = wire.parseRoster(req.json);
+    await wire.verifyRoster(r, wire.unb64(req.key, "key"));
+    return { hash: await wire.rosterHash(r) };
+  }
+  case "validLabel":
+    return { ok: req.labels.map((l) => { try { wire.validLabel(l); return true; } catch (e) { return false; } }) };
+  case "root": {
+    const c = await wire.newRoot(keys, req.me, req.other);
+    return { json: wire.rootJSON(c), id: await wire.rootID(c) };
+  }
+  case "parseRoot": {
+    const c = wire.parseRoot(req.json);
+    await wire.verifyRoot(c, wire.unb64(req.key, "key"));
+    return { id: await wire.rootID(c) };
+  }
+  case "caps": {
+    const c = await wire.newCaps(keys, address, req.session);
+    return { json: wire.capsJSON(c) };
+  }
+  case "parseCaps": {
+    const c = wire.parseCaps(req.json);
+    await wire.verifyCaps(c, wire.unb64(req.key, "key"));
+    return { ok: true };
+  }
+  case "supports":
+    return { supports: await wire.profileSupports(JSON.parse(req.profile), req.address, wire.unb64(req.key, "key"), req.name) };
   case "open": {
     const from = await wire.parsePublic(JSON.parse(req.from));
     return { inner: await wire.open(req.envelope, keys, req.self || address, from) };

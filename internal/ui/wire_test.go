@@ -148,12 +148,20 @@ func publicJSON(t *testing.T, p identity.Public) string {
 	return string(data)
 }
 
-// signEnvelope signs e as the Go client does (envelope.Seal), for envelopes
-// a test puts together itself.
+// signEnvelope signs e as the Go client does (envelope.Seal), in its
+// version's domain, for envelopes a test puts together itself.
 func signEnvelope(e *envelope.Envelope, key ed25519.PrivateKey) {
+	domain := "agentnet-envelope-v1\n"
+	if e.V == envelope.Version2 {
+		domain = "agentnet-envelope-v2\n"
+	}
+	signEnvelopeAs(e, key, domain)
+}
+
+func signEnvelopeAs(e *envelope.Envelope, key ed25519.PrivateKey, domain string) {
 	e.Sig = nil
 	data, _ := json.Marshal(e)
-	e.Sig = ed25519.Sign(key, append([]byte("agentnet-envelope-v1\n"), data...))
+	e.Sig = ed25519.Sign(key, append([]byte(domain), data...))
 }
 
 func encryptTo(t *testing.T, plain []byte, r age.Recipient) []byte {
@@ -499,10 +507,13 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		}
 		w.refuses("unpadded base64", w.call(map[string]any{"op": "open", "envelope": unpadded, "from": publicJSON(t, bob)}), "base64")
 
-		v2 := env
-		v2.V = 2
-		signEnvelope(&v2, bobID.Sign)
-		w.refuses("other version", open(v2, bob), "unsupported envelope version")
+		v3 := env
+		v3.V = 3
+		signEnvelope(&v3, bobID.Sign)
+		if v3.VerifySig(bob.SignKey) == nil {
+			t.Fatal("Go accepts an unknown envelope version")
+		}
+		w.refuses("other version", open(v3, bob), "unsupported envelope version")
 
 		huge := env
 		huge.CT = make([]byte, envelope.MaxCiphertext+1)

@@ -13,6 +13,7 @@ const utf8 = new TextEncoder();
 const fromUTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export const Version = 1;                // envelope.Version
+export const Version2 = 2;               // envelope.Version2: conversation messages
 export const MaxCiphertext = 256 << 10;  // envelope.MaxCiphertext
 export const MaxAttachments = 8;         // envelope.MaxAttachments
 export const MaxBody = 1 << 20;          // protocol.MaxBody
@@ -298,7 +299,10 @@ function marshalEnvelope(e, withSig) {
   return s + "}";
 }
 
-const envelopeSigned = (e) => utf8.encode("agentnet-envelope-v1\n" + marshalEnvelope(e, false));
+// A version 2 envelope is signed in its own domain, so neither version's
+// signature passes for the other.
+const envelopeSigned = (e) => utf8.encode((e.v === Version2 ? "agentnet-envelope-v2\n" : "agentnet-envelope-v1\n") +
+  marshalEnvelope(e, false));
 
 // marshalInner is json.Marshal of an envelope.Inner.
 function marshalInner(n) {
@@ -312,7 +316,46 @@ function marshalInner(n) {
   if (n.session) s += ',"session":' + goString(n.session);
   if (n.fallback) s += ',"fallback":true';
   if (n.status) s += ',"status":' + goString(n.status);
+  if (n.conv) s += ',"conv":' + goString(n.conv);
+  if (n.lid) s += ',"lid":' + goString(n.lid);
+  if (n.root) s += ',"root":' + n.root; // the signed root's JSON as it is
+  if (n.sub) s += ',"sub":' + goString(n.sub);
+  if (n.replica) s += ',"replica":true';
+  if (n.origin) s += ',"origin":' + goString(n.origin);
+  if (n.emotion) s += ',"emotion":' + goString(n.emotion);
+  if (n.target) s += ',"target":{"address":' + goString(n.target.address) + ',"fingerprint":' + goString(n.target.fingerprint) + "}";
+  if (n.pid) s += ',"pid":' + goString(n.pid);
   return s + "}";
+}
+
+const subs = new Set(["", "event", "excerpt"]);
+const agentOrigin = (o) => typeof o === "string" && o.startsWith("agent:");
+
+// checkV2 is envelope.checkVersion2: the conversation fields, only in
+// version 2, and their shapes. (The pid rules follow the core as it is now;
+// participation is still in review there.)
+function checkV2(n) {
+  if (n.v !== Version2) {
+    if (n.conv || n.lid || n.root || n.sub || n.replica || n.origin || n.emotion || n.target || n.pid) {
+      throw new Error("conversation fields in a version 1 message");
+    }
+    return;
+  }
+  if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
+  if (!n.root || utf8.encode(n.root).length > MaxConvRoot) throw new Error("missing or oversized conversation root");
+  if (!subs.has(n.sub)) throw new Error("unknown sub " + n.sub);
+  if (n.origin && n.origin !== "ui" && !(agentOrigin(n.origin) && validToken(n.origin.slice(6), 32))) throw new Error("invalid origin " + n.origin);
+  if (n.emotion && !validToken(n.emotion, 24)) throw new Error("invalid emotion " + n.emotion);
+  if (n.target) {
+    if (n.kind !== "question" && n.kind !== "task") throw new Error("only a question or task has an execution target");
+    if (!validAddress(n.target.address) || !validFingerprint(n.target.fingerprint)) throw new Error("invalid execution target");
+  }
+  if (n.pid) {
+    if (!validID(n.pid)) throw new Error("invalid participation id");
+    const request = n.sub === "" && (n.kind === "question" || n.kind === "task") && n.target;
+    const output = n.sub === "" && (n.kind === "answer" || n.kind === "result");
+    if (n.sub !== "event" && !request && !output) throw new Error("a participation id is not allowed on this message");
+  }
 }
 
 function checkBlob(b) {
@@ -324,9 +367,11 @@ function checkBlob(b) {
 // seal encrypts a message to the recipient's directory entry and signs it
 // with this device's key (envelope.Seal). m has id, from, to, ts, kind, body
 // and optionally reply_to, status, session, fallback and attachments (each
-// {blob: {id, size, sha256}, name, size, sha256}). It returns the envelope as
-// the JSON POST /v1/messages takes. The same stored JSON is sent again on a
-// retry, never sealed again.
+// {blob: {id, size, sha256}, name, size, sha256}); with v: Version2 also a
+// conversation message's conv, lid, root (the signed root's JSON), sub,
+// replica, origin, emotion and target. It returns the envelope as the JSON
+// POST /v1/messages takes. The same stored JSON is sent again on a retry,
+// never sealed again.
 export async function seal(m, keys, recipient) {
   if (!kinds.has(m.kind)) throw new Error("unknown message kind " + m.kind);
   if (!validID(m.id) || !validAddress(m.from) || !validAddress(m.to)) throw new Error("invalid message header");
@@ -340,13 +385,18 @@ export async function seal(m, keys, recipient) {
     if (!Number.isSafeInteger(a.size) || a.size < 0 || !sha256Pattern.test(a.sha256)) throw new Error("invalid attachment");
     text(a.name, "attachment name");
   }
-  const inner = { v: Version, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, body: text(m.body, "message"),
-    reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status") };
+  const v = m.v === Version2 ? Version2 : Version;
+  const inner = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, body: text(m.body, "message"),
+    reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
+    conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
+    origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "" };
+  checkV2(inner);
+  if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
   e.addRecipient(recipient.box_recipient);
   const ct = await e.encrypt(utf8.encode(marshalInner(inner)));
   if (ct.length > MaxCiphertext) throw new Error("message too large (" + ct.length + " bytes encrypted, max " + MaxCiphertext + ")");
-  const env = { v: Version, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
+  const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback };
   env.sig = await signBytes(keys, envelopeSigned(env));
   return marshalEnvelope(env, true);
@@ -365,7 +415,7 @@ export function parseEnvelope(json) {
 
 // verifyEnvelope checks the signature and shape as envelope.VerifySig does.
 export async function verifyEnvelope(e, signKey) {
-  if (e.v !== Version) throw new Error("unsupported envelope version " + e.v);
+  if (e.v !== Version && e.v !== Version2) throw new Error("unsupported envelope version " + e.v);
   if (!e.id || !e.from || !e.to || !e.kind || !e.ct.length) throw new Error("incomplete envelope");
   if (!kinds.has(e.kind)) throw new Error("unknown message kind " + e.kind);
   if (e.ct.length > MaxCiphertext) throw new Error("envelope too large");
@@ -404,9 +454,15 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("inner: " + err.message);
   }
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
-    reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string" });
+    reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
+    conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
+    target: "object", pid: "string" });
+  const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string" }) : null;
   const n = { v: f.v || 0, id: f.id || "", from: f.from || "", to: f.to || "", ts: f.ts || 0, kind: f.kind || "", body: f.body || "",
     reply_to: f.reply_to || "", session: f.session || "", fallback: !!f.fallback, status: f.status || "",
+    conv: f.conv || "", lid: f.lid || "", root: f.root ? JSON.stringify(f.root) : "", sub: f.sub || "", replica: !!f.replica,
+    origin: f.origin || "", emotion: f.emotion || "", pid: f.pid || "",
+    target: target ? { address: target.address || "", fingerprint: target.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       const b = strict(x.blob || {}, "attachment reference", { id: "string", size: "int", sha256: "string" });
@@ -416,6 +472,7 @@ export async function open(json, keys, selfAddress, sender) {
     n.session !== e.session || n.fallback !== e.fallback) {
     throw new Error("encrypted header does not match signed envelope");
   }
+  checkV2(n);
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -424,4 +481,223 @@ export async function open(json, keys, selfAddress, sender) {
     }
   });
   return n;
+}
+
+// ---- signed records (internal/protocol/person.go) ------------------------------------------
+//
+// A person's roster, a DM's root (E0) and a device session's capabilities.
+// Each is signed by one device over a domain line and the record's JSON as
+// Go writes it (struct field order, no signature); a hash is the hex SHA-256
+// of those bytes. Records from others are parsed strictly and checked here
+// exactly as the Go client checks them; what is pinned and when a
+// different record is a conflict is the engine's job.
+
+export const MaxPersonLabel = 64;
+export const MaxPersonRecord = 768;
+export const MaxConvRoot = 2048;
+export const MaxCaps = 16;
+export const MaxCapsRecord = 1024;
+export const CapEnv2 = "env2";
+const personDomain = "agentnet-person-v1\n";
+const rootDomain = "agentnet-conv-root-v1\n";
+const capsDomain = "agentnet-caps-v1\n";
+const fingerprintPattern = /^[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}$/;
+// Go's unicode.IsPrint: letters, marks, numbers, punctuation, symbols and
+// the ASCII space. (Both follow their own Unicode version; a character
+// assigned in one and not the other can be judged differently.)
+const printable = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
+
+export const validHash = (s) => typeof s === "string" && sha256Pattern.test(s);
+export const validFingerprint = (s) => typeof s === "string" && fingerprintPattern.test(s);
+const validToken = (s, max) => typeof s === "string" && s.length >= 1 && s.length <= max && /^[a-z0-9-]+$/.test(s);
+const hashOf = async (bytes) => hex(await sha256(bytes));
+function fitsRecord(json, max, what) {
+  if (utf8.encode(json).length > max) throw new Error(what + ": record too large");
+}
+const goStrings = (list) => (list ? "[" + list.map(goString).join(",") + "]" : "null");
+const sigJSON = (r, withSig) => (withSig && r.sig && r.sig.length ? ',"sig":' + goBytes(r.sig) : "");
+
+// validLabel is person.go's validLabel: 1–64 bytes of printable text
+// without surrounding spaces.
+export function validLabel(s) {
+  if (typeof s !== "string" || s === "" || !wellFormed(s) || utf8.encode(s).length > MaxPersonLabel || s.trim() !== s) {
+    throw new Error("person: label must be 1-" + MaxPersonLabel + " bytes of text without surrounding spaces");
+  }
+  if (!printable.test(s)) throw new Error("person: label has a control character");
+  return s;
+}
+
+// strictRecord parses a record's JSON (a string of at most max UTF-8
+// bytes, or an already parsed value) with only the named fields. A parsed
+// value is measured as Go would write it (fitsRecord), which is how devices
+// write records.
+function strictRecord(json, max, what, fields) {
+  if (typeof json === "string" && utf8.encode(json).length > max) throw new Error(what + ": record too large");
+  return strict(typeof json === "string" ? JSON.parse(json) : json, what, fields);
+}
+
+// Person roster (one device, seq 0).
+
+function marshalRoster(r, withSig) {
+  return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
+    ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map((d) => '{"address":' + goString(d.address) +
+      ',"fingerprint":' + goString(d.fingerprint) + "}").join(",") + "]" : "null") + sigJSON(r, withSig) + "}";
+}
+export const rosterJSON = (r) => marshalRoster(r, true);
+const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
+export const rosterHash = (r) => hashOf(rosterCanonical(r));
+
+export function validateRoster(r) {
+  if (!validID(r.person)) throw new Error("person: invalid id");
+  validLabel(r.label);
+  if (r.seq !== 0 || r.prev !== "") throw new Error("person: only a first roster (seq 0) is supported");
+  if (!r.devices || r.devices.length !== 1) throw new Error("person: exactly one device is supported");
+  if (!validAddress(r.devices[0].address)) throw new Error("person: invalid address " + r.devices[0].address);
+  if (!validFingerprint(r.devices[0].fingerprint)) throw new Error("person: invalid device fingerprint");
+}
+
+// newRoster creates this device's person, as the person asked: a random
+// id, the name they give, and this device.
+export async function newRoster(keys, address, label) {
+  const r = { person: newID(), label, seq: 0, prev: "", devices: [{ address, fingerprint: await fingerprint(await publicEntry(keys, address)) }] };
+  validateRoster(r);
+  r.sig = await signBytes(keys, rosterCanonical(r));
+  if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large; use a shorter label");
+  return r;
+}
+
+export function parseRoster(json) {
+  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", sig: "string" });
+  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", sig: f.sig ? unb64(f.sig, "person signature") : null,
+    devices: f.devices ? f.devices.map((d) => { const x = strict(d, "person device", { address: "string", fingerprint: "string" });
+      return { address: x.address || "", fingerprint: x.fingerprint || "" }; }) : null };
+  validateRoster(r);
+  fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
+  return r;
+}
+
+// verifyRoster checks r and that signKey, its device's key, signed it.
+export async function verifyRoster(r, signKey) {
+  validateRoster(r);
+  if (!(await verifyBytes(signKey, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");
+}
+
+// DM root (E0).
+
+function marshalRoot(c, withSig) {
+  const cr = c.creator;
+  return '{"v":' + goInt(c.v, "version") + ',"kind":' + goString(c.kind) + ',"creator":{"person":' + goString(cr.person) +
+    ',"roster":' + goString(cr.roster) + ',"address":' + goString(cr.address) + ',"fingerprint":' + goString(cr.fingerprint) + "}" +
+    ',"members":' + (c.members ? "[" + c.members.map((m) => '{"person":' + goString(m.person) + ',"roster":' + goString(m.roster) + "}").join(",") + "]" : "null") +
+    ',"nonce":' + goString(c.nonce) + ',"created":' + goInt(c.created, "time") + sigJSON(c, withSig) + "}";
+}
+export const rootJSON = (c) => marshalRoot(c, true);
+const rootCanonical = (c) => utf8.encode(rootDomain + marshalRoot(c, false));
+// rootID is the conversation id: the hash of the root's canonical bytes.
+export const rootID = (c) => hashOf(rootCanonical(c));
+export const rootMember = (c, person) => ((c.members || []).find((m) => m.person === person) || {}).roster;
+
+export function validateRoot(c) {
+  if (c.v !== 1 || c.kind !== "dm") throw new Error("conversation: unsupported root");
+  const cr = c.creator;
+  if (!validID(cr.person) || !validHash(cr.roster) || !validFingerprint(cr.fingerprint)) throw new Error("conversation: invalid creator");
+  if (!validAddress(cr.address)) throw new Error("conversation: invalid address " + cr.address);
+  if (!c.members || c.members.length !== 2) throw new Error("conversation: a DM has two members");
+  for (const m of c.members) if (!validID(m.person) || !validHash(m.roster)) throw new Error("conversation: invalid member");
+  if (c.members[0].person >= c.members[1].person) throw new Error("conversation: members must be distinct and sorted");
+  if (rootMember(c, cr.person) !== cr.roster) throw new Error("conversation: the creator is not a member with that roster");
+  if (!validID(c.nonce) || !(c.created > 0)) throw new Error("conversation: invalid nonce or time");
+}
+
+// newRoot starts a DM between this device's person (me: {person, roster,
+// address, fingerprint}) and another person ({person, roster}, as pinned
+// here). Each call is a separate conversation.
+export async function newRoot(keys, me, other) {
+  const members = [{ person: me.person, roster: me.roster }, { person: other.person, roster: other.roster }]
+    .sort((a, b) => (a.person < b.person ? -1 : 1));
+  const c = { v: 1, kind: "dm", creator: { person: me.person, roster: me.roster, address: me.address, fingerprint: me.fingerprint },
+    members, nonce: newID(), created: Math.floor(Date.now() / 1000) };
+  validateRoot(c);
+  c.sig = await signBytes(keys, rootCanonical(c));
+  if (utf8.encode(rootJSON(c)).length > MaxConvRoot) throw new Error("conversation root too large");
+  return c;
+}
+
+export function parseRoot(json) {
+  const f = strictRecord(json, MaxConvRoot, "conversation", { v: "int", kind: "string", creator: "object", members: "array",
+    nonce: "string", created: "int", sig: "string" });
+  const cr = strict(f.creator || {}, "conversation creator", { person: "string", roster: "string", address: "string", fingerprint: "string" });
+  const c = { v: f.v || 0, kind: f.kind || "", nonce: f.nonce || "", created: f.created || 0, sig: f.sig ? unb64(f.sig, "root signature") : null,
+    creator: { person: cr.person || "", roster: cr.roster || "", address: cr.address || "", fingerprint: cr.fingerprint || "" },
+    members: f.members ? f.members.map((m) => { const x = strict(m, "conversation member", { person: "string", roster: "string" });
+      return { person: x.person || "", roster: x.roster || "" }; }) : null };
+  validateRoot(c);
+  fitsRecord(rootJSON(c), MaxConvRoot, "conversation");
+  return c;
+}
+
+// verifyRoot checks c and that creatorKey, the creator device's key, signed it.
+export async function verifyRoot(c, creatorKey) {
+  validateRoot(c);
+  if (!(await verifyBytes(creatorKey, rootCanonical(c), c.sig))) throw new Error("conversation: root signature invalid");
+}
+
+// Capabilities of one device session.
+
+function marshalCaps(c, withSig) {
+  return '{"address":' + goString(c.address) + ',"session":' + goString(c.session) + ',"caps":' + goStrings(c.caps) +
+    ',"ts":' + goInt(c.ts, "time") + sigJSON(c, withSig) + "}";
+}
+export const capsJSON = (c) => marshalCaps(c, true);
+const capsCanonical = (c) => utf8.encode(capsDomain + marshalCaps(c, false));
+
+export function validateCaps(c) {
+  if (!validAddress(c.address)) throw new Error("caps: invalid address " + c.address);
+  if (!validID(c.session) || !(c.ts > 0) || (c.caps && c.caps.length > MaxCaps)) throw new Error("caps: invalid record");
+  (c.caps || []).forEach((name, i) => {
+    if (!validToken(name, 32) || (i > 0 && c.caps[i - 1] >= name)) throw new Error("caps: names must be sorted, unique [a-z0-9-] tokens");
+  });
+}
+
+// newCaps is this device session's signed record (for PUT /v1/caps).
+export async function newCaps(keys, address, session, caps = [CapEnv2]) {
+  const c = { address, session, caps: [...caps].sort(), ts: Math.floor(Date.now() / 1000) };
+  validateCaps(c);
+  c.sig = await signBytes(keys, capsCanonical(c));
+  return c;
+}
+
+export function parseCaps(json) {
+  const f = strictRecord(json, MaxCapsRecord, "caps", { address: "string", session: "string", caps: "array", ts: "int", sig: "string" });
+  if ((f.caps || []).some((x) => typeof x !== "string")) throw new Error("caps: names must be strings");
+  const c = { address: f.address || "", session: f.session || "", caps: f.caps || null, ts: f.ts || 0, sig: f.sig ? unb64(f.sig, "caps signature") : null };
+  validateCaps(c);
+  fitsRecord(capsJSON(c), MaxCapsRecord, "caps");
+  return c;
+}
+
+export async function verifyCaps(c, signKey) {
+  validateCaps(c);
+  if (!(await verifyBytes(signKey, capsCanonical(c), c.sig))) throw new Error("caps: signature invalid");
+}
+
+// profileSupports is protocol.Profile.Supports for a profile as the relay
+// sends it ({person, sessions, live, caps}): there are sessions, and each
+// has a record that verifies with signKey, names address and that session,
+// and lists name. Sessions are the relay's statement, not signed.
+export async function profileSupports(profile, address, signKey, name) {
+  const sessions = (profile && profile.sessions) || [];
+  if (!sessions.length) return false;
+  const has = new Set();
+  for (const raw of profile.caps || []) {
+    let c;
+    try {
+      c = parseCaps(raw);
+      await verifyCaps(c, signKey);
+    } catch (e) {
+      continue;
+    }
+    if (c.address === address && (c.caps || []).includes(name)) has.add(c.session);
+  }
+  return sessions.every((s) => has.has(s));
 }
