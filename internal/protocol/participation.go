@@ -18,9 +18,10 @@ import (
 // (sub "event") and signed by its author's device:
 //
 //   - invite: by a member's device. It names the host, the earlier messages
-//     of the DM that may be given to the agent (Grant: logical ids, nothing
-//     else earlier), and the member keys that may ask it for follow-up tasks
-//     within this participation only (TaskKeys).
+//     of the DM that may be given to the agent (Grant: each exactly one
+//     message, by its logical id and its sender's key, the pair a message is
+//     admitted under; nothing else earlier), and the member keys that may
+//     ask it for follow-up tasks within this participation only (TaskKeys).
 //   - accept or decline: by the host device only, answering one invite
 //     (Prev is that invite's hash), after the host's person decided. An
 //     accept is all-or-nothing consent to exactly that invite's scope; a
@@ -53,7 +54,7 @@ const AudienceConversation = "conversation"
 
 // Bounds of a participation event.
 const (
-	MaxGrant              = 200  // logical ids
+	MaxGrant              = 200  // message references
 	MaxTaskKeys           = 16   // member key fingerprints
 	MaxInviteNote         = 1024 // bytes
 	MaxParticipationEvent = 8192 // the signed event as JSON
@@ -64,6 +65,13 @@ type EventAuthor struct {
 	Person      string `json:"person"`
 	Roster      string `json:"roster"`
 	Address     string `json:"address"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// GrantRef names one earlier message of the DM exactly: its logical id and
+// the key fingerprint of the device that sent it.
+type GrantRef struct {
+	LID         string `json:"lid"`
 	Fingerprint string `json:"fingerprint"`
 }
 
@@ -86,7 +94,7 @@ type ParticipationEvent struct {
 
 	// Invite only.
 	Host     *ParticipationHost `json:"host,omitempty"`
-	Grant    []string           `json:"grant,omitempty"`     // earlier logical ids of this DM the agent may be given
+	Grant    []GrantRef         `json:"grant,omitempty"`     // earlier messages of this DM the agent may be given
 	Audience string             `json:"audience,omitempty"`  // AudienceConversation
 	TaskKeys []string           `json:"task_keys,omitempty"` // member key fingerprints allowed follow-up tasks here
 	Note     string             `json:"note,omitempty"`      // shown to the host's person
@@ -133,7 +141,14 @@ func (e ParticipationEvent) Validate() error {
 		if _, _, err := SplitAddress(h.Address); err != nil {
 			return fmt.Errorf("participation: host: %w", err)
 		}
-		if err := uniqueValid(e.Grant, MaxGrant, ValidID); err != nil {
+		refs := make([]string, 0, len(e.Grant))
+		for _, g := range e.Grant {
+			if !ValidID(g.LID) || !ValidFingerprint(g.Fingerprint) {
+				return errors.New("participation: grant: invalid message reference")
+			}
+			refs = append(refs, g.LID+"/"+g.Fingerprint)
+		}
+		if err := uniqueValid(refs, MaxGrant, func(string) bool { return true }); err != nil {
 			return fmt.Errorf("participation: grant: %w", err)
 		}
 		if err := uniqueValid(e.TaskKeys, MaxTaskKeys, ValidFingerprint); err != nil {

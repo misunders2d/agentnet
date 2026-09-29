@@ -218,6 +218,11 @@ func (s *store) conversations() ([]ConversationInfo, error) {
 // contentHash identifies what a conversation message says, independently
 // of its per-device copy (envelope id, recipient, time, session): the same
 // sender key and logical id must always carry the same content.
+//
+// The participation id is part of it (a message moved to another
+// participation is not the same message). It is left out when empty, so
+// the hash of a message without one is what it always was; legacyContentHash
+// is the hash before it was added, for rows stored then (see addConvInbox).
 func contentHash(in envelope.Inner) string {
 	type att struct {
 		Name   string
@@ -229,13 +234,19 @@ func contentHash(in envelope.Inner) string {
 		Replica                                                      bool
 		Target                                                       *envelope.Target
 		Attachments                                                  []att
-	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Replica, in.Target, nil}
+		PID                                                          string `json:",omitempty"`
+	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Replica, in.Target, nil, in.PID}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})
 	}
 	data, _ := json.Marshal(c)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func legacyContentHash(in envelope.Inner) string {
+	in.PID = ""
+	return contentHash(in)
 }
 
 // Results of addConvInbox.
@@ -247,15 +258,26 @@ const (
 
 // addConvInbox admits a conversation message once per (verifying key,
 // logical id). fromQuarantine removes the held envelope in the same step.
-func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQuarantine bool) (string, error) {
+//
+// also, if given, runs in the same transaction when the message is new
+// (a participation event's own record): a duplicate or conflicting message
+// has no effect at all, and if also fails nothing is stored.
+func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
 	hash := contentHash(in)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
-	var stored string
-	err = tx.QueryRow(`SELECT coalesce(content_hash, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&stored)
+	var stored, storedPID string
+	err = tx.QueryRow(`SELECT coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&stored, &storedPID)
+	if err == nil && stored != hash && in.PID != "" && storedPID == in.PID && stored == legacyContentHash(in) {
+		// Stored before the participation id was hashed: the same message.
+		if _, err := tx.Exec(`UPDATE inbox SET content_hash = ? WHERE verified_by = ? AND lid = ?`, hash, verifiedBy, in.LID); err != nil {
+			return "", err
+		}
+		stored = hash
+	}
 	switch {
 	case err == nil && stored == hash:
 		if fromQuarantine {
@@ -280,6 +302,11 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return admittedAgain, nil // this envelope id is stored already
+	}
+	if also != nil {
+		if err := also(tx); err != nil {
+			return "", err
+		}
 	}
 	for _, a := range in.Attachments {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO attachments(message_id, blob_id, name, size, sha256, ct_size, ct_sha256) VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -415,21 +442,22 @@ type ConvMessage struct {
 	Emotion string           `json:"emotion,omitempty"` // "" means none sent
 	Target  *envelope.Target `json:"target,omitempty"`
 	PID     string           `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Key     string           `json:"key"`           // the sender's key fingerprint (received: the key that verified it)
 	State   string           `json:"state"`         // inbox: its response state; outbox: queued, waiting, custody, delivered, …
 	Detail  string           `json:"detail,omitempty"`
 	At      int64            `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
 }
 
-func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
+func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 	rows, err := s.db.Query(`
-		SELECT id, lid, 'in', sender, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
+		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, '')
 		  FROM inbox WHERE conv = ?
 		UNION ALL
-		SELECT id, lid, 'out', ?, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), 0, coalesce(origin, ''),
+		SELECT id, lid, 'out', ?, ?, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), 0, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(error, ''), created_at, created_ms, coalesce(pid, '')
 		  FROM outbox WHERE conv = ?
-		ORDER BY ms, 1`, conv, self, conv)
+		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -439,7 +467,7 @@ func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
 		var m ConvMessage
 		var target string
 		var ms int64
-		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
+		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
 			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID); err != nil {
 			return nil, err
 		}
@@ -456,10 +484,15 @@ func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
 // by hash, and never changed; a participation's state is resolved from
 // them when read (participation.go).
 
-// Bounds of the events held.
+// Bounds of the events held. They limit what a member could pile up, and
+// never keep a participation from being stopped: a dismissal of a
+// participation whose invite is held needs only room among that
+// participation's own dismissals.
 const (
-	maxEventsPerParticipation = 64
-	maxEventsPerConversation  = 1000
+	maxInvitesPerConversation  = 1000 // participations of one DM
+	maxEventsPerParticipation  = 16   // its invite, decisions and events of other kinds
+	maxDismissPerParticipation = 16   // its dismissals
+	maxPendingPerConversation  = 256  // events of participations whose invite is not held (yet)
 )
 
 var errTooManyEvents = errors.New("too many participation events")
@@ -472,23 +505,54 @@ func (s *store) addParticipationEvent(ev protocol.ParticipationEvent, raw []byte
 		return err
 	}
 	defer tx.Rollback()
-	var exists, perPID, perConv int
-	if err := tx.QueryRow(`SELECT (SELECT count(*) FROM participation_events WHERE hash = ?),
-		(SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ?),
-		(SELECT count(*) FROM participation_events WHERE conv = ?)`, ev.Hash(), ev.Conv, ev.PID, ev.Conv).Scan(&exists, &perPID, &perConv); err != nil {
+	if err := insertParticipationEvent(tx, ev, raw); err != nil {
+		return err
+	}
+	return s.done(tx.Commit())
+}
+
+// insertParticipationEvent stores ev within tx, once, within the bounds.
+func insertParticipationEvent(tx *sql.Tx, ev protocol.ParticipationEvent, raw []byte) error {
+	var exists, invited, ofKind int
+	if err := tx.QueryRow(`SELECT
+		(SELECT count(*) FROM participation_events WHERE hash = ?),
+		(SELECT count(*) FROM participation_events WHERE conv = ? AND type = ? AND pid = ?),
+		(SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ? AND (type = ?) = (? = ?))`,
+		ev.Hash(),
+		ev.Conv, protocol.EventInvite, ev.PID,
+		ev.Conv, ev.PID, protocol.EventDismiss, ev.Type, protocol.EventDismiss).Scan(&exists, &invited, &ofKind); err != nil {
 		return err
 	}
 	if exists > 0 {
 		return nil
 	}
-	if perPID >= maxEventsPerParticipation || perConv >= maxEventsPerConversation {
+	if ev.Type == protocol.EventDismiss && ofKind >= maxDismissPerParticipation ||
+		ev.Type != protocol.EventDismiss && ofKind >= maxEventsPerParticipation {
 		return errTooManyEvents
 	}
-	if _, err := tx.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		ev.Hash(), ev.Conv, ev.PID, ev.Type, ev.Author.Fingerprint, string(raw), time.Now().Unix()); err != nil {
-		return err
+	switch {
+	case ev.Type == protocol.EventInvite:
+		var invites int
+		if err := tx.QueryRow(`SELECT count(*) FROM participation_events WHERE conv = ? AND type = ?`, ev.Conv, protocol.EventInvite).Scan(&invites); err != nil {
+			return err
+		}
+		if invites >= maxInvitesPerConversation {
+			return errTooManyEvents
+		}
+	case invited == 0: // it waits for an invite not held here
+		var pending int
+		if err := tx.QueryRow(`SELECT count(*) FROM participation_events e WHERE e.conv = ? AND e.type != ? AND NOT EXISTS
+			(SELECT 1 FROM participation_events i WHERE i.conv = e.conv AND i.type = ? AND i.pid = e.pid)`,
+			ev.Conv, protocol.EventInvite, protocol.EventInvite).Scan(&pending); err != nil {
+			return err
+		}
+		if pending >= maxPendingPerConversation {
+			return errTooManyEvents
+		}
 	}
-	return s.done(tx.Commit())
+	_, err := tx.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		ev.Hash(), ev.Conv, ev.PID, ev.Type, ev.Author.Fingerprint, string(raw), time.Now().Unix())
+	return err
 }
 
 // participationEvents returns the events held for a participation.
@@ -541,10 +605,23 @@ func (s *store) participationConv(pid string) (string, error) {
 	return conv, err
 }
 
-// convHasLID reports whether a message with logical id lid of conv is held.
-func (s *store) convHasLID(conv, lid string) (bool, error) {
-	var n int
-	err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ?) + (SELECT count(*) FROM outbox WHERE conv = ? AND lid = ?)`,
-		conv, lid, conv, lid).Scan(&n)
-	return n > 0, err
+// convLIDKeys returns the sender key fingerprints of the messages of conv
+// held with logical id lid (received ones by the key that verified them,
+// sent ones by selfFP).
+func (s *store) convLIDKeys(conv, lid, selfFP string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT verified_by FROM inbox WHERE conv = ? AND lid = ?
+		UNION SELECT ? FROM outbox WHERE conv = ? AND lid = ?`, conv, lid, selfFP, conv, lid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var fp string
+		if err := rows.Scan(&fp); err != nil {
+			return nil, err
+		}
+		out = append(out, fp)
+	}
+	return out, rows.Err()
 }

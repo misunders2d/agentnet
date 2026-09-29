@@ -13,7 +13,7 @@ func vecInvite() ParticipationEvent {
 	e := ParticipationEvent{V: 1, Conv: vecRoot(r).ID(), PID: vecSession, Type: EventInvite, TS: 1790000000,
 		Author:   EventAuthor{Person: vecPerson, Roster: r.Hash(), Address: "vitalii/desk", Fingerprint: vecFP},
 		Host:     &ParticipationHost{Person: vecOther, Address: "sergey/laptop", Fingerprint: vecFP},
-		Grant:    []string{strings.Repeat("1", 32), strings.Repeat("2", 32)},
+		Grant:    []GrantRef{{LID: strings.Repeat("1", 32), Fingerprint: vecFP}, {LID: strings.Repeat("2", 32), Fingerprint: vecFP}},
 		Audience: AudienceConversation, TaskKeys: []string{vecFP}, Note: "check the deploy <&>"}
 	e.Sign(vecKey())
 	return e
@@ -27,24 +27,25 @@ func TestParticipationVectors(t *testing.T) {
 		`"pid":"00112233445566778899aabbccddeeff","type":"invite","prev":"","author":{"person":"0123456789abcdef0123456789abcdef",` +
 		`"roster":"57cbbb8dd8d82a48e8949e376f4b8f75f4945ac496f770790554d55a78065a04","address":"vitalii/desk",` +
 		`"fingerprint":"01234567-89abcdef-01234567-89abcdef"},"ts":1790000000,"host":{"person":"fedcba9876543210fedcba9876543210",` +
-		`"address":"sergey/laptop","fingerprint":"01234567-89abcdef-01234567-89abcdef"},"grant":["11111111111111111111111111111111",` +
-		`"22222222222222222222222222222222"],"audience":"conversation","task_keys":["01234567-89abcdef-01234567-89abcdef"],` +
+		`"address":"sergey/laptop","fingerprint":"01234567-89abcdef-01234567-89abcdef"},"grant":[{"lid":"11111111111111111111111111111111",` +
+		`"fingerprint":"01234567-89abcdef-01234567-89abcdef"},{"lid":"22222222222222222222222222222222",` +
+		`"fingerprint":"01234567-89abcdef-01234567-89abcdef"}],"audience":"conversation","task_keys":["01234567-89abcdef-01234567-89abcdef"],` +
 		`"note":"check the deploy \u003c\u0026\u003e"}`
 	if got := string(inv.Canonical()); got != want {
 		t.Fatalf("invite bytes:\n got %q\nwant %q", got, want)
 	}
-	if inv.Hash() != "bd2545890c4d098f0290f9670409a3a76fa6c35f7acdf01954695ad4bdbe565f" ||
-		hex.EncodeToString(inv.Sig) != "c17d91328617e1b9a56a3f6f3dfd7779b7ff9d148f0baa2938eb8d8dab6e5264d25f5231afbf1529d1a386f567c3e6be6bf9becec89a1596cbf6f6cf8c51390f" {
+	if inv.Hash() != "f8f1666eb4184ec2e81cdb8483c4702a63c45a3c05f76339a2f092afc4f2d818" ||
+		hex.EncodeToString(inv.Sig) != "5f8a2a8b5144cc66a9d13b06daa46810d82a74922bccf7b14a84a1c2992ce2c18c5eac6062f91562c2ef942f49c4538e6c1617382d3c197ae354f9deebfcac05" {
 		t.Fatalf("invite hash %s sig %x", inv.Hash(), inv.Sig)
 	}
 	acc := ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventAccept, Prev: inv.Hash(), TS: 1790000100,
 		Author: EventAuthor{Person: vecOther, Roster: vecRoster().Hash(), Address: "sergey/laptop", Fingerprint: vecFP}}
 	acc.Sign(vecKey())
 	wantAcc := "agentnet-participation-v1\n" + `{"v":1,"conv":"e0758d3e1872da6abc62304e16423c9ae8782d39be3517e4503df4b6ac88b75a",` +
-		`"pid":"00112233445566778899aabbccddeeff","type":"accept","prev":"bd2545890c4d098f0290f9670409a3a76fa6c35f7acdf01954695ad4bdbe565f",` +
+		`"pid":"00112233445566778899aabbccddeeff","type":"accept","prev":"f8f1666eb4184ec2e81cdb8483c4702a63c45a3c05f76339a2f092afc4f2d818",` +
 		`"author":{"person":"fedcba9876543210fedcba9876543210","roster":"57cbbb8dd8d82a48e8949e376f4b8f75f4945ac496f770790554d55a78065a04",` +
 		`"address":"sergey/laptop","fingerprint":"01234567-89abcdef-01234567-89abcdef"},"ts":1790000100}`
-	if string(acc.Canonical()) != wantAcc || acc.Hash() != "ebcf24c468442cc567f30c1379b7718b69730a666634ec9694f95b6913de4a5c" {
+	if string(acc.Canonical()) != wantAcc || acc.Hash() != "8c77bf7bc19c7a372d13cc86fca4c433bcc407ffbebd94a5044c7ee8973d4cd2" {
 		t.Fatalf("accept bytes:\n got %s\nhash %s", acc.Canonical(), acc.Hash())
 	}
 	pub := vecKey().Public().(ed25519.PublicKey)
@@ -65,7 +66,7 @@ func TestParticipationEventRefuses(t *testing.T) {
 	pub := vecKey().Public().(ed25519.PublicKey)
 	inv := vecInvite()
 	changed := inv
-	changed.Grant = append([]string{strings.Repeat("3", 32)}, inv.Grant...)
+	changed.Grant = append([]GrantRef{{LID: strings.Repeat("3", 32), Fingerprint: vecFP}}, inv.Grant...)
 	if changed.Verify(pub) == nil {
 		t.Fatal("a widened grant still verified")
 	}
@@ -80,15 +81,21 @@ func TestParticipationEventRefuses(t *testing.T) {
 		"invite with prev":    func(e *ParticipationEvent) { e.Prev = strings.Repeat("a", 64) },
 		"invite without host": func(e *ParticipationEvent) { e.Host = nil },
 		"other audience":      func(e *ParticipationEvent) { e.Audience = "owner" },
-		"grant too long":      func(e *ParticipationEvent) { e.Grant = many(MaxGrant+1, func(i int) string { return hexID(i) }) },
-		"repeated grant":      func(e *ParticipationEvent) { e.Grant = []string{e.Grant[0], e.Grant[0]} },
-		"bad grant id":        func(e *ParticipationEvent) { e.Grant = []string{"x"} },
-		"too many task keys":  func(e *ParticipationEvent) { e.TaskKeys = many(MaxTaskKeys+1, func(i int) string { return hexFP(i) }) },
-		"bad task key":        func(e *ParticipationEvent) { e.TaskKeys = []string{"k"} },
-		"long note":           func(e *ParticipationEvent) { e.Note = strings.Repeat("n", MaxInviteNote+1) },
-		"control in note":     func(e *ParticipationEvent) { e.Note = "a\x07" },
-		"unknown type":        func(e *ParticipationEvent) { e.Type = "promote" },
-		"bad pid":             func(e *ParticipationEvent) { e.PID = "p" },
+		"grant too long": func(e *ParticipationEvent) {
+			e.Grant = nil
+			for _, id := range many(MaxGrant+1, func(i int) string { return hexID(i) }) {
+				e.Grant = append(e.Grant, GrantRef{LID: id, Fingerprint: vecFP})
+			}
+		},
+		"repeated grant":        func(e *ParticipationEvent) { e.Grant = []GrantRef{e.Grant[0], e.Grant[0]} },
+		"grant without its key": func(e *ParticipationEvent) { e.Grant = []GrantRef{{LID: e.Grant[0].LID}} },
+		"bad grant id":          func(e *ParticipationEvent) { e.Grant = []GrantRef{{LID: "x", Fingerprint: vecFP}} },
+		"too many task keys":    func(e *ParticipationEvent) { e.TaskKeys = many(MaxTaskKeys+1, func(i int) string { return hexFP(i) }) },
+		"bad task key":          func(e *ParticipationEvent) { e.TaskKeys = []string{"k"} },
+		"long note":             func(e *ParticipationEvent) { e.Note = strings.Repeat("n", MaxInviteNote+1) },
+		"control in note":       func(e *ParticipationEvent) { e.Note = "a\x07" },
+		"unknown type":          func(e *ParticipationEvent) { e.Type = "promote" },
+		"bad pid":               func(e *ParticipationEvent) { e.PID = "p" },
 		"accept with a grant": func(e *ParticipationEvent) {
 			e.Type, e.Prev, e.Host, e.Audience = EventAccept, strings.Repeat("a", 64), nil, ""
 		},

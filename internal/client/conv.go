@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -373,7 +374,7 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) { return a.store.con
 
 // ConversationMessages lists a conversation's messages here, oldest first.
 func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
-	return a.store.convMessages(conv, a.Address)
+	return a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint())
 }
 
 // ConvOutgoing is a message to send in a conversation.
@@ -642,16 +643,23 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonInvalid, "it replies to a message outside its conversation")
 		}
 	}
-	if in.Sub == envelope.SubEvent { // a participation record: stored, and the message kept as history
-		if err := a.admitParticipationEvent(in, sender.Fingerprint(), sender.SignKey); err != nil {
+	var also func(*sql.Tx) error
+	if in.Sub == envelope.SubEvent { // a participation record, stored with its message or not at all
+		ev, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+		if err != nil {
 			return hold(reasonInvalid, err.Error())
 		}
+		raw := []byte(in.Body)
+		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
 	}
 	state := ""
 	if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
 		state = stateConvHeld // for the person; nothing runs a conversation request yet, participation or not
 	}
-	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine)
+	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
+	if errors.Is(err, errTooManyEvents) {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err != nil {
 		return err
 	}

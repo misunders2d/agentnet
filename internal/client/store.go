@@ -190,6 +190,7 @@ CREATE TABLE participation_events(
   event TEXT NOT NULL,
   received_at INTEGER NOT NULL);
 CREATE INDEX participation_events_pid ON participation_events(conv, pid);
+CREATE INDEX participation_events_type ON participation_events(conv, type, pid);
 ALTER TABLE inbox ADD COLUMN pid TEXT;
 ALTER TABLE outbox ADD COLUMN pid TEXT;
 ALTER TABLE outbox ADD COLUMN sub TEXT;

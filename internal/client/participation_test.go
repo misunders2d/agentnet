@@ -73,7 +73,7 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 	pid := p.PID
 	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, pid).State == PartInvited })
 	atBob := stateAt(t, w.bob, pid)
-	if !atBob.HostHere || !slices.Equal(atBob.Grant, lids[:2]) || atBob.Note != "please check the deploy" || atBob.Invite != p.Invite {
+	if !atBob.HostHere || !slices.Equal(grantLIDs(atBob.Grant), lids[:2]) || atBob.Note != "please check the deploy" || atBob.Invite != p.Invite {
 		t.Fatalf("bob's view: %+v", atBob)
 	}
 	if _, err := w.alice.AcceptParticipation(tctx(t), pid); err == nil {
@@ -169,7 +169,7 @@ func newEventMaker(t *testing.T, w *world, conv string) *eventMaker {
 	return &eventMaker{t: t, w: w, conv: conv, pid: protocol.NewID(), alice: me(w.alice), bob: me(w.bob), ts: 1790000000}
 }
 
-func (m *eventMaker) make(by *Agent, typ, prev string, grant ...string) protocol.ParticipationEvent {
+func (m *eventMaker) make(by *Agent, typ, prev string, grant ...string) protocol.ParticipationEvent { // grant: lids of alice's messages
 	m.ts++
 	au := m.alice
 	if by == m.w.bob {
@@ -178,7 +178,10 @@ func (m *eventMaker) make(by *Agent, typ, prev string, grant ...string) protocol
 	ev := protocol.ParticipationEvent{V: 1, Conv: m.conv, PID: m.pid, Type: typ, Prev: prev, Author: au, TS: m.ts}
 	if typ == protocol.EventInvite {
 		ev.Host = &protocol.ParticipationHost{Person: m.bob.Person, Address: m.bob.Address, Fingerprint: m.bob.Fingerprint}
-		ev.Audience, ev.Grant = protocol.AudienceConversation, grant
+		ev.Audience = protocol.AudienceConversation
+		for _, lid := range grant {
+			ev.Grant = append(ev.Grant, protocol.GrantRef{LID: lid, Fingerprint: m.alice.Fingerprint})
+		}
 	}
 	ev.Sign(by.id.Sign)
 	if err := ev.Validate(); err != nil {
@@ -318,4 +321,12 @@ func TestParticipationEventAdmission(t *testing.T) {
 	if p := stateAt(t, w.bob, e.pid); p.State != PartInvited || !p.HostHere {
 		t.Fatalf("after a good invite: %+v", p)
 	}
+}
+
+func grantLIDs(g []protocol.GrantRef) []string {
+	var out []string
+	for _, r := range g {
+		out = append(out, r.LID)
+	}
+	return out
 }
