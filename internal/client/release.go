@@ -51,10 +51,12 @@ func (s *store) release() (protocol.Release, bool) {
 	return r, true
 }
 
-// updateRecommended returns the recommendation if it names another build.
+// updateRecommended returns the recommendation if it names a release newer
+// than this build: never an older one (a preview ahead of the stable
+// recommendation is not told to go back) or a version it cannot compare.
 func (s *store) updateRecommended() (protocol.Release, bool) {
 	r, ok := s.release()
-	return r, ok && r.Version != protocol.Version
+	return r, ok && protocol.Newer(r.Version, protocol.Version)
 }
 
 // notifyRelease shows one desktop notice per recommendation. It runs on the

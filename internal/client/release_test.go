@@ -21,6 +21,13 @@ func recommend(t *testing.T, admin *Agent, version, url string) {
 	}
 }
 
+// running sets this build's version for a test (before its daemons start).
+func running(t *testing.T, version string) {
+	old := protocol.Version
+	protocol.Version = version
+	t.Cleanup(func() { protocol.Version = old })
+}
+
 func waitRelease(t *testing.T, a *Agent, url string) {
 	t.Helper()
 	eventually(t, "release "+url, func() bool { r, ok := a.Release(); return ok && r.URL == url || !ok && url == "" })
@@ -30,18 +37,19 @@ func waitRelease(t *testing.T, a *Agent, url string) {
 // recommendation (not again when re-announced or after a restart), and each
 // harness session gets one line without the operator's note.
 func TestReleaseAnnouncement(t *testing.T) {
+	running(t, "v0.3.0")
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
 	stop, _ := runWith(t, w, w.bob, RunOptions{})
-	recommend(t, w.alice, "v9.9", "https://example.test/a")
+	recommend(t, w.alice, "v9.9.0", "https://example.test/a")
 	waitRelease(t, w.bob, "https://example.test/a")
 	eventually(t, "notice", func() bool { return n.count() == 1 })
-	recommend(t, w.alice, "v9.9", "https://example.test/a") // the same again
-	recommend(t, w.alice, "v9.9", "https://example.test/b") // changed within the second
+	recommend(t, w.alice, "v9.9.0", "https://example.test/a") // the same again
+	recommend(t, w.alice, "v9.9.0", "https://example.test/b") // changed within the second
 	waitRelease(t, w.bob, "https://example.test/b")
 	eventually(t, "second notice", func() bool { return n.count() == 2 })
 	quiet(t, w.bob, n, 2)
-	if strings.Contains(n.last(), "v9.9") || strings.Contains(n.last(), "example.test") {
+	if strings.Contains(n.last(), "v9.9.0") || strings.Contains(n.last(), "example.test") {
 		t.Fatalf("notice carries details: %q", n.last())
 	}
 	stop()
@@ -49,7 +57,7 @@ func TestReleaseAnnouncement(t *testing.T) {
 	quiet(t, w.bob, n, 2)
 
 	line := shown(t, w.bob, "A", "PostToolUse")
-	if !strings.Contains(line, "recommends AgentNet v9.9") || !strings.Contains(line, "https://example.test/b") ||
+	if !strings.Contains(line, "recommends AgentNet v9.9.0") || !strings.Contains(line, "https://example.test/b") ||
 		!strings.Contains(line, "unless they have already authorized it") || strings.Contains(line, "NOTE-FOR-PEOPLE") {
 		t.Fatalf("hook line: %q", line)
 	}
@@ -59,10 +67,10 @@ func TestReleaseAnnouncement(t *testing.T) {
 	if stop := shown(t, w.bob, "B", "Stop"); stop != "" {
 		t.Fatalf("Stop mentions the update: %q", stop)
 	}
-	if b := shown(t, w.bob, "B", "UserPromptSubmit"); !strings.Contains(b, "v9.9") {
+	if b := shown(t, w.bob, "B", "UserPromptSubmit"); !strings.Contains(b, "v9.9.0") {
 		t.Fatalf("session B: %q", b)
 	}
-	if r, ok := LocalRelease(w.bob.home); !ok || r.Version != "v9.9" {
+	if r, ok := LocalRelease(w.bob.home); !ok || r.Version != "v9.9.0" {
 		t.Fatalf("local read: %+v %v", r, ok)
 	}
 	recommend(t, w.alice, "", "")
@@ -71,9 +79,7 @@ func TestReleaseAnnouncement(t *testing.T) {
 
 // A build equal to the recommendation is not nudged.
 func TestReleaseSameBuildSilent(t *testing.T) {
-	old := protocol.Version
-	protocol.Version = "v-same"
-	t.Cleanup(func() { protocol.Version = old })
+	running(t, "v-same")
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
 	runWith(t, w, w.bob, RunOptions{})
@@ -85,21 +91,48 @@ func TestReleaseSameBuildSilent(t *testing.T) {
 	}
 }
 
+// A build ahead of the recommendation (a preview newer than the stable
+// release) is not told to go back; a newer release is told.
+func TestReleaseOlderNotRecommended(t *testing.T) {
+	running(t, "v0.4.0")
+	w := newWorld(t, "")
+	n := fakeNotify(w.bob)
+	runWith(t, w, w.bob, RunOptions{})
+	recommend(t, w.alice, "v0.3.0", "https://example.test/stable")
+	waitRelease(t, w.bob, "https://example.test/stable")
+	quiet(t, w.bob, n, 0)
+	if line := shown(t, w.bob, "P", "UserPromptSubmit"); strings.Contains(line, "recommends") {
+		t.Fatalf("told to downgrade: %q", line)
+	}
+	for _, c := range w.bob.Doctor(tctx(t)) {
+		if c.Name == "update" && !strings.Contains(c.Result, "is not older, so no update is needed") {
+			t.Fatalf("doctor: %q", c.Result)
+		}
+	}
+	recommend(t, w.alice, "v0.5.0", "https://example.test/next")
+	waitRelease(t, w.bob, "https://example.test/next")
+	eventually(t, "notice", func() bool { return n.count() == 1 })
+	if line := shown(t, w.bob, "Q", "UserPromptSubmit"); !strings.Contains(line, "recommends AgentNet v0.5.0") {
+		t.Fatalf("newer release not told: %q", line)
+	}
+}
+
 // A notice that could not be shown is not marked: it is tried again after a
 // restart, not on every ping.
 func TestReleaseNoticeRetriedAfterRestart(t *testing.T) {
+	running(t, "v0.3.0")
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
 	n.setFail(os.ErrPermission)
 	stop, _ := runWith(t, w, w.bob, RunOptions{})
-	recommend(t, w.alice, "v7", "https://example.test/")
+	recommend(t, w.alice, "v7.0.0", "https://example.test/")
 	eventually(t, "attempt", func() bool { return n.count() == 1 })
 	quiet(t, w.bob, n, 1)
 	stop()
 	n.setFail(nil)
 	runWith(t, w, w.bob, RunOptions{})
 	eventually(t, "retry", func() bool { return n.count() == 2 })
-	if done, _ := w.bob.store.config("release_notified"); done != "v7 https://example.test/" {
+	if done, _ := w.bob.store.config("release_notified"); done != "v7.0.0 https://example.test/" {
 		t.Fatalf("marked %q", done)
 	}
 }

@@ -158,6 +158,8 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 		add("update", true, "no client version recommended by the Hub")
 	case r.Version == protocol.Version:
 		add("update", true, "this build (%s) is the one the Hub recommends", r.Version)
+	case !protocol.Newer(r.Version, protocol.Version):
+		add("update", true, "the Hub recommends %s; this build (%s) is not older, so no update is needed", r.Version, protocol.Version)
 	default:
 		add("update", true, "the Hub recommends %s; this is %s: see agentnet help update and %s", r.Version, protocol.Version, r.URL)
 	}
