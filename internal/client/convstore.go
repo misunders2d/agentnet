@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -237,7 +238,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 // as history) is kept as it is. also runs with it when it is new.
 // carrier is the id of the envelope that brought it (released from
 // quarantine with it, if held).
-func (s *store) addHistoryInbox(in envelope.Inner, claimedFP, via, carrier string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
+// at (unix ms) places it in the conversation as the forwarding device had
+// it (0: now).
+func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, carrier string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
@@ -249,12 +252,14 @@ func (s *store) addHistoryInbox(in envelope.Inner, claimedFP, via, carrier strin
 	}
 	result := admittedAgain
 	if n == 0 {
-		now := time.Now()
+		if at <= 0 || at > time.Now().UnixMilli() {
+			at = time.Now().UnixMilli()
+		}
 		res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, status, state,
 			conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, claimed_fp, via, acked)
 			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), '', ?, ?, nullif(?, ''), 1, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, 1)`,
 			in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, in.TS, in.Status,
-			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, claimedFP, via)
+			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), at, in.PID, claimedFP, via)
 		if err != nil {
 			return "", err
 		}
@@ -500,7 +505,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
 		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient
-		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') != 'history'
+		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file')
 		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
 		return nil, err
@@ -583,7 +588,22 @@ func (s *store) convFiles(conv string) (map[string][]FileInfo, error) {
 		}
 		out[key] = append(out[key], f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for key, files := range out { // known from history only: where its request stands
+		for i, f := range files {
+			if strings.HasPrefix(f.BlobID, historyBlob) {
+				files[i].Availability = "requestable"
+				var state string
+				if s.db.QueryRow(`SELECT state FROM file_requests WHERE message_id = ? AND sha256 = ?`, strings.TrimPrefix(key, "in/"), f.SHA256).Scan(&state) == nil {
+					files[i].Availability = state
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // Participation events are append-only: each signed event is stored once,

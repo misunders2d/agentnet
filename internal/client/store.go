@@ -288,6 +288,22 @@ CREATE TABLE history_jobs(
   state TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL);
+`, `
+CREATE TABLE file_requests(
+  message_id TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  state TEXT NOT NULL,
+  detail TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(message_id, sha256));
+CREATE TABLE file_serves(
+  id TEXT PRIMARY KEY,
+  device TEXT NOT NULL,
+  conv TEXT NOT NULL,
+  lid TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  state TEXT NOT NULL,
+  updated_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -816,6 +832,10 @@ type FileInfo struct {
 	Size      int64  `json:"size"`
 	SHA256    string `json:"sha256"`
 	SavedPath string `json:"saved_path,omitempty"`
+	// A file known from history only: "requestable" (ask another device of
+	// this person for it: RequestFile), "requested", or "unavailable" (no
+	// device of this person could provide it). Empty: here, or fetched.
+	Availability string `json:"availability,omitempty"`
 
 	ctSize   int64
 	ctSHA256 string

@@ -1,6 +1,12 @@
 package client
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -180,8 +186,8 @@ func TestHistoryNeverSwallowsDirectRequest(t *testing.T) {
 			Target: &envelope.Target{Address: w.alice.Address, Fingerprint: w.alice.Self().Fingerprint()}}
 		key := w.bob.Self().Fingerprint()
 		hist := func() {
-			h := itemOf(in, key).inner(conv)
-			if _, err := w.alice.store.addHistoryInbox(h, key, "admin/laptop", protocol.NewID(), false, nil); err != nil {
+			h := itemOf(in, key, 0).inner(conv)
+			if _, err := w.alice.store.addHistoryInbox(h, 0, key, "admin/laptop", protocol.NewID(), false, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -205,3 +211,75 @@ func TestHistoryNeverSwallowsDirectRequest(t *testing.T) {
 		}
 	}
 }
+
+// Files in history: the new device asks for them. A file the old device
+// sent (its source deleted, the daemon restarted) comes from its kept
+// copy; one it received from what it fetched; one it no longer holds is
+// answered as unavailable.
+func TestHistoryFilesOnRequest(t *testing.T) {
+	w := newWorld(t, "")
+	stopAlice := runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop to have the conversation", func() bool { return len(convBodies(t, w.alice, conv)) == 1 })
+	dir := t.TempDir()
+	sentPath, sentData := writeFile(t, dir, "sent.bin", 3000)
+	gonePath, _ := writeFile(t, dir, "gone.bin", 2000)
+	recvPath, recvData := writeFile(t, dir, "received.bin", 4000)
+	for _, s := range []struct {
+		from *Agent
+		path string
+	}{{w.alice, sentPath}, {w.alice, gonePath}, {w.bob, recvPath}} {
+		if _, err := s.from.SendConv(tctx(t), conv, ConvOutgoing{Body: filepath.Base(s.path), Files: []OutgoingFile{{Path: s.path}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Remove(sentPath) // the laptop answers from its kept copy
+	eventually(t, "the laptop to hold all, and keep the received file", func() bool {
+		msgs, _ := w.alice.ConversationMessages(conv)
+		if len(msgs) != 4 {
+			return false
+		}
+		_, err := os.Stat(w.alice.downloadPath(msgs[3].Attachments[0].BlobID))
+		return err == nil
+	})
+	gone, _ := os.ReadFile(gonePath)
+	os.Remove(w.alice.keptPath(sha(gone)))
+	stopAlice()
+	runAgent(t, w.alice)
+	phone := linked(t, w.alice)
+	var msgs []ConvMessage
+	eventually(t, "the history with its files", func() bool {
+		msgs, _ = phone.ConversationMessages(conv)
+		return len(msgs) == 4 && len(msgs[3].Attachments) == 1 && msgs[3].Attachments[0].Availability == "requestable"
+	})
+	if _, _, err := phone.OpenAttachment(tctx(t), msgs[1].ID, 0); err == nil {
+		t.Fatal("a history file opened before it was asked for")
+	}
+	for _, i := range []int{1, 2, 3} {
+		if err := phone.RequestFile(tctx(t), msgs[i].ID, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the answers", func() bool {
+		m, _ := phone.ConversationMessages(conv)
+		return m[1].Attachments[0].Availability == "" && m[2].Attachments[0].Availability == "unavailable" && m[3].Attachments[0].Availability == ""
+	})
+	for i, want := range map[int][]byte{1: sentData, 3: recvData} {
+		r, f, err := phone.OpenAttachment(tctx(t), msgs[i].ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(r)
+		r.Close()
+		if !bytes.Equal(got, want) || f.SHA256 != sha(want) {
+			t.Fatalf("file %d: %d bytes", i, len(got))
+		}
+	}
+}
+
+func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }

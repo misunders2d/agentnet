@@ -154,6 +154,7 @@ const (
 	SubEvent   = "event"   // a conversation event; history only, never a request
 	SubExcerpt = "excerpt" // shared history; never a request
 	SubHistory = "history" // a message or event of the conversation, forwarded by a device of the recipient's own person; never a request
+	SubFile    = "file"    // a request for, or the offer of, a history message's file between devices of one person; never a request to run
 	OriginUI   = "ui"      // typed by a person, as the sending device asserts
 	// OriginAgentPrefix starts "agent:<harness>", written by an agent.
 	OriginAgentPrefix = "agent:"
@@ -187,7 +188,7 @@ func checkVersion2(in Inner) error {
 		return errors.New("missing or oversized conversation root")
 	}
 	switch in.Sub {
-	case "", SubEvent, SubExcerpt, SubHistory:
+	case "", SubEvent, SubExcerpt, SubHistory, SubFile:
 	default:
 		return fmt.Errorf("unknown sub %q", in.Sub)
 	}

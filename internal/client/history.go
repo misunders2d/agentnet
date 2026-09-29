@@ -58,6 +58,7 @@ type HistoryItem struct {
 	Target      *envelope.Target      `json:"target,omitempty"`
 	PID         string                `json:"pid,omitempty"`
 	Attachments []envelope.Attachment `json:"attachments,omitempty"` // manifests (name, size, sha256); no blob for the new device
+	At          int64                 `json:"at"`                    // when the forwarding device got or sent it (unix ms): its place in the conversation
 }
 
 // inner is the item as the message it records.
@@ -70,9 +71,9 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 	return in
 }
 
-func itemOf(in envelope.Inner, key string) HistoryItem {
+func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
 	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo,
-		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID}
+		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
 	}
@@ -128,7 +129,7 @@ func (a *Agent) forwardStale(me personRow, in envelope.Inner, key string, raw []
 	if err != nil || !ok {
 		return nil // a roster not in this person's chain: nothing to go by
 	}
-	item := itemOf(in, key)
+	item := itemOf(in, key, time.Now().UnixMilli())
 	var copies []outCopy
 	for _, d := range me.roster.Devices {
 		if d.Address == a.Address || old.Has(d.Address, d.Fingerprint()) || d.Address == in.From {
@@ -187,7 +188,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		raw := []byte(orig.Body)
 		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
 	}
-	res, err := a.store.addHistoryInbox(orig, item.FromKey, env.From, env.ID, fromQuarantine, also)
+	res, err := a.store.addHistoryInbox(orig, item.At, item.FromKey, env.From, env.ID, fromQuarantine, also)
 	if errors.Is(err, errTooManyEvents) {
 		return hold(reasonInvalid, err.Error())
 	}
@@ -288,7 +289,7 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') != 'history'
 		  UNION ALL
 		  SELECT o.conv, o.created_ms, o.id, ?, ?, NULL, o.created_at, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid
-		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') != 'history'
+		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file')
 		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid))
 		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations)
 		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, pos.Conv, pos.Ms, pos.ID, historyPage)
@@ -339,7 +340,7 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 			}
 			roots[it.conv] = raw
 		}
-		c, err := a.historyCopy(dev, it.conv, raw, itemOf(it.in, it.key))
+		c, err := a.historyCopy(dev, it.conv, raw, itemOf(it.in, it.key, it.pos.Ms))
 		if err != nil {
 			return false, err
 		}

@@ -290,8 +290,11 @@ func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final
 	if err != nil {
 		return err
 	}
-	// Ciphertext that arrived directly may be the only copy; keep it.
-	if local, err := a.store.heldLocally(f.BlobID); err == nil && !local {
+	// Ciphertext that arrived directly may be the only copy; keep it. So
+	// is a conversation file's: another device of this person may ask for
+	// it (historyfiles.go).
+	conv, _ := a.store.convOf(msgID)
+	if local, err := a.store.heldLocally(f.BlobID); err == nil && !local && conv == "" {
 		os.Remove(a.downloadPath(f.BlobID))
 	}
 	return a.store.setSaved(msgID, f.BlobID, final)
@@ -487,6 +490,9 @@ func (a *Agent) OpenAttachment(ctx context.Context, msgID string, index int) (io
 		return nil, FileInfo{}, fmt.Errorf("received message %s has no attachment %d", msgID, index)
 	}
 	f := files[index]
+	if strings.HasPrefix(f.BlobID, historyBlob) {
+		return nil, f, errors.New("this file came with the conversation's history: ask your other device for it first (RequestFile)")
+	}
 	if err := a.fetchCiphertext(ctx, f); err != nil {
 		return nil, f, err
 	}

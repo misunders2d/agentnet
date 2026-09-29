@@ -42,23 +42,24 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
-	home       string
-	id         *identity.Identity
-	store      *store
-	hub        *hubConn
-	heartbeat  time.Duration
-	adQuery    string                     // this run's signed session ad, for the push stream
-	kick       func()                     // wakes the current stream's retry worker
-	kickMu     sync.Mutex                 // guards kick for kickNow
-	wakeWorker func()                     // wakes the question/task worker; a no-op outside Run
-	changes    *changeFeed                // local state changed (changes.go)
-	listed     listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
-	members    memberState                // the Hub's member list from the push stream (members.go)
-	session    string                     // this run's session id (Run); "" outside Run
-	convWork   convWork                   // conversation upkeep due on the next sync (conv.go)
-	agentSweep agentSweep                 // the worker's look at requests to its agent (agentjob.go)
-	alertWake  chan struct{}              // wakes the desktop alert loop (alerts.go)
-	openConv   func(conv string) []string // RunOptions.OpenConv
+	home           string
+	id             *identity.Identity
+	store          *store
+	hub            *hubConn
+	heartbeat      time.Duration
+	adQuery        string                     // this run's signed session ad, for the push stream
+	kick           func()                     // wakes the current stream's retry worker
+	kickMu         sync.Mutex                 // guards kick for kickNow
+	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
+	wakeWorker     func()                     // wakes the question/task worker; a no-op outside Run
+	changes        *changeFeed                // local state changed (changes.go)
+	listed         listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
+	members        memberState                // the Hub's member list from the push stream (members.go)
+	session        string                     // this run's session id (Run); "" outside Run
+	convWork       convWork                   // conversation upkeep due on the next sync (conv.go)
+	agentSweep     agentSweep                 // the worker's look at requests to its agent (agentjob.go)
+	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
+	openConv       func(conv string) []string // RunOptions.OpenConv
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run

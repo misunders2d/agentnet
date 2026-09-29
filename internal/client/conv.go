@@ -46,6 +46,8 @@ const (
 	convRelease                      // look again at waiting conversation messages
 	convPersons                      // compare published person records with the pinned ones
 	convHistory                      // queue the next page of history for a new device of this person (history.go)
+	convServe                        // answer a file request from another device of this person (historyfiles.go)
+	convFetch                        // keep received conversation files (historyfiles.go)
 )
 
 // proofPage bounds the held messages looked at in one sync.
@@ -105,9 +107,15 @@ func (a *Agent) convSync(ctx context.Context) {
 	}
 	if work&convHistory != 0 && a.historyStep(ctx) {
 		a.convWork.due(convHistory) // one page per sync; the next follows at once
-		if a.kick != nil {
-			a.kick()
-		}
+		a.kickNow()
+	}
+	if work&convServe != 0 && a.serveFiles(ctx) {
+		a.convWork.due(convServe) // one file per sync
+		a.kickNow()
+	}
+	if work&convFetch != 0 && a.prefetchFiles(ctx) {
+		a.convWork.due(convFetch) // one file per sync
+		a.kickNow()
 	}
 }
 
@@ -373,6 +381,11 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	lid := protocol.NewID()
 	var copies []outCopy
+	for _, f := range m.Files { // this device's own copy, for its person's other devices to ask for later
+		if err := a.keepSent(f.Path); err != nil {
+			return ConvSent{}, err
+		}
+	}
 	if len(m.Files) > 0 {
 		// Files go with a turn a person sends, encrypted to each device; the
 		// ciphertext waits in the private spool until the Hub holds the
@@ -630,8 +643,8 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	} else if !ok {
 		return hold(reasonInvalid, "the root binds the sender's person to a roster step its chain does not have")
 	}
-	if in.Sub == envelope.SubHistory && sp.info.Person != me.info.Person {
-		return hold(reasonInvalid, "history comes only from a device of this installation's own person")
+	if (in.Sub == envelope.SubHistory || in.Sub == envelope.SubFile) && sp.info.Person != me.info.Person {
+		return hold(reasonInvalid, "history and its files come only from a device of this installation's own person")
 	}
 	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
 		return err
@@ -661,8 +674,11 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return err
 		}
 	}
-	if in.Sub == envelope.SubHistory {
+	switch in.Sub {
+	case envelope.SubHistory:
 		return a.admitHistory(ctx, env, in, root, hold, fromQuarantine)
+	case envelope.SubFile:
+		return a.admitFile(env, in, hold)
 	}
 	if in.ReplyTo != "" { // a reply may name only a message of its own conversation
 		c, err := a.store.convOf(in.ReplyTo)
@@ -726,6 +742,10 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		a.wakeAlerts()
 		if len(forward) > 0 {
 			a.kickNow() // the stream's worker sends them now, not at the next ping
+		}
+		if len(in.Attachments) > 0 {
+			a.convWork.due(convFetch) // keep its files here (historyfiles.go)
+			a.kickNow()
 		}
 	}
 	return nil

@@ -151,7 +151,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.Logf("connected to hub as %s", a.Address)
 	a.membersConnected(resp.Header)
 	defer a.membersDisconnected()
-	a.convWork.due(convPublish | convRetry | convRelease | convHistory) // a new connection: publish, then look again
+	a.convWork.due(convPublish | convRetry | convRelease | convHistory | convServe | convFetch) // a new connection: publish, then look again
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)

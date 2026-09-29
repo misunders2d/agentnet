@@ -171,6 +171,13 @@ func TestDMFileDamagedRefused(t *testing.T) {
 	data, _ := os.ReadFile(blob)
 	data[len(data)/2] ^= 1
 	os.WriteFile(blob, data, 0o600)
+	// Bob keeps conversation files once fetched: drop his copy, so the
+	// damaged one is what the Hub serves him.
+	eventually(t, "bob's fetch to settle", func() bool {
+		_, err := os.Stat(w.bob.downloadPath(blobID) + ".part")
+		return os.IsNotExist(err)
+	})
+	os.Remove(w.bob.downloadPath(blobID))
 	if _, _, err := w.bob.OpenAttachment(tctx(t), sent.ID, 0); err == nil || !strings.Contains(err.Error(), "signed digest") {
 		t.Fatalf("damaged file opened: %v", err)
 	}
