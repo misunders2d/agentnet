@@ -61,6 +61,10 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()
 	defer func() { stopAlerts(); <-alertsDone }()
+	remindCtx, stopRemind := context.WithCancel(ctx)
+	remindDone := make(chan struct{})
+	go func() { defer close(remindDone); a.remindLoop(remindCtx) }()
+	defer func() { stopRemind(); <-remindDone }()
 	if opts.Owned != nil {
 		stopOwned, err := opts.Owned()
 		if err != nil {

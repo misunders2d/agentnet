@@ -258,6 +258,8 @@ func run(args []string) error {
 		return runMembers(ctx, a, rest, os.Stdout, os.Stderr)
 	case "person":
 		return runPerson(ctx, a, rest, os.Stdout)
+	case "remind":
+		return runRemind(a, rest, os.Stdout, time.Now())
 	case "dm":
 		return runDM(ctx, a, rest, os.Stdout)
 	case "sessions":

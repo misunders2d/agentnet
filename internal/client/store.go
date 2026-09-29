@@ -214,6 +214,17 @@ CREATE TABLE alerts(
   count INTEGER NOT NULL,
   due_ms INTEGER NOT NULL);
 CREATE INDEX alerts_due ON alerts(due_ms);
+`, `
+CREATE TABLE reminders(
+  message TEXT PRIMARY KEY,
+  conv TEXT,
+  due_at INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  rev INTEGER NOT NULL,
+  notified_rev INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL);
+CREATE INDEX reminders_due ON reminders(due_at) WHERE state = 'pending';
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -360,6 +371,9 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status)
 		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
 		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status); err != nil {
+		return err
+	}
+	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 		return err
 	}
 	for _, a := range in.Attachments {

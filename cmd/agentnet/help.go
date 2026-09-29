@@ -56,6 +56,7 @@ Questions and tasks sent to you:
              approve --tasks: run its tasks without asking, for its exact key
   approvals  list who is approved, with task keys and whether they still hold
   resolve    close an item your responder marked needs_human
+  remind     remind me later about a received message (list, done, cancel)
   open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
@@ -406,6 +407,34 @@ machine it explains that the requests can only be decided there. Without a
 coding agent it prints the conversation or list. Opening never accepts,
 declines, replies or runs anything; the prompt asks the agent not to act
 unless you ask, but in that session your own tool permissions still apply.`,
+
+	"remind": `Usage: agentnet remind ID WHEN
+       agentnet remind list [--all]
+       agentnet remind done ID
+       agentnet remind cancel ID
+
+Remind me later about received message ID (a direct message, question or
+task, or a DM message; ids from inbox or dm show). WHEN is local time: a
+duration (30m, 2h, 1h30m, 2d), a clock time (15:00: today, or else
+tomorrow) or a date and time (2026-09-30 09:00). Setting it again moves it.
+
+At that time the running daemon shows one notification without content (on
+Linux a click opens the message's thread, or the DM on the page served with
+daemon --ui). A reminder only asks for your attention: it never answers,
+accepts, declines or runs anything, nothing is sent, and the message's own
+state does not change. It is personal to this installation.
+
+A reply to that very message, however it is sent (reply, decline, your
+responder's answer, a DM reply to it), ends the reminder. Anything else does
+not: another message, a failure, reading it. done and cancel end it by hand.
+
+Nothing comes due while the daemon is stopped: a reminder due then is
+overdue at its next start, notified once, and stays in remind list as
+overdue until it is answered, done or cancelled. On Linux the timer follows
+the wall clock across a suspend; elsewhere a reminder may come due only when
+the daemon next wakes after the computer slept. The notification itself may
+be hidden or dropped by the system (permissions, Focus); remind list is the
+record.`,
 
 	"resolve": `Usage: agentnet resolve ID
 

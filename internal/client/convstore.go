@@ -420,6 +420,9 @@ func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, w
 		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub); err != nil {
 		return err
 	}
+	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
+		return err
+	}
 	if jobKey != "" {
 		// Read and acknowledged: it was never received, only asked here.
 		if _, err := tx.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, state, verified_by,
