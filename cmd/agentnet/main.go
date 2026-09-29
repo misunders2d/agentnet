@@ -337,11 +337,20 @@ func runJoin(ctx context.Context, home string, args []string) error {
 		return fmt.Errorf("--agent NAME is required: use the name the person gave for this agent on this computer, or ask them "+
 			"(lowercase letters, digits, hyphens, e.g. laptop); the address becomes %s/NAME and cannot be changed later", label)
 	}
-	a, err := client.Join(ctx, home, fs.Arg(0), *name)
+	join := client.Join
+	if _, err := protocol.DecodeLinkOffer(fs.Arg(0)); err == nil {
+		join = client.JoinAndLink
+	}
+	a, err := join(ctx, home, fs.Arg(0), *name)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	if link := a.LinkState(); link.State == client.LinkPending {
+		fmt.Printf("%s is waiting for approval on %s\nfingerprint %s\n", a.Address, link.Approver, a.Self().Fingerprint())
+		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page or agentnet person links / person approve ID)")
+		return nil
+	}
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
 	if chosen, err := a.ResponderChosen(); err == nil && !chosen {
 		fmt.Fprintln(os.Stderr, "next: ask the person how questions and tasks should be handled (agentnet responder list)")

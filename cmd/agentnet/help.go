@@ -97,7 +97,7 @@ Tested on Linux; macOS and Windows run in CI. Also: docs/revival/INSTALL.md
 
 // topics maps a command (or "command subcommand") to its help text.
 var topics = map[string]string{
-	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE
+	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE-OR-LINK
 
 Enroll this computer as an agent with an invite code from your admin. Creates
 keys in the home directory, registers them with the Hub, and prints your
@@ -107,6 +107,15 @@ agent, or ask (lowercase letters, digits, hyphens), and unless they already
 confirmed it, confirm the full address before joining. Nothing is created until NAME is given. If the answer is lost, run
 the same command again; it reuses the same keys. An existing enrollment in
 the home is never replaced.
+
+To add this computer to your existing person, get a device link from your
+existing device (Your devices -> Add a device, or agentnet person link).
+Use that code or its full URL with the same join command. No new admin
+invitation is needed. This device waits for your approval on the existing
+device; it cannot send or receive messages yet. Start agentnet daemon here
+to wait for approval, and keep AgentNet running on the existing device.
+Approve there on its page, or with person links and person approve ID.
+Do not create a second person on the new device.
 
 If the Hub says the address is taken (another device already has it, or had
 it and was revoked), nothing was enrolled and the invitation and keys stay
@@ -293,20 +302,35 @@ with ADDRESS#SESSION.`,
 
 	"person": `Usage: agentnet person
        agentnet person create NAME
+       agentnet person service
+       agentnet person link
+       agentnet person links
+       agentnet person approve ID
+       agentnet person refuse ID
+       agentnet person remove ADDRESS
 
-Create the person this installation speaks for, once, explicitly. Nothing
-creates a person for you: not joining, not an address, not a name, not an
-update, and existing conversations stay as they are. NAME is only what you
-call yourself; others see it as your claim, not as a verified identity. The
-record (a random person id, NAME and this installation's key) is signed by
-this installation and published on your Hub, so others can start a DM with
-you. If you already created a person on another computer, do not create a
-second one here: linking computers to one person comes later.
+One person can use up to eight devices, each with its own keys. person shows
+your person and its devices, marking this one. create NAME sets up a new
+person explicitly. NAME is a display name, not proof of identity: equal
+names never merge people. service marks an independent server or bot; it
+speaks as itself and does not create a human person.
 
-Limits: one computer per person for now. If this installation's keys are
-replaced, its person cannot continue: others see a conflict and your DMs
-freeze. A different record for a person or address someone has pinned is
-treated the same way (frozen, never replaced).`,
+To add your phone or another computer, use Your devices on the page, or
+person link on an existing device. The private code expires in ten minutes
+and can be used once. On the new device: join --agent NAME CODE. Keep
+AgentNet running on both devices. person links lists requests; approve ID
+adds the requested device only after your confirmation, and refuse ID
+rejects it. Approval makes it you and grants access to your chats. Never
+approve a device you did not just ask to link. Private keys are not copied.
+
+remove ADDRESS removes a device from your person. A device admitted through
+linking is also revoked from the Hub; one admitted separately by an admin
+keeps its independent membership. Removal cannot erase data already held
+there. You cannot remove the last device. If all devices are lost, create
+a new identity visibly; the Hub admin cannot silently recover it as you.
+
+This replaces preview single-device persons; old preview DMs are not
+migrated. All devices in new DMs need the person2-capable version.`,
 
 	"dm": `Usage: agentnet dm new ADDRESS
        agentnet dm list
