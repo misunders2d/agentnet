@@ -88,7 +88,6 @@ async function loadOverview() {
   const m = machineLines(o);
   $("machine").textContent = m.summary;
   fill($("machine-detail"), ...m.details.filter(Boolean).map((t) => el("p", {}, t)));
-  $("new-btn").hidden = !!o.device; // a browser device starts DMs with people, nothing else
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
   renderNotify(o.notify);
@@ -1728,8 +1727,7 @@ function renderThreads(threads) {
   if (!loose.length) {
     fill(list, reminders, people, devices, el("li", { class: "hint empty-list" }, threads.length
       ? "Other devices and services appear here; people's devices are under each person."
-      : state.overview.device ? "No messages from devices here. Start a DM with a person above."
-        : "No conversations yet. Start one with the + button, or with someone below."),
+      : "No conversations yet. Start one with the + button, or with someone below."),
       directorySection(threads));
     return;
   }

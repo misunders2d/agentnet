@@ -113,6 +113,7 @@ const resolvable = {}; // notification channels this device resolves, for /api/n
 let uploads = 0, uploadFails = false; // files handed to /api/upload
 let uploadTries = 0, uploadFailAt = 0; // the one upload try (counted from 1) that fails
 let dmSendRefuses = ""; // what /api/dm/send refuses with, if set
+let sendRefuses = ""; // what /api/send refuses with, if set
 const served = {}; // received files' bytes, by /api/files path
 const calls = [];
 const hold = {};
@@ -127,7 +128,10 @@ function fetch(url, opts) {
   let data = {};
   if (u.pathname === "/api/thread") data = threads[u.searchParams.get("id")];
   else if (u.pathname === "/api/overview") data = Object.assign({ version: serving }, overview);
-  else if (u.pathname === "/api/send") data = { id: "new", state: "delivered" };
+  else if (u.pathname === "/api/send") {
+    if (sendRefuses) return Promise.resolve({ ok: false, status: 409, text: async () => sendRefuses, statusText: "" });
+    data = { id: "new", state: "delivered" };
+  }
   else if (u.pathname === "/api/refresh") data = refreshReply;
   else if (u.pathname === "/api/dm") data = dmThreads[u.searchParams.get("id")] || {};
   else if (u.pathname === "/api/dm/send") {
@@ -1023,6 +1027,25 @@ const ev = { preventDefault() {} };
   await $("dialog-ok").onclick();
   const zv1 = calls.find((c) => c.path === "/api/send");
   check(zv1 && zv1.body.files.length === 1 && run("state.files").length === 0, "and sends it: " + JSON.stringify(zv1 && zv1.body));
+  // The browser device writes to devices too (version 1), from Zoom as
+  // anywhere; a refused send keeps the dialog and its text.
+  overview.device = { online: true, persisted: true, revoked: false };
+  await run("loadOverview()");
+  check($("new-btn").hidden !== true, "a browser device can start a conversation with a device");
+  await run('Zoom.go(2, { thread: "a1" })');
+  run("writeDialog(state.data, null)");
+  byId["write-body"].value = "hey!";
+  sendRefuses = "alice/desk's key changed: nothing is sent until the new key is trusted.";
+  calls.length = 0;
+  await $("dialog-ok").onclick();
+  check($("dialog").open && byId["write-body"].value === "hey!" && $("dialog-error").textContent.includes("key changed"),
+    "a refused send keeps the dialog, its text and says why: " + $("dialog-error").textContent);
+  sendRefuses = "";
+  await $("dialog-ok").onclick();
+  const zb = calls.filter((c) => c.path === "/api/send").pop();
+  check(!$("dialog").open && zb.body.to === "alice/desk" && (zb.body.kind || "message") === "message" && zb.body.body === "hey!", "then it is sent: " + JSON.stringify(zb && zb.body));
+  delete overview.device;
+  await run("loadOverview()");
   run('setLens("classic")');
   await run('openDM("d2")');
   // Asking an agent takes no files.

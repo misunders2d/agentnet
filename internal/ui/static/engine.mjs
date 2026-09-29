@@ -149,6 +149,20 @@ function outText(state, peer, detail) {
 
 const iso = (ms) => new Date(ms).toISOString();
 
+// checkFiles refuses files beyond what this browser sends.
+function checkFiles(files) {
+  if (files.length > 8) throw new Error("A message takes at most 8 files.");
+  let total = 0;
+  for (const f of files) {
+    total += f.size;
+    if (f.size > wire.BrowserMaxFile) throw new Error(f.name + " is larger than this browser sends (" + (wire.BrowserMaxFile >> 20) + " MiB); send it from a computer with AgentNet.");
+  }
+  if (total > wire.BrowserMaxMessage) throw new Error("These files are more than this browser sends in one message (" + (wire.BrowserMaxMessage >> 20) + " MiB); send fewer at a time.");
+}
+
+// replyKind is the kind of a reply to a message of kind k (client.replyKind).
+const replyKind = (k) => (k === "question" ? "answer" : k === "task" ? "result" : "message");
+
 // copyOrder is the least advanced of a message's copies (its state is the
 // message's, as the core reports it).
 const copyRank = { failed: 0, waiting: 1, queued: 2, custody: 3, delivered: 4 };
@@ -924,7 +938,7 @@ export class Engine {
     const d = await this.call("GET", "/v1/agents/" + label + "/" + agent);
     const pub = await wire.parsePublic(d.public);
     if (pub.address !== address) throw new Error("the server answered for another address");
-    return { pub, fingerprint: await wire.fingerprint(pub), json: wire.marshalPublic(pub) };
+    return { pub, fingerprint: await wire.fingerprint(pub), json: wire.marshalPublic(pub), revoked: !!d.revoked };
   }
 
   async pubOf(pin) {
@@ -1137,13 +1151,7 @@ export class Engine {
   async sendDM({ conv, body, reply_to: replyTo, files = [] }) {
     body = String(body || "").trim();
     if (!body && !files.length) throw new Error("Write a message or add a file first.");
-    if (files.length > 8) throw new Error("A message takes at most 8 files.");
-    let total = 0;
-    for (const f of files) {
-      total += f.size;
-      if (f.size > wire.BrowserMaxFile) throw new Error(f.name + " is larger than this browser sends (" + (wire.BrowserMaxFile >> 20) + " MiB); send it from a computer with AgentNet.");
-    }
-    if (total > wire.BrowserMaxMessage) throw new Error("These files are more than this browser sends in one message (" + (wire.BrowserMaxMessage >> 20) + " MiB); send fewer at a time.");
+    checkFiles(files);
     const c = await this.store.get("convs", conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
     if (replyTo) {
@@ -1298,6 +1306,19 @@ export class Engine {
     for (const rec of await this.store.all("outbox")) {
       if (!this.connected) return;
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
+      if (rec.v === 1) {
+        const pin = await this.store.get("pins", rec.to);
+        const why = !pin || pin.pending || pin.fingerprint !== rec.fp ? rec.to + "'s key changed: it is not sent until the new key is trusted." : "";
+        if (why) {
+          if (rec.detail !== why) {
+            await put(this.store, "outbox", rec.id, { ...rec, detail: why });
+            this.changed();
+          }
+          continue;
+        }
+        await this.post({ ...rec, state: "queued", detail: "" });
+        continue;
+      }
       const c = await this.store.get("convs", rec.conv);
       let g;
       try { g = await this.gate(c, rec); } catch (e) { continue; }
@@ -1316,6 +1337,125 @@ export class Engine {
       }
       await this.post({ ...rec, state: "queued", detail: "" });
     }
+  }
+
+  // ---- device conversations (version 1): messages, questions and tasks
+  // to one device, as agentnet send sends them, and replies by hand. The
+  // recipient's own approvals and acceptance decide what runs there;
+  // nothing runs here.
+
+  // sendDirect sends a message, question or task to the device at to (a
+  // reply to reply_to, a device message with it), with files.
+  async sendDirect({ to, kind, body, reply_to: replyTo = "", files = [] }) {
+    body = String(body || "").trim();
+    kind = kind || "message";
+    to = String(to || "").trim();
+    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (!["message", "question", "task"].includes(kind)) throw new Error("Choose message, question or task.");
+    if (!wire.validAddress(to)) throw new Error("That is not an AgentNet address.");
+    if (to === this.address) throw new Error("That is this browser.");
+    checkFiles(files);
+    if (replyTo) {
+      const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
+      if (!m || m.v !== 1 || (m.from || m.to) !== to) throw new Error("A reply stays in its conversation with that device.");
+    }
+    return this.sendV1({ to, kind, body, replyTo, files, status: "" });
+  }
+
+  // sendV1 seals one version 1 message to the key pinned for to (pinned
+  // the first time), keeps it with its files before sending, and sends
+  // that exact envelope, retried until the server takes it.
+  async sendV1({ to, kind, body, replyTo, files, status }) {
+    const pin = await this.sendKey(to);
+    const recipient = await this.pubOf(pin);
+    const sealed = [];
+    for (const f of files) {
+      const bytes = f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer());
+      sealed.push({ ...(await wire.encryptFile(bytes, wire.safeName(f.name), recipient)), uploaded: false });
+    }
+    const id = wire.newID(), at = this.now();
+    const attachments = sealed.map((f) => f.attachment);
+    const envelope = await wire.seal({ id, from: this.address, to, ts: Math.floor(at / 1000), kind, body, reply_to: replyTo, status, attachments }, this.keys, recipient);
+    const rec = { v: 1, id, to, fp: pin.fingerprint, kind, body, reply_to: replyTo, status, at, envelope,
+      attachments: attachments.length ? attachments : undefined, files: sealed.length ? sealed : undefined, state: "queued", detail: "" };
+    await put(this.store, "outbox", id, rec);
+    this.changed();
+    await this.post(rec);
+    const now = await this.store.get("outbox", id);
+    return { id, state: now.state, detail: now.detail };
+  }
+
+  // sendKey is the key to seal to for address (client.sendKey): the
+  // server's entry, pinned the first time; one that differs from the pin
+  // is a changed key, kept pending and never used; the pin when the server
+  // is out of reach (the message then waits here).
+  async sendKey(address) {
+    const pin = await this.store.get("pins", address);
+    const changed = () => new Error(address + "'s key changed: nothing is sent until the new key is trusted (on a computer with agentnet trust).");
+    let d;
+    try {
+      d = await this.directory(address);
+    } catch (e) {
+      if (pin && !pin.pending && retryable(e)) return pin;
+      if (e.status === 404) throw new Error(address + " is not on your server.");
+      throw new Error("Could not find " + address + "'s key on your server: " + e.message);
+    }
+    if (d.revoked) throw new Error(address + " was removed from your server.");
+    if (!pin) {
+      const p = { address, json: d.json, fingerprint: d.fingerprint, pending: null };
+      await put(this.store, "pins", address, p);
+      return p;
+    }
+    if (pin.pending) throw changed();
+    if (d.fingerprint === pin.fingerprint) return pin;
+    await put(this.store, "pins", address, { ...pin, pending: { json: d.json, fingerprint: d.fingerprint } });
+    this.changed();
+    throw changed();
+  }
+
+  // replyV1 answers received device message id by hand: an answer to a
+  // question, a result (done) for a task, else a message.
+  async replyV1(id, body) {
+    const m = await this.store.get("inbox", id);
+    if (!m || m.v !== 1) throw new Error("No message with that id.");
+    body = String(body || "").trim();
+    if (!body) throw new Error("Write your answer first.");
+    const r = await this.sendV1({ to: m.from, kind: replyKind(m.kind), body, replyTo: id, files: [], status: m.kind === "task" ? "done" : "" });
+    if (m.state === "held") await put(this.store, "inbox", id, { ...(await this.store.get("inbox", id)), state: "answered" });
+    this.changed();
+    return { note: r.state === "queued" ? "Your answer waits to be sent; it is retried automatically." : "Answered." };
+  }
+
+  // v1Threads are the device conversations: each peer device's messages,
+  // received and sent, joined by replies as the core does (peerThreads),
+  // each oldest first.
+  async v1Threads() {
+    const msgs = [...(await this.store.all("inbox")).filter((m) => m.v === 1).map((m) => ({ ...m, dir: "in", peer: m.from })),
+      ...(await this.store.all("outbox")).filter((r) => r.v === 1).map((r) => ({ ...r, dir: "out", peer: r.to }))];
+    const byID = new Map(msgs.map((m) => [m.id, m]));
+    const parent = new Map(msgs.map((m) => [m.id, m.id]));
+    const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+    for (const m of msgs) {
+      const r = m.reply_to && byID.get(m.reply_to);
+      if (r && r.peer === m.peer) parent.set(find(m.id), find(r.id));
+    }
+    const groups = new Map();
+    for (const m of msgs) groups.set(find(m.id), [...(groups.get(find(m.id)) || []), m]);
+    return [...groups.values()].map((g) => g.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)));
+  }
+
+  async threadSummaries() {
+    const out = [];
+    for (const g of await this.v1Threads()) {
+      const first = g[0], last = g[g.length - 1];
+      const pin = await this.store.get("pins", first.peer);
+      const replied = new Set(g.map((m) => m.reply_to).filter(Boolean));
+      out.push({ id: first.id, peer: first.peer, title: firstLine(first.body), last: firstLine(last.body), last_at: iso(last.at), count: g.length,
+        review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.dir === "in" && !m.read).length, running: 0,
+        waiting: g.some((m) => m.dir === "out" && (m.kind === "question" || m.kind === "task") && !replied.has(m.id)),
+        key_changed: !!(pin && pin.pending), notices: 0, notice_only: false });
+    }
+    return out;
   }
 
   // ---- receiving
@@ -1901,8 +2041,7 @@ export class Engine {
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
-    const threads = inbox.filter((m) => m.v === 1).map((m) => ({ id: m.id, peer: m.from, title: firstLine(m.body), last: firstLine(m.body),
-      last_at: iso(m.at), count: 1, review: 0, unread: m.read ? 0 : 1, running: 0, waiting: false, key_changed: false, notices: 0, notice_only: false }));
+    const threads = await this.threadSummaries();
     const held = await this.store.all("held");
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -2313,14 +2452,24 @@ export class Engine {
     return "A record about an agent (" + e.type + ").";
   }
 
+  // thread is the device conversation holding message id.
   async thread(id) {
-    const m = await this.store.get("inbox", id);
-    if (!m || m.v !== 1) throw new Error("No message with that id.");
-    const pin = await this.store.get("pins", m.from);
-    return { id, peer: m.from, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
-      messages: [{ id, dir: "in", from: m.from, to: this.address, kind: m.kind, body: m.body, at: iso(m.at), unread: !m.read, files: [], actions: [],
-        author: { label: m.from, about: "Signed with " + m.from + "'s key. Whether a person or one of their agents wrote it is not recorded." },
-        state_text: m.state === "held" ? "Held for you: nothing runs in this browser" : "" }] };
+    const g = (await this.v1Threads()).find((x) => x.some((m) => m.id === id));
+    if (!g) throw new Error("No message with that id.");
+    const peer = g[0].peer;
+    const pin = await this.store.get("pins", peer);
+    const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
+    return { id: g[0].id, peer, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
+      messages: g.map((m) => {
+        const inbound = m.dir === "in";
+        return { id: m.id, dir: m.dir, from: inbound ? m.from : this.address, to: inbound ? this.address : m.to, kind: m.kind, body: m.body,
+          reply_to: m.reply_to || "", at: iso(m.at), state: m.state, status: m.status || "", detail: m.detail || "", unread: inbound && !m.read,
+          files: (m.attachments || []).map((a) => ({ name: wire.safeName(a.name), size: a.size, ...this.fileState(a) })),
+          actions: inbound && m.state === "held" && !(pin && pin.pending) ? ["reply"] : [], // a held question or task: answered here by hand
+          author: inbound ? { label: m.from, about: "Signed with " + m.from + "'s key. Whether a person or one of their agents wrote it is not recorded." }
+            : { label: "You", about: "Sent from this browser." },
+          state_text: inbound ? (m.state === "held" ? heldText : m.state === "answered" ? "You answered it here." : "") : outText(m.state, peer, m.detail) };
+      }) };
   }
 
   async markRead(ids) {
@@ -2340,6 +2489,19 @@ export class Engine {
   async refreshDM(id) {
     const out = (await this.store.all("outbox")).filter((m) => m.conv === id && m.state === "custody").slice(-20);
     for (const m of out) {
+      try {
+        const r = await this.call("GET", "/v1/messages/" + m.id);
+        if (r && r.state) await this.setOutState(m.id, r.state);
+      } catch (e) { /* unknown stays unknown */ }
+    }
+    return { text: "" };
+  }
+
+  // refreshThread asks once, when a device conversation is opened, about
+  // its messages the server still holds.
+  async refreshThread(id) {
+    const g = (await this.v1Threads()).find((x) => x.some((m) => m.id === id)) || [];
+    for (const m of g.filter((x) => x.dir === "out" && x.state === "custody").slice(-20)) {
       try {
         const r = await this.call("GET", "/v1/messages/" + m.id);
         if (r && r.state) await this.setOutState(m.id, r.state);
@@ -2377,11 +2539,12 @@ export class Engine {
     case "/api/device/decide": return this.decideLink(body.id, !!body.accept);
     case "/api/device/remove": return this.removeDevice(body.address);
     case "/api/device/service": throw new Error("A browser is always a person's device: a service joins from a computer with AgentNet.");
-    case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : { text: "Connection unknown" };
+    case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);
     case "/api/act":
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
+      if (body.do === "reply") return this.replyV1(body.id, body.body);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
-    case "/api/send": throw new Error("This browser sends DMs only: start a DM with a person.");
+    case "/api/send": return this.sendDirect(body);
     case "/api/simulate": throw new Error("Not available here.");
     }
     throw new Error("Unknown request.");
