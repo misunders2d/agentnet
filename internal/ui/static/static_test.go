@@ -50,7 +50,10 @@ func TestRelayServesThePage(t *testing.T) {
 	for p, name := range relayFiles {
 		resp := serve("GET", p)
 		body, _ := io.ReadAll(resp.Body)
-		data, err := fs.ReadFile(Files, name)
+		data, err := devicePage(), error(nil)
+		if name != "" {
+			data, err = fs.ReadFile(Files, name)
+		}
 		if err != nil || resp.StatusCode != 200 || string(body) != string(data) {
 			t.Fatalf("%s: %d, %d bytes (%v)", p, resp.StatusCode, len(body), err)
 		}
@@ -87,7 +90,7 @@ func TestRelayServesThePage(t *testing.T) {
 // Nothing else is served: not the daemon's page or its API, not the relay's
 // API (the relay routes it before this handler), no listings, no tricks.
 func TestRelayServesNothingElse(t *testing.T) {
-	for _, p := range []string{"/index.html", "/relay.html", "/assets/app.js", "/assets/lenses.js", "/assets/index.html",
+	for _, p := range []string{"/index.html", "/relay.html", "/assets/relay.mjs", "/assets/index.html",
 		"/api/overview", "/events", "/v1/version", "/v1/agents", "/assets/", "/assets/vendor/", "/assets/vendor/age.mjs/",
 		"/assets/../relay.html", "/assets/static.go", "/static.go", "/assets/wire.mjs.map", "/favicon.ico"} {
 		resp := serve("GET", p)
@@ -113,10 +116,20 @@ func TestRelayPageLoadsOnlyServedFiles(t *testing.T) {
 	for p := range relayFiles {
 		served[p] = true
 	}
-	page, _ := fs.ReadFile(Files, "relay.html")
-	for _, m := range regexp.MustCompile(`(?:src|href)="([^"]+)"`).FindAllStringSubmatch(string(page), -1) {
+	page := devicePage()
+	if strings.Contains(string(page), `src="/assets/app.js"`) || !strings.Contains(string(page), `<script type="module" src="/assets/device.mjs">`) {
+		t.Fatal("the device page does not start with device.mjs")
+	}
+	for _, m := range regexp.MustCompile(`(?:src|href)="(/[^"]*)"`).FindAllStringSubmatch(string(page), -1) { // paths; #anchors stay in the page
 		if !served[m[1]] {
-			t.Errorf("relay.html loads %s, which is not served", m[1])
+			t.Errorf("the device page loads %s, which is not served", m[1])
+		}
+	}
+	// device.mjs loads the views by address once the device is ready.
+	dev, _ := fs.ReadFile(Files, "device.mjs")
+	for _, m := range regexp.MustCompile(`"(/assets/[^"]+)"`).FindAllStringSubmatch(string(dev), -1) {
+		if !served[m[1]] {
+			t.Errorf("device.mjs loads %s, which is not served", m[1])
 		}
 	}
 	imports := regexp.MustCompile(`(?m)^\s*(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"`)

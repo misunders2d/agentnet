@@ -35,6 +35,7 @@ function el(tag, attrs, ...kids) {
 }
 
 async function api(path, body) {
+  if (window.agentnetEngine) return window.agentnetEngine.api(path, body); // a browser device (the relay's page)
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   };
@@ -83,15 +84,24 @@ async function loadOverview() {
   $("demo").hidden = !o.demo;
   $("me").textContent = o.me.address;
   $("me").title = "Key " + o.me.fingerprint;
-  $("machine").textContent = o.me.responder
-    ? "Your responder: " + o.me.responder + " in " + o.me.responder_dir
-    : "No responder: questions and tasks wait for you";
+  $("machine").textContent = o.device ? deviceLine(o.device)
+    : o.me.responder ? "Your responder: " + o.me.responder + " in " + o.me.responder_dir
+      : "No responder: questions and tasks wait for you";
+  $("new-btn").hidden = !!o.device; // a browser device starts DMs with people, nothing else
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
   renderReview(o.review);
   renderThreads(o.threads);
   renderQuarantine(o.quarantine);
   return o;
+}
+
+// deviceLine says what a browser device is doing, plainly.
+function deviceLine(d) {
+  if (d.revoked) return "This device was removed from its server: nothing more is sent or received here.";
+  return (d.online ? "Connected to your server" : "Not connected to your server now: what you write waits here") +
+    " · This browser runs nothing: questions and tasks wait for you" +
+    (d.persisted === false ? " · This browser may clear this device's data" : "");
 }
 
 // ---- contacts ------------------------------------------------------------------
@@ -1291,6 +1301,14 @@ function kindHint() {
 // One event stream; each event carries only a change counter. When it
 // breaks, say so and wait for the person instead of retrying on a timer.
 function listen() {
+  if (window.agentnetEngine) { // a browser device: its engine says when something changed
+    window.agentnetEngine.listen((seq) => {
+      const first = state.seq < 0;
+      state.seq = seq;
+      refetch(first);
+    });
+    return;
+  }
   const es = new EventSource("/events");
   es.addEventListener("change", (e) => {
     const seq = Number(e.data);
@@ -1448,7 +1466,9 @@ function announceChanges(o, first) {
 
 // ---- wiring ------------------------------------------------------------------------
 
-document.addEventListener("DOMContentLoaded", () => {
+// start wires the page; the relay's page loads this file after the device
+// is ready, when the document has loaded already.
+function start() {
   $("composer").addEventListener("submit", send);
   $("body").addEventListener("input", grow);
   $("body").addEventListener("keydown", (e) => {
@@ -1508,4 +1528,6 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (wide && first) openThread(first.id);
   }).catch(() => { $("lost").hidden = false; });
   listen();
-});
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+else start();

@@ -81,6 +81,7 @@ let appElem;
 appElem = new Elem("div");
 const radios = ["message", "question", "task"].map((v) => Object.assign(new Elem("input"), { value: v, checked: v === "message" }));
 const document = {
+  readyState: "loading", // the page wires itself at DOMContentLoaded, which checks never fire
   body: new Elem("body"),
   getElementById: (id) => (byId[id] ||= new Elem("div", id)),
   createElement: (tag) => new Elem(tag),
