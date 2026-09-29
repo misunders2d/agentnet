@@ -65,13 +65,15 @@ async function handle(req) {
     return { joined: engine.joined };
   case "join":
     return { address: await engine.join(req.code, req.name) };
+  case "joinLink": // a device link from another device of the person (its QR's text)
+    return { address: await engine.joinAndLink(req.code, req.name) };
   case "person":
     return await engine.createPerson(req.label);
   case "start":
     engine.start();
     return {};
   case "status":
-    return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current };
+    return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current, link: engine.link ? engine.link.state : "" };
   case "api":
     return { v: await engine.api(req.path, req.body) };
   case "offline":

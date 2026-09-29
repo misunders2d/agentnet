@@ -595,6 +595,10 @@ export async function joinConsent(keys, address, person, seq, prev) {
   return signBytes(keys, joinBytes(person, seq, prev, await publicEntry(keys, address)));
 }
 
+// checkJoin reports whether join is dev's consent to join person as the
+// step seq after the roster whose hash is prev.
+export const checkJoin = (person, seq, prev, dev, join) => verifyBytes(dev.sign_key, joinBytes(person, seq, prev, dev), join);
+
 // validateRoster is PersonRoster.Validate: its shape and bounds, and each
 // device's entry (not the signatures of the record or the chain).
 export async function validateRoster(r) {
@@ -758,6 +762,43 @@ export async function linkMAC(o, dev, join) {
 export async function checkLinkMAC(o, dev, join, mac) {
   const key = await subtle.importKey("raw", o.secret, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   return subtle.verify("HMAC", key, mac, linkTranscript(o, dev, join));
+}
+
+// History items (client/history.go): a message a device of your person
+// forwards to another as history, with the key it was sent under (the
+// forwarding device's word: the original signature covered ciphertext for
+// another device). Attachments are manifests only (no blob here).
+
+// historyJSON is json.Marshal of a HistoryItem.
+export function historyJSON(h) {
+  let s = '{"v":1,"from":' + goString(h.from) + ',"from_key":' + goString(h.from_key) + ',"id":' + goString(h.id) + ',"lid":' + goString(h.lid) +
+    ',"ts":' + goInt(h.ts, "time") + ',"kind":' + goString(h.kind) + ',"body":' + goString(h.body);
+  if (h.reply_to) s += ',"reply_to":' + goString(h.reply_to);
+  if (h.status) s += ',"status":' + goString(h.status);
+  if (h.sub) s += ',"sub":' + goString(h.sub);
+  if (h.origin) s += ',"origin":' + goString(h.origin);
+  if (h.emotion) s += ',"emotion":' + goString(h.emotion);
+  if (h.target) s += ',"target":{"address":' + goString(h.target.address) + ',"fingerprint":' + goString(h.target.fingerprint) + "}";
+  if (h.pid) s += ',"pid":' + goString(h.pid);
+  if (h.attachments && h.attachments.length) {
+    s += ',"attachments":[' + h.attachments.map((a) => '{"blob":{"id":"","size":0,"sha256":""},"name":' + goString(a.name) +
+      ',"size":' + goInt(a.size, "size") + ',"sha256":' + goString(a.sha256) + "}").join(",") + "]";
+  }
+  return s + ',"at":' + goInt(h.at, "time") + "}";
+}
+
+// parseHistory reads a history item strictly (as the core's decodeStrict).
+export function parseHistory(json) {
+  const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
+    kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
+    target: "object", pid: "string", attachments: "array", at: "int" });
+  if (f.v !== 1 || !validID(f.id) || !validID(f.lid) || !validAddress(f.from || "") || !validFingerprint(f.from_key || "")) throw new Error("a malformed history item");
+  const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string" }) : null;
+  return { from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
+    reply_to: f.reply_to || "", status: f.status || "", sub: f.sub || "", origin: f.origin || "", emotion: f.emotion || "", pid: f.pid || "",
+    target: target ? { address: target.address || "", fingerprint: target.fingerprint || "" } : null,
+    attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
+      return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }
 
 // DM root (E0).

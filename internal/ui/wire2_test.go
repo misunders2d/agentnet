@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -260,6 +261,31 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		}
 		if !ed25519.Verify(jr.Public.SignKey, protocol.JoinBytes(o.Person, o.Seq+1, o.Roster, jr.Public), jr.Link.Join) || !protocol.CheckLinkMAC(o, jr.Public, jr.Link.Join, jr.Link.MAC) {
 			t.Fatal("Go refuses the device's consent or MAC")
+		}
+	})
+
+	t.Run("history items", func(t *testing.T) {
+		// What a Go device forwards, read and written back byte for byte.
+		full := client.HistoryItem{V: 1, From: bob.Address, FromKey: bob.Fingerprint(), ID: protocol.NewID(), LID: protocol.NewID(), TS: 1759150000,
+			Kind: "message", Body: "a line\nand \"quotes\" <b>", ReplyTo: protocol.NewID(), Status: "done", Sub: "event", Origin: "ui", Emotion: "smile",
+			Target: &envelope.Target{Address: dana, Fingerprint: pub.Fingerprint()}, PID: protocol.NewID(),
+			Attachments: []envelope.Attachment{{Name: "notes é.txt", Size: 12, SHA256: strings.Repeat("ab", 32)}}, At: 1759150000123}
+		bare := client.HistoryItem{V: 1, From: dana, FromKey: pub.Fingerprint(), ID: protocol.NewID(), LID: protocol.NewID(), TS: 1759150001, Kind: "message", Body: ""}
+		for _, it := range []client.HistoryItem{full, bare} {
+			raw := marshal(t, it)
+			if got := w.ok(map[string]any{"op": "history", "json": raw})["json"]; got != raw {
+				t.Fatalf("history item:\n go %s\n js %v", raw, got)
+			}
+		}
+		for what, raw := range map[string]string{
+			"another version": strings.Replace(marshal(t, bare), `"v":1`, `"v":2`, 1),
+			"an unknown field": strings.Replace(marshal(t, bare), `"v":1`, `"v":1,"extra":true`, 1),
+			"a bad key":        strings.Replace(marshal(t, bare), pub.Fingerprint(), "nope", 1),
+			"a bad address":    strings.Replace(marshal(t, bare), dana, "dana", 1),
+		} {
+			if v := w.call(map[string]any{"op": "history", "json": raw}); v["error"] == nil {
+				t.Errorf("%s: accepted", what)
+			}
 		}
 	})
 

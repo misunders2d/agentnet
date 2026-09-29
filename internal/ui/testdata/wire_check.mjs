@@ -76,6 +76,8 @@ async function handle(req) {
     const mac = await wire.linkMAC(o, dev, join);
     return { mac: wire.b64(mac), checks: req.check ? await wire.checkLinkMAC(o, dev, join, wire.unb64(req.check, "mac")) : null };
   }
+  case "history": // a history item read and written again
+    return { json: wire.historyJSON(wire.parseHistory(req.json)) };
   case "joinLink":
     return { body: await wire.joinRequest(keys, address, req.secret, { offer: req.offer, join: wire.unb64(req.join, "join"), mac: wire.unb64(req.mac, "mac") }) };
   case "validLabel":

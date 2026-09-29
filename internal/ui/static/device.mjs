@@ -3,9 +3,10 @@
 // when the person asks (with an invitation for this server), then starts
 // the engine and the usual views (app.js, lenses.js) over it.
 import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
-import { decodeInvite, support, validName } from "./wire.mjs";
+import { decodeInvite, decodeOffer, support, validName } from "./wire.mjs";
 
 const invitePrefix = "#agentnet-invite-v1:";
+const linkPrefix = "#agentnet-link-v2:"; // a device link from another device of your person (its QR)
 const openPrefix = "#agentnet-open:"; // a notification's click (sw.js)
 
 // push is the engine's Web Push adapter. The service worker is registered
@@ -77,10 +78,21 @@ const privacy = () => el("details", { class: "join-more" }, el("summary", {}, "P
 // with it: it is not kept or shown again, even when it is damaged. It is
 // not logged.
 function takeInvite() {
-  if (!location.hash.startsWith(invitePrefix)) return null;
+  const link = location.hash.startsWith(linkPrefix);
+  if (!link && !location.hash.startsWith(invitePrefix)) return null;
   const raw = location.hash.slice(1);
   history.replaceState(null, "", location.pathname + location.search);
-  try { return { code: decodeURIComponent(raw), damaged: false }; } catch (e) { return { code: "", damaged: true }; }
+  try { return { code: decodeURIComponent(raw), damaged: false, link }; } catch (e) { return { code: "", damaged: true, link }; }
+}
+
+// linkProblem says why a device link cannot be used here ("" when it can).
+function linkProblem(code) {
+  let o;
+  try { o = decodeOffer(code); } catch (e) {
+    return "That device link is not complete. Make a new one on your other device (Your devices, Add a device).";
+  }
+  if (Date.now() / 1000 >= o.expires) return "That device link expired. Make a new one on your other device (Your devices, Add a device).";
+  return inviteProblem(o.invite);
 }
 
 // inviteProblem says, in the person's words, why code cannot be used to
@@ -157,6 +169,7 @@ async function run(link) {
 // enrolled or named until the person presses Join.
 function joinScreen(engine, link) {
   onInvite = (inv) => joinScreen(engine, inv);
+  if (link && link.link) { linkScreen(engine, link); return; }
   const fromLink = link && !link.damaged ? link.code : "";
   const linkProblem = link && (link.damaged ? "damaged" : inviteProblem(fromLink));
   const needCode = !fromLink || !!linkProblem;
@@ -198,6 +211,44 @@ function joinScreen(engine, link) {
     recovery && el("p", { class: "join-recovery" }, recovery),
     form, storageNote(), privacy());
   (needCode ? invite : name).focus();
+}
+
+// linkScreen joins this browser as a new device of the person whose
+// other device made the link: a name for this browser, then that device's
+// approval. Nothing is joined until the person presses Add.
+function linkScreen(engine, link) {
+  const problem = link.damaged ? "This device link could not be opened. Make a new one on your other device." : linkProblem(link.code);
+  const name = el("input", { id: "join-name", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "32", placeholder: "phone", "aria-describedby": "join-name-hint" });
+  const error = el("p", { class: "error", role: "alert", id: "join-error" });
+  const button = el("button", { type: "submit", class: "btn primary join-go", disabled: !!problem }, "Add this browser");
+  const form = el("form", { class: "join-form", novalidate: true },
+    el("label", { for: "join-name" }, "Name this browser"), name,
+    el("p", { class: "hint", id: "join-name-hint" }, "So you can tell your devices apart. Lowercase, like phone or work-laptop."),
+    error, button);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (button.disabled) return;
+    const chosen = name.value.trim();
+    const why = !chosen ? "Choose a name for this browser." : !validName(chosen) ? "Use lowercase letters, numbers and dashes for the name, like phone or work-laptop." : "";
+    error.textContent = why;
+    if (why) return;
+    button.disabled = true;
+    try {
+      let persisted = null;
+      try { persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch (e) { persisted = null; }
+      await engine.joinAndLink(link.code, chosen);
+      engine.storage = { persisted };
+      onInvite = null;
+      start(engine);
+    } catch (e) {
+      error.textContent = e.message;
+      button.disabled = false;
+    }
+  });
+  show("Add this browser to you", el("p", { class: "join-intro" }, "This link comes from one of your devices. Name this browser, then approve it on that device: it becomes one more device of yours, with your chats."),
+    problem && el("p", { class: "join-recovery" }, problem),
+    form, storageNote(), privacy());
+  name.focus();
 }
 
 async function start(engine) {

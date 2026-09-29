@@ -1122,12 +1122,14 @@ function deviceList(p, open = (addr) => openHub({ kind: "device", key: addr })) 
 // setupChoice asks who uses this computer, until a person or a service is chosen.
 function setupChoice() {
   const o = state.overview;
+  if (o.link && o.link.state === "pending") return []; // it joins as the person of the device that approves it
   if (o.role === "service") return [el("p", {}, "This computer is a service or bot: it has no person. DMs are between people; its device conversations are below.")];
+  const choose = devicesHere() && !o.device; // a browser is always a person's device
   return [
-    el("p", {}, devicesHere() ? "Who uses this computer?" : "You have no person yet. A person is you, the human, as others see you in DMs."),
-    el("button", { type: "button", class: "chip", onclick: () => personDialog() }, devicesHere() ? "I do: set up my person…" : "Set up your person…"),
-    devicesHere() && el("button", { type: "button", class: "chip", onclick: () => serviceDialog() }, "It is a service or bot…"),
-    devicesHere() && el("p", {}, "Already use AgentNet as yourself on another device? Add this device from there instead (Your devices, Add a device), so you are one person everywhere."),
+    el("p", {}, choose ? "Who uses this computer?" : "You have no person yet. A person is you, the human, as others see you in DMs."),
+    el("button", { type: "button", class: "chip", onclick: () => personDialog() }, choose ? "I do: set up my person…" : "Set up your person…"),
+    choose && el("button", { type: "button", class: "chip", onclick: () => serviceDialog() }, "It is a service or bot…"),
+    choose && el("p", {}, "Already use AgentNet as yourself on another device? Add this device from there instead (Your devices, Add a device), so you are one person everywhere."),
   ];
 }
 

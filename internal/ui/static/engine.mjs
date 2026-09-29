@@ -19,6 +19,12 @@ const MAX_BACKOFF = 60_000;
 const stores = ["kv", "pins", "persons", "convs", "inbox", "outbox", "held", "lids", "receipts"];
 // heldPage bounds the held messages read in one step (the Go client's proofPage).
 const heldPage = 50;
+// historyPage bounds the messages one step of copying your chats to a new
+// device queues (the Go client's historyPage).
+const historyPage = 50;
+// linkTTL is how long a device link lives: a minute under the server's
+// limit (protocol.MaxLinkTTL), for this browser's clock.
+const linkTTL = 9 * 60;
 
 // ---- storage -------------------------------------------------------------------------------
 
@@ -194,6 +200,7 @@ export class Engine {
       this.revoked = !!id.revoked;
     }
     this.me = (await this.store.get("kv", "person")) || null;
+    this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
     return !!id;
   }
 
@@ -309,7 +316,27 @@ export class Engine {
   // invitation code, once. The code is never stored or logged.
   async join(code, agentName) {
     if (this.joined) throw new Error("This browser already holds a device.");
-    const inv = wire.decodeInvite(code);
+    return this.joinWith(wire.decodeInvite(code), agentName, null);
+  }
+
+  // joinAndLink enrolls this browser with a device link code from another
+  // device of your person (its QR or its text): it joins as a new device
+  // of that person, waiting (the server lets it do nothing else) until
+  // that device approves it. The code is never stored or logged.
+  async joinAndLink(code, agentName) {
+    if (this.joined) throw new Error("This browser already holds a device.");
+    const o = wire.decodeOffer(code);
+    if (Math.floor(this.now() / 1000) >= o.expires) throw new Error("That link expired: make a new one on your other device.");
+    const address = await this.joinWith(wire.decodeInvite(o.invite), agentName, async (keys, addr) => {
+      const join = await wire.joinConsent(keys, addr, o.person, o.seq + 1, o.roster);
+      return { offer: o.offer, join, mac: await wire.linkMAC(o, await wire.publicEntry(keys, addr), join) };
+    }, { state: "pending", person: o.person, seq: o.seq + 1, approver: o.approver.address, approver_key: o.approver.fingerprint, expires: o.expires });
+    return address;
+  }
+
+  // joinWith joins with invitation inv (link: the link fields a device
+  // link adds, made with the new keys; state: this device's link to keep).
+  async joinWith(inv, agentName, link, linkState) {
     // An invitation that pins the server's own certificate is for the
     // command line: a browser cannot apply that pin, and its own trust is
     // not a substitute. Refused before anything is sent.
@@ -325,19 +352,54 @@ export class Engine {
       pending = { address, keys: await wire.newKeys() };
       await put(this.store, "kv", "joining", pending);
     }
-    const body = await wire.joinRequest(pending.keys, address, inv.secret);
+    const body = await wire.joinRequest(pending.keys, address, inv.secret, link ? await link(pending.keys, address) : null);
     try {
       await this.call("POST", "/v1/join", body, { signed: false });
     } catch (e) {
       if (e.status === 409) throw new Error("The name " + address + " is already used on this server. Choose another name.");
+      if (e.status === 403 && link) throw new Error("That link cannot be used any more (it was used, or it expired): make a new one on your other device.");
       throw new Error("Could not join (" + e.message + "). Check your connection and try again.");
     }
     const fingerprint = await wire.fingerprint(await wire.publicEntry(pending.keys, address));
     await this.store.write([{ s: "kv", k: "identity", v: { address, keys: pending.keys, fingerprint, joined: this.now() } },
-      { s: "kv", k: "joining", v: undefined }]);
+      { s: "kv", k: "joining", v: undefined }, ...(linkState ? [{ s: "kv", k: "link", v: linkState }] : [])]);
     await this.load();
     this.changed();
     return address;
+  }
+
+  get waitingLink() { return !!(this.link && this.link.state === "pending"); }
+
+  async setLink(state, detail) {
+    this.link = { ...this.link, state, detail: detail || "" };
+    await put(this.store, "kv", "link", this.link);
+    this.changed();
+  }
+
+  // finishLink pins this device's person once its server admitted it: the
+  // chain must name this device in the step after the offer's, signed by
+  // the approving device.
+  async finishLink() {
+    const s = this.link;
+    try {
+      const steps = await this.chain(s.person, -1);
+      if (!steps.length) throw new Error("no roster");
+      await wire.verifyFirst(steps[0]);
+      for (let i = 1; i < steps.length; i++) await wire.verifyNext(steps[i], steps[i - 1]);
+      const step = steps.find((r) => r.seq === s.seq);
+      if (!step || step.by !== s.approver_key || !(await wire.rosterHas(step, this.address, this.fp))) {
+        throw new Error("the person's roster does not name this device in the step its approver signed");
+      }
+      if (!(await wire.rosterHas(steps[steps.length - 1], this.address, this.fp))) throw new Error("this device is no longer in its person's roster");
+      const me = { ...(await this.personRecord(steps, "self", null)), published: true };
+      await put(this.store, "kv", "person", me);
+      this.me = me;
+      await this.pinDevices(me);
+      await this.setLink("linked");
+    } catch (e) {
+      if (retryable(e)) throw e;
+      await this.setLink("failed", e.message);
+    }
   }
 
   // A person is kept as the chain of roster steps verified here (TOFU on
@@ -372,12 +434,18 @@ export class Engine {
     }
     const self = devices.find((d) => d.address === this.address);
     const one = self && state === "self" ? self : devices[0];
-    return { person: r.person, label: r.label, seq: r.seq, hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known,
+    const steps2 = [...((before && before.steps) || [])];
+    for (const st of steps) {
+      const h = await wire.rosterHash(st);
+      if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
+    }
+    return { person: r.person, label: r.label, seq: r.seq, hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
       address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
   }
 
   async createPerson(label) {
     if (this.me) throw new Error("This device already speaks for \"" + this.me.label + "\"; a second person is not created.");
+    if (this.waitingLink) throw new Error("This browser joins as the person of the device that approves it: it creates none.");
     const r = await wire.newRoster(this.keys, this.address, String(label || "").trim());
     const me = await this.personRecord([r], "self", null);
     await put(this.store, "kv", "person", me);
@@ -399,6 +467,254 @@ export class Engine {
     this.me = { ...this.me, published: true };
     await put(this.store, "kv", "person", this.me);
     this.changed();
+  }
+
+  // ---- your devices: this one approves a new device of your person
+  // (client/link.go, the existing device's side)
+
+  // linkBook is what this device keeps about its links: offers it made
+  // (with their secrets) and the requests that answered them.
+  async linkBook() {
+    return (await this.store.get("kv", "links")) || { offers: {}, requests: {} };
+  }
+
+  // newDeviceLink makes a one-use link a new device of your person joins
+  // with: a device invite from the server bound to this offer, and a secret
+  // only the link carries (the server never sees it). It opens this page.
+  async newDeviceLink() {
+    if (!this.me) throw new Error("Set up your person first.");
+    if (!this.me.published) {
+      try {
+        await this.publishPerson();
+      } catch (e) {
+        throw new Error("Your person is not on your server yet: this page publishes it when it connects. Try again in a moment.");
+      }
+    }
+    const offer = wire.newID(), expires = Math.floor(this.now() / 1000) + linkTTL;
+    const inv = await this.call("POST", "/v1/person/device-invite", { offer, expires });
+    const o = { v: 2, invite: inv.code, offer, expires, person: this.me.person, seq: this.me.seq, roster: this.me.hash,
+      approver: { address: this.address, fingerprint: this.fp }, secret: globalThis.crypto.getRandomValues(new Uint8Array(32)) };
+    const code = wire.encodeOffer(o);
+    const book = await this.linkBook();
+    book.offers[offer] = { ...o, used: false };
+    await put(this.store, "kv", "links", book);
+    return { url: this.base + "/#" + code, expires: iso(expires * 1000) };
+  }
+
+  // onLinkEvent takes the server's "link" event: a device joined with one
+  // of this device's offers. A request that matches its offer (its MAC
+  // under the secret, the device's consent to the next step) becomes a
+  // request for the person and uses the offer up; anything else changes
+  // nothing, so nobody without the link can use it up. Again: no change.
+  async onLinkEvent(data) {
+    let ev;
+    try {
+      const j = JSON.parse(data);
+      if (typeof j.offer !== "string" || !wire.validID(j.offer)) throw new Error("offer");
+      ev = { offer: j.offer, device: await wire.parsePublic(j.device), join: wire.unb64(j.join, "join"), mac: wire.unb64(j.mac, "mac") };
+    } catch (e) {
+      return; // malformed: ignored
+    }
+    const o = (await this.linkBook()).offers[ev.offer];
+    if (!o || o.used) return; // not this device's, or used up (the same request again is kept as it was)
+    if (!(await wire.checkLinkMAC(o, ev.device, ev.join, ev.mac)) || !(await wire.checkJoin(o.person, o.seq + 1, o.roster, ev.device, ev.join))) return;
+    const now = Math.floor(this.now() / 1000);
+    if (now >= o.expires || ev.device.address.split("/")[0] !== this.address.split("/")[0] || !this.me || this.me.person !== o.person) return;
+    const state = this.me.seq !== o.seq || this.me.hash !== o.roster ? "stale" : "pending"; // shown, never approved
+    const book = await this.linkBook();
+    if (!book.offers[ev.offer] || book.offers[ev.offer].used) return;
+    book.offers[ev.offer].used = true;
+    book.requests[ev.offer] = { id: ev.offer, address: ev.device.address, device: wire.marshalPublic(ev.device), fingerprint: await wire.fingerprint(ev.device),
+      join: wire.b64(ev.join), requested_at: now, expires: o.expires, state, detail: "" };
+    await put(this.store, "kv", "links", book);
+    this.changed();
+  }
+
+  async setRequest(id, state, extra) {
+    const book = await this.linkBook();
+    book.requests[id] = { ...book.requests[id], state, ...extra };
+    await put(this.store, "kv", "links", book);
+    this.changed();
+  }
+
+  // linkRequests are the requests kept here, newest first; a pending one
+  // past its time is expired.
+  async linkRequests() {
+    const now = Math.floor(this.now() / 1000);
+    return Object.values((await this.linkBook()).requests)
+      .map((r) => (r.state === "pending" && now >= r.expires ? { ...r, state: "expired" } : r))
+      .sort((a, b) => b.requested_at - a.requested_at || (a.id < b.id ? -1 : 1));
+  }
+
+  // decideLink approves or refuses request id. An approval checks again
+  // that the link has not expired and your devices have not changed,
+  // signs the roster step that adds the device and publishes it; one the
+  // server did not take yet stays approved and is published when this page
+  // connects (never as a second, competing step).
+  async decideLink(id, accept) {
+    const book = await this.linkBook();
+    const r = book.requests[id];
+    if (!r) throw new Error("No device link request " + id + " here.");
+    const name = r.address.split("/")[1];
+    if (r.state === "approved" && accept) return this.publishLink(id);
+    if (r.state !== "pending") throw new Error("That request is " + r.state + " already.");
+    if (!accept) {
+      await this.setRequest(id, "refused");
+      await this.call("POST", "/v1/person/device-refuse", { address: r.address }).catch(() => {}); // never admitted; it expires there anyway
+      return { note: "Refused: " + name + " did not join as you." };
+    }
+    if (Math.floor(this.now() / 1000) >= r.expires) {
+      await this.setRequest(id, "expired");
+      throw new Error("That expired: make a new link on this device and use it again.");
+    }
+    const o = book.offers[id];
+    if (!this.me || this.me.person !== o.person) {
+      await this.setRequest(id, "failed", { detail: "this device no longer speaks for that person" });
+      throw new Error("That device already belongs to someone.");
+    }
+    if (this.me.seq !== o.seq || this.me.hash !== o.roster) {
+      await this.setRequest(id, "stale");
+      throw new Error("Your devices changed meanwhile: make a new link and try again.");
+    }
+    const prev = await wire.parseRoster(this.me.json);
+    const next = await wire.nextRoster(this.keys, this.address, prev, [...prev.devices, await wire.parsePublic(JSON.parse(r.device))], wire.unb64(r.join, "join"));
+    await wire.verifyNext(next, prev);
+    await this.setRequest(id, "approved", { roster: wire.rosterJSON(next) });
+    return this.publishLink(id);
+  }
+
+  // publishLink publishes an approved request's roster step, then keeps it
+  // as your person here and starts copying your chats to the device.
+  async publishLink(id) {
+    const r = (await this.linkBook()).requests[id];
+    const name = r.address.split("/")[1];
+    try {
+      await this.call("PUT", "/v1/person", r.roster);
+    } catch (e) {
+      if (e.code === "roster_stale") {
+        await this.setRequest(id, "stale");
+        throw new Error("Your devices changed meanwhile: make a new link and try again.");
+      }
+      if (e.code === "link_expired") {
+        await this.setRequest(id, "expired");
+        throw new Error("That expired: make a new link on this device and use it again.");
+      }
+      if (retryable(e)) throw new Error("Approved; your server has not taken it yet. It is sent again when this page connects: keep it open.");
+      await this.setRequest(id, "failed", { detail: e.message });
+      throw new Error(e.message);
+    }
+    const next = await wire.parseRoster(r.roster);
+    this.me = { ...(await this.personRecord([await wire.parseRoster(this.me.json), next], "self", this.me)), published: true };
+    await put(this.store, "kv", "person", this.me);
+    await this.pinDevices(this.me);
+    await this.setRequest(id, "linked");
+    await this.startHistory(r.address, r.fingerprint);
+    return { note: name + " is now one of your devices." };
+  }
+
+  // retryApproved publishes approved requests the server has not taken yet.
+  async retryApproved() {
+    for (const r of Object.values((await this.linkBook()).requests)) {
+      if (r.state === "approved") await this.publishLink(r.id).catch(() => {});
+    }
+  }
+
+  // removeDevice takes the device at address out of your person (never the
+  // last one); a device a link admitted is revoked on the server with it.
+  async removeDevice(address) {
+    if (!this.me) throw new Error("Set up your person first.");
+    const prev = await wire.parseRoster(this.me.json);
+    const keep = prev.devices.filter((d) => d.address !== address);
+    if (keep.length === prev.devices.length) throw new Error(address + " is not a device of your person.");
+    if (!keep.length) throw new Error("The last device of a person cannot be removed.");
+    const next = await wire.nextRoster(this.keys, this.address, prev, keep, null);
+    try {
+      await this.call("PUT", "/v1/person", wire.rosterJSON(next));
+    } catch (e) {
+      if (e.code === "roster_stale") {
+        await this.refreshPerson(this.me).catch(() => {});
+        throw new Error("Your devices changed meanwhile: try again.");
+      }
+      throw new Error(e.message);
+    }
+    this.me = { ...(await this.personRecord([prev, next], "self", this.me)), published: true };
+    await put(this.store, "kv", "person", this.me);
+    this.changed();
+    return { note: address + " is no longer one of your devices." };
+  }
+
+  // ---- copying your chats to a new device (client/history.go): one job
+  // per device this one linked, each step queuing a page of history copies
+  // and where it ended in one write, so it resumes where it stopped (the
+  // page must be open for it to run).
+
+  async historyBook() {
+    return (await this.store.get("kv", "history")) || {};
+  }
+
+  async startHistory(address, fingerprint) {
+    const book = await this.historyBook();
+    if (!book[address]) {
+      book[address] = { device: address, fingerprint, pos: null, done: 0, total: (await this.store.all("convs")).length, state: "running" };
+      await put(this.store, "kv", "history", book);
+      this.changed();
+    }
+    this.runHistory().catch(() => {});
+  }
+
+  runHistory() {
+    if (!this.historyRun) this.historyRun = this.historyPasses().finally(() => { this.historyRun = null; });
+    return this.historyRun;
+  }
+
+  async historyPasses() {
+    for (;;) {
+      let more = false;
+      for (const j of Object.values(await this.historyBook())) {
+        if (j.state !== "running") continue;
+        const dev = this.me && this.me.devices.find((d) => d.address === j.device && d.fingerprint === j.fingerprint);
+        if (!dev) { // no longer a device of your person
+          await put(this.store, "kv", "history", { ...(await this.historyBook()), [j.device]: { ...j, state: "ended" } });
+          this.changed();
+          continue;
+        }
+        more = (await this.historyStep(dev, j)) || more;
+      }
+      if (!more) return;
+    }
+  }
+
+  // historyStep queues the next page of history for dev after job j's
+  // position: every conversation's messages in (conv, time, id) order,
+  // received ones with the key they came under, each message sent here
+  // once (its first copy), none the device itself sent.
+  async historyStep(dev, j) {
+    const convs = new Map((await this.store.all("convs")).map((c) => [c.id, c]));
+    const rows = [];
+    for (const m of await this.store.all("inbox")) {
+      if (m.conv && convs.has(m.conv) && m.fp !== dev.fingerprint) rows.push({ conv: m.conv, ms: m.at, id: m.id, m, here: false });
+    }
+    const first = new Map();
+    for (const r of await this.store.all("outbox")) {
+      if (!r.conv || r.history || !convs.has(r.conv)) continue;
+      const f = first.get(r.lid);
+      if (!f || r.id < f.id) first.set(r.lid, r);
+    }
+    for (const r of first.values()) rows.push({ conv: r.conv, ms: r.at, id: r.id, m: r, here: true });
+    const cmp = (a, b) => (a.conv !== b.conv ? (a.conv < b.conv ? -1 : 1) : a.ms !== b.ms ? a.ms - b.ms : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const page = rows.filter((r) => !j.pos || cmp(r, j.pos) > 0).sort(cmp).slice(0, historyPage);
+    const copies = [];
+    for (const r of page) copies.push(await this.historyCopy(dev, convs.get(r.conv), this.itemOf(r.m, r.here)));
+    const pos = page.length ? { conv: page[page.length - 1].conv, ms: page[page.length - 1].ms, id: page[page.length - 1].id } : j.pos;
+    const state = page.length < historyPage ? "done" : "running";
+    const done = state === "done" ? convs.size : [...convs.keys()].filter((c) => pos && c < pos.conv).length;
+    const book = await this.historyBook();
+    if (!book[dev.address] || book[dev.address].state !== "running") return false;
+    book[dev.address] = { ...book[dev.address], pos, state, done, total: convs.size };
+    await this.store.write([...copies.map((c) => ({ s: "outbox", k: c.id, v: c })), { s: "kv", k: "history", v: book }]);
+    this.changed();
+    if (this.connected) for (const c of copies) await this.post(c);
+    return state === "running";
   }
 
   // ---- keys and persons of others
@@ -512,6 +828,7 @@ export class Engine {
     if (p.state === "self") {
       this.me = { ...next, published: true };
       await put(this.store, "kv", "person", this.me);
+      await this.pinDevices(this.me);
       this.changed();
       return this.me;
     }
@@ -842,6 +1159,7 @@ export class Engine {
       ops.push(fromHeld ? { s: "held", k: env.id, v: undefined } : { s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
       await this.store.write(ops);
       this.changed();
+      if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
     } catch (e) {
       if (e instanceof Hold) {
         if (!fromHeld) await this.hold(env, data, e.reason);
@@ -943,7 +1261,10 @@ export class Engine {
       const m = (await this.store.get("inbox", n.reply_to)) || (await this.store.get("outbox", n.reply_to));
       if (m && m.conv !== n.conv) throw new Hold("invalid", "it replies to a message outside its conversation");
     }
-    if (n.sub === "history") throw new Hold("invalid", "history is not read on this device yet");
+    if (n.sub === "history") {
+      if (!own) throw new Hold("invalid", "history comes only from another device of your person");
+      return this.admitHistory(n, env, root, ops);
+    }
     if (n.sub === "event") { // a participation record: the sending device's own, for this very conversation, signed
       let e;
       try {
@@ -960,7 +1281,9 @@ export class Engine {
       [n.kind, n.body, n.reply_to, n.conv, n.sub, n.origin, n.emotion, n.target, n.pid, n.status]))));
     const key = pin.fingerprint + "/" + n.lid;
     const seen = await this.store.get("lids", key);
-    if (seen) {
+    if (seen && seen.history) {
+      ops.push({ s: "inbox", k: seen.id, v: undefined }); // a copy received directly replaces the history copy
+    } else if (seen) {
       if (seen.hash !== hash) throw new Hold("conflicting_duplicate", "a message with the same key and logical id but other content is stored");
       return ops; // the same message again: acknowledged, not stored twice
     }
@@ -975,7 +1298,89 @@ export class Engine {
     // The attention hint is the sender's claim: recorded, checked against
     // this DM's channel here, never used to route anything.
     if (env.attn && !own) rec.attn = env.chan === (await wire.notifyChannel(n.conv, this.fp)) ? "ok" : "mismatch";
-    return [...ops, { s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash } }];
+    const forwards = own ? [] : await this.forwardStale(n, env, pin, conv || { root: n.root });
+    return [...ops, { s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash } }, ...forwards.map((r) => ({ s: "outbox", k: r.id, v: r }))];
+  }
+
+  // itemOf is a stored message as a history item (manifests only).
+  itemOf(m, sentHere) {
+    return { from: sentHere ? this.address : m.from, from_key: sentHere ? this.fp : m.fp, id: m.id, lid: m.lid, ts: m.ts || Math.floor(m.at / 1000), at: m.at,
+      kind: m.kind, body: m.body || "", reply_to: m.reply_to || "", status: m.status || "", sub: m.sub || "", origin: m.origin || "",
+      emotion: m.emotion || "", target: m.target || null, pid: m.pid || "", attachments: (m.attachments || []).map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })) };
+  }
+
+  // historyCopy seals item as history for your device dev (address,
+  // fingerprint, json) in conversation c: kept in the outbox, sent as any
+  // copy is, never shown as a message here.
+  async historyCopy(dev, c, item) {
+    const recipient = await wire.parsePublic(JSON.parse(dev.json));
+    const id = wire.newID(), lid = wire.newID();
+    const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(this.now() / 1000), kind: "message",
+      body: wire.historyJSON(item), conv: c.id, lid, root: c.root, replica: true, sub: "history" }, this.keys, recipient);
+    return { id, conv: c.id, lid, kind: "message", sub: "history", at: this.now(), to: dev.address, own: true, history: true, envelope, state: "queued", detail: "" };
+  }
+
+  // forwardStale forwards, as history, a message the other person sent to
+  // an older roster step of yours (fan) to your devices that step lacked:
+  // copies its sender could not know to send (every such device forwards;
+  // duplicates are stored once there).
+  async forwardStale(n, env, pin, c) {
+    const f = (n.fan || []).find((x) => x.person === this.me.person);
+    if (!f || f.roster === this.me.hash) return [];
+    const old = (this.me.steps || []).find((st) => st.hash === f.roster);
+    if (!old) return []; // a step not in your chain: nothing to go by
+    const item = this.itemOf({ ...n, id: env.id, from: env.from, fp: pin.fingerprint, at: this.now(), ts: env.ts || n.ts }, false);
+    const out = [];
+    for (const d of this.me.devices) {
+      if (d.address === this.address || d.address === env.from || old.devices.includes(d.address + "|" + d.fingerprint)) continue;
+      out.push(await this.historyCopy(d, { id: n.conv, root: c.root }, item));
+    }
+    return out;
+  }
+
+  // admitHistory takes a history item from another device of your person:
+  // the message it forwards, sent under a key the forwarder names (its
+  // word, not a signature here), from a device of a member person (one
+  // that was or is theirs). It never runs, alerts or is held; a copy of
+  // the same message received directly replaces it, and one received
+  // before it stays.
+  async admitHistory(n, env, root, ops) {
+    let item;
+    try {
+      item = wire.parseHistory(n.body);
+    } catch (e) {
+      throw new Hold("invalid", "a malformed history item");
+    }
+    let owner = null, dev = null;
+    for (let pass = 0; pass < 2 && !owner; pass++) {
+      for (const m of root.members) {
+        let p = m.person === this.me.person ? this.me : await this.store.get("persons", m.person);
+        if (pass === 1) p = p ? await this.refreshPerson(p) : await this.pinChain(m.person);
+        const d = p && p.known.find((k) => k.address === item.from && k.fingerprint === item.from_key);
+        if (d) { owner = p; dev = d; break; }
+      }
+    }
+    if (!owner) throw new Hold("invalid", "the history item's sender is no device of a member of this conversation");
+    if (owner.state === "conflict") throw new Hold("identity_conflict", "this person's record conflicts with the one kept here; it is frozen");
+    if (item.sub === "event") { // the signed event itself, verified under its author's key
+      try {
+        const e = wire.parseEvent(item.body);
+        if (!item.pid || e.conv !== n.conv || e.pid !== item.pid || e.author.address !== item.from || e.author.fingerprint !== item.from_key) {
+          throw new Error("the record is not its sender's own, for this conversation");
+        }
+        await wire.verifyEvent(e, (await wire.parsePublic(JSON.parse(dev.json))).sign_key);
+      } catch (err) {
+        throw new Hold("invalid", "participation: " + err.message);
+      }
+    }
+    const key = item.from_key + "/" + item.lid;
+    if (item.from_key === this.fp || (await this.store.get("lids", key))) return ops; // sent here, or known: received directly, or as history before
+    const mine = owner === this.me;
+    const rec = { id: item.id, from: item.from, kind: item.kind, body: item.body, reply_to: item.reply_to, at: item.at || item.ts * 1000, fp: item.from_key,
+      read: true, v: 2, conv: n.conv, lid: item.lid, sub: item.sub, pid: item.pid, origin: item.origin, emotion: item.emotion, replica: true,
+      target: item.target, own: mine, history: true, synced_from: env.from, state: "",
+      attachments: item.attachments.length ? item.attachments.map((a) => ({ blob: null, name: a.name, size: a.size, sha256: a.sha256 })) : undefined };
+    return [...ops, { s: "inbox", k: item.id, v: rec }, { s: "lids", k: key, v: { id: item.id, hash: "", history: true } }];
   }
 
   // retryHeld looks again at messages held for missing proof, when new
@@ -1089,14 +1494,24 @@ export class Engine {
     if (!r.ok) {
       let j = {};
       try { j = await r.json(); } catch (e) { /* none */ }
-      if (j.code === "revoked") await this.setRevoked();
+      if (j.code === "revoked" && !this.waitingLink) await this.setRevoked();
+      if (this.waitingLink && (j.code === "link_refused" || j.code === "link_expired" || j.code === "revoked")) {
+        await this.setLink(j.code === "link_refused" ? "refused" : "expired");
+        this.stop();
+      }
       return false;
+    }
+    if (this.waitingLink && r.headers.get("Agentnet-Members") === "1") {
+      // A member's stream: approved before this stream connected.
+      ctrl.abort();
+      await this.finishLink();
+      return true;
     }
     this.connected = true;
     this.members = { ...this.members, listed: r.headers.get("Agentnet-Members") === "1" ? "listed" : "not_listed", current: false };
     this.changed();
     let watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
-    const work = this.onConnect();
+    const work = this.waitingLink ? Promise.resolve() : this.onConnect(); // a device waiting for approval only holds its stream
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = "", event = "", data = "", healthy = true;
@@ -1142,13 +1557,28 @@ export class Engine {
       await this.flushReceipts();
       await this.retryHeld();
       await this.flushOutbox();
+      await this.retryApproved();
+      this.runHistory().catch(() => {});
       await this.reconcileNotify().catch(() => {});
     } catch (e) { /* tried again on the next ping */ }
   }
 
   async dispatch(event, data) {
+    if (this.waitingLink) {
+      if (event === "linked") {
+        await this.finishLink();
+        this.abort.abort(); // reconnect as a member
+      } else if (event === "ping") {
+        let p = {};
+        try { p = JSON.parse(data); } catch (e) { /* none */ }
+        if (p.conn) this.call("POST", "/v1/stream/ack", { conn: p.conn }).catch(() => {});
+      }
+      return;
+    }
     if (event === "message") {
       await this.onMessage(data);
+    } else if (event === "link") {
+      await this.onLinkEvent(data);
     } else if (event === "members") {
       let m;
       try { m = JSON.parse(data); } catch (e) { this.members = { ...this.members, current: false }; this.changed(); return; }
@@ -1207,7 +1637,7 @@ export class Engine {
   convMessages(convId, inbox, outbox) {
     const groups = new Map();
     for (const r of outbox) {
-      if (r.conv !== convId) continue;
+      if (r.conv !== convId || r.history) continue; // history for your other devices is not a message here
       const g = groups.get(r.lid || r.id) || [];
       g.push(r);
       groups.set(r.lid || r.id, g);
@@ -1260,6 +1690,11 @@ export class Engine {
     const threads = inbox.filter((m) => m.v === 1).map((m) => ({ id: m.id, peer: m.from, title: firstLine(m.body), last: firstLine(m.body),
       last_at: iso(m.at), count: 1, review: 0, unread: m.read ? 0 : 1, running: 0, waiting: false, key_changed: false, notices: 0, notice_only: false }));
     const held = await this.store.all("held");
+    const now = Math.floor(this.now() / 1000);
+    const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
+    const history = Object.values(await this.historyBook()).map((j) => ({ device: j.device, name: j.device.split("/")[1], done: j.done, total: j.total, state: j.state }));
+    const asks = (await this.linkRequests()).filter((r) => r.state === "pending")
+      .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
     return {
       demo: false, seq: this.seq, version: this.version, release: "",
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true },
@@ -1272,6 +1707,8 @@ export class Engine {
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
+      // A browser is always a person's device (never a service).
+      role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };
   }
 
@@ -1288,7 +1725,8 @@ export class Engine {
         const event = m.sub === "event" ? this.eventText(m.body, peer) : "";
         return { id: m.id, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
-          pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own ? m.from : "", copies: here ? m.copies : undefined,
+          pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? m.copies : undefined,
+          synced_from: m.history ? m.synced_from : "",
           attachments: (m.attachments || []).map((a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size })),
           state_text: event ? "" : here ? outText(m.state, m.lagging || (peer ? peer.address : ""), m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
@@ -1638,6 +2076,7 @@ export class Engine {
     if (!m) throw new Error((await this.store.get("outbox", id)) ? "Files you sent are not kept here after sending." : "No such message here.");
     const att = (m.attachments || [])[i];
     if (!att) throw new Error("That message has no such file.");
+    if (!att.blob) throw new Error("This file came with the conversation's history: it is on " + (m.synced_from || "your other device") + ", not here.");
     const bytes = wire.decryptFile(await this.getBytes("/v1/blobs/" + att.blob.id + "/data"), att, this.keys);
     const plain = await bytes;
     return { name: wire.safeName(att.name), size: att.size, image: wire.sniffImage(plain), bytes: plain };
@@ -1720,6 +2159,10 @@ export class Engine {
     case "/api/dm/agent/ask": return this.askAgent(body);
     case "/api/dm/agent/decide": throw new Error("This browser runs no agent: an agent is accepted on the computer that runs it.");
     case "/api/person": return this.createPerson(body.label);
+    case "/api/device/link": return this.newDeviceLink();
+    case "/api/device/decide": return this.decideLink(body.id, !!body.accept);
+    case "/api/device/remove": return this.removeDevice(body.address);
+    case "/api/device/service": throw new Error("A browser is always a person's device: a service joins from a computer with AgentNet.");
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : { text: "Connection unknown" };
     case "/api/act":
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
