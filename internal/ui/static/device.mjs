@@ -2,8 +2,8 @@
 // browser can do, allows one tab only, proves storage works, joins only
 // when the person asks (with an invitation for this server), then starts
 // the engine and the usual views (app.js, lenses.js) over it.
-import { Engine, openIDB, probeStore } from "./engine.mjs";
-import { support } from "./wire.mjs";
+import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
+import { decodeInvite, support, validName } from "./wire.mjs";
 
 const invitePrefix = "#agentnet-invite-v1:";
 
@@ -20,90 +20,145 @@ function el(tag, attrs, ...kids) {
 }
 
 let panel;
-function show(...kids) {
-  panel.replaceChildren(el("h1", {}, "AgentNet"), ...kids.flat().filter(Boolean).map((k) => (typeof k === "string" ? el("p", {}, k) : k)));
+// show fills the page's one card: a title, then what this step says.
+function show(title, ...kids) {
+  panel.replaceChildren(el("div", { class: "join-card" }, el("h1", {}, title),
+    kids.flat().filter(Boolean).map((k) => (typeof k === "string" ? el("p", {}, k) : k))));
 }
 
-// The code-trust and storage limits, said before anything is created.
-const limits = () => [
-  el("p", { class: "hint" }, "This page's code comes from this server. Whoever runs the server could change it, and code from here can use this device's keys and read its messages. Use a server you trust."),
-  el("p", { class: "hint" }, "This device's keys stay in this browser and cannot be copied out or backed up. If the browser clears this site's data, the device is lost: join again and ask your server's admin to remove the old one."),
-];
+// The storage note, and what it and the server's trust mean, in a few
+// plain words up front and the rest one click away.
+const storageNote = () => el("p", { class: "join-note" }, "Your chats are saved in this browser. Clearing its data removes them.");
+const privacy = () => el("details", { class: "join-more" }, el("summary", {}, "Privacy and storage"),
+  el("p", {}, "Messages are encrypted from device to device. Your server passes them on and cannot read them."),
+  el("p", {}, "This page itself comes from your server each time you open it. Whoever runs the server could change it, and a changed page could read your chats here. Use a server you trust."),
+  el("p", {}, "This browser's key is made here and cannot be copied out, so there is no backup. If the browser's data for this site is cleared, this browser cannot read its chats again: join again with a new invitation, and ask your server's admin to remove the old one."),
+  el("p", {}, "Nothing runs in this browser. Questions and tasks sent here wait for you."));
+
+// takeInvite takes an invitation from the link and removes it from the
+// address, and so from this history entry, before anything else is done
+// with it: it is not kept or shown again, even when it is damaged. It is
+// not logged.
+function takeInvite() {
+  if (!location.hash.startsWith(invitePrefix)) return null;
+  const raw = location.hash.slice(1);
+  history.replaceState(null, "", location.pathname + location.search);
+  try { return { code: decodeURIComponent(raw), damaged: false }; } catch (e) { return { code: "", damaged: true }; }
+}
+
+// inviteProblem says, in the person's words, why code cannot be used to
+// join here ("" when it can). The engine checks the same again.
+function inviteProblem(code) {
+  if (!code) return "Paste the invitation code you were sent.";
+  let inv;
+  try { inv = decodeInvite(code); } catch (e) {
+    return "That is not a complete invitation code. Copy all of it again, or ask the sender for a new link.";
+  }
+  if (inv.cert) return "This invitation is for the AgentNet program on a computer, not for a browser. Ask the sender for a browser invite link.";
+  try { sameOrigin(inv.hub, location.origin); } catch (e) {
+    return "This invitation is for another server (" + new URL(inv.hub).host + "). Open the invite link you were sent instead.";
+  }
+  return "";
+}
+
+let onInvite = null; // the join screen, while it is shown
 
 async function main() {
-  // An invitation in the link is taken once and removed from the address
-  // before anything else is done with it, so it is not kept in history or
-  // shown again, even when it is damaged. It is not logged.
-  let code = "", damaged = false;
-  if (location.hash.startsWith(invitePrefix)) {
-    const raw = location.hash.slice(1);
-    history.replaceState(null, "", location.pathname + location.search);
-    try { code = decodeURIComponent(raw); } catch (e) { damaged = true; }
-  }
+  // A link opened in this tab while the page is open changes only the
+  // fragment, without loading the page again: it is taken the same way.
+  window.addEventListener("hashchange", () => {
+    const inv = takeInvite();
+    if (inv && onInvite) onInvite(inv);
+  });
+  const link = takeInvite();
   document.querySelector(".app").hidden = true;
-  panel = el("main", { id: "device-setup", class: "relay-page" });
+  panel = el("main", { id: "device-setup", class: "join" });
   document.body.prepend(panel);
-  show("Checking this browser…");
-  const missing = globalThis.isSecureContext ? await support() : ["a secure (https) connection"];
-  if (typeof indexedDB === "undefined") missing.push("IndexedDB storage");
-  if (!navigator.locks) missing.push("Web Locks");
+  show("AgentNet", "Opening…");
+  if (!globalThis.isSecureContext) {
+    show("AgentNet", "AgentNet needs a secure (https) address. Ask your server's admin for it.");
+    return;
+  }
+  const missing = await support();
+  if (typeof indexedDB === "undefined") missing.push("storage for sites");
+  if (!navigator.locks) missing.push("tab locks");
   if (missing.length) {
-    show("This browser cannot hold an AgentNet device: it lacks " + missing.join(", ") + ".");
+    show("AgentNet", "This browser cannot run AgentNet (it lacks " + missing.join(", ") + "). Try an up-to-date browser.");
     return;
   }
   // One tab holds the device: a second one never opens a second stream or
   // writes anything.
   navigator.locks.request("agentnet-device", { ifAvailable: true }, async (lock) => {
     if (!lock) {
-      show("AgentNet is already open in another tab of this browser. Use that tab: this one does nothing, so nothing is sent or received twice.");
+      show("AgentNet", "AgentNet is already open in another tab. Use that tab: this one stays idle, so nothing is sent or received twice.");
       return;
     }
-    await run(code, damaged);
+    await run(link);
     await new Promise(() => {}); // the lock is held while this tab is open
   });
 }
 
-async function run(code, damaged) {
+async function run(link) {
   let store;
   try {
     store = await openIDB();
     await probeStore(store);
   } catch (e) {
-    show("This browser does not keep data for this site (" + e.message + "), so it cannot hold a device. Private windows and blocked site data do this.");
+    show("AgentNet", "This browser cannot save chats for this site, so AgentNet cannot run here. Private windows and blocked site data can do this: open the link in a regular window.",
+      el("p", { class: "hint" }, "(" + e.message + ")"));
     return;
   }
   const engine = new Engine({ store, base: location.origin });
   if (await engine.load()) start(engine);
-  else joinScreen(engine, code, damaged);
+  else joinScreen(engine, link);
 }
 
-function joinScreen(engine, code, damaged) {
+// joinScreen asks for a name for this browser, and for an invitation code
+// only when the link brought none that can be used here. Nothing is
+// enrolled or named until the person presses Join.
+function joinScreen(engine, link) {
+  onInvite = (inv) => joinScreen(engine, inv);
+  const fromLink = link && !link.damaged ? link.code : "";
+  const linkProblem = link && (link.damaged ? "damaged" : inviteProblem(fromLink));
+  const needCode = !fromLink || !!linkProblem;
   const invite = el("textarea", { id: "join-code", rows: "3", autocomplete: "off", spellcheck: "false", placeholder: "agentnet-invite-v1:…" });
-  const name = el("input", { id: "join-name", type: "text", autocomplete: "off", spellcheck: "false", maxlength: "32", placeholder: "phone" });
-  const error = el("p", { class: "error", role: "alert" });
-  const button = el("button", { type: "button", class: "btn primary" }, "Join");
-  button.addEventListener("click", async () => {
+  const name = el("input", { id: "join-name", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "32", placeholder: "phone", "aria-describedby": "join-name-hint" });
+  const error = el("p", { class: "error", role: "alert", id: "join-error" });
+  const button = el("button", { type: "submit", class: "btn primary join-go" }, "Join");
+  const form = el("form", { class: "join-form", novalidate: true },
+    needCode && [el("label", { for: "join-code" }, "Invitation code"), invite],
+    el("label", { for: "join-name" }, "Name this browser"), name,
+    el("p", { class: "hint", id: "join-name-hint" }, "So you can tell your devices apart. Lowercase, like phone or work-laptop."),
+    error, button);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
     if (button.disabled) return;
+    const code = needCode ? invite.value.trim() : fromLink;
+    const chosen = name.value.trim();
+    const problem = inviteProblem(code) ||
+      (!chosen ? "Choose a name for this browser." : !validName(chosen) ? "Use lowercase letters, numbers and dashes for the name, like phone or work-laptop." : "");
+    error.textContent = problem; // each try replaces what the last one said
+    if (problem) return;
     button.disabled = true;
-    error.textContent = "";
     try {
       // Asked for when the person acts; the answer is shown, not assumed.
       let persisted = null;
       try { persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch (e) { persisted = null; }
-      await engine.join(code || invite.value.trim(), name.value.trim());
+      await engine.join(code, chosen);
       engine.storage = { persisted };
+      onInvite = null;
       start(engine);
     } catch (e) {
       error.textContent = e.message;
       button.disabled = false;
     }
   });
-  show(el("p", {}, "Join this server with this browser as one of your devices. It is for you, the person: nothing runs in it, and questions and tasks sent to it wait for you."),
-    code ? el("p", {}, "An invitation came with the link.") : [damaged && el("p", { class: "error" }, "The invitation in the link is damaged. Paste the invitation instead."),
-      el("label", { for: "join-code", class: "field-label" }, "Invitation"), invite],
-    el("label", { for: "join-name", class: "field-label" }, "A name for this device (lowercase, such as phone)"), name,
-    limits(), error, button);
-  name.focus();
+  const recovery = linkProblem === "damaged" ? "This invite link could not be opened. Paste an invitation code below, or ask the sender for a new link."
+    : linkProblem || (!link ? "Open the invite link you were sent, or paste the invitation code below." : "");
+  show("Join AgentNet", el("p", { class: "join-intro" }, "Chat with people and their agents."),
+    recovery && el("p", { class: "join-recovery" }, recovery),
+    form, storageNote(), privacy());
+  (needCode ? invite : name).focus();
 }
 
 async function start(engine) {
@@ -121,4 +176,4 @@ async function start(engine) {
   }
 }
 
-main().catch((e) => show("AgentNet could not start here: " + e.message));
+main().catch((e) => show("AgentNet", "AgentNet could not start here: " + e.message));

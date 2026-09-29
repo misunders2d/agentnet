@@ -47,11 +47,20 @@ export async function openIDB(name = "agentnet") {
     after: (s, k, n) => request(db.transaction(s).objectStore(s).getAll(k === "" ? null : IDBKeyRange.lowerBound(k, true), n)),
     async write(ops) {
       const t = db.transaction([...new Set(ops.map((o) => o.s))], "readwrite", { durability: "strict" });
-      for (const o of ops) {
-        if (o.v === undefined) t.objectStore(o.s).delete(o.k);
-        else t.objectStore(o.s).put(o.v, o.k);
+      const finished = done(t);
+      try {
+        for (const o of ops) {
+          if (o.v === undefined) t.objectStore(o.s).delete(o.k);
+          else t.objectStore(o.s).put(o.v, o.k);
+        }
+      } catch (e) {
+        // A request that cannot be made (a value that cannot be stored)
+        // aborts the others made before it: all of a write or none.
+        t.abort();
+        await finished.catch(() => {});
+        throw e;
       }
-      await done(t);
+      await finished;
     },
     close: () => db.close(),
   };
@@ -261,8 +270,8 @@ export class Engine {
     try {
       await this.call("POST", "/v1/join", body, { signed: false });
     } catch (e) {
-      if (e.status === 409) throw new Error(address + " is already enrolled; nothing was enrolled. Choose another device name.");
-      throw new Error("Joining was not confirmed: " + e.message + ". Try again.");
+      if (e.status === 409) throw new Error("The name " + address + " is already used on this server. Choose another name.");
+      throw new Error("Could not join (" + e.message + "). Check your connection and try again.");
     }
     const fingerprint = await wire.fingerprint(await wire.publicEntry(pending.keys, address));
     await this.store.write([{ s: "kv", k: "identity", v: { address, keys: pending.keys, fingerprint, joined: this.now() } },
