@@ -85,9 +85,9 @@ async function loadOverview() {
   $("demo").hidden = !o.demo;
   $("me").textContent = o.me.address;
   $("me").title = "Key " + o.me.fingerprint;
-  $("machine").textContent = o.device ? deviceLine(o.device)
-    : o.me.responder ? "Your responder: " + o.me.responder + " in " + o.me.responder_dir
-      : "No responder: questions and tasks wait for you";
+  const m = machineLines(o);
+  $("machine").textContent = m.summary;
+  fill($("machine-detail"), ...m.details.filter(Boolean).map((t) => el("p", {}, t)));
   $("new-btn").hidden = !!o.device; // a browser device starts DMs with people, nothing else
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
@@ -574,12 +574,22 @@ async function retryOpen() {
   else await openDM(r.conv);
 }
 
-// deviceLine says what a browser device is doing, plainly.
-function deviceLine(d) {
-  if (d.revoked) return "This device was removed from its server: nothing more is sent or received here.";
-  return (d.online ? "Connected to your server" : "Not connected to your server now: what you write waits here") +
-    " · This browser runs nothing: questions and tasks wait for you" +
-    (d.persisted === false ? " · This browser may clear this device's data" : "");
+// machineLines says what this computer or browser is in one plain line;
+// the technical details (where the responder runs, the address, the key,
+// the version) wait one click away.
+function machineLines(o) {
+  const tech = ["Address: " + o.me.address, "Key: " + o.me.fingerprint, o.version && "AgentNet " + o.version];
+  const d = o.device;
+  if (d) {
+    if (d.revoked) return { summary: "This device was removed from its server: nothing more is sent or received here.", details: tech };
+    return {
+      summary: (d.online ? "Connected to your server" : "Not connected to your server now: what you write waits here") +
+        (d.persisted === false ? " · This browser may clear this device's data" : ""),
+      details: ["This browser runs nothing: questions and tasks wait for you.", ...tech],
+    };
+  }
+  if (o.me.responder) return { summary: "Your responder: " + o.me.responder, details: ["It runs in " + o.me.responder_dir, ...tech] };
+  return { summary: "No responder: questions and tasks wait for you", details: ["To choose one, see agentnet help responder.", ...tech] };
 }
 
 // ---- contacts ------------------------------------------------------------------

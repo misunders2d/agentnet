@@ -185,6 +185,12 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 
 .side-foot { padding: 12px 18px 16px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
 .machine, .release { color: var(--muted); font-size: 12.5px; }
+.notify-line { font-size: 13px; color: var(--text); }
+.notify-line::before { content: "🔔 "; }
+.notify-line .text-btn { font-weight: 650; }
+.machine-more summary { cursor: pointer; }
+.machine-detail { display: grid; gap: 2px; padding: 4px 0 0 14px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.machine-detail p { margin: 0; }
 .release { color: var(--attn); }
 .held-back { font-size: 13px; }
 .held-back summary { cursor: pointer; width: max-content; color: var(--danger); font-weight: 550; }

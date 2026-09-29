@@ -811,6 +811,27 @@ const ev = { preventDefault() {} };
   check(run("state.dm") === "d1" && run("state.pendingOpen") !== null, "an unknown channel opens nothing and waits for the stream");
   run("state.pendingOpen = null");
 
+  // The footer: one plain line about this computer; where the responder
+  // runs, the address, key and version one click away.
+  overview.me.responder = "claude";
+  overview.me.responder_dir = "/home/me/.agentnet/responder";
+  await run("loadOverview()");
+  check($("machine").textContent === "Your responder: claude", "the footer names the responder, not its folder: " + $("machine").textContent);
+  const tech = JSON.stringify($("machine-detail").children.map(textOf));
+  check(tech.includes("It runs in /home/me/.agentnet/responder") && tech.includes("Address: me/laptop") && tech.includes("Key: SHA256:me"),
+    "the folder, address and key are in the details: " + tech);
+  delete overview.me.responder;
+  delete overview.me.responder_dir;
+  await run("loadOverview()");
+  check($("machine").textContent === "No responder: questions and tasks wait for you" &&
+    JSON.stringify($("machine-detail").children.map(textOf)).includes("agentnet help responder"), "no responder: said plainly, how to choose one in the details");
+  overview.device = { online: false, persisted: false, revoked: false };
+  await run("loadOverview()");
+  check($("machine").textContent === "Not connected to your server now: what you write waits here · This browser may clear this device's data" &&
+    JSON.stringify($("machine-detail").children.map(textOf)).includes("This browser runs nothing"), "a browser device: its state plainly, the rest in the details: " + $("machine").textContent);
+  delete overview.device;
+  await run("loadOverview()");
+
   // Desktop alerts (the daemon's page): the daemon shows them; no browser
   // permission is asked. A click (#conv=ID) opens that DM, or the list.
   overview.notify = { available: true, native: true, enabled: false, reason: "", mutes: [], allowed: [] };
