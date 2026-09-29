@@ -639,17 +639,29 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		ttl := fs.Duration("ttl", 7*24*time.Hour, "invite lifetime (max 720h)")
 		admin := fs.Bool("admin", false, "grant admin rights")
 		raw := fs.Bool("raw", false, "print only the invite code (for scripts)")
+		link := fs.Bool("link", false, "print a private browser invitation URL (Hub needs --web and browser-trusted HTTPS)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
+		if *raw && *link {
+			return errors.New("choose either --raw or --link")
+		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL\n" +
+			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw | --link] LABEL\n" +
 				"LABEL is the invited person's AgentNet name (e.g. bob). Use the name your person gave for this invitation; if they have not, ask them who is being invited and what name to use. " +
 				"Do not infer it or reuse your own label, \"admin\", a user, host or model name unless your person chose it. It grants no rights; --admin does")
 		}
 		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
 		if err != nil {
 			return err
+		}
+		if *link {
+			address, err := inviteLink(code)
+			if err != nil {
+				return fmt.Errorf("invite created, but no browser link printed: %w", err)
+			}
+			fmt.Println(address)
+			return nil
 		}
 		if *raw {
 			fmt.Println(code)

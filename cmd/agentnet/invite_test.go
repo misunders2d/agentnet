@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,58 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+func TestInviteLinkKeepsCodeInFragment(t *testing.T) {
+	for _, hub := range []string{"https://hub.example.test", "https://hub.example.test:8443/", "https://[::1]:8443"} {
+		code := protocol.Invite{Hub: hub, Label: "bob", Secret: "synthetic<&>#?"}.Encode()
+		link, err := inviteLink(" \n" + code + "\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := url.Parse(link)
+		if err != nil {
+			t.Fatal("invalid link")
+		}
+		if u.Fragment != code || u.RawQuery != "" || u.Path != "/" || u.User != nil || u.Scheme != "https" {
+			t.Fatal("invite not isolated in the HTTPS URL fragment")
+		}
+		r, err := http.NewRequest("GET", link, nil)
+		if err != nil || r.URL.RequestURI() != "/" {
+			t.Fatal("request target carries invitation data")
+		}
+		inv, err := protocol.DecodeInvite(u.Fragment)
+		if err != nil || inv.Secret != "synthetic<&>#?" || inv.Label != "bob" {
+			t.Fatal("fragment changed the invitation")
+		}
+	}
+}
+
+func TestInviteLinkRefusesUnsupportedInvites(t *testing.T) {
+	for _, inv := range []protocol.Invite{
+		{Hub: "https://hub.example.test", Label: "bob", Secret: "synthetic", CertPEM: "pin"},
+		{Hub: "http://hub.example.test", Label: "bob", Secret: "synthetic"},
+		{Hub: "https://hub.example.test/path", Label: "bob", Secret: "synthetic"},
+		{Hub: "https://hub.example.test/?secret=synthetic", Label: "bob", Secret: "synthetic"},
+		{Hub: "https://synthetic@hub.example.test", Label: "bob", Secret: "synthetic"},
+	} {
+		link, err := inviteLink(inv.Encode())
+		if err == nil || link != "" || strings.Contains(err.Error(), "synthetic") {
+			t.Fatal("unsupported invite produced a link or leaked its contents")
+		}
+	}
+	if link, err := inviteLink("not-an-invite"); err == nil || link != "" {
+		t.Fatal("invalid code accepted")
+	}
+}
+
+func TestInviteOutputFlagsCheckedBeforeCreating(t *testing.T) {
+	// A nil client proves the conflicting flags are refused before contacting
+	// the Hub or creating an otherwise unused invitation.
+	err := runAdmin(context.Background(), nil, []string{"invite", "--raw", "--link", "bob"})
+	if err == nil || !strings.Contains(err.Error(), "either --raw or --link") {
+		t.Fatalf("conflicting flags: %v", err)
+	}
+}
 
 // An invitation from a release build installs that release, checked against
 // its SHA256SUMS; one from a development build says to build from source.

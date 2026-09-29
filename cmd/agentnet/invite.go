@@ -2,11 +2,32 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// inviteLink keeps the private, single-use code entirely in the fragment,
+// which is not sent with the browser's request for the page. A browser cannot
+// apply the certificate pin supported by the CLI, so do not silently drop it.
+func inviteLink(code string) (string, error) {
+	inv, err := protocol.DecodeInvite(code)
+	if err != nil {
+		return "", fmt.Errorf("cannot create a browser invitation: invalid invite code")
+	}
+	if inv.CertPEM != "" {
+		return "", fmt.Errorf("browser invitations require HTTPS trusted by the browser; this invite uses a certificate pin, which browsers cannot apply (use a regular CLI invitation)")
+	}
+	u, err := url.Parse(inv.Hub)
+	if err != nil {
+		return "", fmt.Errorf("cannot create a browser invitation: invalid Hub URL")
+	}
+	u.Path = "/"
+	u.Fragment = strings.TrimSpace(code)
+	return u.String(), nil
+}
 
 // Public project links given in invitations. main is the default branch.
 const (
