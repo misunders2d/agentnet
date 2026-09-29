@@ -272,8 +272,10 @@ func TestSessionAddressing(t *testing.T) {
 func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
 	// A ping interval well above one signed request's round trip on slow CI
-	// disks (Windows), so a live daemon's ack is never late.
-	const beat = 250 * time.Millisecond
+	// disks (Windows): the Hub closes a stream whose ack is later than two
+	// intervals, and a 250ms interval was once too short there (both
+	// streams closed as silent and reconnected). Production pings every 90s.
+	const beat = time.Second
 	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
 	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
@@ -291,7 +293,7 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	// publishes its capabilities, and the Hub's members event for that makes
 	// each look once more (GET /v1/version), after runWith returns on slow
 	// CI. Wait for it to end: a daemon that kept asking never goes quiet.
-	for settle := time.Now().Add(15 * time.Second); ; {
+	for settle := time.Now().Add(30 * time.Second); ; {
 		rec.reset()
 		time.Sleep(4 * beat)
 		if _, others := rec.snapshot(); len(others) == 0 {
@@ -301,14 +303,15 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 		}
 	}
 	rec.reset()
-	time.Sleep(2 * time.Second) // ~8 ping intervals with both daemons connected and nothing to do
+	const idle = 5 * beat // five ping intervals with both daemons connected and nothing to do
+	time.Sleep(idle)
 	acks, others := rec.snapshot()
 	if len(others) != 0 {
 		t.Fatalf("idle daemons made %d non-ping request(s): %v", len(others), others)
 	}
 	// Each daemon answers each ping; nothing else is asked.
-	if acks == 0 || acks > 2*(2000/250+1) {
-		t.Fatalf("%d ping acks in 2s with a %s ping interval", acks, beat)
+	if acks == 0 || acks > 2*(int(idle/beat)+1) {
+		t.Fatalf("%d ping acks in %s with a %s ping interval", acks, idle, beat)
 	}
 }
 
