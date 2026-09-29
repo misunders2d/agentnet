@@ -194,6 +194,10 @@ CREATE INDEX participation_events_type ON participation_events(conv, type, pid);
 ALTER TABLE inbox ADD COLUMN pid TEXT;
 ALTER TABLE outbox ADD COLUMN pid TEXT;
 ALTER TABLE outbox ADD COLUMN sub TEXT;
+`, `
+ALTER TABLE participation_events ADD COLUMN prev TEXT;
+UPDATE participation_events SET prev = json_extract(event, '$.prev');
+CREATE INDEX participation_events_prev ON participation_events(conv, pid, type, author);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

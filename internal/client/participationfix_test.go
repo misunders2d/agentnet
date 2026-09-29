@@ -148,15 +148,79 @@ func TestBoundsNeverTrapDismissal(t *testing.T) {
 	if err := add(orphan.make(w.alice, protocol.EventDismiss, local.pid+local.pid)); !errors.Is(err, errTooManyEvents) {
 		t.Fatalf("pending events beyond the bound: %v", err)
 	}
-	// So are one participation's dismissals, and they do not use its other room.
-	evs, _ = w.bob.store.participationEvents(conv, many.pid)
+	// So are one participation's dismissals that follow an event not held.
 	for i := range maxDismissPerParticipation {
-		if err := add(many.make(w.alice, protocol.EventDismiss, evs[0].Hash())); err != nil {
+		if err := add(many.make(w.alice, protocol.EventDismiss, protocol.NewID()+protocol.NewID())); err != nil {
 			t.Fatalf("dismissal %d: %v", i, err)
 		}
 	}
-	if err := add(many.make(w.alice, protocol.EventDismiss, evs[0].Hash())); !errors.Is(err, errTooManyEvents) {
+	if err := add(many.make(w.alice, protocol.EventDismiss, protocol.NewID()+protocol.NewID())); !errors.Is(err, errTooManyEvents) {
 		t.Fatalf("dismissals beyond the bound: %v", err)
+	}
+}
+
+// Held dismissals (following events not held here) never keep either
+// member from stopping a participation with one that follows what is held,
+// made here or arriving; such a stop is stored once per key, and the
+// unresolved ones stay bounded.
+func TestHeldDismissalsNeverBlockAStop(t *testing.T) {
+	w, conv, lids := dmWithHistory(t)
+	_, root := rootOf(t, w.alice, conv)
+	add := func(ev protocol.ParticipationEvent) error {
+		raw, _ := json.Marshal(ev)
+		return w.bob.store.addParticipationEvent(ev, raw)
+	}
+	active := func() (*eventMaker, protocol.ParticipationEvent, protocol.ParticipationEvent) {
+		e := newEventMaker(t, w, conv)
+		inv := e.make(w.alice, protocol.EventInvite, "", lids[0])
+		acc := e.make(w.bob, protocol.EventAccept, inv.Hash())
+		for _, ev := range []protocol.ParticipationEvent{inv, acc} {
+			if err := add(ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range maxDismissPerParticipation { // signed, following nothing held here
+			if err := add(e.make(w.alice, protocol.EventDismiss, inv.Hash()[:32]+protocol.NewID())); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := add(e.make(w.alice, protocol.EventDismiss, inv.Hash()[:32]+protocol.NewID())); !errors.Is(err, errTooManyEvents) {
+			t.Fatalf("held dismissals beyond the bound: %v", err)
+		}
+		if p := stateAt(t, w.bob, e.pid); p.State != PartActive || p.Claimable() {
+			t.Fatalf("setup: %+v", p)
+		}
+		return e, inv, acc
+	}
+
+	// Made here, by the host (a member).
+	local, _, _ := active()
+	if p, err := w.bob.DismissParticipation(tctx(t), local.pid); err != nil || p.State != PartDismissed {
+		t.Fatalf("a stop after held dismissals: %s %v", p.State, err)
+	}
+	if p, err := w.bob.DismissParticipation(tctx(t), local.pid); err != nil || p.State != PartDismissed {
+		t.Fatalf("a retried stop: %s %v", p.State, err)
+	}
+
+	// Arriving from the other member.
+	arriving, _, acc := active()
+	stop := arriving.make(w.alice, protocol.EventDismiss, acc.Hash())
+	raw, _ := json.Marshal(stop)
+	env := craft(t, w.alice, w.bob, envelope.Inner{Kind: envelope.KindMessage, Body: string(raw), Conv: conv, LID: protocol.NewID(), Root: root,
+		Sub: envelope.SubEvent, PID: arriving.pid, Origin: envelope.OriginUI})
+	if err := w.bob.verifyAndStore(tctx(t), env); err != nil || heldReason(t, w.bob, env.ID) != "" {
+		t.Fatalf("an arriving stop: %v held %q", err, heldReason(t, w.bob, env.ID))
+	}
+	if p := stateAt(t, w.bob, arriving.pid); p.State != PartDismissed {
+		t.Fatalf("after an arriving stop: %s", p.State)
+	}
+	// One stop per key: a second, different one by the same key is not
+	// stored; the other member still has room.
+	if err := add(arriving.make(w.alice, protocol.EventDismiss, acc.Hash())); !errors.Is(err, errTooManyEvents) {
+		t.Fatalf("a second stop by one key: %v", err)
+	}
+	if err := add(arriving.make(w.bob, protocol.EventDismiss, acc.Hash())); err != nil {
+		t.Fatalf("the other member's stop: %v", err)
 	}
 }
 

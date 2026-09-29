@@ -485,13 +485,14 @@ func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 // them when read (participation.go).
 
 // Bounds of the events held. They limit what a member could pile up, and
-// never keep a participation from being stopped: a dismissal of a
-// participation whose invite is held needs only room among that
-// participation's own dismissals.
+// never keep a participation from being stopped: a dismissal that follows
+// an event of the participation held here is always stored, once per
+// author key (a retry is the same event), whatever else is held; only
+// dismissals following an event not held (yet) share a bound.
 const (
 	maxInvitesPerConversation  = 1000 // participations of one DM
 	maxEventsPerParticipation  = 16   // its invite, decisions and events of other kinds
-	maxDismissPerParticipation = 16   // its dismissals
+	maxDismissPerParticipation = 16   // its dismissals following an event not held (yet)
 	maxPendingPerConversation  = 256  // events of participations whose invite is not held (yet)
 )
 
@@ -513,22 +514,45 @@ func (s *store) addParticipationEvent(ev protocol.ParticipationEvent, raw []byte
 
 // insertParticipationEvent stores ev within tx, once, within the bounds.
 func insertParticipationEvent(tx *sql.Tx, ev protocol.ParticipationEvent, raw []byte) error {
-	var exists, invited, ofKind int
+	var exists, invited int
 	if err := tx.QueryRow(`SELECT
 		(SELECT count(*) FROM participation_events WHERE hash = ?),
-		(SELECT count(*) FROM participation_events WHERE conv = ? AND type = ? AND pid = ?),
-		(SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ? AND (type = ?) = (? = ?))`,
-		ev.Hash(),
-		ev.Conv, protocol.EventInvite, ev.PID,
-		ev.Conv, ev.PID, protocol.EventDismiss, ev.Type, protocol.EventDismiss).Scan(&exists, &invited, &ofKind); err != nil {
+		(SELECT count(*) FROM participation_events WHERE conv = ? AND type = ? AND pid = ?)`,
+		ev.Hash(), ev.Conv, protocol.EventInvite, ev.PID).Scan(&exists, &invited); err != nil {
 		return err
 	}
 	if exists > 0 {
 		return nil
 	}
-	if ev.Type == protocol.EventDismiss && ofKind >= maxDismissPerParticipation ||
-		ev.Type != protocol.EventDismiss && ofKind >= maxEventsPerParticipation {
-		return errTooManyEvents
+	const knownPrev = `EXISTS (SELECT 1 FROM participation_events p WHERE p.conv = d.conv AND p.pid = d.pid AND p.hash = d.prev)`
+	if ev.Type == protocol.EventDismiss {
+		var known, stops, pendingStops int
+		if err := tx.QueryRow(`SELECT
+			(SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ? AND hash = ?),
+			(SELECT count(*) FROM participation_events d WHERE d.conv = ? AND d.pid = ? AND d.type = ? AND d.author = ? AND `+knownPrev+`),
+			(SELECT count(*) FROM participation_events d WHERE d.conv = ? AND d.pid = ? AND d.type = ? AND NOT `+knownPrev+`)`,
+			ev.Conv, ev.PID, ev.Prev,
+			ev.Conv, ev.PID, protocol.EventDismiss, ev.Author.Fingerprint,
+			ev.Conv, ev.PID, protocol.EventDismiss).Scan(&known, &stops, &pendingStops); err != nil {
+			return err
+		}
+		switch {
+		case known > 0 && stops == 0:
+			return storeParticipationEvent(tx, ev, raw) // a stop following what is held: always room
+		case known > 0:
+			return errTooManyEvents // this key already stopped it
+		case pendingStops >= maxDismissPerParticipation:
+			return errTooManyEvents
+		}
+	} else {
+		var ofKind int
+		if err := tx.QueryRow(`SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ? AND type != ?`,
+			ev.Conv, ev.PID, protocol.EventDismiss).Scan(&ofKind); err != nil {
+			return err
+		}
+		if ofKind >= maxEventsPerParticipation {
+			return errTooManyEvents
+		}
 	}
 	switch {
 	case ev.Type == protocol.EventInvite:
@@ -550,8 +574,12 @@ func insertParticipationEvent(tx *sql.Tx, ev protocol.ParticipationEvent, raw []
 			return errTooManyEvents
 		}
 	}
-	_, err := tx.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		ev.Hash(), ev.Conv, ev.PID, ev.Type, ev.Author.Fingerprint, string(raw), time.Now().Unix())
+	return storeParticipationEvent(tx, ev, raw)
+}
+
+func storeParticipationEvent(tx *sql.Tx, ev protocol.ParticipationEvent, raw []byte) error {
+	_, err := tx.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at, prev) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		ev.Hash(), ev.Conv, ev.PID, ev.Type, ev.Author.Fingerprint, string(raw), time.Now().Unix(), ev.Prev)
 	return err
 }
 
