@@ -64,6 +64,9 @@ func (l *Live) Overview() (Overview, error) {
 	if err := l.dmOverview(&o); err != nil {
 		return o, err
 	}
+	if err := l.identityOverview(&o); err != nil {
+		return o, err
+	}
 	threads, err := l.a.Threads()
 	if err != nil {
 		return o, err

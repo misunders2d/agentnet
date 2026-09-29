@@ -19,7 +19,7 @@ import (
 // DM); nothing merges people or conversations by name or address.
 
 func personView(p client.PersonInfo) PersonView {
-	return PersonView{Person: p.Person, Label: p.Label, Address: p.Address, Fingerprint: p.Fingerprint, State: p.State}
+	return PersonView{Person: p.Person, Label: p.Label, Address: p.Address, Fingerprint: p.Fingerprint, State: p.State, Devices: deviceViews(p.Devices)}
 }
 
 // dmOverview adds this installation's person, the people and the DMs.
@@ -51,7 +51,7 @@ func (l *Live) dmOverview(o *Overview) error {
 	}
 	for _, p := range listed {
 		if !byAddress[p.Address] {
-			o.People = append(o.People, PersonView{Label: p.Label, Address: p.Address, State: PersonListed})
+			o.People = append(o.People, PersonView{Label: p.Label, Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
 		}
 	}
 	convs, err := l.a.Conversations()
@@ -199,8 +199,8 @@ func (l *Live) DM(id string) (DMThread, error) {
 		people := l.people(c.Peer)
 		for _, m := range msgs {
 			dm := DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
-				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, c.Peer.Address, m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments)}
+				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies)}
 			if m.Target != nil {
 				dm.To = m.Target.Address
 			}

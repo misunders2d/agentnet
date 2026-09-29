@@ -249,8 +249,13 @@ type DMMessage struct {
 	Replica     bool       `json:"replica,omitempty"`
 	PID         string     `json:"pid,omitempty"` // the agent participation it is for, from or about
 	Attachments []FileView `json:"attachments,omitempty"`
-	To          string     `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
-	Event       string     `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	// Sent by you: Via is the device of yours it was sent from when that is
+	// not this one; Copies are this device's copies, one per device it went
+	// to (the other person's and your own), with how far each got.
+	Via    string     `json:"via,omitempty"`
+	Copies []CopyView `json:"copies,omitempty"`
+	To     string     `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
+	Event  string     `json:"event,omitempty"` // a participation record, said in words (its body is the record)
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`
@@ -281,6 +286,13 @@ type FileLimits struct {
 	MaxFile    int64 `json:"max_file"`              // bytes per file
 	MaxMessage int64 `json:"max_message,omitempty"` // bytes per message (the browser device only)
 	MaxCount   int   `json:"max_count"`
+}
+
+// CopyView is one device's copy of a message you sent.
+type CopyView struct {
+	To     string `json:"to"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // FileView is one file of a message as the page lists it: its name made

@@ -1160,6 +1160,14 @@ const ev = { preventDefault() {} };
     "the request says what approving means, keys under Details, and waits: " + ask);
   await $("dialog-ok").onclick();
   check(calls.some((c) => c.path === "/api/device/decide" && c.body.id === "L1" && c.body.accept === true), "approving sends that decision");
+  // A message you sent from your other device says so; its copies, one per
+  // device, only in Details.
+  const viaMsg = { id: "v1", dir: "out", from: "me/phone", via: "me/phone", kind: "message", body: "from my phone", at: T, origin: "ui", state: "custody",
+    copies: [{ to: "alice/desk", state: "delivered" }, { to: "me/laptop", state: "custody" }] };
+  check(run("dmAuthor")(viaMsg, { peer: alicePerson }) === "You, on your phone", "sent from your phone: " + run("dmAuthor")(viaMsg, { peer: alicePerson }));
+  const det = JSON.stringify(textOf(run("dmDetails")(viaMsg)));
+  check(det.includes("Sent from") && det.includes("your phone (me/phone)") && det.includes("alice/desk: delivered") && det.includes("me/laptop: on your server"),
+    "Details name the device it came from and each copy: " + det);
   run("devicesDialog()");
   const devs = JSON.stringify($("dialog-body").children.map(textOf));
   check(/laptop\s+\(this device\)/.test(devs) && devs.includes("Remove") && devs.includes("Copying your chats to phone: 3 of 12"), "your devices, with the copy's progress: " + devs);

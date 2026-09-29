@@ -1047,7 +1047,7 @@ function setHubBack() {
 
 // dmAuthor names who wrote a DM message, as the sending AgentNet says.
 function dmAuthor(m, d) {
-  if (m.dir === "out") return "You";
+  if (m.dir === "out") return m.via ? "You, on your " + myDeviceName(m.via) : "You";
   if ((m.origin || "").startsWith("agent:")) return "An agent on " + m.from + ", as their AgentNet says";
   return d.peer.label;
 }
@@ -1432,8 +1432,20 @@ function dmDetails(m) {
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
+      m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
+      (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
+        el("li", {}, c.to + ": " + (copyWord[c.state] || c.state) + (c.detail ? " (" + c.detail + ")" : "")))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
 }
+
+// myDeviceName is the name of one of your devices, by its address.
+function myDeviceName(address) {
+  const p = state.overview && state.overview.person;
+  const d = p && (p.devices || []).find((x) => x.address === address);
+  return d ? d.name : address;
+}
+
+const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "failed" };
 
 // agentLinkText says which agent a person's device runs, and where it is
 // in DMs here. The link is the invitation's host: that person and device.
