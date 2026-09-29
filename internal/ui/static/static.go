@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs manifest.webmanifest sw.js ant.png
+//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs manifest.webmanifest sw.js ant.png
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -41,6 +41,7 @@ var relayFiles = map[string]string{
 	"/assets/engine.mjs":     "engine.mjs",
 	"/assets/wire.mjs":       "wire.mjs",
 	"/assets/vendor/age.mjs": "vendor/age.mjs",
+	"/assets/vendor/qr.mjs":  "vendor/qr.mjs", // loaded only to show a new device's link
 }
 
 // relayIcons are the app icon's paths and sizes, named by the manifest.

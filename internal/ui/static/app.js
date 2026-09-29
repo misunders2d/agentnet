@@ -1221,10 +1221,36 @@ function devicesDialog() {
   });
 }
 
-// addDeviceDialog shows a one-use link for a new device of this person.
+// qrCode draws text as a QR code with the vendored encoder, loaded only
+// when one is shown: dark on light with a four-module quiet zone, so a
+// phone's camera reads it in either theme. null if it cannot be drawn
+// (the link is shown as text anyway).
+async function qrCode(text) {
+  try {
+    const { encodeQR } = await import("/assets/vendor/qr.mjs");
+    const m = encodeQR(text, "raw", { ecc: "low", border: 4 });
+    const n = m.length, ns = "http://www.w3.org/2000/svg";
+    let d = "";
+    m.forEach((row, y) => row.forEach((on, x) => { if (on) d += "M" + x + " " + y + "h1v1h-1z"; }));
+    const svg = document.createElementNS(ns, "svg");
+    for (const [k, v] of [["viewBox", "0 0 " + n + " " + n], ["class", "qr"], ["role", "img"], ["aria-label", "QR code of the link"], ["shape-rendering", "crispEdges"]]) svg.setAttribute(k, v);
+    const bg = document.createElementNS(ns, "rect"), dark = document.createElementNS(ns, "path");
+    for (const [k, v] of [["width", n], ["height", n], ["fill", "#fff"]]) bg.setAttribute(k, v);
+    dark.setAttribute("d", d);
+    dark.setAttribute("fill", "#000");
+    svg.append(bg, dark);
+    return svg;
+  } catch (e) {
+    return null;
+  }
+}
+
+// addDeviceDialog shows a one-use link for a new device of this person:
+// a QR code to scan with its camera, and the link as text to paste.
 async function addDeviceDialog() {
   let l;
   try { l = await api("/api/device/link", {}); } catch (e) { $("dialog-error").textContent = e.message; return; }
+  const qr = await qrCode(l.url);
   const code = el("textarea", { id: "link-code", rows: "3", readonly: true, spellcheck: "false" });
   code.value = l.url;
   const copy = el("button", { type: "button", class: "chip", onclick: async () => {
@@ -1232,8 +1258,9 @@ async function addDeviceDialog() {
   } }, "Copy the link");
   dialog({
     title: "Add a device",
-    body: [el("p", {}, "On your new device, open this link: paste it into its browser, or give it to AgentNet there when it joins. It joins as you once you approve it here."),
-      code, copy,
+    body: [el("p", {}, qr ? "On your new device, scan this code with its camera, or open the link below in its browser (or give it to AgentNet there when it joins). It joins as you once you approve it here."
+      : "On your new device, open this link: paste it into its browser, or give it to AgentNet there when it joins. It joins as you once you approve it here."),
+      qr, code, copy,
       el("p", { class: "hint" }, "It works once, until " + new Date(l.expires).toLocaleTimeString() + ". Anyone with it can ask to be you, so give it only to your own device; you still approve it here.")],
     ok: "Done",
     run: async () => {},

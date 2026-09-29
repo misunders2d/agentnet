@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
+	mux.HandleFunc("GET /assets/vendor/qr.mjs", s.qrModule)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /api/overview", s.overview)
 	mux.HandleFunc("GET /api/thread", s.thread)
@@ -176,6 +177,19 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(data)
+}
+
+// qrModule is the vendored QR encoder the page loads when it shows a link
+// for a new device.
+func (s *Server) qrModule(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(static.Files, "vendor/qr.mjs")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }

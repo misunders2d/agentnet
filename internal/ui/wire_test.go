@@ -25,20 +25,24 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// The vendored age library is exactly what webvendor/build.sh makes from the
-// pinned package graph.
+// The vendored age library and QR encoder are exactly what
+// webvendor/build.sh makes from the pinned package graph.
 func TestVendoredAgeMatchesRecipe(t *testing.T) {
-	data, err := os.ReadFile("static/vendor/age.mjs")
-	if err != nil {
-		t.Fatal(err)
-	}
 	sums, err := os.ReadFile("webvendor/SHA256SUMS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(data)
-	if want := hex.EncodeToString(sum[:]) + "  age.mjs\n"; string(sums) != want {
-		t.Fatalf("static/vendor/age.mjs does not match webvendor/SHA256SUMS: run webvendor/build.sh")
+	want := ""
+	for _, name := range []string{"age.mjs", "qr.mjs"} {
+		data, err := os.ReadFile("static/vendor/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		want += hex.EncodeToString(sum[:]) + "  " + name + "\n"
+	}
+	if string(sums) != want {
+		t.Fatalf("static/vendor does not match webvendor/SHA256SUMS: run webvendor/build.sh")
 	}
 	var pkg struct{ Dependencies, DevDependencies map[string]string }
 	raw, err := os.ReadFile("webvendor/package.json")

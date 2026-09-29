@@ -114,10 +114,13 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/app.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
-	for _, a := range []string{"app.js", "lenses.js", "app.css"} {
+	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs"} {
 		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
 		}
+	}
+	if r := do(t, ts, "GET", "/assets/vendor/age.mjs", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
+		t.Errorf("the daemon's page serves the browser device's age library: %d", r.StatusCode)
 	}
 	// The app icon: the favicon and the header's mark.
 	icon := do(t, ts, "GET", "/assets/icon-192.png", "", authed(ts, nil))

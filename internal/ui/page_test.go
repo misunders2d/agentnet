@@ -31,3 +31,16 @@ func TestServiceWorker(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
+
+// The vendored QR encoder with a full-size new-device link:
+// testdata/qr_check.mjs.
+func TestQRCode(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/qr_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
