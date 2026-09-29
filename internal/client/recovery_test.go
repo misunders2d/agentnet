@@ -128,7 +128,12 @@ func newWorld(t *testing.T, publicURL string) *world {
 
 func mustJoin(t *testing.T, home, code, name string) *Agent {
 	t.Helper()
-	a, err := Join(tctx(t), home, code, name)
+	// Join creates the home (keys, SQLite schema) and then asks the Hub,
+	// all within its context: a longer budget than one request's for slow
+	// CI disks (Windows).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	a, err := Join(ctx, home, code, name)
 	if err != nil {
 		t.Fatalf("join %s: %v", name, err)
 	}

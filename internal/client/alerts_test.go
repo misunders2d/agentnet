@@ -58,9 +58,11 @@ func inboxlessCount(t *testing.T, a *Agent, table string) int {
 
 // Off by default; on, a DM turn from an allowed exact key alerts once,
 // after the grace, with fixed text and a click on that conversation;
-// later messages of it within the grace add to that one alert.
+// later messages of it within the grace add to that one alert. The grace
+// outlasts two sends on a slow runner (Windows CI), so "two" lands within
+// it; an alert wrongly queued while off is still pending at the check.
 func TestDesktopAlertOnceAfterGrace(t *testing.T) {
-	w, conv, n, _ := alertWorld(t, 400*time.Millisecond)
+	w, conv, n, _ := alertWorld(t, 3*time.Second)
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "while off"})
 	time.Sleep(600 * time.Millisecond)
 	if n.count() != 0 || pendingAlerts(t, w.bob) != 0 {

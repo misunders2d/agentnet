@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -290,14 +291,18 @@ func TestAttachmentMemoryIsBounded(t *testing.T) {
 			}
 		}
 	}()
-	res, err := w.alice.Send(tctx(t), w.bob.Address, "large", "", path)
+	// Moving 48 MiB through the Hub's disk takes longer than one request's
+	// budget on slow CI disks (Windows).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := w.alice.Send(ctx, w.bob.Address, "large", "", path)
 	if err == nil && res.State != protocol.StateCustody {
 		err = fmt.Errorf("send not in custody: %s (%s)", res.State, res.Detail)
 	}
 	var msg Message
 	if err == nil {
 		msg = receive(t, w)
-		_, err = w.bob.Download(tctx(t), msg.ID, t.TempDir(), false)
+		_, err = w.bob.Download(ctx, msg.ID, t.TempDir(), false)
 	}
 	close(stop)
 	wg.Wait()

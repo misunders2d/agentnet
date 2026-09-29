@@ -367,7 +367,9 @@ func (r recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 // sleeping laptop, a half-open link) loses its session within the lease.
 func TestSilentPeerSessionExpires(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
-	const beat, grace = 50 * time.Millisecond, 100 * time.Millisecond
+	// A lease well above one send's time on slow CI disks (Windows), so the
+	// message reaches the Hub while the session is still live.
+	const beat, grace = 250 * time.Millisecond, 500 * time.Millisecond
 	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat, SessionGrace: grace}, "127.0.0.1:0")}
 	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
