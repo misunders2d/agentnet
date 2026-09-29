@@ -456,6 +456,8 @@ export class Engine {
     const id = await wire.rootID(c);
     await put(this.store, "convs", id, { id, root: wire.rootJSON(c), peer: them.person, created: c.created, creator: this.address });
     this.changed();
+    // Starting a DM is deciding on that person: with notifications on, they may alert.
+    if ((await this.notifyState()).enabled) this.syncNotify().catch(() => {});
     return id;
   }
 
@@ -1184,8 +1186,28 @@ export class Engine {
   // channels it has not muted, unless this page reports it presented the
   // messages first.
 
+  // notifyState is this device's notification choices. Each change bumps
+  // rev; synced is the rev the relay last confirmed, so a change made while
+  // the relay could not be told (turning off offline, too) stays pending and
+  // is sent when the page reconnects. A device never turned on writes nothing.
   async notifyState() {
-    return (await this.store.get("kv", "notify")) || { enabled: false, allowed: [], mutes: [] };
+    return { enabled: false, allowed: [], mutes: [], rev: 0, synced: 0, ...((await this.store.get("kv", "notify")) || {}) };
+  }
+
+  // changeNotify stores a change as pending, then tries to tell the relay;
+  // false: not yet (it is sent again on reconnect).
+  async changeNotify(fn) {
+    const st = await this.notifyState();
+    fn(st);
+    st.rev++;
+    await put(this.store, "kv", "notify", st);
+    this.changed();
+    try {
+      await this.syncNotify();
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // notifyInfo is what the relay offers (null when it sends no Web Push).
@@ -1210,13 +1232,19 @@ export class Engine {
     return out;
   }
 
-  // syncNotify sends this device's preferences to the relay.
+  // syncNotify sends this device's preferences to the relay; what it sent
+  // is confirmed (a change made meanwhile stays pending).
   async syncNotify() {
     const st = await this.notifyState();
     if (!(await this.notifyInfo())) return;
     const mutes = [];
     for (const conv of st.mutes) mutes.push(await wire.notifyChannel(conv, this.fp));
     await this.call("PUT", "/v1/notify/prefs", { enabled: st.enabled, senders: await this.notifySenders(st), mutes });
+    const now = await this.notifyState();
+    if (now.synced < st.rev) {
+      await put(this.store, "kv", "notify", { ...now, synced: st.rev });
+      this.changed();
+    }
   }
 
   // enableNotify subscribes this browser (the page asked for permission
@@ -1227,17 +1255,13 @@ export class Engine {
     if (!this.push || !this.push.supported()) throw new Error("This browser cannot show notifications for AgentNet here.");
     const sub = await this.push.subscribe(info.push_key);
     await this.call("PUT", "/v1/notify/subscription", sub);
-    await put(this.store, "kv", "notify", { ...(await this.notifyState()), enabled: true });
-    await this.syncNotify();
-    this.changed();
-    return { note: "Notifications are on." };
+    const told = await this.changeNotify((st) => { st.enabled = true; });
+    return { note: told ? "Notifications are on." : "Notifications are on here; your server is told when this page reconnects." };
   }
 
   async disableNotify() {
-    await put(this.store, "kv", "notify", { ...(await this.notifyState()), enabled: false });
-    await this.syncNotify();
-    this.changed();
-    return { note: "Notifications are off." };
+    const told = await this.changeNotify((st) => { st.enabled = false; });
+    return { note: told ? "Notifications are off." : "Notifications are off here; your server is told when this page reconnects." };
   }
 
   // reconcileNotify runs when the page starts and connects: a browser may
@@ -1245,29 +1269,25 @@ export class Engine {
   async reconcileNotify() {
     const st = await this.notifyState();
     const info = await this.notifyInfo();
-    if (!st.enabled || !info || !this.push || !this.push.supported()) return;
-    const sub = await this.push.current(info.push_key);
-    if (sub) await this.call("PUT", "/v1/notify/subscription", sub);
-    await this.syncNotify();
+    if (!info) return;
+    if (st.enabled && this.push && this.push.supported()) {
+      const sub = await this.push.current(info.push_key);
+      if (sub) await this.call("PUT", "/v1/notify/subscription", sub);
+    }
+    // On: the senders may have changed. A pending change, off included, is
+    // sent. Never turned on: nothing.
+    if (st.enabled || st.synced < st.rev) await this.syncNotify();
   }
 
   async muteDM(conv, muted) {
     if (!(await this.store.get("convs", conv))) throw new Error("No conversation " + conv + " here.");
-    const st = await this.notifyState();
-    const mutes = st.mutes.filter((c) => c !== conv).concat(muted ? [conv] : []);
-    await put(this.store, "kv", "notify", { ...st, mutes });
-    await this.syncNotify();
-    this.changed();
+    await this.changeNotify((st) => { st.mutes = st.mutes.filter((c) => c !== conv).concat(muted ? [conv] : []); });
     return { note: muted ? "This DM is muted." : "This DM notifies you again." };
   }
 
   async allowSender(person, allowed) {
     if (!(await this.store.get("persons", person))) throw new Error("That person is not known here.");
-    const st = await this.notifyState();
-    const list = st.allowed.filter((p) => p !== person).concat(allowed ? [person] : []);
-    await put(this.store, "kv", "notify", { ...st, allowed: list });
-    await this.syncNotify();
-    this.changed();
+    await this.changeNotify((st) => { st.allowed = st.allowed.filter((p) => p !== person).concat(allowed ? [person] : []); });
     return { note: allowed ? "Alerts from them are on." : "Alerts from them are off." };
   }
 
@@ -1297,7 +1317,7 @@ export class Engine {
     let info = null;
     try { info = await this.notifyInfo(); } catch (e) { /* unknown now */ }
     const supported = !!(this.push && this.push.supported());
-    return { available: !!info && supported, enabled: st.enabled,
+    return { available: !!info && supported, enabled: st.enabled, pending: st.synced < st.rev,
       reason: !info ? "Your server does not send notifications." : !supported ? "This browser cannot show notifications for AgentNet here." : "",
       mutes: st.mutes, allowed: (await this.notifySenders(st)).map((s) => s.address) };
   }

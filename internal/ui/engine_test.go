@@ -910,6 +910,9 @@ func TestBrowserEngineNotify(t *testing.T) {
 		t.Fatalf("before turning on: %v", n)
 	}
 	w.api("/api/notify/seen", map[string]any{"conv": conv, "ids": []string{hello.ID}}) // off: nothing to report
+	w.ok(map[string]any{"op": "reload", "base": "https://" + hub.Addr})                // never turned on: a reconnect writes nothing
+	w.until("reconnected", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == true })
+	time.Sleep(300 * time.Millisecond)
 	for _, c := range calls() {
 		if c.Method != "GET" {
 			t.Fatalf("something was sent before the person turned notifications on: %+v", c)
@@ -990,9 +993,28 @@ func TestBrowserEngineNotify(t *testing.T) {
 	if p := prefs()["prefs"].(map[string]any); len(p["senders"].([]any)) != 0 || len(p["mutes"].([]any)) != 0 {
 		t.Fatalf("after alice's key changed: %v", p)
 	}
-	// Off: preferences say so; the subscription stays for turning on again.
-	w.api("/api/notify/disable", map[string]any{})
+	// Off while the relay cannot be reached, then a reload: off here and
+	// pending, and the relay is told on reconnect (no later alert can come).
+	w.ok(map[string]any{"op": "offline", "on": true})
+	w.until("disconnected", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == false })
+	off := w.api("/api/notify/disable", map[string]any{})
+	if n := w.api("/api/overview", nil)["notify"].(map[string]any); n["enabled"] != false || n["pending"] != true || !strings.Contains(off["note"].(string), "reconnects") {
+		t.Fatalf("off while offline: %v (%v)", n, off)
+	}
+	w.ok(map[string]any{"op": "reload", "base": "https://" + hub.Addr})
+	w.ok(map[string]any{"op": "offline", "on": false})
+	w.until("the relay told", func() bool { return w.api("/api/overview", nil)["notify"].(map[string]any)["pending"] == false })
 	if p := prefs(); p["prefs"].(map[string]any)["enabled"] != false || p["subscribed"] != true {
-		t.Fatalf("turning off: %v", p)
+		t.Fatalf("after reconnecting: %v", p)
+	}
+	// Off and told: a reconnect writes nothing more.
+	calls()
+	w.ok(map[string]any{"op": "reload", "base": "https://" + hub.Addr})
+	w.until("reconnected", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == true })
+	time.Sleep(300 * time.Millisecond)
+	for _, c := range calls() {
+		if c.Method != "GET" {
+			t.Fatalf("a reconnect wrote to the relay with nothing pending: %+v", c)
+		}
 	}
 }

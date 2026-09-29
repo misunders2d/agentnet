@@ -117,8 +117,11 @@ function renderNotify(n) {
   } else if (notifyPermission() === "denied") {
     fill(line, "Notifications are blocked in this browser's settings. Everything else works without them.");
   } else if (n.enabled) {
-    fill(line, "Notifications on, from " + plural(n.allowed.length, "contact", "contacts") + " · ",
+    fill(line, "Notifications on, from " + plural(n.allowed.length, "contact", "contacts") + (n.pending ? " (your server is told when this page reconnects)" : "") + " · ",
       el("button", { type: "button", class: "text-btn", onclick: () => notifyAct("/api/notify/disable") }, "Turn off"));
+  } else if (n.pending) {
+    fill(line, "Notifications off here; your server is told when this page reconnects · ",
+      el("button", { type: "button", class: "text-btn", onclick: () => notifyDialog() }, "Turn on…"));
   } else {
     fill(line, "Notifications off · ", el("button", { type: "button", class: "text-btn", onclick: () => notifyDialog() }, "Turn on…"));
   }
