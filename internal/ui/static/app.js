@@ -115,11 +115,11 @@ function renderNotify(n) {
   const key = JSON.stringify([n, notifyPermission()]);
   if (line.dataset.key === key) return;
   line.dataset.key = key;
-  const iphone = typeof navigator !== "undefined" && /iPhone|iPad/.test(navigator.userAgent) &&
+  const iphone = !n.native && typeof navigator !== "undefined" && /iPhone|iPad/.test(navigator.userAgent) &&
     !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
   if (!n.available) {
     fill(line, "Notifications: " + (iphone ? "on iPhone, add AgentNet to your Home Screen first, then turn them on there." : n.reason));
-  } else if (notifyPermission() === "denied") {
+  } else if (!n.native && notifyPermission() === "denied") {
     fill(line, "Notifications are blocked in this browser's settings. Everything else works without them.");
   } else if (n.enabled) {
     fill(line, "Notifications on, from " + plural(n.allowed.length, "contact", "contacts") + (n.pending ? " (your server is told when this page reconnects)" : "") + " · ",
@@ -146,6 +146,8 @@ async function notifyAct(path, body) {
 // notifyDialog turns notifications on, only on the person's click: the
 // browser's own permission question comes from that click.
 function notifyDialog() {
+  const native = !!(state.overview.notify && state.overview.notify.native);
+  if (native) return alertsDialog();
   dialog({
     title: "Get notifications?",
     body: [el("p", {}, "When someone you started a DM with writes to you, or an agent you invited answers, this device shows \u201cAgentNet: New activity\u201d. It never shows what was written."),
@@ -158,6 +160,25 @@ function notifyDialog() {
     run: async () => {
       const perm = await Notification.requestPermission();
       if (perm !== "granted") throw new Error("The browser did not allow notifications. Everything else works without them.");
+      const r = await api("/api/notify/enable", {});
+      if (r.note) announce(r.note);
+      await loadOverview();
+    },
+  });
+}
+
+// alertsDialog turns on this computer's own alerts (the daemon shows them;
+// the browser is not asked for anything).
+function alertsDialog() {
+  dialog({
+    title: "Get alerts on this computer?",
+    body: [el("p", {}, "When someone you started a DM with writes to you, or an agent you invited answers, this computer shows \u201cAgentNet: New activity\u201d while AgentNet runs here, even with this page closed. It never shows what was written."),
+      el("p", {}, "You can mute any DM, and turn this off again here."),
+      el("details", { class: "tech" }, el("summary", {}, "Details"),
+        el("p", {}, "Nothing leaves this computer for this: AgentNet decides from the messages it already holds. Your system may delay or hide alerts (do not disturb, focus modes). Clicking an alert opens its DM on Linux; on macOS and Windows it only shows. People who start a DM with you alert only after you allow them.")),
+    ],
+    ok: "Turn on",
+    run: async () => {
       const r = await api("/api/notify/enable", {});
       if (r.note) announce(r.note);
       await loadOverview();
@@ -191,13 +212,32 @@ function reportSeen() {
   api("/api/notify/seen", { conv: t.id, ids }).catch(() => { delete state.seenReported[t.id]; });
 }
 
+// showList shows the conversation list, in every lens (a summary alert,
+// or one whose conversation is not here).
+function showList(why) {
+  if (state.lens === "zoom") Zoom.go(0, {});
+  document.body.classList.remove("show-conv");
+  if (why) announce(why);
+}
+
+// openClicked opens the DM a desktop alert named, if this computer holds
+// it; otherwise the list, saying so. The id is only looked up, never used
+// any other way.
+async function openClicked(conv) {
+  if (!(state.overview.dms || []).some((d) => d.id === conv)) {
+    showList("The conversation of that alert is not on this computer.");
+    return;
+  }
+  if (state.lens === "zoom") await Zoom.go(2, { dm: conv });
+  else await openDM(conv);
+}
+
 // openNotified opens the conversation a notification names, as this
 // device resolves its channel; if it is not here yet, it waits for the
 // stream to catch up, then says so. A summary opens the conversation list.
 function openNotified(chan) {
   if (!chan) {
-    document.body.classList.remove("show-conv");
-    announce("New activity in more than one conversation.");
+    showList("New activity in more than one conversation.");
     return;
   }
   state.pendingOpen = { chan, until: Date.now() + 15000 };
@@ -205,8 +245,7 @@ function openNotified(chan) {
   setTimeout(() => {
     if (state.pendingOpen && state.pendingOpen.chan === chan) {
       state.pendingOpen = null;
-      document.body.classList.remove("show-conv");
-      announce("The conversation of that notification is not on this device.");
+      showList("The conversation of that notification is not on this device.");
     }
   }, 15000);
 }
@@ -1849,8 +1888,13 @@ function start() {
   $("timeline").addEventListener("scroll", reportSeen);
   document.addEventListener("visibilitychange", reportSeen);
   window.addEventListener("focus", reportSeen);
+  // A desktop alert's click opens this page on its conversation (#conv=ID,
+  // from the daemon): taken once and removed from the address.
+  const clicked = /^#conv=([0-9a-f]{64})$/.exec(location.hash);
+  if (location.hash.startsWith("#conv=")) history.replaceState(null, "", location.pathname + location.search);
   loadOverview().then(async (o) => {
     setLens(saved);
+    if (clicked) { await openClicked(clicked[1]); return; }
     if (await restoreAfterReload()) return; // back after an update, with what was unsent
     // Open the latest conversation; reports are not conversations.
     const first = o.threads.find((t) => !t.notice_only && (t.count > 1 || t.review || t.running || t.waiting)) ||

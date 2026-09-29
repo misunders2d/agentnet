@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
+	mux.HandleFunc("POST /api/notify/{what}", s.notify)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -83,7 +84,10 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if !s.authed(r) {
-			http.Error(w, "open the address agentnet printed", http.StatusUnauthorized)
+			// A notification's click opens the page without its token and
+			// relies on this browser's session; when that is gone, say how
+			// to get in again.
+			http.Error(w, "This page needs its address from this computer: run agentnet ui and open the address it prints.", http.StatusUnauthorized)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -219,6 +223,43 @@ func (s *Server) askAgent(w http.ResponseWriter, r *http.Request) {
 		v, err := p.AskAgent(d)
 		writeResult(w, v, err)
 	}
+}
+
+// notify serves the alert controls: enable, disable, mute, allow and
+// seen (a presentation report).
+func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Alerts)
+	if !ok {
+		writeErr(w, NotFound("alerts are not available here"))
+		return
+	}
+	var v struct {
+		Conv    string   `json:"conv"`
+		Person  string   `json:"person"`
+		Muted   bool     `json:"muted"`
+		Allowed bool     `json:"allowed"`
+		IDs     []string `json:"ids"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	var note string
+	var err error
+	switch r.PathValue("what") {
+	case "enable":
+		note, err = p.NotifyEnable()
+	case "disable":
+		note, err = p.NotifyDisable()
+	case "mute":
+		note, err = p.NotifyMute(v.Conv, v.Muted)
+	case "allow":
+		note, err = p.NotifyAllow(v.Person, v.Allowed)
+	case "seen":
+		err = p.NotifySeen(v.Conv, v.IDs)
+	default:
+		err = NotFound("no such alert control")
+	}
+	writeResult(w, map[string]string{"note": note}, err)
 }
 
 // writeResult writes v, or err as the page's error.

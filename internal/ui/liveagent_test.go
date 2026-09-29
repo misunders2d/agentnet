@@ -347,3 +347,98 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 		t.Fatalf("the agent ran %q", data)
 	}
 }
+
+// Desktop alerts from the daemon's page, through the client's alert
+// preferences: off by default; on adds the people this person started a
+// DM with (an arrival adds nobody); a DM mutes by its id; allowing names
+// the exact key; a presentation report goes through; nothing asks a
+// browser for anything (native).
+func TestLiveAlerts(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
+	bob, err := client.Join(ctx, filepath.Join(t.TempDir(), "bob"), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bob.Close() })
+	code, _ = alice.Invite(ctx, "carol", time.Hour, false)
+	carol, err := client.Join(ctx, filepath.Join(t.TempDir(), "carol"), code, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { carol.Close() })
+	runDaemon(t, alice)
+	runDaemon(t, bob)
+	runDaemon(t, carol)
+	for _, a := range []*client.Agent{alice, carol} {
+		if _, err := a.CreatePerson(ctx, strings.Split(a.Address, "/")[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pb := NewLive(bob)
+	pb.CreatePerson("Bob")
+	eventually := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	var mine, theirs string
+	eventually("bob's DM with alice", func() bool { mine, err = pb.NewDM(alice.Address); return err == nil })
+	pb.SendDM(DMDraft{Conv: mine, Body: "hi alice"})
+	eventually("carol's DM with bob", func() bool { theirs, err = carol.CreateDM(ctx, bob.Address); return err == nil })
+	hello, _ := carol.SendConv(ctx, theirs, client.ConvOutgoing{Body: "hi bob"})
+	eventually("carol's DM at bob", func() bool { _, err := pb.DM(theirs); return err == nil })
+
+	o, _ := pb.Overview()
+	if o.Notify == nil || !o.Notify.Native || !o.Notify.Available || o.Notify.Enabled {
+		t.Fatalf("before turning on: %+v", o.Notify)
+	}
+	if _, err := pb.NotifyEnable(); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := bob.AlertPrefs()
+	if !p.Enabled || len(p.Senders) != 1 || p.Senders[0].Address != alice.Address || p.Senders[0].Fingerprint != alice.Self().Fingerprint() {
+		t.Fatalf("on: %+v (only alice, whom bob started a DM with)", p)
+	}
+	d, _ := pb.DM(theirs)
+	if _, err := pb.NotifyAllow(d.Peer.Person, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pb.NotifyMute(mine, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pb.NotifyMute(strings.Repeat("ab", 32), true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("muting an unknown DM: %v", err)
+	}
+	p, _ = bob.AlertPrefs()
+	if len(p.Senders) != 2 || len(p.Mutes) != 1 || p.Mutes[0] != mine {
+		t.Fatalf("after allowing carol and muting alice's DM: %+v", p)
+	}
+	if err := pb.NotifySeen(theirs, []string{hello.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pb.NotifySeen("nope", []string{hello.ID}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a report for no conversation: %v", err)
+	}
+	if o, _ = pb.Overview(); !o.Notify.Enabled || len(o.Notify.Allowed) != 2 || len(o.Notify.Mutes) != 1 {
+		t.Fatalf("overview when on: %+v", o.Notify)
+	}
+	if _, err := pb.NotifyDisable(); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ = bob.AlertPrefs(); p.Enabled || len(p.Senders) != 2 {
+		t.Fatalf("off keeps the choices: %+v", p)
+	}
+}

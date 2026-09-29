@@ -774,6 +774,22 @@ const ev = { preventDefault() {} };
   await pause(5);
   check(run("state.dm") === "d1" && run("state.pendingOpen") !== null, "an unknown channel opens nothing and waits for the stream");
   run("state.pendingOpen = null");
+
+  // Desktop alerts (the daemon's page): the daemon shows them; no browser
+  // permission is asked. A click (#conv=ID) opens that DM, or the list.
+  overview.notify = { available: true, native: true, enabled: false, reason: "", mutes: [], allowed: [] };
+  await run("loadOverview()");
+  const asked = Notification.asked;
+  calls.length = 0;
+  run("notifyDialog()");
+  check(JSON.stringify($("dialog-body").children.map(textOf)).includes("this computer shows"), "the desktop dialog says this computer shows it");
+  await $("dialog-ok").onclick();
+  check(Notification.asked === asked && calls.some((c) => c.path === "/api/notify/enable"), "turned on without asking the browser anything");
+  await run('openThread("a1")');
+  await run('openClicked("d2")');
+  check(run("state.dm") === "d2", "an alert's click opens its DM");
+  await run('openClicked("' + "e".repeat(64) + '")');
+  check(run("state.dm") === "d2", "a DM not here opens nothing else");
   delete overview.notify;
 
   // Search finds people by the name they give or their device, and DMs by

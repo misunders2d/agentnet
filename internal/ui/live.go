@@ -39,6 +39,9 @@ func (l *Live) Overview() (Overview, error) {
 		o.Release = r.Version
 	}
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
+	if n, err := l.notifyView(); err == nil {
+		o.Notify = n
+	}
 	if err := l.dmOverview(&o); err != nil {
 		return o, err
 	}

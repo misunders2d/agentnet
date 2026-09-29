@@ -64,7 +64,8 @@ type Overview struct {
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
 	Persons bool         `json:"persons"`
-	Agents  bool         `json:"agents"` // agents can be invited into DMs here (Participants)
+	Agents  bool         `json:"agents"`           // agents can be invited into DMs here (Participants)
+	Notify  *NotifyView  `json:"notify,omitempty"` // optional DM alerts, where the provider has them (Alerts)
 	Person  *PersonView  `json:"person,omitempty"`
 	People  []PersonView `json:"people"`
 	DMs     []DMSummary  `json:"dms"`
@@ -187,6 +188,30 @@ func AgentActions(kind, state string) []string {
 		return []string{DoAccept}
 	}
 	return nil
+}
+
+// NotifyView is what the page shows about optional DM alerts
+// (docs/revival/NOTIFY.md). The browser device's engine sends the same
+// shape for Web Push.
+type NotifyView struct {
+	Available bool     `json:"available"`
+	Native    bool     `json:"native"` // this computer shows the alert itself: no browser permission is asked
+	Enabled   bool     `json:"enabled"`
+	Pending   bool     `json:"pending"`
+	Reason    string   `json:"reason,omitempty"`
+	Mutes     []string `json:"mutes"`   // conversation ids
+	Allowed   []string `json:"allowed"` // addresses whose DM turns may alert
+}
+
+// Alerts is implemented by providers that alert for DMs on this computer
+// (the desktop daemon). Off until the person turns them on; the page
+// reports only messages it actually presented.
+type Alerts interface {
+	NotifyEnable() (string, error)
+	NotifyDisable() (string, error)
+	NotifyMute(conv string, muted bool) (string, error)
+	NotifyAllow(person string, allowed bool) (string, error)
+	NotifySeen(conv string, ids []string) error
 }
 
 // Participants is implemented by providers where agents can be invited

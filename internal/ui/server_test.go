@@ -252,3 +252,25 @@ func TestEventsCarryOnlyACounter(t *testing.T) {
 		t.Fatalf("second event %q", got)
 	}
 }
+
+// A desktop alert's click opens the page without its token; with the
+// session gone, the page says how to get in again. Alert controls exist
+// only where the provider has alerts.
+func TestAlertClickAndControls(t *testing.T) {
+	ts, _ := newTestServer(t)
+	resp := do(t, ts, "GET", "/", "", nil)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "run agentnet ui") {
+		t.Fatalf("no session: %d %q", resp.StatusCode, body)
+	}
+	for _, what := range []string{"enable", "disable", "mute", "allow", "seen"} {
+		if r := do(t, ts, "POST", "/api/notify/"+what, `{}`, post(ts)); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s on a provider without alerts: %d", what, r.StatusCode)
+		}
+	}
+	var o map[string]any
+	json.NewDecoder(do(t, ts, "GET", "/api/overview", "", authed(ts, nil)).Body).Decode(&o)
+	if _, ok := o["notify"]; ok {
+		t.Fatal("the overview offers alerts it does not have")
+	}
+}
