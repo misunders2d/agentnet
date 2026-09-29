@@ -21,6 +21,16 @@ type Live struct {
 	staged  staged // files the page handed over, not sent yet
 }
 
+// recommended is the build the Hub's operator recommends, only when it is
+// newer than this one: a preview newer than the stable release is never
+// told to go back to it, and an unknown version string recommends nothing.
+func recommended(r protocol.Release, ok bool) string {
+	if ok && protocol.Newer(r.Version, protocol.Version) {
+		return r.Version
+	}
+	return ""
+}
+
 // NewLive returns the Provider for agent a. It is meant to run inside the
 // daemon that owns a's home: files a previous run's page handed over and
 // never sent are removed first, as nothing can be staging yet.
@@ -42,9 +52,7 @@ func (l *Live) Overview() (Overview, error) {
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
-	if r, ok := l.a.Release(); ok && r.Version != protocol.Version {
-		o.Release = r.Version
-	}
+	o.Release = recommended(l.a.Release())
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 	if n, err := l.notifyView(); err == nil {
 		o.Notify = n

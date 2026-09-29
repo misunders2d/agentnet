@@ -12,6 +12,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
@@ -483,5 +484,29 @@ func TestLiveHumanDMs(t *testing.T) {
 	}
 	if bodies(live2, d1) != "out:deploy topic|in:on deploy" || bodies(live2, d2) != "out:budget topic|in:can you check the budget?" {
 		t.Fatalf("after a restart: %q / %q", bodies(live2, d1), bodies(live2, d2))
+	}
+}
+
+// The page recommends an update only to a newer build: a preview newer
+// than the stable release, or the same version, recommends nothing.
+func TestRecommendedOnlyNewer(t *testing.T) {
+	was := protocol.Version
+	t.Cleanup(func() { protocol.Version = was })
+	for _, c := range []struct {
+		running, recommended, want string
+		ok                         bool
+	}{
+		{"v0.3.0", "v0.2.1", "", true},            // installed preview, older stable: no downgrade
+		{"v0.3.0", "v0.3.0", "", true},            // the same build
+		{"v0.3.0-4-gabcdef1", "v0.3.0", "", true}, // a build after that release
+		{"v0.3.0", "v0.3.1", "v0.3.1", true},      // a real update is still shown
+		{"v0.2.1", "v0.3.0", "v0.3.0", true},
+		{"dev", "v0.3.1", "", true},     // an unknown running version recommends nothing
+		{"v0.3.0", "v0.3.1", "", false}, // no recommendation held
+	} {
+		protocol.Version = c.running
+		if got := recommended(protocol.Release{Version: c.recommended}, c.ok); got != c.want {
+			t.Errorf("running %s, recommended %s: %q, want %q", c.running, c.recommended, got, c.want)
+		}
 	}
 }
