@@ -260,13 +260,13 @@ button.replyref:hover { text-decoration: underline; }
 
 .files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .file {
-  display: inline-flex; align-items: center; gap: 10px; padding: 7px 10px 7px 8px; border-radius: 10px;
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 10px 7px 8px; border-radius: 10px;
   background: var(--surface); color: var(--text); font-size: 13.5px; max-width: 100%;
 }
 .msg.out .file { background: rgb(255 255 255 / .92); color: #16181d; }
 .file-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: none; }
 .msg.out .file-icon { background: #ecebfc; color: #3f39c4; }
-.file-text { min-width: 0; display: grid; }
+.file-text { min-width: 0; flex: 1 1 auto; display: grid; }
 .file-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-size { color: var(--muted); font-size: 12px; }
 .msg.out .file-size { color: #5d6370; }
@@ -419,7 +419,7 @@ dialog .check input { margin-top: 4px; width: 16px; height: 16px; accent-color: 
 .props { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .prop { font-size: 12.5px; background: #fff5c7; border: 2px solid var(--ink); border-radius: 6px; padding: 1px 8px; overflow-wrap: anywhere; }
 .stamp { position: absolute; top: -12px; right: 44px; background: #e5383b; color: #fff; font-family: var(--impact); font-size: 15px; letter-spacing: .06em; padding: 1px 9px; border: 3px solid var(--ink); transform: rotate(4deg); box-shadow: 2px 2px 0 var(--ink); }
-.read-btn { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 8px; border: 2px solid transparent; background: rgb(255 255 255 / .9); color: var(--ink); font-size: 15px; opacity: .65; }
+.read-btn { position: absolute; z-index: 2; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 8px; border: 2px solid transparent; background: rgb(255 255 255 / .9); color: var(--ink); font-size: 15px; opacity: .65; }
 .read-btn:hover, .read-btn:focus-visible { opacity: 1; border-color: var(--ink); }
 .panel-foot { display: flex; justify-content: space-between; gap: 8px; font-family: var(--comic-font); font-size: 12px; color: #444; border-top: 2px dotted #bbb; margin-top: 8px; padding-top: 4px; min-width: 0; }
 .panel-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -663,5 +663,6 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 .attach-chip .file-size { font-size: 12px; color: var(--muted); }
 .remove-file { width: 28px; height: 28px; font-size: 18px; }
 .attach { flex: none; }
-.file-open { display: block; width: 100%; }
+.file-open { flex: 1 0 100%; } /* an opened picture, on a line of its own */
+.file-open:empty { display: none; }
 .file-preview { display: block; max-width: min(360px, 100%); max-height: 320px; margin: 6px 0 2px; border-radius: 10px; }

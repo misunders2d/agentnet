@@ -619,8 +619,10 @@ func TestLiveFiles(t *testing.T) {
 	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a file sent twice: %v", err)
 	}
-	// A device conversation (v1) takes files too, under the names chosen.
-	v1, _ := pb.StageFile("budget plan.xlsx", strings.NewReader("cells"))
+	// A device conversation (v1) takes files too, under the names chosen;
+	// the receiving page shows the name a received file is saved under.
+	v1Name := "../budget <plan>.xlsx"
+	v1, _ := pb.StageFile(v1Name, strings.NewReader("cells"))
 	v1Sent, err := pb.Send(Draft{To: alice.Address, Kind: KindMessage, Files: []string{v1}})
 	if err != nil || len(pb.staged.files) != 0 {
 		t.Fatalf("a file in a device conversation: %v (staged %d)", err, len(pb.staged.files))
@@ -634,7 +636,7 @@ func TestLiveFiles(t *testing.T) {
 			}
 			for _, m := range th.Messages {
 				if m.ID == v1Sent.ID {
-					return len(m.Files) == 1 && m.Files[0].Name == "budget plan.xlsx"
+					return len(m.Files) == 1 && m.Files[0].Name == client.SafeName(v1Name) && m.Files[0].Name != v1Name
 				}
 			}
 		}
@@ -659,6 +661,10 @@ func TestLiveFiles(t *testing.T) {
 	})
 	if got.ID != sent.ID || got.Body != "" || len(got.Attachments) != 1 || got.Attachments[0].Name != "_numbers.csv" || got.Attachments[0].Size != int64(len(content)) {
 		t.Fatalf("alice's page: %+v", got)
+	}
+	// A message of files only is listed by their names, not as nothing.
+	if o, _ := pa.Overview(); len(o.DMs) != 1 || o.DMs[0].Last != "📎 _numbers.csv" {
+		t.Fatalf("alice's DM list: %+v", o.DMs)
 	}
 	r, name, err := pa.OpenFile(ctx, got.ID, 0)
 	if err != nil {

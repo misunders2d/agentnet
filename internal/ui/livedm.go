@@ -111,6 +111,13 @@ func (l *Live) dmOverview(o *Overview) error {
 				if m.Sub == envelope.SubEvent {
 					return eventText(m.Body, people)
 				}
+				if m.Body == "" && len(m.Attachments) > 0 { // files only: their names
+					var names []string
+					for _, f := range m.Attachments {
+						names = append(names, client.SafeName(f.Name))
+					}
+					return "📎 " + strings.Join(names, ", ")
+				}
 				return firstLine(m.Body)
 			}
 			s.Title, s.Last = line(msgs[0]), line(msgs[len(msgs)-1])

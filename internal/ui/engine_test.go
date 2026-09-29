@@ -1161,6 +1161,11 @@ func TestBrowserEngineFiles(t *testing.T) {
 		t.Fatal("the manifest's plaintext digest is not the file's")
 	}
 	w.refuses("a sent file read back", w.call(map[string]any{"op": "openFile", "id": sent["id"], "i": 0}), "not kept")
+	for _, d := range w.api("/api/overview", nil)["dms"].([]any) {
+		if d := d.(map[string]any); d["id"] == conv && d["last"] != "📎 notes.txt" {
+			t.Fatalf("a message of files only in the DM list: %q", d["last"])
+		}
+	}
 
 	// Go's own client reads the browser's file, checked against the digest
 	// the browser signed; a flipped ciphertext byte at the Hub is refused.

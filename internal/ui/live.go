@@ -179,7 +179,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 			v.Unread = true
 		}
 		for _, f := range m.Attachments {
-			v.Files = append(v.Files, File{Name: f.Name, Size: f.Size, Saved: f.SavedPath})
+			v.Files = append(v.Files, File{Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath}) // the name it is saved under
 		}
 		if m.Dir == "in" {
 			v.Author = Author{Label: m.From, About: "Signed with " + m.From + "'s key. Whether a person or one of their agents wrote it is not recorded."}

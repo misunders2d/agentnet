@@ -1043,7 +1043,9 @@ export class Engine {
         l.dms.push({ conv: c.id, pid: info.pid, state: info.state });
         links.set(info.host.person, ls);
       }
-      const line = (m) => (m.sub === "event" ? this.eventText(m.body, peer) : firstLine(m.body));
+      const line = (m) => (m.sub === "event" ? this.eventText(m.body, peer)
+        : !m.body && (m.attachments || []).length ? "📎 " + m.attachments.map((a) => wire.safeName(a.name)).join(", ") // files only: their names
+          : firstLine(m.body));
       dms.push({ id: c.id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? line(msgs[msgs.length - 1]) : "",
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
