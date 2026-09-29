@@ -271,10 +271,10 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	now := time.Now()
 	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
-		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?)`,
+		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid)
+		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''))`,
 		in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy,
-		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli())
+		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID)
 	if err != nil {
 		return "", err
 	}
@@ -367,10 +367,10 @@ func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Env
 func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, why string) error {
 	data, _ := json.Marshal(env)
 	now := time.Now()
-	_, err := s.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?)`,
+	_, err := s.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
+		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''))`,
 		env.ID, env.To, in.Body, string(data), state, why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
-		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli())
+		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub)
 	return s.done(err)
 }
 
@@ -414,7 +414,8 @@ type ConvMessage struct {
 	Origin  string           `json:"origin,omitempty"`  // the sender's assertion ("" for none)
 	Emotion string           `json:"emotion,omitempty"` // "" means none sent
 	Target  *envelope.Target `json:"target,omitempty"`
-	State   string           `json:"state"` // inbox: its response state; outbox: queued, waiting, custody, delivered, …
+	PID     string           `json:"pid,omitempty"` // the agent participation it is for, from or about
+	State   string           `json:"state"`         // inbox: its response state; outbox: queued, waiting, custody, delivered, …
 	Detail  string           `json:"detail,omitempty"`
 	At      int64            `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
 }
@@ -422,11 +423,11 @@ type ConvMessage struct {
 func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
 	rows, err := s.db.Query(`
 		SELECT id, lid, 'in', sender, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
-		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms
+		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, '')
 		  FROM inbox WHERE conv = ?
 		UNION ALL
-		SELECT id, lid, 'out', ?, kind, body, coalesce(reply_to, ''), '', 0, coalesce(origin, ''),
-		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(error, ''), created_at, created_ms
+		SELECT id, lid, 'out', ?, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), 0, coalesce(origin, ''),
+		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(error, ''), created_at, created_ms, coalesce(pid, '')
 		  FROM outbox WHERE conv = ?
 		ORDER BY ms, 1`, conv, self, conv)
 	if err != nil {
@@ -439,7 +440,7 @@ func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
 		var target string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID); err != nil {
 			return nil, err
 		}
 		if target != "" {
@@ -449,4 +450,101 @@ func (s *store) convMessages(conv, self string) ([]ConvMessage, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// Participation events are append-only: each signed event is stored once,
+// by hash, and never changed; a participation's state is resolved from
+// them when read (participation.go).
+
+// Bounds of the events held.
+const (
+	maxEventsPerParticipation = 64
+	maxEventsPerConversation  = 1000
+)
+
+var errTooManyEvents = errors.New("too many participation events")
+
+// addParticipationEvent stores a verified event (the author's device key
+// verified it), once.
+func (s *store) addParticipationEvent(ev protocol.ParticipationEvent, raw []byte) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists, perPID, perConv int
+	if err := tx.QueryRow(`SELECT (SELECT count(*) FROM participation_events WHERE hash = ?),
+		(SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ?),
+		(SELECT count(*) FROM participation_events WHERE conv = ?)`, ev.Hash(), ev.Conv, ev.PID, ev.Conv).Scan(&exists, &perPID, &perConv); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+	if perPID >= maxEventsPerParticipation || perConv >= maxEventsPerConversation {
+		return errTooManyEvents
+	}
+	if _, err := tx.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		ev.Hash(), ev.Conv, ev.PID, ev.Type, ev.Author.Fingerprint, string(raw), time.Now().Unix()); err != nil {
+		return err
+	}
+	return s.done(tx.Commit())
+}
+
+// participationEvents returns the events held for a participation.
+func (s *store) participationEvents(conv, pid string) ([]protocol.ParticipationEvent, error) {
+	rows, err := s.db.Query(`SELECT event FROM participation_events WHERE conv = ? AND pid = ? ORDER BY hash`, conv, pid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []protocol.ParticipationEvent
+	for rows.Next() {
+		var raw string
+		var ev protocol.ParticipationEvent
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// participationIDs lists the participations with events in conv, and the
+// conversation of one participation id.
+func (s *store) participationIDs(conv string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT pid FROM participation_events WHERE conv = ? ORDER BY pid`, conv)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var pid string
+		if err := rows.Scan(&pid); err != nil {
+			return nil, err
+		}
+		out = append(out, pid)
+	}
+	return out, rows.Err()
+}
+
+func (s *store) participationConv(pid string) (string, error) {
+	var conv string
+	err := s.db.QueryRow(`SELECT conv FROM participation_events WHERE pid = ? LIMIT 1`, pid).Scan(&conv)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNoParticipation
+	}
+	return conv, err
+}
+
+// convHasLID reports whether a message with logical id lid of conv is held.
+func (s *store) convHasLID(conv, lid string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ?) + (SELECT count(*) FROM outbox WHERE conv = ? AND lid = ?)`,
+		conv, lid, conv, lid).Scan(&n)
+	return n > 0, err
 }

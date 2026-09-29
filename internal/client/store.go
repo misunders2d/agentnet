@@ -180,6 +180,19 @@ DROP INDEX inbox_links;
 CREATE INDEX inbox_links ON inbox(sender, id, reply_to, received_at, conv);
 DROP INDEX outbox_links;
 CREATE INDEX outbox_links ON outbox(recipient, id, reply_to, created_at, conv);
+`, `
+CREATE TABLE participation_events(
+  hash TEXT PRIMARY KEY,
+  conv TEXT NOT NULL,
+  pid TEXT NOT NULL,
+  type TEXT NOT NULL,
+  author TEXT NOT NULL,
+  event TEXT NOT NULL,
+  received_at INTEGER NOT NULL);
+CREATE INDEX participation_events_pid ON participation_events(conv, pid);
+ALTER TABLE inbox ADD COLUMN pid TEXT;
+ALTER TABLE outbox ADD COLUMN pid TEXT;
+ALTER TABLE outbox ADD COLUMN sub TEXT;
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

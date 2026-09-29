@@ -95,6 +95,7 @@ type Inner struct {
 	Origin  string          `json:"origin,omitempty"`  // OriginUI or "agent:<harness>": the sender's assertion, not proof
 	Emotion string          `json:"emotion,omitempty"` // the agent's chosen emotion; required on agent-origin turns
 	Target  *Target         `json:"target,omitempty"`  // the one execution recipient of a question or task
+	PID     string          `json:"pid,omitempty"`     // the agent participation a request is for, an output is from, or an event is about
 }
 
 // Kinds of messages. The kind is signed and encrypted; it states intent,
@@ -157,7 +158,7 @@ func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAg
 // version 1).
 func checkVersion2(in Inner) error {
 	if in.V != Version2 {
-		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Sub != "" || in.Replica || in.Origin != "" || in.Emotion != "" || in.Target != nil {
+		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Sub != "" || in.Replica || in.Origin != "" || in.Emotion != "" || in.Target != nil || in.PID != "" {
 			return errors.New("conversation fields in a version 1 message")
 		}
 		return nil
@@ -185,6 +186,21 @@ func checkVersion2(in Inner) error {
 		}
 		if _, _, err := protocol.SplitAddress(t.Address); err != nil || !protocol.ValidFingerprint(t.Fingerprint) {
 			return errors.New("invalid execution target")
+		}
+	}
+	// A participation id: on an event about it, on a request to its agent
+	// (which then names its target), or on the agent's answer or result
+	// (which has none). A target without one stays a request for the person.
+	if in.PID != "" {
+		if !validID(in.PID) {
+			return errors.New("invalid participation id")
+		}
+		switch {
+		case in.Sub == SubEvent:
+		case in.Sub == "" && (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil:
+		case in.Sub == "" && (in.Kind == KindAnswer || in.Kind == KindResult):
+		default:
+			return errors.New("a participation id belongs on an event, a request to the agent (with its target) or the agent's answer or result")
 		}
 	}
 	return nil

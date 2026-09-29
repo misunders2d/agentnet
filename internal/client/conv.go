@@ -384,6 +384,9 @@ type ConvOutgoing struct {
 	Origin  string           // envelope.OriginUI (default) or "agent:<harness>"
 	Emotion string           // required with an agent origin
 	Target  *envelope.Target // the one execution recipient of a question or task, if any
+	PID     string           // the agent participation (AskAgent sets it with the target)
+
+	sub string // envelope.SubEvent for participation events (participation.go)
 }
 
 // ConvSent is what became of a conversation message.
@@ -454,7 +457,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: protocol.NewID(), Root: raw,
-		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target}
+		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err != nil {
 		return ConvSent{}, err
@@ -639,9 +642,14 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonInvalid, "it replies to a message outside its conversation")
 		}
 	}
+	if in.Sub == envelope.SubEvent { // a participation record: stored, and the message kept as history
+		if err := a.admitParticipationEvent(in, sender.Fingerprint(), sender.SignKey); err != nil {
+			return hold(reasonInvalid, err.Error())
+		}
+	}
 	state := ""
 	if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
-		state = stateConvHeld // for the person; nothing runs it until participation exists
+		state = stateConvHeld // for the person; nothing runs a conversation request yet, participation or not
 	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine)
 	if err != nil {

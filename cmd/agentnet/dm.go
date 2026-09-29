@@ -44,7 +44,7 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 // runDM handles two-person conversations (agentnet help dm).
 func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: dm new ADDRESS | dm list | dm show ID | dm send [--question|--task] ID TEXT (see agentnet help dm)")
+		return errors.New("usage: dm new ADDRESS | dm list | dm show ID | dm send [--question|--task] ID TEXT | dm invite ID HOST | dm agents ID | dm accept-agent PID | dm decline-agent PID | dm dismiss-agent PID | dm ask-agent [--task] PID TEXT (see agentnet help dm)")
 	}
 	switch args[0] {
 	case "new":
@@ -84,7 +84,14 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			if m.Detail != "" {
 				state += ": " + m.Detail
 			}
-			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, m.Kind, state,
+			kind := m.Kind
+			if m.Sub != "" {
+				kind += " " + m.Sub
+			}
+			if m.PID != "" {
+				kind += " pid " + m.PID
+			}
+			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
 				m.ID, strings.ReplaceAll(m.Body, "\n", "\n  "))
 		}
 		return nil
@@ -113,6 +120,89 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		}
 		fmt.Fprintln(stdout, line)
 		return nil
+	case "invite":
+		fs := flag.NewFlagSet("dm invite", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		grant := fs.String("grant", "", "comma-separated logical ids of earlier messages the agent may be given")
+		tasks := fs.String("tasks", "", "comma-separated member key fingerprints allowed follow-up tasks")
+		note := fs.String("note", "", "a note for the host's person")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
+			return errors.New("usage: dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST")
+		}
+		p, err := a.InviteAgent(ctx, fs.Arg(0), fs.Arg(1), splitList(*grant), splitList(*tasks), *note)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
+		return nil
+	case "agents":
+		if len(args) != 2 {
+			return errors.New("usage: dm agents ID")
+		}
+		parts, err := a.Participations(args[1])
+		if err != nil {
+			return err
+		}
+		for _, p := range parts {
+			line := fmt.Sprintf("%s  %s  agent on %s (%q's), invited by %q, %d earlier messages shared", p.PID, p.State, p.Host.Address,
+				p.Host.Label, p.Inviter.Label, len(p.Grant))
+			if p.Conflict != "" {
+				line += "  (" + p.Conflict + ")"
+			}
+			if p.Held > 0 {
+				line += fmt.Sprintf("  [%d records not counted here]", p.Held)
+			}
+			fmt.Fprintln(stdout, line)
+		}
+		return nil
+	case "accept-agent", "decline-agent", "dismiss-agent":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: dm %s PID", args[0])
+		}
+		decide := a.AcceptParticipation
+		switch args[0] {
+		case "decline-agent":
+			decide = a.DeclineParticipation
+		case "dismiss-agent":
+			decide = a.DismissParticipation
+		}
+		p, err := decide(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
+		return nil
+	case "ask-agent":
+		fs := flag.NewFlagSet("dm ask-agent", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		task := fs.Bool("task", false, "a task instead of a question")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
+			return errors.New("usage: dm ask-agent [--task] PID TEXT")
+		}
+		kind := envelope.KindQuestion
+		if *task {
+			kind = envelope.KindTask
+		}
+		sent, err := a.AskAgent(ctx, fs.Arg(0), kind, fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		line := sent.ID + " " + sent.State
+		if sent.Detail != "" {
+			line += " (" + sent.Detail + ")"
+		}
+		fmt.Fprintln(stdout, line)
+		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
