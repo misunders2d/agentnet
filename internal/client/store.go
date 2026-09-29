@@ -831,8 +831,8 @@ type job struct {
 
 	// A request to this device's agent in a DM (agentjob.go).
 	Conv, PID, Key string // Key: the fingerprint that verified it
-	Target          *envelope.Target
-	Local           bool // asked here, by this device's own person
+	Target         *envelope.Target
+	Local          bool // asked here, by this device's own person
 }
 
 // followUp reports whether j processes a reply to one of our requests,
