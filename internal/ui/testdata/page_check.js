@@ -1172,6 +1172,22 @@ const ev = { preventDefault() {} };
     "their device's conversations say whose device it is and link back: " + $("conv-topic").textContent);
   run("backOneLevel()");
   check(run("state.hub.kind") === "person" && run("state.hub.key") === "p-bob", "back from their device goes to the person");
+  // Zoom: one node for you (with a service present, no second "you" at the
+  // devices' centre); each person's devices behind a closed disclosure.
+  run('setLens("zoom")');
+  run("Zoom.go(0, {})");
+  const tree = (n, out = []) => { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; };
+  const layer = $("zoom").children[$("zoom").children.length - 1]; // the level shown (the one before may still be leaving)
+  const zoomEls = tree(layer);
+  const zt = JSON.stringify(textOf(layer));
+  check((zt.match(/\(you\)/g) || []).length === 1 && !zoomEls.some((e) => (e.className || "").split(/\s+/).includes("me")) &&
+    zt.replace(/\s+/g, "").includes("hub/ops") && !zt.includes("This computer"), "Zoom shows you once, and the service apart: " + zt.slice(0, 400));
+  const discl = zoomEls.filter((e) => e.tagName === "details" && (e.className || "").includes("person-devices"));
+  const bobDevs = discl.find((e) => textOf(e).includes("Bob on 2 devices"));
+  check(discl.length === 3 && discl.every((e) => e.attrs.open === undefined) && discl.some((e) => textOf(e).includes("You on 2 devices")) &&
+    bobDevs && textOf(bobDevs).includes("desk") && textOf(bobDevs).includes("phone"),
+    "each checked person's devices (Alice's one too) are behind a closed disclosure holding them: " + discl.map(textOf).join(" | "));
+  run('setLens("classic")');
   overview.link = { state: "pending" };
   await run("loadOverview()");
   check(JSON.stringify($("conv-list").children.map(textOf)).includes("Waiting for your other device to approve this one"), "this device's own request is said plainly");

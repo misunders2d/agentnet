@@ -442,25 +442,30 @@ const Zoom = {
     const head = el("h3", { class: "zoom-group" }, "People");
     if (!o.person) return el("section", { class: "zoom-people-set" }, head, linkNotices(), el("div", { class: "person-setup" }, setupChoice()));
     const dms = o.dms || [], people = o.people || [];
-    // A person's devices hang under them: one node, never one per device.
-    const children = (p) => devicesOf(p).length > 1 && el("ul", { class: "device-children", "aria-label": p.label + "'s devices" },
-      devicesOf(p).map((d) => el("li", {}, el("span", { class: "device-child" }, d.name + (d.this ? " (this device)" : "")))));
+    // Each person is one node, you included (once); their devices open
+    // under it on a click, from their checked record.
+    const devices = (p) => (p.state === "pinned" || p.state === "self") && deviceDisclosure(p, (addr) => this.go(1, { peer: addr, person: null }));
+    const me = o.person;
+    const meFace = [avatar(me.label, "node-face"), el("span", { class: "node-name" }, me.label + " (you)"),
+      el("span", { class: "node-status" }, me.published ? "others can start a DM with you" : "not on your server yet")];
+    const self = el("li", { class: "person-cluster self" },
+      devicesHere() ? el("button", { type: "button", class: "person-card self", "aria-label": "You, " + me.label + ": your devices", onclick: () => devicesDialog() }, meFace)
+        : el("div", { class: "person-card self" }, meFace),
+      devices(me), agentNodes(me, (conv) => { this.person = null; openDM(conv); }));
     return el("section", { class: "zoom-people-set" }, head, linkNotices(),
-      el("div", { class: "person-cluster mine" }, el("p", { class: "hint" }, meLine()), children(o.person)),
       el("p", { class: "hint" }, "Each name is what that person calls themself."),
-      people.length ? el("ul", { class: "person-cards" }, people.map((p) => {
+      el("ul", { class: "person-cards" }, self, people.map((p) => {
         const theirs = dms.filter((d) => d.peer.person && d.peer.person === p.person);
         const held = theirs.reduce((n, d) => n + d.held, 0), unread = theirs.reduce((n, d) => n + d.unread, 0);
-        const status = ["via " + p.address, personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
+        const status = [devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address, personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
           held && held + " held", unread && unread + " new"].filter(Boolean).join(" · ");
         const b = el("button", { type: "button", class: "person-card" + (p.state === "conflict" ? " danger" : ""), "aria-label": p.label + ", " + status },
           avatar(p.label || p.address, "node-face"), el("span", { class: "node-name" }, p.label), el("span", { class: "node-status" }, status));
         b.addEventListener("click", () => this.go(1, { person: personKey(p), peer: null }, b));
-        return el("li", { class: "person-cluster" }, b, (p.state === "pinned") && children(p),
+        return el("li", { class: "person-cluster" }, b, devices(p),
           agentNodes(p, (conv) => this.go(2, { person: personKey(p), dm: conv, peer: null })));
-      })) : el("p", { class: "hint" }, "No one else on your server has set up a person yet."),
-      o.person.agents && o.person.agents.length > 0 && el("div", { class: "person-cluster mine" },
-        el("p", { class: "hint" }, "You"), agentNodes(o.person, (conv) => { this.person = null; openDM(conv); })));
+      })),
+      !people.length && el("p", { class: "hint" }, "No one else on your server has set up a person yet."));
   },
 
   // Level 0: the people you have DMs with, and each device you talk to,
@@ -483,7 +488,11 @@ const Zoom = {
       const a = -Math.PI / 2 + Math.PI / list.length + (2 * Math.PI * i) / list.length;
       return [50 + 38 * Math.cos(a), 50 + 34 * Math.sin(a)];
     });
-    pos.forEach(([x, y], i) => {
+    // With a person, you are the People node above: the devices and
+    // services have no second "you" at their centre. Without one, this
+    // computer is.
+    const center = !o.person;
+    if (center) pos.forEach(([x, y], i) => {
       const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
       for (const [k, v] of [["x1", 50], ["y1", 50], ["x2", x], ["y2", y]]) l.setAttribute(k, v);
       l.setAttribute("class", "net-line" + (list[i].review ? " hot" : ""));
@@ -503,10 +512,9 @@ const Zoom = {
       node.addEventListener("click", () => this.go(1, { peer: p.peer, person: null }, node));
       return node;
     });
-    const me = el("div", { class: "node me" }, avatar(o.me.address, "node-face"), el("span", { class: "node-name" }, "You"),
+    const me = center && el("div", { class: "node me" }, avatar(o.me.address, "node-face"), el("span", { class: "node-name" }, "This computer"),
       el("span", { class: "node-status" }, o.me.address));
-    me.style.left = "50%";
-    me.style.top = "50%";
+    if (me) { me.style.left = "50%"; me.style.top = "50%"; }
     return el("div", { class: "zoom-people" }, zoomReminders(), people, devices,
       el("div", { class: "network" }, svg, me, nodes,
         el("p", { class: "zoom-hint" }, "Glowing contacts have something waiting for your decision.")),
@@ -524,8 +532,7 @@ const Zoom = {
       el("header", { class: "zoom-head" }, avatar(p.label || p.address), el("div", {}, el("h2", {}, p.label),
         el("p", { class: "hint" }, "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state) +
           (online ? " · their computer is " + online : "")))),
-      el("details", { class: "person-devices", open: devicesOf(p).length > 1 },
-        el("summary", {}, p.label + " on " + plural(devicesOf(p).length, "device", "devices")), deviceList(p, (addr) => this.go(1, { peer: addr, person: null }))),
+      deviceDisclosure(p, (addr) => this.go(1, { peer: addr, person: null })),
       el("div", { class: "zoom-contact" },
         dms.length ? el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id, from) => this.go(2, { dm: id }, from))))
           : el("p", { class: "hint" }, "No DM with " + p.label + " yet."),

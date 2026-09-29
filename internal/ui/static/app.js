@@ -1004,11 +1004,10 @@ function renderHub() {
     const p = x.person;
     fill($("conv-name"), p.label);
     $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
-    $("conv-presence").textContent = "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state);
-    const devs = devicesOf(p);
+    $("conv-presence").textContent = "The name they give · " + (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
+      " · " + (personStateText[p.state] || p.state);
     fill($("hub"),
-      el("details", { class: "person-devices", open: devs.length > 1 },
-        el("summary", {}, p.label + " on " + plural(devs.length, "device", "devices")), deviceList(p)),
+      deviceDisclosure(p),
       (p.agents || []).map((a) => el("p", { class: "hint agent-link" }, agentLinkText(a, p))),
       x.dms.length ? el("ul", { class: "thread-list hub-list", "aria-label": "DMs with " + p.label }, x.dms.map((d) => dmRow(d, (id) => openDM(id))))
         : el("p", { class: "hint empty-list" }, "No DMs with " + p.label + " yet."),
@@ -1096,6 +1095,14 @@ function deviceOwner(address) {
   if (!o) return null;
   return [...(o.person ? [o.person] : []), ...(o.people || [])]
     .find((p) => (p.state === "pinned" || p.state === "self") && devicesOf(p).some((d) => d.address === address)) || null;
+}
+
+// deviceDisclosure is a person's devices behind one click ("Bob on 2
+// devices"), closed until opened: the person stays one node.
+function deviceDisclosure(p, open) {
+  const n = devicesOf(p).length;
+  return el("details", { class: "person-devices" },
+    el("summary", {}, (p.state === "self" ? "You" : p.label) + " on " + plural(n, "device", "devices")), deviceList(p, open));
 }
 
 // deviceList shows a person's devices, each with its own device
