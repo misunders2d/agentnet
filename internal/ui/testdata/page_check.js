@@ -1033,6 +1033,8 @@ const ev = { preventDefault() {} };
   await run("loadOverview()");
   check($("new-btn").hidden !== true, "a browser device can start a conversation with a device");
   await run('Zoom.go(2, { thread: "a1" })');
+  const chatText = JSON.stringify(textOf($("zoom").children[$("zoom").children.length - 1]));
+  check(!chatText.includes("[object Object]") && chatText.includes("alice/desk"), "Zoom's chat names a device message's author: " + chatText.slice(0, 300));
   run("writeDialog(state.data, null)");
   byId["write-body"].value = "hey!";
   sendRefuses = "alice/desk's key changed: nothing is sent until the new key is trusted.";

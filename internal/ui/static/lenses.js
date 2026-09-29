@@ -11,7 +11,8 @@ const motion = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matc
 const stampWord = { question: "QUESTION", task: "TASK", answer: "ANSWER", result: "RESULT" };
 const needsYou = (m) => !isReport(m) && (m.actions || []).some((a) => decisionActions.includes(a));
 const working = (m) => (m.actions || []).includes("cancel");
-const authorName = (m) => m.author || (m.dir === "in" ? m.from : "You (this computer)");
+// A DM message's author is its words (comicDM); a device message's is {label, about}.
+const authorName = (m) => (m.author && typeof m.author === "object" ? m.author.label : m.author) || (m.dir === "in" ? m.from : "You (this computer)");
 const faceOf = (m) => m.face || (m.dir === "out" && state.overview ? state.overview.me.address : m.from);
 
 // comicDM is a DM as the comic draws it: the person's name as they give it,

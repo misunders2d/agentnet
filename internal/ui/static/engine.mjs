@@ -1860,7 +1860,9 @@ export class Engine {
       return true;
     }
     this.connected = true;
-    this.members = { ...this.members, listed: r.headers.get("Agentnet-Members") === "1" ? "listed" : "not_listed", current: false };
+    // A device waiting for approval is no member yet: its server lists it
+    // nothing, which says nothing about the server.
+    this.members = { ...this.members, listed: this.waitingLink ? "unknown" : r.headers.get("Agentnet-Members") === "1" ? "listed" : "not_listed", current: false };
     this.changed();
     let watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
     const work = this.waitingLink ? Promise.resolve() : this.onConnect(); // a device waiting for approval only holds its stream

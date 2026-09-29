@@ -88,6 +88,7 @@ async function loadOverview() {
   const m = machineLines(o);
   $("machine").textContent = m.summary;
   fill($("machine-detail"), ...m.details.filter(Boolean).map((t) => el("p", {}, t)));
+  $("new-btn").hidden = !!(o.link && o.link.state === "pending"); // a device waiting for approval sends nothing
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
   renderNotify(o.notify);
@@ -760,7 +761,7 @@ function memberRow(m) {
 function directorySection(threads) {
   const d = directory();
   const known = new Set(threads.map((t) => t.peer));
-  const others = d.members.filter((m) => !known.has(m.address));
+  const others = d.members.filter((m) => !known.has(m.address) && !deviceOwner(m.address)); // a checked person's devices are under them
   const note = directoryNote(d);
   if (!others.length && !note) return [];
   const open = !!state.directoryOpen;
@@ -1130,16 +1131,18 @@ function deviceDisclosure(p, open) {
 }
 
 // deviceList shows a person's devices, each with its own device
-// conversations (if any) one click away; this device is marked.
+// conversations one click away, or a first message to it (its agent, as
+// that computer's owner allows); this device is marked.
 function deviceList(p, open = (addr) => openHub({ kind: "device", key: addr })) {
   const contacts = contactsOf((state.overview && state.overview.threads) || []);
+  const me = state.overview && state.overview.me.address;
   return el("ul", { class: "device-list" }, devicesOf(p).map((d) => {
     const c = contacts.find((x) => x.peer === d.address);
     const n = c ? c.conversations.length + c.singles.length : 0;
     return el("li", { class: "device-row" },
       el("span", {}, el("strong", {}, d.name), d.this ? " (this device)" : "", el("span", { class: "hint" }, " · " + d.address)),
-      n > 0 && el("button", { type: "button", class: "text-btn", onclick: () => open(d.address) },
-        plural(n, "device conversation", "device conversations")));
+      n > 0 ? el("button", { type: "button", class: "text-btn", onclick: () => open(d.address) }, plural(n, "device conversation", "device conversations"))
+        : !d.this && d.address !== me && el("button", { type: "button", class: "text-btn", onclick: () => newConversationDialog(d.address) }, "Write to it…"));
   }));
 }
 
