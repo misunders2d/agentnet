@@ -76,6 +76,34 @@
   DMs, one DM and a write dialog that sends only to it. Not built: agent
   invitation and participation, Zoom's human–agent links (they wait for real
   participation data), linking devices, DMs on the relay's browser page.
+- **Release gate: a whole-team pre-release review (owner request,
+  2026-09-29).** Before this release, Codex (synthesis), core Claude, frontend
+  Claude and Agy review a stable candidate SHA against the owner's requested
+  outcomes: inventory, then each area and its cross-area failure cases, one
+  cross-challenge round (two at most), an owner, fix and recheck for each
+  confirmed defect, and only genuine product decisions to the owner. Release
+  only when each outcome is verified or explicitly excluded by the owner;
+  deferred requests stay visible. A build or a local commit is not a published
+  release or a deployed messenger. The working checklist is root's
+  `/tmp/agentnet-release-review-20260929.md` (temporary); its rows are:
+  - R1 explicit persons, no merging, two DMs apart across restarts;
+  - R2 agent invitation with selected context, explicit host acceptance,
+    dismissal by either person;
+  - R3 questions and tasks only for the exact host, key, scope and grants;
+    nothing a person or replica sent runs by itself;
+  - R4 Classic, Comic, Zoom and search agree, with agents linked to their
+    human;
+  - R5 a relay HTTPS URL hosts a usable human messenger (ciphertext-only
+    relay, honest browser storage);
+  - R6 Chrome install gives a separate app; updates strand no code or drafts;
+  - R7 "Remind me later";
+  - R8 one-command update with published binaries;
+  - R9 truthful directory, presence and search;
+  - R10 Pi attention, onboarding and the bundled skill;
+  - R11 migration, dedupe, offline retry, key replacement, mixed versions;
+  - R12 the complete inventory, known limits and platform qualification.
+
+  All rows were pending when recorded; the inventory is not approval.
 - **Also built since the design was written:** the People directory (`aec4d4f`,
   `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
   `docs/revival/M4.md`); the browser device's wire format and the relay's page

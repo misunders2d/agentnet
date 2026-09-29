@@ -321,6 +321,12 @@ If a local database or key file is damaged:
   DMs; apart from device history. `9c1d4b4` (candidate, review pending) adds people search and DMs in Comic and
   Zoom (no person–agent links: they wait for participation data). Not built: agent invitation, Zoom human–agent
   links, device linking, relay browser DMs.
+- **Release gate (owner request, 2026-09-29)**: a whole-team pre-release review of a stable candidate SHA
+  (inventory, per-area and cross-area review, one or two challenge rounds, fix and recheck per confirmed defect,
+  Codex synthesis, only genuine product decisions to Sergey). Rows R1–R12 are listed in
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status); the working checklist is root's temporary
+  `/tmp/agentnet-release-review-20260929.md`. Nothing is released until each outcome is verified or explicitly
+  excluded by Sergey; the inventory is not approval.
 - **Owner decisions for two-person DMs (2026-09-29)**: either person may dismiss an invited agent; selected earlier
   DM messages may be shared with an agent, the choice visible to both people, with no separate approval from the
   other person; the host's acceptance stays explicit. See [MESSENGER_ARCHITECTURE.md §9.2 and §15](MESSENGER_ARCHITECTURE.md).
