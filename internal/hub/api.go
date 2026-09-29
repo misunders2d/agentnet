@@ -265,6 +265,10 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "invite needs a valid person label")
 		return
 	}
+	if req.Browser && (h.certPEM != "" || !h.cfg.Web) {
+		writeError(w, http.StatusConflict, "", "this Hub cannot serve browser invitations: that needs hub serve --web and HTTPS that browsers trust (not a certificate pin)")
+		return
+	}
 	if req.TTL <= 0 || req.TTL > 30*24*time.Hour {
 		req.TTL = 7 * 24 * time.Hour
 	}

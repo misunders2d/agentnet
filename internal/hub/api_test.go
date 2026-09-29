@@ -153,3 +153,47 @@ func enrollOther(t *testing.T, h *Hub) string {
 	}
 	return "other/x"
 }
+
+// A browser invite is refused, creating nothing, unless the Hub serves the
+// browser messenger over HTTPS that browsers trust (no certificate pin).
+func TestBrowserInviteRefusedBeforeMinting(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		platform, web bool
+		want          int
+	}{
+		{"pinned", false, true, http.StatusConflict},
+		{"no web page", true, false, http.StatusConflict},
+		{"browser-trusted with web", true, true, http.StatusCreated},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://hub.example.test", Logf: t.Logf,
+				PlatformTLS: c.platform, Web: c.web})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { h.Close() })
+			id, _ := identity.Generate()
+			if err := h.store.createInvite("s", "admin", true, time.Hour, "x"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.store.enroll("s", id.Public("admin/test"), "admin"); err != nil {
+				t.Fatal(err)
+			}
+			invites := func() int {
+				var n int
+				h.store.db.QueryRow(`SELECT count(*) FROM invites`).Scan(&n)
+				return n
+			}
+			before := invites()
+			body, _ := json.Marshal(protocol.InviteRequest{Label: "bob", Browser: true})
+			w := serve(h, signed(t, id, "admin/test", "POST", "/v1/admin/invites", body))
+			if w.Code != c.want {
+				t.Fatalf("browser invite: %d %s", w.Code, w.Body)
+			}
+			if created := invites() - before; (c.want == http.StatusCreated) != (created == 1) || created > 1 {
+				t.Fatalf("%d invites created", created)
+			}
+		})
+	}
+}

@@ -150,6 +150,10 @@ type InviteRequest struct {
 	Label string        `json:"label"`
 	TTL   time.Duration `json:"ttl"`
 	Admin bool          `json:"admin"`
+	// Browser asks for an invite a browser can use: the Hub refuses it,
+	// creating nothing, unless it serves the browser messenger over HTTPS
+	// that browsers trust (no certificate pin).
+	Browser bool `json:"browser,omitempty"`
 }
 
 // RevokeRequest asks the Hub (as admin) to revoke an agent.

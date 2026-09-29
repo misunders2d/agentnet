@@ -299,6 +299,20 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	}
 }
 
+// A browser invitation from an installation that reaches its Hub through a
+// certificate pin is refused before any request: no invite is created.
+func TestBrowserInviteRefusedBeforeAnyRequest(t *testing.T) {
+	w := newWorld(t, "")
+	rec := &requestLog{}
+	w.alice.hub.http.Transport = recordingRT{w.alice.hub.http.Transport, rec}
+	if code, err := w.alice.BrowserInvite(tctx(t), "carol", time.Hour, false); !errors.Is(err, ErrPinnedHub) || code != "" {
+		t.Fatalf("browser invite from a pinned Hub: %q %v", code, err)
+	}
+	if acks, others := rec.snapshot(); acks != 0 || len(others) != 0 {
+		t.Fatalf("requests made: %v", others)
+	}
+}
+
 // requestLog counts ping acks and records any other request path.
 type requestLog struct {
 	mu     sync.Mutex

@@ -651,7 +651,11 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 				"LABEL is the invited person's AgentNet name (e.g. bob). Use the name your person gave for this invitation; if they have not, ask them who is being invited and what name to use. " +
 				"Do not infer it or reuse your own label, \"admin\", a user, host or model name unless your person chose it. It grants no rights; --admin does")
 		}
-		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
+		invite := a.Invite
+		if *link {
+			invite = a.BrowserInvite // refused before any invite is created unless a browser can use it
+		}
+		code, err := invite(ctx, fs.Arg(0), *ttl, *admin)
 		if err != nil {
 			return err
 		}

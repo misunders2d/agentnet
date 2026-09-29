@@ -595,6 +595,32 @@ func (a *Agent) Invite(ctx context.Context, label string, ttl time.Duration, adm
 	return out.Code, err
 }
 
+// ErrPinnedHub refuses a browser invitation: this installation reaches its
+// Hub through a certificate pin, which browsers cannot apply.
+var ErrPinnedHub = errors.New("browser invitations need HTTPS that browsers trust; this Hub uses a certificate pin, which browsers cannot apply (use a regular invitation)")
+
+// BrowserInvite creates an invite for a browser invitation link (admin
+// only). A Hub this installation reaches through a certificate pin is
+// refused before anything is asked; the Hub itself refuses, creating
+// nothing, unless it serves the browser messenger over HTTPS that browsers
+// trust.
+func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
+	if cert, err := a.store.config("hub_cert"); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	} else if cert != "" {
+		return "", ErrPinnedHub
+	}
+	var out struct{ Code string }
+	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
+		var he *HubError
+		if errors.As(err, &he) && he.Status == 400 { // an older Hub refuses the unknown field
+			return "", fmt.Errorf("%w (a Hub that cannot create browser invitations needs an update)", err)
+		}
+		return "", err
+	}
+	return out.Code, nil
+}
+
 // Revoke revokes address on the Hub (admin only).
 func (a *Agent) Revoke(ctx context.Context, address string) error {
 	return a.hub.do(ctx, "POST", "/v1/admin/revoke", protocol.RevokeRequest{Address: address}, nil)
