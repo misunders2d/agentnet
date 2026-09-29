@@ -6,7 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
-  dm: null, dmData: null, personOpen: {},
+  dm: null, dmData: null, personOpen: {}, dmReply: null,
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -499,6 +499,7 @@ function beginDM(id) {
     grow();
     setKind("message");
     setAnswering(null);
+    setDMReply(null);
   }
   state.dm = id;
   return changed;
@@ -538,7 +539,8 @@ async function loadDM(scrollToEnd) {
   $("composer").hidden = false;
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
-  if (state.draftKey === null) restoreDraft(key, { messages: [] }); // just switched here (beginDM)
+  if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
+  else if (state.dmReply && !t.messages.some((m) => m.id === state.dmReply.id)) setDMReply(null);
   state.draftKey = key;
   syncComposer();
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
@@ -572,12 +574,18 @@ function dmMsg(m, t, prev) {
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.unread && el("span", { class: "tag unread" }, "New"),
     el("time", { datetime: m.at }, when(m.at)));
+  const parent = m.reply_to && t.messages.find((x) => x.id === m.reply_to);
   return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held ? " needs" : "") },
     !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
-      el("div", { class: "bubble", tabindex: "-1" }, el("p", { class: "body" }, m.body)),
+      el("div", { class: "bubble", tabindex: "-1" },
+        m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + firstLine(parent.body, 90))
+          : el("span", { class: "replyref" }, "Reply to a message not shown here")),
+        el("p", { class: "body" }, m.body)),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
-      el("div", { class: "foot" }, !held && m.state_text && el("span", {}, m.state_text), dmDetails(m))));
+      el("div", { class: "foot" }, !held && m.state_text && el("span", {}, m.state_text),
+        !t.frozen && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
+        dmDetails(m))));
 }
 
 function dmDetails(m) {
@@ -599,16 +607,17 @@ function dmDetails(m) {
 async function sendDM() {
   const t = state.dmData;
   if (state.sending || !t || t.frozen) return;
-  const key = state.draftKey, text = $("body").value;
+  const key = state.draftKey, text = $("body").value, reply = state.dmReply;
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
   try {
-    const r = await api("/api/dm/send", { conv: t.id, body: text });
+    const r = await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "" });
     announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (state.draftKey === key) {
       if ($("body").value === text) { $("body").value = ""; grow(); }
+      if (state.dmReply === reply) setDMReply(null);
     } else if (state.drafts[key] && state.drafts[key].text === text) {
       delete state.drafts[key];
     }
@@ -692,40 +701,48 @@ function renderThreads(threads) {
   }), directorySection(threads));
 }
 
-function renderSearch(threads) {
-  const { people, dms, agents, conversations, listed } = searchKnown(state.query, threads, directory());
-  $("list-title").textContent = "Search results";
+// searchItems lists what a search finds; each result opens through the
+// view's own handler (the sidebar, or Zoom), so it lands where it is.
+function searchItems(q, threads, open) {
+  const { people, dms, agents, conversations, listed } = searchKnown(q, threads, directory());
   const shown = conversations.slice(0, 30);
   const kind = (t) => t.count > 1 ? "Conversation" : "Message";
   if (!people.length && !dms.length && !agents.length && !conversations.length && !listed.length) {
-    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No person, agent or conversation matches."),
-      directoryNote(directory()) && el("li", { class: "hint dir-note" }, directoryNote(directory())));
-    return;
+    return [el("li", { class: "hint empty-list" }, "No person, agent or conversation matches."),
+      directoryNote(directory()) && el("li", { class: "hint dir-note" }, directoryNote(directory()))];
   }
-  fill($("conv-list"),
+  return [
     people.length > 0 && el("li", { class: "result-head" }, plural(people.length, "person", "people")),
-    ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => choosePerson(p) },
+    ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.person(p) },
       el("span", { class: "result-kind" }, "Person"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label),
         el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
     dms.length > 0 && el("li", { class: "result-head" }, plural(dms.length, "DM", "DMs")),
-    ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => { clearSearch(); openDM(d.id); } },
+    ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.dm(d) },
       el("span", { class: "result-kind" }, "DM"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, d.title || "No messages yet"),
         el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
     agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
-    ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result",
-      onclick: () => { state.expanded = c.peer; clearSearch(); } },
+    ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.contact(c) },
       el("span", { class: "result-kind" }, "Agent"), el("span", { class: "result-main" }, who(c.peer),
         el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), presenceBadge(c.peer), counts(c)))),
     ...listed.map(memberRow),
     conversations.length > 0 && el("li", { class: "result-head" }, plural(conversations.length, "conversation or message", "conversations or messages")),
-    ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result",
-      onclick: () => { state.expanded = t.peer; clearSearch(); openThread(t.id); } },
+    ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.conversation(t) },
       el("span", { class: "result-kind" }, kind(t)),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, t.title),
         el("span", { class: "hint" }, "with ", t.peer, " · ", when(t.last_at))), threadFlag(t)))),
-    conversations.length > shown.length && el("li", { class: "hint result-more" }, (conversations.length - shown.length) + " more: type more to narrow the search."));
+    conversations.length > shown.length && el("li", { class: "hint result-more" }, (conversations.length - shown.length) + " more: type more to narrow the search.")];
+}
+
+function renderSearch(threads) {
+  $("list-title").textContent = "Search results";
+  fill($("conv-list"), ...searchItems(state.query, threads, {
+    person: (p) => choosePerson(p),
+    dm: (d) => { clearSearch(); if (state.lens === "zoom") Zoom.go(2, { dm: d.id }); else openDM(d.id); },
+    contact: (c) => { state.expanded = c.peer; clearSearch(); },
+    conversation: (t) => { state.expanded = t.peer; clearSearch(); openThread(t.id); },
+  }));
 }
 
 function clearSearch() {
@@ -759,6 +776,7 @@ function beginThread(id) {
     grow();
     setKind("message");
     setAnswering(null);
+    setDMReply(null);
   }
   state.dm = null;
   state.dmData = null;
@@ -1147,9 +1165,22 @@ function setKind(kind) {
   kindHint();
 }
 
+// setDMReply chooses the message of the open DM a new message replies to
+// (or none). It is part of that DM's draft and never crosses to another.
+function setDMReply(m) {
+  state.dmReply = m ? { id: m.id, body: m.body } : null;
+  if (!m && state.answering) return;
+  $("replying").hidden = !m;
+  if (m) {
+    $("replying-label").textContent = "Replying to";
+    $("replying-text").textContent = firstLine(m.body, 70);
+  }
+}
+
 function setAnswering(m) {
   state.answering = m;
   $("replying").hidden = !m;
+  $("replying-label").textContent = "Answering";
   if (m) $("replying-text").textContent = (kindTag[m.kind] || "message").toLowerCase() + ": " + firstLine(m.body, 70);
   syncComposer();
   kindHint();
@@ -1161,7 +1192,7 @@ function setAnswering(m) {
 function keepDraft() {
   if (state.draftKey === null) return;
   const text = $("body").value;
-  if (text || state.answering) state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering };
+  if (text || state.answering || state.dmReply) state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply };
   else delete state.drafts[state.draftKey];
 }
 
@@ -1173,6 +1204,9 @@ function restoreDraft(key, t) {
   // Answer only what can still be answered by hand.
   const m = d && d.answering && t.messages.find((x) => x.id === d.answering.id && (x.actions || []).includes("reply"));
   setAnswering(m || null);
+  // A DM's reply target comes back only if that message is in this DM.
+  const r = state.dm && d && d.reply && t.messages.find((x) => x.id === d.reply.id);
+  setDMReply(r || null);
 }
 
 // syncComposer enables what the open conversation allows. A send on its way
@@ -1335,7 +1369,9 @@ const reloadKey = "agentnet-reload";
 function keepForReload() {
   keepDraft();
   const drafts = {};
-  for (const [k, d] of Object.entries(state.drafts)) drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null };
+  for (const [k, d] of Object.entries(state.drafts)) {
+    drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null, reply: d.reply ? d.reply.id : null };
+  }
   const fields = {};
   if (state.dialogRestore && $("dialog").open) {
     for (const f of $("dialog-body").querySelectorAll("input[type=text], textarea, select")) if (f.id) fields[f.id] = f.value;
@@ -1358,7 +1394,9 @@ async function restoreAfterReload() {
     sessionStorage.removeItem(reloadKey);
   } catch (e) { /* nothing kept */ }
   if (!keep) return false;
-  for (const [k, d] of Object.entries(keep.drafts || {})) state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null };
+  for (const [k, d] of Object.entries(keep.drafts || {})) {
+    state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null, reply: d.reply ? { id: d.reply } : null };
+  }
   if (keep.lens) setLens(keep.lens);
   if (keep.thread) await openThread(keep.thread);
   else if (keep.dm) await openDM(keep.dm);
@@ -1418,7 +1456,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("kind").addEventListener("change", kindHint);
   kindHint();
-  $("replying-cancel").addEventListener("click", () => setAnswering(null));
+  $("replying-cancel").addEventListener("click", () => { setAnswering(null); setDMReply(null); });
   $("review-btn").addEventListener("click", () => toggleReview());
   $("new-btn").addEventListener("click", () => newConversationDialog());
   $("search").addEventListener("input", () => { state.query = $("search").value; rerenderContacts(); });

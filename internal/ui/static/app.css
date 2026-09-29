@@ -588,3 +588,5 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .person-card:hover { background: var(--hover); }
 .person-card.danger { border-color: var(--danger); }
 .person-card .node-name { box-shadow: none; padding: 0; }
+.zoom-search { width: 100%; margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.zoom-results { width: 100%; max-width: 560px; }

@@ -267,7 +267,7 @@ function zoomDirectory(threads) {
 // ---- Zoom: everyone → one person → one thread → one message ---------------------
 
 const Zoom = {
-  level: 0, peer: null, person: null, dm: null, msg: null, origins: [],
+  level: 0, peer: null, person: null, dm: null, msg: null, origins: [], query: "",
 
   // Two kinds of path: a person (by their record) and their DMs, or a
   // device contact (by address) and its conversations. Never both at once.
@@ -294,20 +294,40 @@ const Zoom = {
       if (this.level >= 2 && (!state.data || state.data.peer !== this.peer)) this.level = this.peer ? 1 : 0;
       if (this.level === 3 && !state.data.messages.some((m) => m.id === this.msg)) this.level = 2;
     }
+    const typing = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("zoom-search");
     fill($("zoom"), this.layer());
+    if (typing) { const f = $("zoom").querySelector(".zoom-search"); if (f) f.focus(); }
   },
+
+  // results is what the Zoom search finds; choosing one zooms to it.
+  results() {
+    const pick = (level, patch) => { this.query = ""; this.go(level, patch); };
+    return el("div", { class: "zoom-results" }, el("ul", { class: "conv-list" }, searchItems(this.query, state.overview.threads, {
+      person: (p) => pick(1, { person: personKey(p), peer: null }),
+      dm: (d) => pick(2, { dm: d.id }),
+      contact: (c) => pick(1, { peer: c.peer, person: null }),
+      conversation: (t) => pick(2, { thread: t.id, peer: t.peer, person: null }),
+    })));
+  },
+
+  content(views) { return this.query.trim() ? this.results() : views[this.level](); },
 
   layer() {
     const views = this.person ? [() => this.everyone(), () => this.personLevel(), () => this.dmLevel(), () => this.dmMessage()]
       : [() => this.everyone(), () => this.person_(), () => this.thread(), () => this.message()];
+    const content = el("div", { class: "zoom-content" }, this.content(views));
+    const search = el("input", { type: "search", class: "zoom-search", placeholder: "Search people, agents and conversations",
+      "aria-label": "Search people, agents and conversations", autocomplete: "off", spellcheck: "false", value: this.query,
+      oninput: (e) => { this.query = e.target.value; fill(content, this.content(views)); },
+      onkeydown: (e) => { if (e.key === "Escape" && this.query) { e.stopPropagation(); e.target.value = ""; this.query = ""; fill(content, this.content(views)); } } });
     return el("div", { class: "zoom-layer" },
-      el("div", { class: "zoom-side" }, lensSwitch(), el("nav", { class: "ladder", "aria-label": "Zoom level" },
+      el("div", { class: "zoom-side" }, lensSwitch(), search, el("nav", { class: "ladder", "aria-label": "Zoom level" },
         this.names().map((n, i) => el("button", {
           type: "button", class: "rung" + (i === this.level ? " here" : ""), disabled: i > this.level,
           "aria-current": i === this.level ? "step" : "false", onclick: () => i < this.level && this.go(i, {}),
         }, el("span", { class: "rung-dot" }), el("span", { class: "rung-name" }, n))),
         el("p", { class: "hint ladder-hint" }, "Esc zooms out"))),
-      el("div", { class: "zoom-content" }, views[this.level]()));
+      content);
   },
 
   async go(level, patch, from) {

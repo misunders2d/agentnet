@@ -22,8 +22,10 @@ class Elem {
     if (k === "id") { this.id = String(v); byId[this.id] = this; }
   }
   getAttribute(k) { return this.attrs[k] ?? null; }
-  addEventListener() {}
+  // Listeners are kept, so a check can click an element as a person would.
+  addEventListener(ev, f) { ((this.listeners ||= {})[ev] ||= []).push(f); }
   removeEventListener() {}
+  click() { for (const f of (this.listeners && this.listeners.click) || []) f({ currentTarget: this, target: this, preventDefault() {}, stopPropagation() {} }); }
   focus() {}
   scrollIntoView() {}
   showModal() { this.open = true; }
@@ -639,6 +641,70 @@ const ev = { preventDefault() {} };
   check(frozenBtn && frozenBtn.attrs.disabled !== undefined, "a frozen DM in Zoom offers no writing");
   await run('Zoom.go(2, { thread: "a1" })');
   check(run("Zoom.person") === null && run("state.dm") === null, "a device conversation in Zoom leaves the person path");
+
+  // Search opens a DM where it is: from Zoom, Zoom goes to that DM, also
+  // another person's.
+  const find = (root, pred) => {
+    for (const c of root.children || []) {
+      if (c instanceof Object && c.tagName && pred(c)) return c;
+      const f = c instanceof Object && c.children ? find(c, pred) : null;
+      if (f) return f;
+    }
+    return null;
+  };
+  const bobPerson = { person: "p-bob", label: "Bob", address: "bob/desk", state: "pinned" };
+  overview.people = [alicePerson, bobPerson];
+  overview.dms = [...overview.dms, { id: "d4", peer: bobPerson, created: T, mine: false, count: 1, title: "lunch plans", last: "lunch plans", last_at: T, unread: 0, held: 0, waiting: 0 }];
+  dmThreads.d4 = { id: "d4", peer: bobPerson, created: T, mine: false, messages: [dmsg("m9", "in", "lunch plans", { from: "bob/desk" })] };
+  delete dmThreads.d1.frozen;
+  await run("loadOverview()");
+  run('setLens("zoom")');
+  await run('Zoom.go(2, { dm: "d2" })');
+  run('Zoom.query = "lunch"; Zoom.refresh()');
+  let hit = find($("zoom"), (n) => n.className === "result" && textOf(n).includes("lunch plans"));
+  check(hit && textOf(hit).includes("DM"), "Zoom's search lists the DM with its kind");
+  hit.click();
+  await pause(20);
+  check(run("state.dm") === "d4" && run("Zoom.level") === 2 && run("Zoom.person") === "p-bob" && run("Zoom.query") === "",
+    "choosing a DM in Zoom's search zooms to that DM of another person: " + [run("state.dm"), run("Zoom.level"), run("Zoom.person")]);
+  run('state.query = "budget"');
+  run("renderSearch")(overview.threads);
+  hit = find($("conv-list"), (n) => n.className === "result" && textOf(n).includes("budget"));
+  hit.click();
+  await pause(20);
+  check(run("state.dm") === "d2" && run("Zoom.level") === 2 && run("Zoom.person") === "p-alice", "a DM result in Zoom's lens zooms to it (sidebar search)");
+  run('Zoom.query = "alice"; Zoom.refresh()');
+  find($("zoom"), (n) => n.className === "result" && textOf(n).includes("Person")).click();
+  await pause(20);
+  check(run("Zoom.level") === 1 && run("Zoom.person") === "p-alice", "a person result in Zoom zooms to that person");
+  run('setLens("classic")');
+
+  // Replying to one message of a DM: a visible target that can be
+  // cancelled, kept with that DM's draft, sent as that DM's reply only.
+  await run('openDM("d2")');
+  const replyBtn = find($("timeline"), (n) => n.tagName === "button" && textOf(n) === "Reply" && true);
+  const m3Item = find($("timeline"), (n) => n.id === "m-m3");
+  find(m3Item, (n) => n.tagName === "button" && textOf(n) === "Reply").click();
+  check(!$("replying").hidden && $("replying-label").textContent === "Replying to" && $("replying-text").textContent === "can you check?",
+    "choosing Reply shows which message the reply is to");
+  $("body").value = "yes, on it";
+  await run('openDM("d1")');
+  check($("replying").hidden && run("state.dmReply") === null, "another DM does not inherit the reply target");
+  calls.length = 0;
+  $("body").value = "unrelated";
+  await run("send")(ev);
+  check(calls.find((c) => c.path === "/api/dm/send").body.reply_to === "", "a message in another DM replies to nothing");
+  await run('openDM("d2")');
+  check(!$("replying").hidden && run("state.dmReply.id") === "m3" && $("body").value === "yes, on it", "the reply target comes back with that DM's draft");
+  calls.length = 0;
+  await run("send")(ev);
+  const sentReply = calls.find((c) => c.path === "/api/dm/send");
+  check(sentReply && sentReply.body.reply_to === "m3" && sentReply.body.conv === "d2" && $("replying").hidden, "the reply goes to that DM, to that message, and the target clears");
+  find(find($("timeline"), (n) => n.id === "m-m2"), (n) => n.tagName === "button" && textOf(n) === "Reply").click();
+  run("setDMReply(null)");
+  check($("replying").hidden && run("state.dmReply") === null, "a reply target can be cancelled");
+  check(replyBtn !== null, "DM messages offer Reply");
+
   run('setLens("classic")');
   Object.assign(overview, { persons: false, person: null, people: [], dms: [] });
 
