@@ -184,16 +184,27 @@ export const marshalPublic = (p) => '{"address":' + goString(p.address) + ',"sig
 // identity.Public.Verify does: the encryption key is signed by the signing
 // key. Whether it is the key trusted before is the caller's question.
 export async function parsePublic(v) {
+  const out = parsePublicShape(v);
+  await checkPublic(out);
+  return out;
+}
+
+// parsePublicShape reads a directory entry's fields (checkPublic checks it).
+export function parsePublicShape(v) {
   const p = strict(v, "directory entry", { address: "string", sign_key: "string", box_recipient: "string", box_sig: "string" });
-  const out = { address: p.address || "", sign_key: unb64(p.sign_key || "", "signing key"),
+  return { address: p.address || "", sign_key: unb64(p.sign_key || "", "signing key"),
     box_recipient: p.box_recipient || "", box_sig: unb64(p.box_sig || "", "key signature") };
-  if (out.sign_key.length !== 32) throw new Error("bad signing key");
-  if (!recipientPattern.test(out.box_recipient)) throw new Error("bad encryption key");
-  try { new Encrypter().addRecipient(out.box_recipient); } catch (e) { throw new Error("bad encryption key"); }
-  if (!(await verifyBytes(out.sign_key, bindingMessage(out.address, out.box_recipient), out.box_sig))) {
+}
+
+// checkPublic is identity.Public.Verify: the keys' shapes, and the
+// encryption key signed by the signing key for this address.
+export async function checkPublic(p) {
+  if (!(p.sign_key instanceof Uint8Array) || p.sign_key.length !== 32) throw new Error("bad signing key");
+  if (!recipientPattern.test(p.box_recipient)) throw new Error("bad encryption key");
+  try { new Encrypter().addRecipient(p.box_recipient); } catch (e) { throw new Error("bad encryption key"); }
+  if (!(await verifyBytes(p.sign_key, bindingMessage(p.address, p.box_recipient), p.box_sig))) {
     throw new Error("encryption key not signed by signing key");
   }
-  return out;
 }
 
 // fingerprint is identity.Public.Fingerprint: both keys, shortened for people
@@ -234,10 +245,11 @@ function hubOrigin(raw) {
 
 // joinRequest is the body of POST /v1/join: this device's entry, signed to
 // prove it holds the key (protocol.SignJoin).
-export async function joinRequest(keys, address, secret) {
+export async function joinRequest(keys, address, secret, link) {
   text(secret, "invite secret");
   const pub = await publicEntry(keys, address);
-  const signed = (sig) => '{"secret":' + goString(secret) + ',"public":' + marshalPublic(pub) + ',"sig":' + goBytes(sig) + "}";
+  const linkJSON = link ? ',"link":{"offer":' + goString(link.offer) + ',"join":' + goBytes(link.join) + ',"mac":' + goBytes(link.mac) + "}" : "";
+  const signed = (sig) => '{"secret":' + goString(secret) + ',"public":' + marshalPublic(pub) + linkJSON + ',"sig":' + goBytes(sig) + "}";
   const sig = await signBytes(keys, utf8.encode("agentnet-join-v1\n" + signed(null)));
   return signed(sig);
 }
@@ -327,10 +339,11 @@ function marshalInner(n) {
   if (n.emotion) s += ',"emotion":' + goString(n.emotion);
   if (n.target) s += ',"target":{"address":' + goString(n.target.address) + ',"fingerprint":' + goString(n.target.fingerprint) + "}";
   if (n.pid) s += ',"pid":' + goString(n.pid);
+  if (n.fan && n.fan.length) s += ',"fan":[' + n.fan.map((f) => '{"person":' + goString(f.person) + ',"roster":' + goString(f.roster) + "}").join(",") + "]";
   return s + "}";
 }
 
-const subs = new Set(["", "event", "excerpt"]);
+const subs = new Set(["", "event", "excerpt", "history"]);
 const agentOrigin = (o) => typeof o === "string" && o.startsWith("agent:");
 
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
@@ -338,7 +351,7 @@ const agentOrigin = (o) => typeof o === "string" && o.startsWith("agent:");
 // participation is still in review there.)
 function checkV2(n) {
   if (n.v !== Version2) {
-    if (n.conv || n.lid || n.root || n.sub || n.replica || n.origin || n.emotion || n.target || n.pid) {
+    if (n.conv || n.lid || n.root || n.sub || n.replica || n.origin || n.emotion || n.target || n.pid || n.fan) {
       throw new Error("conversation fields in a version 1 message");
     }
     return;
@@ -348,6 +361,12 @@ function checkV2(n) {
   if (!subs.has(n.sub)) throw new Error("unknown sub " + n.sub);
   if (n.origin && n.origin !== "ui" && !(agentOrigin(n.origin) && validToken(n.origin.slice(6), 32))) throw new Error("invalid origin " + n.origin);
   if (n.emotion && !validToken(n.emotion, 24)) throw new Error("invalid emotion " + n.emotion);
+  if (n.fan) {
+    if (n.fan.length > 2) throw new Error("a conversation message names at most its two member persons");
+    n.fan.forEach((f, i) => {
+      if (!validID(f.person) || !validHash(f.roster) || (i > 0 && f.person === n.fan[0].person)) throw new Error("invalid fan");
+    });
+  }
   if (n.target) {
     if (n.kind !== "question" && n.kind !== "task") throw new Error("only a question or task has an execution target");
     if (!validAddress(n.target.address) || !validFingerprint(n.target.fingerprint)) throw new Error("invalid execution target");
@@ -391,7 +410,8 @@ export async function seal(m, keys, recipient) {
   const inner = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, body: text(m.body, "message"),
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
-    origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "" };
+    origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
+    fan: m.fan && m.fan.length ? m.fan : null };
   checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -464,12 +484,13 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string" });
+    target: "object", pid: "string", fan: "array" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string" }) : null;
+  const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
   const n = { v: f.v || 0, id: f.id || "", from: f.from || "", to: f.to || "", ts: f.ts || 0, kind: f.kind || "", body: f.body || "",
     reply_to: f.reply_to || "", session: f.session || "", fallback: !!f.fallback, status: f.status || "",
     conv: f.conv || "", lid: f.lid || "", root: f.root ? JSON.stringify(f.root) : "", sub: f.sub || "", replica: !!f.replica,
-    origin: f.origin || "", emotion: f.emotion || "", pid: f.pid || "",
+    origin: f.origin || "", emotion: f.emotion || "", pid: f.pid || "", fan,
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -501,13 +522,16 @@ export async function open(json, keys, selfAddress, sender) {
 // different record is a conflict is the engine's job.
 
 export const MaxPersonLabel = 64;
-export const MaxPersonRecord = 768;
+export const MaxPersonDevices = 8;
+export const MaxPersonRecord = 4096;
 export const MaxConvRoot = 2048;
 export const MaxCaps = 16;
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
-const personDomain = "agentnet-person-v1\n";
-const rootDomain = "agentnet-conv-root-v1\n";
+export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
+const personDomain = "agentnet-person-v2\n";
+const personJoinDomain = "agentnet-person-join-v2\n";
+const rootDomain = "agentnet-conv-root-v2\n";
 const capsDomain = "agentnet-caps-v1\n";
 const fingerprintPattern = /^[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}$/;
 // Go's unicode.IsPrint: letters, marks, numbers, punctuation, symbols and
@@ -544,50 +568,196 @@ function strictRecord(json, max, what, fields) {
   return strict(typeof json === "string" ? JSON.parse(json) : json, what, fields);
 }
 
-// Person roster (one device, seq 0).
+// Person roster (version 2), a chain: seq 0 is one device signed by it;
+// each later step names the step before it (prev) and the device of it
+// that signed (by), adds at most one device, whose consent is join (its
+// signature over joinBytes), and may remove any. A device is its directory
+// entry (address and keys), so old records stay verifiable. Canonical
+// bytes leave out sig and join (protocol/person.go).
 
 function marshalRoster(r, withSig) {
   return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
-    ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map((d) => '{"address":' + goString(d.address) +
-      ',"fingerprint":' + goString(d.fingerprint) + "}").join(",") + "]" : "null") + sigJSON(r, withSig) + "}";
+    ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map(marshalPublic).join(",") + "]" : "null") +
+    (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + "}";
 }
 export const rosterJSON = (r) => marshalRoster(r, true);
 const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
 export const rosterHash = (r) => hashOf(rosterCanonical(r));
 
-export function validateRoster(r) {
+// joinBytes are what a device signs to join person at seq, after the
+// roster whose hash is prev, as the entry dev (protocol.JoinBytes).
+export const joinBytes = (person, seq, prev, dev) => utf8.encode(personJoinDomain + '{"person":' + goString(person) +
+  ',"seq":' + goInt(seq, "seq") + ',"prev":' + goString(prev) + ',"device":' + marshalPublic(dev) + "}");
+
+// joinConsent is this device's consent to join person as the step seq
+// after the roster whose hash is prev (its join signature).
+export async function joinConsent(keys, address, person, seq, prev) {
+  return signBytes(keys, joinBytes(person, seq, prev, await publicEntry(keys, address)));
+}
+
+// validateRoster is PersonRoster.Validate: its shape and bounds, and each
+// device's entry (not the signatures of the record or the chain).
+export async function validateRoster(r) {
   if (!validID(r.person)) throw new Error("person: invalid id");
   validLabel(r.label);
-  if (r.seq !== 0 || r.prev !== "") throw new Error("person: only a first roster (seq 0) is supported");
-  if (!r.devices || r.devices.length !== 1) throw new Error("person: exactly one device is supported");
-  if (!validAddress(r.devices[0].address)) throw new Error("person: invalid address " + r.devices[0].address);
-  if (!validFingerprint(r.devices[0].fingerprint)) throw new Error("person: invalid device fingerprint");
+  if (!Number.isSafeInteger(r.seq) || r.seq < 0) throw new Error("person: invalid seq");
+  if (r.seq === 0 && (r.prev !== "" || r.by || (r.join && r.join.length) || !r.devices || r.devices.length !== 1)) {
+    throw new Error("person: a first roster has one device and nothing before it");
+  }
+  if (r.seq > 0 && (!validHash(r.prev) || !validFingerprint(r.by))) throw new Error("person: a later roster names the roster before it and its signer");
+  if (!r.devices || r.devices.length === 0 || r.devices.length > MaxPersonDevices) throw new Error("person: 1-" + MaxPersonDevices + " devices");
+  const addrs = new Set(), fps = new Set();
+  for (const d of r.devices) {
+    if (!validAddress(d.address)) throw new Error("person: invalid address " + d.address);
+    await checkPublic(d);
+    const fp = await fingerprint(d);
+    if (addrs.has(d.address) || fps.has(fp)) throw new Error("person: a device is listed twice");
+    addrs.add(d.address);
+    fps.add(fp);
+  }
+}
+
+// rosterDevice is the device of r with key fingerprint fp, or null.
+export async function rosterDevice(r, fp) {
+  for (const d of r.devices) if ((await fingerprint(d)) === fp) return d;
+  return null;
+}
+
+// rosterHas reports whether the device at address with fingerprint fp is in r.
+export async function rosterHas(r, address, fp) {
+  const d = await rosterDevice(r, fp);
+  return !!d && d.address === address;
 }
 
 // newRoster creates this device's person, as the person asked: a random
-// id, the name they give, and this device.
+// id, the name they give, and this device (seq 0).
 export async function newRoster(keys, address, label) {
-  const r = { person: newID(), label, seq: 0, prev: "", devices: [{ address, fingerprint: await fingerprint(await publicEntry(keys, address)) }] };
-  validateRoster(r);
+  const r = { person: newID(), label, seq: 0, prev: "", devices: [await publicEntry(keys, address)], by: "", sig: null, join: null };
+  await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large; use a shorter label");
   return r;
 }
 
-export function parseRoster(json) {
-  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", sig: "string" });
-  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", sig: f.sig ? unb64(f.sig, "person signature") : null,
-    devices: f.devices ? f.devices.map((d) => { const x = strict(d, "person device", { address: "string", fingerprint: "string" });
-      return { address: x.address || "", fingerprint: x.fingerprint || "" }; }) : null };
-  validateRoster(r);
+// nextRoster is the step after prev with devices, signed by this device
+// (at address, a device of prev); join is an added device's consent (null
+// when none is added).
+export async function nextRoster(keys, address, prev, devices, join) {
+  const by = await fingerprint(await publicEntry(keys, address));
+  if (!(await rosterHas(prev, address, by))) throw new Error("person: this device is not in the roster it would follow");
+  const r = { person: prev.person, label: prev.label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, by, sig: null, join: join || null };
+  await validateRoster(r);
+  r.sig = await signBytes(keys, rosterCanonical(r));
+  if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large");
+  return r;
+}
+
+export async function parseRoster(json) {
+  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array",
+    by: "string", sig: "string", join: "string" });
+  const devices = f.devices ? await Promise.all(f.devices.map((d) => parsePublicShape(d))) : null;
+  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, by: f.by || "",
+    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null };
+  await validateRoster(r);
   fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
   return r;
 }
 
-// verifyRoster checks r and that signKey, its device's key, signed it.
-export async function verifyRoster(r, signKey) {
-  validateRoster(r);
-  if (!(await verifyBytes(signKey, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");
+// verifyFirst checks r as the first roster of its person: signed by its one device.
+export async function verifyFirst(r) {
+  await validateRoster(r);
+  if (r.seq !== 0) throw new Error("person: not a first roster");
+  if (!(await verifyBytes(r.devices[0].sign_key, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");
+}
+
+// verifyNext checks r as the step after prev (itself verified): the chain
+// link, the signer, and the consent of an added device. It returns the
+// added device, or null.
+export async function verifyNext(r, prev) {
+  await validateRoster(r);
+  if (r.person !== prev.person || r.seq !== prev.seq + 1 || r.prev !== (await rosterHash(prev))) throw new Error("person: not the next roster of that chain");
+  const signer = await rosterDevice(prev, r.by);
+  if (!signer) throw new Error("person: signed by a device that is not in the roster before it");
+  if (!(await verifyBytes(signer.sign_key, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");
+  let added = null;
+  for (const d of r.devices) {
+    const old = await rosterDevice(prev, await fingerprint(d));
+    if (old && old.address !== d.address) throw new Error("person: a device changed its address");
+    if (!old && added) throw new Error("person: more than one device added in one step");
+    if (!old) added = d;
+  }
+  if (!added) {
+    if (r.join && r.join.length) throw new Error("person: a join without an added device");
+    return null;
+  }
+  if (!(await verifyBytes(added.sign_key, joinBytes(r.person, r.seq, r.prev, added), r.join))) {
+    throw new Error("person: the added device did not consent (join signature invalid)");
+  }
+  return added;
+}
+
+// Linking a new device to a person (protocol/link.go): the existing device
+// shows a LinkOffer (its person's current step, itself, a device invite
+// and a 32-byte secret the Hub never sees); the new device joins with the
+// invite, adding its consent (join) and an HMAC under the secret over a
+// fixed transcript; the existing device checks both and asks its person.
+
+export const LinkPrefix = "agentnet-link-v2:";
+const linkDomain = "agentnet-link-v2\n";
+
+function marshalOffer(o) {
+  return '{"v":' + goInt(o.v, "version") + ',"invite":' + goString(o.invite) + ',"offer":' + goString(o.offer) +
+    ',"expires":' + goInt(o.expires, "expiry") + ',"person":' + goString(o.person) + ',"seq":' + goInt(o.seq, "seq") +
+    ',"roster":' + goString(o.roster) + ',"approver":{"address":' + goString(o.approver.address) + ',"fingerprint":' +
+    goString(o.approver.fingerprint) + '},"secret":' + goBytes(o.secret) + "}";
+}
+
+// encodeOffer is LinkOffer.Encode: the prefix and the offer's JSON in
+// unpadded base64url.
+export const encodeOffer = (o) => LinkPrefix + b64url(utf8.encode(marshalOffer(o)));
+
+// decodeOffer is protocol.DecodeLinkOffer: the code alone, as a fragment,
+// or at the end of a whole URL; its shape checked.
+export function decodeOffer(text) {
+  let s = String(text).trim();
+  const i = s.indexOf("#" + LinkPrefix);
+  if (i >= 0) s = s.slice(i + 1);
+  if (!s.startsWith(LinkPrefix)) throw new Error("not an AgentNet device link code");
+  let f;
+  try {
+    const raw = s.slice(LinkPrefix.length);
+    if (!/^[A-Za-z0-9_-]*$/.test(raw)) throw new Error("");
+    f = strict(JSON.parse(fromUTF8.decode(Uint8Array.from(unb64url(raw), (c) => c.charCodeAt(0)))), "device link",
+      { v: "int", invite: "string", offer: "string", expires: "int", person: "string", seq: "int", roster: "string", approver: "object", secret: "string" });
+  } catch (e) {
+    throw new Error("device link code damaged");
+  }
+  const a = strict(f.approver || {}, "device link approver", { address: "string", fingerprint: "string" });
+  const o = { v: f.v || 0, invite: f.invite || "", offer: f.offer || "", expires: f.expires || 0, person: f.person || "", seq: f.seq || 0,
+    roster: f.roster || "", approver: { address: a.address || "", fingerprint: a.fingerprint || "" }, secret: f.secret ? unb64(f.secret, "link secret") : new Uint8Array(0) };
+  if (o.v !== 2 || !validID(o.offer) || !(o.expires > 0) || !validID(o.person) || o.seq < 0 || !validHash(o.roster) ||
+    !validFingerprint(o.approver.fingerprint) || o.secret.length !== 32 || !validAddress(o.approver.address)) {
+    throw new Error("device link code damaged");
+  }
+  decodeInvite(o.invite); // throws if it is not one
+  return o;
+}
+
+// linkTranscript is protocol.LinkTranscript.
+export const linkTranscript = (o, dev, join) => utf8.encode(linkDomain + '{"offer":' + goString(o.offer) + ',"expires":' + goInt(o.expires, "expiry") +
+  ',"person":' + goString(o.person) + ',"seq":' + goInt(o.seq, "seq") + ',"roster":' + goString(o.roster) + ',"approver":' +
+  goString(o.approver.fingerprint) + ',"device":' + marshalPublic(dev) + ',"join":' + goBytes(join) + "}");
+
+// linkMAC is HMAC-SHA256 under the offer's secret over the transcript.
+export async function linkMAC(o, dev, join) {
+  const key = await subtle.importKey("raw", o.secret, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await subtle.sign("HMAC", key, linkTranscript(o, dev, join)));
+}
+
+// checkLinkMAC compares mac with linkMAC (WebCrypto's verify: constant time).
+export async function checkLinkMAC(o, dev, join, mac) {
+  const key = await subtle.importKey("raw", o.secret, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  return subtle.verify("HMAC", key, mac, linkTranscript(o, dev, join));
 }
 
 // DM root (E0).
@@ -606,7 +776,7 @@ export const rootID = (c) => hashOf(rootCanonical(c));
 export const rootMember = (c, person) => ((c.members || []).find((m) => m.person === person) || {}).roster;
 
 export function validateRoot(c) {
-  if (c.v !== 1 || c.kind !== "dm") throw new Error("conversation: unsupported root");
+  if (c.v !== 2 || c.kind !== "dm") throw new Error("conversation: unsupported root");
   const cr = c.creator;
   if (!validID(cr.person) || !validHash(cr.roster) || !validFingerprint(cr.fingerprint)) throw new Error("conversation: invalid creator");
   if (!validAddress(cr.address)) throw new Error("conversation: invalid address " + cr.address);
@@ -623,7 +793,7 @@ export function validateRoot(c) {
 export async function newRoot(keys, me, other) {
   const members = [{ person: me.person, roster: me.roster }, { person: other.person, roster: other.roster }]
     .sort((a, b) => (a.person < b.person ? -1 : 1));
-  const c = { v: 1, kind: "dm", creator: { person: me.person, roster: me.roster, address: me.address, fingerprint: me.fingerprint },
+  const c = { v: 2, kind: "dm", creator: { person: me.person, roster: me.roster, address: me.address, fingerprint: me.fingerprint },
     members, nonce: newID(), created: Math.floor(Date.now() / 1000) };
   validateRoot(c);
   c.sig = await signBytes(keys, rootCanonical(c));
@@ -668,7 +838,7 @@ export function validateCaps(c) {
 }
 
 // newCaps is this device session's signed record (for PUT /v1/caps).
-export async function newCaps(keys, address, session, caps = [CapEnv2]) {
+export async function newCaps(keys, address, session, caps = [CapEnv2, CapPerson]) {
   const c = { address, session, caps: [...caps].sort(), ts: Math.floor(Date.now() / 1000) };
   validateCaps(c);
   c.sig = await signBytes(keys, capsCanonical(c));

@@ -46,11 +46,38 @@ async function handle(req) {
     const r = await wire.newRoster(keys, address, req.label);
     return { json: wire.rosterJSON(r), hash: await wire.rosterHash(r) };
   }
-  case "parseRoster": {
-    const r = wire.parseRoster(req.json);
-    await wire.verifyRoster(r, wire.unb64(req.key, "key"));
-    return { hash: await wire.rosterHash(r) };
+  case "parseRoster": { // a first roster, or with prev the step after it
+    const r = await wire.parseRoster(req.json);
+    if (!req.prev) {
+      await wire.verifyFirst(r);
+      return { hash: await wire.rosterHash(r) };
+    }
+    const added = await wire.verifyNext(r, await wire.parseRoster(req.prev));
+    return { hash: await wire.rosterHash(r), added: added ? added.address : "" };
   }
+  case "nextRoster": { // this device signs the step after prev with these devices (and an added one's join)
+    const prev = await wire.parseRoster(req.prev);
+    const devices = await Promise.all(req.devices.map((d) => wire.parsePublic(JSON.parse(d))));
+    const r = await wire.nextRoster(keys, address, prev, devices, req.join ? wire.unb64(req.join, "join") : null);
+    return { json: wire.rosterJSON(r), hash: await wire.rosterHash(r) };
+  }
+  case "joinSign": // this device's consent to join person at seq after prev
+    return { join: wire.b64(await wire.joinConsent(keys, address, req.person, req.seq, req.prev)) };
+  case "decodeOffer": {
+    const o = wire.decodeOffer(req.code);
+    return { offer: Object.assign({}, o, { secret: wire.b64(o.secret) }) };
+  }
+  case "encodeOffer":
+    return { code: wire.encodeOffer(Object.assign({}, req.offer, { secret: wire.unb64(req.offer.secret, "secret") })) };
+  case "linkMAC": { // the MAC this device sends with its join, and whether a given one checks
+    const o = wire.decodeOffer(req.code);
+    const dev = req.device ? await wire.parsePublic(JSON.parse(req.device)) : await wire.publicEntry(keys, address);
+    const join = wire.unb64(req.join, "join");
+    const mac = await wire.linkMAC(o, dev, join);
+    return { mac: wire.b64(mac), checks: req.check ? await wire.checkLinkMAC(o, dev, join, wire.unb64(req.check, "mac")) : null };
+  }
+  case "joinLink":
+    return { body: await wire.joinRequest(keys, address, req.secret, { offer: req.offer, join: wire.unb64(req.join, "join"), mac: wire.unb64(req.mac, "mac") }) };
   case "validLabel":
     return { ok: req.labels.map((l) => { try { wire.validLabel(l); return true; } catch (e) { return false; } }) };
   case "root": {

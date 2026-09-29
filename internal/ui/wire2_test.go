@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -68,6 +69,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 	}
 
 	var danaRoster protocol.PersonRoster
+	pubJSON := func(p identity.Public) string { return marshal(t, p) }
 	t.Run("person rosters", func(t *testing.T) {
 		v := w.ok(map[string]any{"op": "roster", "label": "Dana <&> 😀"})
 		r, err := protocol.ParsePersonRoster([]byte(v["json"].(string)))
@@ -79,7 +81,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		}
 		danaRoster = r
 		br := goRoster(bobID, bob.Address, "Bob")
-		if got := w.ok(map[string]any{"op": "parseRoster", "json": marshal(t, br), "key": b64(bob.SignKey)}); got["hash"] != br.Hash() {
+		if got := w.ok(map[string]any{"op": "parseRoster", "json": marshal(t, br)}); got["hash"] != br.Hash() {
 			t.Fatalf("hash of Go's person: %v, want %s", got["hash"], br.Hash())
 		}
 		for what, change := range map[string]func(*protocol.PersonRoster){
@@ -89,8 +91,11 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			"long label":        func(r *protocol.PersonRoster) { r.Label = strings.Repeat("é", 33) },
 			"later roster":      func(r *protocol.PersonRoster) { r.Seq = 1 },
 			"prev":              func(r *protocol.PersonRoster) { r.Prev = strings.Repeat("a", 64) },
-			"two devices":       func(r *protocol.PersonRoster) { r.Devices = append(r.Devices, r.Devices[0]) },
+			"a signer at seq 0": func(r *protocol.PersonRoster) { r.By = bob.Fingerprint() },
+			"two devices":       func(r *protocol.PersonRoster) { r.Devices = append(r.Devices, eveID.Public("eve/lab")) },
+			"a device twice":    func(r *protocol.PersonRoster) { r.Devices = append(r.Devices, r.Devices[0]) },
 			"bad device key":    func(r *protocol.PersonRoster) { r.Devices[0].SignKey = r.Devices[0].SignKey[:5] },
+			"unbound box key":   func(r *protocol.PersonRoster) { r.Devices[0].BoxSig = eveID.Public(bob.Address).BoxSig },
 			"bad address":       func(r *protocol.PersonRoster) { r.Devices[0].Address = "Bob" },
 			"bad id":            func(r *protocol.PersonRoster) { r.Person = "x" },
 		} {
@@ -98,13 +103,20 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			change(&r)
 			r.Sign(bobID.Sign)
 			raw := marshal(t, r)
-			_, goErr := protocol.ParsePersonRoster([]byte(raw))
+			goErr := func() error {
+				p, err := protocol.ParsePersonRoster([]byte(raw))
+				if err != nil {
+					return err
+				}
+				return p.VerifyFirst()
+			}()
 			both(t, what, "parseRoster", raw, bob.SignKey, goErr)
 		}
 		r = goRoster(bobID, bob.Address, "Bob")
 		r.Sig[0] ^= 1
 		both(t, "flipped signature", "parseRoster", marshal(t, r), bob.SignKey, r.VerifyFirst())
-		r = goRoster(eveID, bob.Address, "Bob") // signed by another key
+		r = goRoster(bobID, bob.Address, "Bob")
+		r.Sign(eveID.Sign) // signed by a key that is not its device's
 		both(t, "other key", "parseRoster", marshal(t, r), bob.SignKey, r.VerifyFirst())
 		raw := strings.TrimSuffix(marshal(t, goRoster(bobID, bob.Address, "Bob")), "}") + `,"admin":true}`
 		_, goErr := protocol.ParsePersonRoster([]byte(raw))
@@ -124,6 +136,130 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			if (err == nil) != got[i].(bool) {
 				t.Errorf("label %q: Go %v, device %v", l, err, got[i])
 			}
+		}
+	})
+
+	// Roster chains: each side follows the other's steps, adding a device
+	// (with its consent) or removing one, and both refuse what breaks the
+	// chain.
+	t.Run("roster chains", func(t *testing.T) {
+		// Go's person adds the device (its consent signed there).
+		b0 := goRoster(bobID, bob.Address, "Bob")
+		join, _ := base64.StdEncoding.DecodeString(w.ok(map[string]any{"op": "joinSign", "person": b0.Person, "seq": 1, "prev": b0.Hash()})["join"].(string))
+		b1 := protocol.PersonRoster{Person: b0.Person, Label: b0.Label, Seq: 1, Prev: b0.Hash(), Devices: []identity.Public{b0.Devices[0], pub}, By: bob.Fingerprint(), Join: join}
+		b1.Sign(bobID.Sign)
+		if _, err := b1.VerifyNext(b0); err != nil {
+			t.Fatalf("Go refuses the device's consent: %v", err)
+		}
+		got := w.ok(map[string]any{"op": "parseRoster", "json": marshal(t, b1), "prev": marshal(t, b0)})
+		if got["hash"] != b1.Hash() || got["added"] != dana {
+			t.Fatalf("the device reads Go's step as %v, want %s adding %s", got, b1.Hash(), dana)
+		}
+		// The device's person adds a Go device (its consent signed by Go), then removes it.
+		eve := eveID.Public("eve/lab")
+		eveJoin := ed25519.Sign(eveID.Sign, protocol.JoinBytes(danaRoster.Person, 1, danaRoster.Hash(), eve))
+		v := w.ok(map[string]any{"op": "nextRoster", "prev": marshal(t, danaRoster), "devices": []string{pubJSON(pub), pubJSON(eve)}, "join": b64(eveJoin)})
+		d1, err := protocol.ParsePersonRoster([]byte(v["json"].(string)))
+		if err != nil || marshal(t, d1) != v["json"] || d1.Hash() != v["hash"] {
+			t.Fatalf("Go reads the device's step differently: %v\n%s\n%s", err, v["json"], marshal(t, d1))
+		}
+		if added, err := d1.VerifyNext(danaRoster); err != nil || added == nil || added.Address != eve.Address {
+			t.Fatalf("Go refuses the device's step adding eve: %v %v", added, err)
+		}
+		v = w.ok(map[string]any{"op": "nextRoster", "prev": marshal(t, d1), "devices": []string{pubJSON(pub)}})
+		d2, err := protocol.ParsePersonRoster([]byte(v["json"].(string)))
+		if err != nil || d2.Hash() != v["hash"] {
+			t.Fatalf("the removal: %v", err)
+		}
+		if added, err := d2.VerifyNext(d1); err != nil || added != nil {
+			t.Fatalf("Go refuses the device's removal: %v %v", added, err)
+		}
+		// Refused alike: a broken chain.
+		step := func(change func(*protocol.PersonRoster)) (string, error) {
+			r := protocol.PersonRoster{Person: b0.Person, Label: b0.Label, Seq: 1, Prev: b0.Hash(), Devices: []identity.Public{b0.Devices[0], pub}, By: bob.Fingerprint(), Join: join}
+			change(&r)
+			r.Sign(bobID.Sign)
+			raw := marshal(t, r)
+			p, err := protocol.ParsePersonRoster([]byte(raw))
+			if err == nil {
+				_, err = p.VerifyNext(b0)
+			}
+			return raw, err
+		}
+		for what, change := range map[string]func(*protocol.PersonRoster){
+			"no consent":       func(r *protocol.PersonRoster) { r.Join = nil },
+			"another consent":  func(r *protocol.PersonRoster) { r.Join = eveJoin },
+			"two added":        func(r *protocol.PersonRoster) { r.Devices = append(r.Devices, eve) },
+			"a signer outside": func(r *protocol.PersonRoster) { r.By = eve.Fingerprint() },
+			"wrong prev":       func(r *protocol.PersonRoster) { r.Prev = strings.Repeat("b", 64) },
+			"skipped seq":      func(r *protocol.PersonRoster) { r.Seq = 2 },
+			"moved device":     func(r *protocol.PersonRoster) { d := bobID.Public("bob/other"); r.Devices[0] = d },
+			"other person":     func(r *protocol.PersonRoster) { r.Person = protocol.NewID() },
+		} {
+			raw, goErr := step(change)
+			if goErr == nil {
+				t.Fatalf("%s: Go accepts it", what)
+			}
+			if v := w.call(map[string]any{"op": "parseRoster", "json": raw, "prev": marshal(t, b0)}); v["error"] == nil {
+				t.Errorf("%s: the device accepts what Go refuses (%v)", what, goErr)
+			}
+		}
+		// A join consent shown to Go byte for byte.
+		if got := protocol.JoinBytes(b0.Person, 1, b0.Hash(), pub); !ed25519.Verify(pub.SignKey, got, join) {
+			t.Fatal("the device's consent is not over Go's join bytes")
+		}
+	})
+
+	// Device links: an offer read and written alike; the MAC and a join
+	// request that carries the link agree with Go.
+	t.Run("device links", func(t *testing.T) {
+		code := protocol.Invite{Hub: "https://hub.example", Label: "dana", Secret: protocol.NewID()}.Encode()
+		secret := make([]byte, protocol.LinkSecretSize)
+		rand.Read(secret)
+		o := protocol.LinkOffer{V: 2, Invite: code, Offer: protocol.NewID(), Expires: time.Now().Add(5 * time.Minute).Unix(), Person: danaRoster.Person,
+			Seq: 0, Roster: danaRoster.Hash(), Approver: protocol.LinkApprover{Address: dana, Fingerprint: pub.Fingerprint()}, Secret: secret}
+		got := w.ok(map[string]any{"op": "decodeOffer", "code": "https://hub.example/#" + o.Encode()})["offer"].(map[string]any)
+		if got["offer"] != o.Offer || got["invite"] != o.Invite || got["roster"] != o.Roster || got["secret"] != b64(secret) ||
+			got["approver"].(map[string]any)["fingerprint"] != o.Approver.Fingerprint {
+			t.Fatalf("the device reads Go's offer as %v", got)
+		}
+		back := w.ok(map[string]any{"op": "encodeOffer", "offer": got})["code"].(string)
+		if back != o.Encode() {
+			t.Fatalf("the device writes the offer differently:\n%s\n%s", back, o.Encode())
+		}
+		if _, err := protocol.DecodeLinkOffer(back); err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"agentnet-link-v2:%%%", "agentnet-invite-v1:x", o.Encode()[:40]} {
+			if v := w.call(map[string]any{"op": "decodeOffer", "code": bad}); v["error"] == nil {
+				t.Errorf("the device reads a damaged code %q", bad)
+			}
+		}
+		join := ed25519.Sign(eveID.Sign, protocol.JoinBytes(o.Person, 1, o.Roster, eveID.Public("eve/lab")))
+		eve := eveID.Public("eve/lab")
+		want := protocol.LinkMAC(o, eve, join)
+		m := w.ok(map[string]any{"op": "linkMAC", "code": o.Encode(), "device": pubJSON(eve), "join": b64(join), "check": b64(want)})
+		if m["mac"] != b64(want) || m["checks"] != true {
+			t.Fatalf("the MAC differs from Go's: %v, want %s", m, b64(want))
+		}
+		bad := append([]byte{}, want...)
+		bad[0] ^= 1
+		if m := w.ok(map[string]any{"op": "linkMAC", "code": o.Encode(), "device": pubJSON(eve), "join": b64(join), "check": b64(bad)}); m["checks"] != false {
+			t.Fatal("the device accepts a changed MAC")
+		}
+		// The device joining with a link: Go reads its request, consent and MAC.
+		dj, _ := base64.StdEncoding.DecodeString(w.ok(map[string]any{"op": "joinSign", "person": o.Person, "seq": o.Seq + 1, "prev": o.Roster})["join"].(string))
+		dm, _ := base64.StdEncoding.DecodeString(w.ok(map[string]any{"op": "linkMAC", "code": o.Encode(), "join": b64(dj)})["mac"].(string))
+		body := w.ok(map[string]any{"op": "joinLink", "secret": "invite-secret", "offer": o.Offer, "join": b64(dj), "mac": b64(dm)})["body"].(string)
+		var jr protocol.JoinRequest
+		if err := strictJSON([]byte(body), &jr); err != nil || jr.Link == nil {
+			t.Fatalf("the join request: %v %s", err, body)
+		}
+		if err := protocol.VerifyJoin(jr); err != nil || marshal(t, jr) != body {
+			t.Fatalf("Go refuses or rewrites the device's join: %v\n%s\n%s", err, body, marshal(t, jr))
+		}
+		if !ed25519.Verify(jr.Public.SignKey, protocol.JoinBytes(o.Person, o.Seq+1, o.Roster, jr.Public), jr.Link.Join) || !protocol.CheckLinkMAC(o, jr.Public, jr.Link.Join, jr.Link.MAC) {
+			t.Fatal("Go refuses the device's consent or MAC")
 		}
 	})
 
@@ -165,7 +301,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			"creator roster":  func(c *protocol.ConvRoot) { c.Creator.Roster = strings.Repeat("a", 64) },
 			"creator outside": func(c *protocol.ConvRoot) { c.Creator.Person = protocol.NewID() },
 			"group":           func(c *protocol.ConvRoot) { c.Kind = "group" },
-			"version":         func(c *protocol.ConvRoot) { c.V = 2 },
+			"version 1":       func(c *protocol.ConvRoot) { c.V = 1 },
 			"bad nonce":       func(c *protocol.ConvRoot) { c.Nonce = "x" },
 			"no time":         func(c *protocol.ConvRoot) { c.Created = 0 },
 		} {
@@ -290,6 +426,22 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		if q.Target == nil || q.Target.Address != bob.Address {
 			t.Fatalf("target: %+v", q.Target)
 		}
+		// fan: the rosters the sender sent copies to, and history copies.
+		fan := []map[string]any{{"person": danaRoster.Person, "roster": danaRoster.Hash()}, {"person": bobRoster.Person, "roster": bobRoster.Hash()}}
+		f := in2(w.ok(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": msg(map[string]any{"fan": fan, "sub": "history", "replica": true})}))
+		if len(f.Fan) != 2 || f.Fan[0].Person != danaRoster.Person || f.Fan[1].Roster != bobRoster.Hash() || f.Sub != envelope.SubHistory || !f.Replica {
+			t.Fatalf("fan and history: %+v %q %v", f.Fan, f.Sub, f.Replica)
+		}
+		gfan := envelope.Inner{V: 2, ID: protocol.NewID(), From: bob.Address, To: dana, TS: now, Kind: "message", Body: "fanned", Conv: conv, LID: protocol.NewID(),
+			Root: json.RawMessage(root), Origin: "ui", Fan: []envelope.Fan{{Person: bobRoster.Person, Roster: bobRoster.Hash()}}}
+		genv, err := envelope.Seal(gfan, bobID.Sign, danaRecipient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gi := w.ok(map[string]any{"op": "open", "envelope": marshal(t, genv), "from": publicJSON(t, bob)})["inner"].(map[string]any)
+		if gf, _ := gi["fan"].([]any); len(gf) != 1 || gf[0].(map[string]any)["roster"] != bobRoster.Hash() {
+			t.Fatalf("the device reads Go's fan as %v", gi["fan"])
+		}
 		// What Go's Seal refuses, the device refuses to seal.
 		for what, extra := range map[string]map[string]any{
 			"v1 with a conversation": {"v": 1},
@@ -300,6 +452,9 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			"bad emotion":            {"origin": "agent:claude", "emotion": "Happy"},
 			"target on a message":    {"target": map[string]any{"address": bob.Address, "fingerprint": bob.Fingerprint()}},
 			"bad conversation id":    {"conv": "x"},
+			"three in the fan":       {"fan": []map[string]any{{"person": protocol.NewID(), "roster": goRoot.Creator.Roster}, {"person": protocol.NewID(), "roster": goRoot.Creator.Roster}, {"person": protocol.NewID(), "roster": goRoot.Creator.Roster}}},
+			"one person twice":       {"fan": []map[string]any{{"person": danaRoster.Person, "roster": goRoot.Creator.Roster}, {"person": danaRoster.Person, "roster": goRoot.Creator.Roster}}},
+			"bad fan roster":         {"fan": []map[string]any{{"person": danaRoster.Person, "roster": "x"}}},
 		} {
 			m := msg(extra)
 			goIn := envelope.Inner{V: 2, ID: m["id"].(string), From: dana, To: bob.Address, TS: now, Kind: "message", Body: "x",
@@ -310,6 +465,11 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			}
 			if tg, ok := extra["target"].(map[string]any); ok {
 				goIn.Target = &envelope.Target{Address: tg["address"].(string), Fingerprint: tg["fingerprint"].(string)}
+			}
+			if fs, ok := extra["fan"].([]map[string]any); ok {
+				for _, f := range fs {
+					goIn.Fan = append(goIn.Fan, envelope.Fan{Person: f["person"].(string), Roster: f["roster"].(string)})
+				}
 			}
 			_, goErr := envelope.Seal(goIn, bobID.Sign, danaRecipient)
 			vv := w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": m})
