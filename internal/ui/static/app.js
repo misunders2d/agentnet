@@ -590,6 +590,7 @@ function dmMsg(m, t, prev) {
   const cont = prev && !prev.event && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
     !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
+  const acts = m.actions || []; // a request to your agent: yours to decide on
   const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who" }, author),
     agent && el("span", { class: "tag" }, "Agent"),
     to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
@@ -597,7 +598,7 @@ function dmMsg(m, t, prev) {
     m.unread && el("span", { class: "tag unread" }, "New"),
     el("time", { datetime: m.at }, when(m.at)));
   const parent = m.reply_to && t.messages.find((x) => x.id === m.reply_to);
-  return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held ? " needs" : "") },
+  return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held || acts.length ? " needs" : "") },
     !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
       el("div", { class: "bubble", tabindex: "-1" },
@@ -605,8 +606,11 @@ function dmMsg(m, t, prev) {
           : el("span", { class: "replyref" }, "Reply to a message not shown here")),
         el("p", { class: "body" }, m.body)),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
+      acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
+        m.job_detail && el("p", { class: "hint" }, m.job_detail),
+        el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
-      el("div", { class: "foot" }, !held && m.state_text && el("span", {}, m.state_text),
+      el("div", { class: "foot" }, !held && !acts.length && m.state_text && el("span", {}, m.state_text),
         !t.frozen && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         dmDetails(m))));
 }
@@ -633,7 +637,10 @@ const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) =>
 // agentName names an agent by the person whose installation runs it.
 const agentName = (a) => (a.host_here ? "Your agent" : a.host.label + "'s agent");
 const isMe = (p) => !!p && p.state === "self";
-const mayTask = (a) => a.tasks_from.some(isMe);
+// taskFree says whether your tasks run without its owner accepting each one
+// (the invitation names your key). Anyone in the DM may still give it a
+// task: the owner then accepts it, unless they already allow your key.
+const taskFree = (a) => a.host_here || a.tasks_from.some(isMe);
 
 // renderAgents shows the agents invited into the open DM: whose each is,
 // what it may be shown, who may give it tasks, and what you can do now.
@@ -654,7 +661,8 @@ function agentCard(a, t) {
   const facts = ["invited by " + (isMe(a.inviter) ? "you" : a.inviter.label),
     shown ? "shown " + plural(shown, "earlier message", "earlier messages") + (a.missing ? " (" + a.missing + " not here)" : "")
       : "shown no earlier messages",
-    a.tasks_from.length ? "tasks from " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") : "questions only"];
+    a.tasks_from.length ? "tasks without asking from " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ")
+      : "tasks wait for " + (a.host_here ? "you" : a.host.label) + " to accept them"];
   return el("div", { class: "agent-card " + a.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", {}, agentName(a)),
       el("span", { class: "hint" }, "on " + a.host.address)),
@@ -695,8 +703,8 @@ function inviteDialog(t) {
       el("fieldset", { class: "choices" }, el("legend", {}, "Earlier messages it may be shown"),
         share.length ? share.map((c) => c.row) : el("p", { class: "hint" }, "No messages yet."),
         el("p", { class: "hint" }, "None unless you choose. Nothing else earlier is given.")),
-      el("fieldset", { class: "choices" }, el("legend", {}, "Who may give it tasks"), tasks.map((c) => c.row),
-        el("p", { class: "hint" }, "Either of you can ask it questions. Tasks only from those chosen.")),
+      el("fieldset", { class: "choices" }, el("legend", {}, "Tasks without asking its owner each time"), tasks.map((c) => c.row),
+        el("p", { class: "hint" }, "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
       el("label", { for: "agent-note", class: "field-label" }, "A note for its owner (optional)"), note],
     ok: "Invite",
     run: async () => {
@@ -721,7 +729,8 @@ function decideDialog(a, t, accept) {
       el("p", {}, shared.length ? "It may be shown these earlier messages:" : "It is shown no earlier messages."),
       shared.length > 0 && el("ul", { class: "quote-list" }, shared.map((m) => el("li", {}, dmAuthor(m, t) + ": " + firstLine(m.body, 90)))),
       a.missing > 0 && el("p", { class: "hint" }, plural(a.missing, "chosen message is", "chosen messages are") + " not on this computer and cannot be shown."),
-      el("p", {}, a.tasks_from.length ? "Tasks from: " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") + "." : "Questions only: no one may give it tasks."),
+      el("p", {}, a.tasks_from.length ? "Tasks run without asking you when they come from: " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") + "."
+        : "Every task waits for you to accept it."),
       a.note && el("p", {}, "Their note: " + a.note),
       el("p", { class: "hint" }, "You accept exactly this, all or nothing. Either of you can dismiss it later.")]
       : [el("p", {}, "Your agent does not join. If you change your mind, they can invite it again.")],
@@ -737,7 +746,9 @@ function decideDialog(a, t, accept) {
 function dismissDialog(a) {
   dialog({
     title: "Dismiss " + agentName(a).replace(/^Your/, "your") + "?",
-    body: [el("p", {}, "It gets nothing more from this DM and nothing more can be asked of it. What was already said stays. To have it again, invite it again.")],
+    body: [el("p", {}, "It gets nothing more from this DM and nothing more can be asked of it. What was already said stays. To have it again, invite it again."),
+      el("p", { class: "hint" }, a.host_here ? "If it is running something now, that stops, and its reply is kept here."
+        : "Something it already started on " + a.host.address + " may still finish, and its reply arrive, before the dismissal reaches that computer.")],
     ok: "Dismiss",
     run: async () => {
       await api("/api/dm/agent/dismiss", { pid: a.pid });
@@ -1393,7 +1404,7 @@ function syncComposer() {
     $("send").disabled = blocked || state.sending;
     const a = state.dmAgent && agentOf(state.dmAgent);
     // Asking an agent: a question, or a task when the invitation lets you give it tasks.
-    $("kind").hidden = !a || !mayTask(a);
+    $("kind").hidden = !a;
     for (const r of document.querySelectorAll('input[name="kind"]')) {
       const l = r.value === "message" && r.closest && r.closest("label");
       if (l) l.hidden = !!a;
@@ -1462,7 +1473,8 @@ function kindHint() {
   if (state.dm) {
     const a = state.dmAgent && agentOf(state.dmAgent);
     $("compose-hint").textContent = !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
-      : kindValue() === "task" ? "The invitation lets you give it tasks. It runs on " + a.host.address + ". Ctrl+Enter sends."
+      : kindValue() === "task" ? (taskFree(a) ? "It runs on " + a.host.address + " without asking " + (a.host_here ? "you" : a.host.label) + " first."
+        : a.host.label + " accepts it first, unless they already allow tasks from your key.") + " Ctrl+Enter sends."
         : "Both of you see what you ask and what it answers. It runs on " + a.host.address + ". Ctrl+Enter sends.";
     return;
   }

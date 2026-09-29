@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -205,4 +207,123 @@ func eventLines(ms []DMMessage) string {
 		}
 	}
 	return strings.Join(out, "|")
+}
+
+// Only this device's person decides on a request to its agent, and only
+// what the core allows in that state.
+func TestAgentActions(t *testing.T) {
+	for _, c := range []struct {
+		kind, state string
+		want        string
+	}{
+		{"task", "awaiting", "accept"},
+		{"question", "awaiting", ""},
+		{"task", "running", "cancel"},
+		{"question", "needs_human", "accept,resolve"},
+		{"task", "failed", "accept"},
+		{"task", "interrupted", "accept"},
+		{"question", "cancelled", "accept"},
+		{"question", "part_waiting", ""},
+		{"question", "answered", ""},
+		{"task", "not_run", ""},
+		{"task", "not_delivered", ""},
+		{"question", "conv_held", ""},
+	} {
+		if got := strings.Join(AgentActions(c.kind, c.state), ","); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.kind, c.state, got, c.want)
+		}
+	}
+}
+
+// A task needs no standing permission to be asked: with no task keys in
+// the invitation, Bob's task to Alice's agent waits for Alice, and runs
+// once when she accepts it from her page. The agent is a stand-in binary
+// named like a supported harness (no model is called).
+func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in")
+	}
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	t.Setenv("HOME", t.TempDir()) // nothing of the real harness's sessions is read
+	bin := t.TempDir()
+	log := filepath.Join(bin, "runs")
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nprintf 'rotated\\n\\nemotion: calm\\n'\n"), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
+	bob, err := client.Join(ctx, filepath.Join(t.TempDir(), "bob"), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bob.Close() })
+	if err := alice.SetResponder(&client.Responder{Harness: "claude", Dir: t.TempDir(), Timeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	runDaemon(t, alice)
+	runDaemon(t, bob)
+	pa, pb := NewLive(alice), NewLive(bob)
+	eventually := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	pa.CreatePerson("Alice")
+	pb.CreatePerson("Bob")
+	var conv string
+	eventually("a DM", func() bool { conv, err = pb.NewDM(alice.Address); return err == nil })
+	inv, err := pb.InviteAgent(AgentInvite{Conv: conv, Host: alice.Address})
+	if err != nil || len(inv.TasksFrom) != 0 {
+		t.Fatalf("invite without task keys: %+v %v", inv, err)
+	}
+	eventually("the invitation at alice", func() bool { d, _ := pa.DM(conv); return len(d.Agents) == 1 })
+	if _, err := pa.DecideAgent(inv.PID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually("active at bob", func() bool { d, _ := pb.DM(conv); return len(d.Agents) == 1 && d.Agents[0].CanAsk })
+	sent, err := pb.AskAgent(AgentAsk{PID: inv.PID, Kind: "task", Body: "rotate the key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task DMMessage
+	eventually("the task waiting for alice", func() bool {
+		d, _ := pa.DM(conv)
+		for _, m := range d.Messages {
+			if m.ID == sent.ID {
+				task = m
+			}
+		}
+		return task.State == "awaiting"
+	})
+	if strings.Join(task.Actions, ",") != "accept" || !strings.Contains(task.StateText, "accept") {
+		t.Fatalf("the waiting task on alice's page: %+v", task)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("the agent ran before alice accepted")
+	}
+	if _, err := pa.Act(Action{Do: DoAccept, ID: sent.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually("the agent's result at bob", func() bool {
+		d, _ := pb.DM(conv)
+		for _, m := range d.Messages {
+			if m.Dir == "in" && m.PID == inv.PID && strings.HasPrefix(m.Origin, "agent:") && strings.Contains(m.Body, "rotated") {
+				return true
+			}
+		}
+		return false
+	})
+	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 1 {
+		t.Fatalf("the agent ran %q", data)
+	}
 }

@@ -146,6 +146,29 @@ type DMMessage struct {
 	PID       string    `json:"pid,omitempty"`   // the agent participation it is for, from or about
 	To        string    `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
 	Event     string    `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	// A request to this device's agent: what its person can do with it
+	// here (accept, cancel, resolve), and what the run left to say.
+	Actions   []string `json:"actions,omitempty"`
+	JobDetail string   `json:"job_detail,omitempty"`
+}
+
+// AgentActions are the decisions this device's person can take on a
+// request to its agent in state: run a task that needs their accept (or
+// run one again), stop a run, or close what the agent handed back.
+func AgentActions(kind, state string) []string {
+	switch state {
+	case "awaiting":
+		if kind == KindTask {
+			return []string{DoAccept}
+		}
+	case "running":
+		return []string{DoCancel}
+	case "needs_human":
+		return []string{DoAccept, DoResolve}
+	case "interrupted", "failed", "cancelled":
+		return []string{DoAccept}
+	}
+	return nil
 }
 
 // Participants is implemented by providers where agents can be invited

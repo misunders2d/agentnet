@@ -19,7 +19,7 @@ const faceOf = (m) => m.face || (m.dir === "out" && state.overview ? state.overv
 function comicDM(d) {
   const me = state.overview && state.overview.person ? state.overview.person.label : "You";
   return { id: "dm:" + d.id, dm: true, peer: d.peer.label, via: d.peer.address,
-    messages: d.messages.map((m) => Object.assign({}, m, { dm: true, actions: [], author: dmAuthor(m, d),
+    messages: d.messages.map((m) => Object.assign({}, m, { dm: true, actions: m.actions || [], author: dmAuthor(m, d),
       face: m.dir === "out" ? me : d.peer.label || m.from, to: d.peer.label })) };
 }
 

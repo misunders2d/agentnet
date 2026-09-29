@@ -170,6 +170,17 @@ func (l *Live) DM(id string) (DMThread, error) {
 			if m.Target != nil {
 				dm.To = m.Target.Address
 			}
+			// A request to this device's agent: its job state is the row's
+			// (received), or the local job's (this person asking their own agent).
+			switch {
+			case m.PID != "" && m.Dir == "in" && m.Target != nil && m.Target.Address == l.a.Address && !m.Replica:
+				dm.Actions, dm.JobDetail = AgentActions(m.Kind, m.State), m.JobDetail
+			case m.PID != "" && m.Dir == "out" && m.Job != "":
+				dm.Actions, dm.JobDetail = AgentActions(m.Kind, m.Job), m.JobDetail
+				if text := DMStateText("in", m.Kind, m.Job, c.Peer.Address, ""); text != "" {
+					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
+				}
+			}
 			if m.Sub == envelope.SubEvent {
 				dm.Event, dm.Body, dm.StateText = eventText(m.Body, people), "", ""
 			}

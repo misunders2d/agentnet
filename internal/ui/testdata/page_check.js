@@ -603,16 +603,30 @@ const ev = { preventDefault() {} };
   await run('openDM("d4")');
   let ag = JSON.stringify($("agents").children.map(textOf));
   check(!$("agents").hidden && ag.includes("Your agent") && ag.includes("Accept") && ag.includes("Decline") && ag.includes("invited by Alice") &&
-    ag.includes("shown 1 earlier message") && ag.includes("questions only") && ag.includes("help with deploy"),
+    ag.includes("shown 1 earlier message") && ag.includes("tasks wait for you to accept them") && ag.includes("help with deploy"),
     "an invitation to your agent says who invited it, what it may see, and offers accept and decline: " + ag);
   tl = JSON.stringify($("timeline").children.map(textOf));
   check(tl.includes("Alice invited your agent") && !tl.includes('"pid"') && tl.includes("Shared with your agent") && tl.includes("To your agent"),
     "a record reads as a sentence; the shared message and the request to the agent say so: " + tl);
   check($("timeline").children.flatMap((c) => strayText(c)).concat($("agents").children.flatMap((c) => strayText(c))).length === 0,
     "no stray text with agents");
+  check(!tl.includes("Run") && !tl.includes("Stop"), "a request still waiting offers no decision");
+  // A task to your agent that needs your accept: the usual decision, by its id.
+  dmThreads.d4.messages.push(dmsg("m44", "in", "rotate the key", { kind: "task", pid: "pid1", to: "me/laptop", state: "awaiting",
+    state_text: "Needs you: tasks run only if you accept them", actions: ["accept"] }));
+  await run('openDM("d4")');
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("Needs you: tasks run only if you accept them") && tl.includes("Accept"), "a task to your agent offers accept: " + tl);
+  calls.length = 0;
+  run("decide")("accept", dmThreads.d4.messages[3], run("state.dmData"));
+  check(!calls.some((c) => c.path === "/api/act"), "running it waits for the dialog");
+  byId.gate.checked = true;
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/act" && c.body.do === "accept" && c.body.id === "m44"), "accept names that request");
+  dmThreads.d4.messages.pop();
   run("decideDialog")(dmThreads.d4.agents[0], run("state.dmData"), true);
   const acc = JSON.stringify($("dialog-body").children.map(textOf));
-  check(!calls.some((c) => c.path === "/api/dm/agent/decide") && acc.includes("the deploy plan") && acc.includes("Questions only"),
+  check(!calls.some((c) => c.path === "/api/dm/agent/decide") && acc.includes("the deploy plan") && acc.includes("Every task waits for you"),
     "accepting shows exactly what is agreed to, and waits for its button: " + acc);
   await $("dialog-ok").onclick();
   check(calls.some((c) => c.path === "/api/dm/agent/decide" && c.body.pid === "pid1" && c.body.accept === true), "accept sends the host's decision");
@@ -637,7 +651,7 @@ const ev = { preventDefault() {} };
   dmThreads.d4.agents = [agentV("pid2", { state: "active", host: alice, host_here: false, inviter: me, tasks_from: [me], can_ask: true, can_dismiss: true })];
   await run('openDM("d4")');
   ag = JSON.stringify($("agents").children.map(textOf));
-  check(ag.includes("Alice's agent") && ag.includes("Ask") && ag.includes("Dismiss") && !ag.includes("Accept") && ag.includes("tasks from you"),
+  check(ag.includes("Alice's agent") && ag.includes("Ask") && ag.includes("Dismiss") && !ag.includes("Accept") && ag.includes("tasks without asking from you"),
     "someone else's agent offers ask and dismiss, never accept: " + ag);
   run("setDMAgent")(dmThreads.d4.agents[0]);
   check($("body").placeholder === "Ask Alice's agent" && $("kind").hidden === false && !$("replying").hidden,
@@ -649,6 +663,14 @@ const ev = { preventDefault() {} };
   check(asks.length === 1 && asks[0].body.pid === "pid2" && asks[0].body.kind === "question" && asks[0].body.body === "which branch?" &&
     !calls.some((c) => c.path === "/api/dm/send"), "the question goes to the agent, not as a message to the person");
   check(run("state.dmAgent") === "pid2", "follow-ups go to the same agent until cancelled");
+  dmThreads.d4.agents[0].tasks_from = [];
+  await run('openDM("d4")');
+  check($("kind").hidden === false, "a task can be given without standing permission: the owner accepts it");
+  run("setKind")("task");
+  run("kindHint")();
+  check($("compose-hint").textContent.includes("Alice accepts it first"), "and the page says so: " + $("compose-hint").textContent);
+  run("setKind")("question");
+  dmThreads.d4.agents[0].tasks_from = [me];
   await run('openDM("d2")');
   check(run("state.dmAgent") === null && $("body").placeholder === "Write to Alice", "another DM does not ask that agent");
   await run('openDM("d4")');
