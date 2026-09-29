@@ -492,7 +492,8 @@ const ev = { preventDefault() {} };
     "choosing a new agent opens a new conversation to them and sends nothing");
   $("dialog").open = false;
   run("chooseMember")("bob/desk");
-  check(run("state.expanded") === "bob/desk" && !$("dialog").open, "choosing a contact opens the contact");
+  check(run("state.hub && state.hub.kind") === "device" && run("state.hub.key") === "bob/desk" && !$("hub").hidden && !$("dialog").open,
+    "choosing a contact shows its conversations");
   // Not current: presence is not said at all.
   overview.directory = Object.assign({}, overview.directory, { current: false,
     members: overview.directory.members.map((m) => Object.assign({}, m, { presence: "" })) });
@@ -571,11 +572,51 @@ const ev = { preventDefault() {} };
     dmsg("m2", "out", "budget", { state: "waiting", state_text: "Kept here, not sent yet: alice/desk cannot read conversations now" }),
     dmsg("m3", "in", "can you check?", { kind: "question", state: "conv_held", state_text: "Held for you: nothing runs it. Answer here if you want to.", unread: true })] };
   dmThreads.d3 = { id: "d3", peer: { person: "p-vit", label: "Vitalii", address: "vitalii/laptop", state: "pinned" }, created: T, mine: true, messages: [] };
-  run('state.personOpen["p-alice"] = true');
   await run("loadOverview()");
   side = JSON.stringify($("conv-list").children.map(textOf));
-  check(side.includes("2 DMs") && side.includes("budget") && side.includes("deploy") && side.includes("checked against their computer"),
-    "two DMs with one person are listed apart, with how the person is known: " + side);
+  check(side.includes("2 DMs") && side.includes("checked against their computer") && !side.includes("deploy"),
+    "the sidebar has one row for a person, with how they are known, not their DMs: " + side);
+  // A person's row shows their DMs in the main pane, apart; an open DM
+  // links back to them; back goes one level up at a time (MEL-494).
+  const rowOf = (name) => $("conv-list").children.map((li) => li.children && li.children.find((b) => b.tagName === "button" && textOf(b).includes(name))).find(Boolean);
+  rowOf("Alice").click();
+  let hub = JSON.stringify($("hub").children.map(textOf));
+  check(!$("hub").hidden && $("timeline").hidden && $("composer").hidden && hub.includes("budget") && hub.includes("deploy") && hub.includes("New DM with Alice") &&
+    run("state.dm") === null && textOf($("conv-name")) === "Alice", "a person with two DMs shows both, apart, in the main pane: " + hub);
+  check(rowOf("Alice").attrs["aria-current"] === "true", "the sidebar marks the person shown");
+  await run('openDM("d1")');
+  check($("hub").hidden && !$("timeline").hidden && !$("hub-back").hidden && $("hub-back").textContent === "\u2039 Alice \u00b7 2 DMs",
+    "an open DM links back to its person: " + $("hub-back").textContent);
+  run("openHub(state.hub)"); // the link's click
+  check(!$("hub").hidden && run("state.dm") === null, "the link goes back to the person's DMs");
+  await run('openDM("d1")');
+  run("backOneLevel()");
+  check(!$("hub").hidden && run("state.dm") === null, "back from a DM goes to its person first (then to the list)");
+  // With one DM, the person's row opens it directly; a device with one
+  // conversation too; the back link still reaches their view.
+  const twoDMs = overview.dms;
+  overview.dms = twoDMs.filter((d) => d.id === "d1");
+  await run("loadOverview()");
+  rowOf("Alice").click();
+  await pause(10);
+  check(run("state.dm") === "d1" && $("hub").hidden && $("hub-back").textContent === "\u2039 Alice", "a person with one DM opens it directly: " + $("hub-back").textContent);
+  overview.dms = twoDMs;
+  await run("loadOverview()");
+  const deviceRow = (addr) => $("conv-list").children.map((li) => li.children && li.children.find((b) => b.tagName === "button" &&
+    textOf(b).replace(/\s+/g, "").includes(addr) && !textOf(b).includes("Person"))).find(Boolean);
+  const keepThreads = overview.threads;
+  overview.threads = [sum("c1", "carol/ci", { title: "which port?" }), sum("b1", "bob/desk", { title: "hi from bob", count: 2 }), sum("b2", "bob/desk", { title: "port?" })];
+  await run("loadOverview()");
+  deviceRow("carol/ci").click();
+  await pause(10);
+  check(run("state.data && state.data.peer") === "carol/ci" && $("hub").hidden, "a device with one conversation opens it directly");
+  deviceRow("bob/desk").click();
+  await pause(10);
+  hub = JSON.stringify($("hub").children.map(textOf));
+  check(!$("hub").hidden && run("state.data") === null && hub.includes("hi from bob") && hub.includes("New conversation with bob/desk"),
+    "a device with more shows them in the main pane: " + hub);
+  overview.threads = keepThreads;
+  await run("loadOverview()");
   calls.length = 0;
   await run('openDM("d2")');
   check(calls.some((c) => c.path === "/api/dm") && !calls.some((c) => c.path === "/api/thread"), "a DM opens through the DM API");
@@ -1076,7 +1117,8 @@ const ev = { preventDefault() {} };
   const res = JSON.stringify($("conv-list").children.map(textOf));
   check(res.includes("Person") && res.includes("Vitalii") && res.includes("not checked yet"), "a person result says its kind and how it is known: " + res);
   run("choosePerson")(overview.people[1]);
-  check(run("state.query") === "" && run('state.personOpen["listed:vitalii/laptop"]') === true, "choosing a person opens their row, nothing else");
+  check(run("state.query") === "" && run("state.hub.key") === "listed:vitalii/laptop" && !$("hub").hidden && run("state.dm") === null,
+    "choosing a person shows them, nothing else");
 
   // Comic draws a DM as an issue: the person's name, captions for held and
   // kept messages, no decisions.

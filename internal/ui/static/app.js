@@ -5,8 +5,8 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
-  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
+  drafts: {}, draftKey: null, sending: false, hub: null, query: "", singlesOpen: {}, directoryOpen: false,
+  dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
   files: [], opened: [],
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
@@ -95,6 +95,8 @@ async function loadOverview() {
   renderReview(o.review);
   renderThreads(o.threads);
   renderQuarantine(o.quarantine);
+  if (state.dm || state.data) setHubBack();
+  else if (state.hub && !$("hub").hidden) renderHub();
   if (state.pendingOpen) retryOpen();
   return o;
 }
@@ -714,8 +716,7 @@ function chooseMember(addr) {
   clearSearch();
   if (state.overview.threads.some((t) => t.peer === addr)) {
     if (state.lens === "zoom") { Zoom.go(1, { peer: addr, person: null }); return; }
-    state.expanded = addr;
-    rerenderContacts();
+    openHub({ kind: "device", key: addr });
     return;
   }
   newConversationDialog(addr);
@@ -885,14 +886,16 @@ function peopleSection() {
     !people.length && el("li", { class: "hint empty-list" }, "No one else on your server has set up a person yet.")];
 }
 
+// personRow is one person in the sidebar: their DMs open in the main pane
+// (the one DM directly, when there is just one).
 function personRow(p, dms) {
   const key = personKey(p);
-  const open = !!state.personOpen[key];
+  const current = sameHub(state.hub, { kind: "person", key });
   const unread = dms.reduce((n, d) => n + d.unread, 0);
   const held = dms.reduce((n, d) => n + d.held, 0);
   const last = dms[0];
-  const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(open),
-    onclick: () => { state.personOpen[key] = !open; rerenderContacts(); } },
+  const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
+    onclick: () => (dms.length === 1 ? openDM(dms[0].id) : openHub({ kind: "person", key })) },
     avatar(p.label || p.address),
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
@@ -905,12 +908,7 @@ function personRow(p, dms) {
       el("span", { class: "conv-sub" }, "via " + p.address + " · " + (personStateText[p.state] || p.state) +
         (dms.length ? " · " + plural(dms.length, "DM", "DMs") : "")),
       (p.agents || []).map((a) => el("span", { class: "conv-sub agent-link" }, agentLinkText(a, p)))));
-  return el("li", { class: "contact-item" + (open ? " open" : "") }, head,
-    open && el("div", { class: "contact-body" },
-      dms.length > 0 && el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id) => openDM(id)))),
-      p.state === "conflict"
-        ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
-        : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)));
+  return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
 }
 
 // dmFlags shows a DM's numbers side by side.
@@ -934,9 +932,111 @@ function dmRow(d, open) {
 // choosePerson opens a person found by search: their DMs, never a guess.
 function choosePerson(p) {
   clearSearch();
-  state.personOpen[personKey(p)] = true;
   if (state.lens === "zoom") { Zoom.go(1, { person: personKey(p), peer: null }); return; }
+  openHub({ kind: "person", key: personKey(p) });
+}
+
+// ---- a person's or a device's conversations (MEL-494) --------------------------------
+//
+// The sidebar lists people and device contacts, one row each. A row shows
+// their conversations in the main pane (the only one directly, when there
+// is just one), and an open conversation links back to them. It only
+// groups: each conversation keeps its own id and nothing is merged.
+
+// ownerOf is the person or device contact the open conversation belongs to.
+function ownerOf() {
+  if (state.dm) return state.dmData ? { kind: "person", key: personKey(state.dmData.peer) } : null;
+  return state.data ? { kind: "device", key: state.data.peer } : null;
+}
+
+const sameHub = (a, b) => !!(a && b && a.kind === b.kind && a.key === b.key);
+
+// hubOf is what a person's or device's view shows now: the person and
+// their DMs, or the device contact with its conversations.
+function hubOf(h) {
+  const o = state.overview;
+  if (!o || !h) return null;
+  if (h.kind === "person") {
+    const dms = (o.dms || []).filter((d) => personKey(d.peer) === h.key);
+    const p = (o.people || []).find((x) => personKey(x) === h.key) || (dms[0] && dms[0].peer);
+    return p ? { label: p.label, person: p, dms, count: dms.length } : null;
+  }
+  const c = contactsOf(o.threads || []).find((x) => x.peer === h.key);
+  return c ? { label: c.peer, contact: c, count: c.conversations.length + c.singles.length } : null;
+}
+
+// openHub shows a person's or device's conversations, leaving the open
+// one (its draft stays with it).
+function openHub(h) {
+  if (state.dm) beginDM(null);
+  else if (state.data || state.thread) beginThread(null);
+  state.hub = h;
+  document.body.classList.add("show-conv");
+  renderHub();
   rerenderContacts();
+}
+
+// showPane shows a person's or device's conversations ("hub") or the open
+// conversation ("conv") in the main pane.
+function showPane(which) {
+  const hub = which === "hub";
+  $("hub").hidden = !hub;
+  $("timeline").hidden = hub || state.lens === "comic";
+  $("comic").hidden = hub || state.lens !== "comic";
+  if (hub) {
+    $("composer").hidden = true;
+    $("agents").hidden = true;
+    $("notice").hidden = true;
+    $("hub-back").hidden = true;
+    fill($("peer-chips"));
+  }
+}
+
+function renderHub() {
+  const x = hubOf(state.hub);
+  showPane("hub");
+  if (!x) {
+    fill($("conv-name"), "Choose a conversation");
+    $("conv-topic").textContent = "";
+    $("conv-presence").textContent = "";
+    fill($("hub"), el("p", { class: "hint empty-list" }, "This is not on this computer any more."));
+    return;
+  }
+  $("conv-avatar").replaceWith(Object.assign(avatar(x.label), { id: "conv-avatar" }));
+  if (x.person) {
+    const p = x.person;
+    fill($("conv-name"), p.label);
+    $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
+    $("conv-presence").textContent = "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state);
+    fill($("hub"),
+      (p.agents || []).map((a) => el("p", { class: "hint agent-link" }, agentLinkText(a, p))),
+      x.dms.length ? el("ul", { class: "thread-list hub-list", "aria-label": "DMs with " + p.label }, x.dms.map((d) => dmRow(d, (id) => openDM(id))))
+        : el("p", { class: "hint empty-list" }, "No DMs with " + p.label + " yet."),
+      p.state === "conflict" ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
+        : el("button", { type: "button", class: "chip new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label));
+    return;
+  }
+  const c = x.contact;
+  fill($("conv-name"), who(c.peer));
+  $("conv-topic").textContent = "Device · " + [plural(c.conversations.length, "conversation", "conversations"),
+    c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · ");
+  $("conv-presence").textContent = peerPresence(c.peer) || "";
+  fill($("hub"), contactBody(c, (id) => openThread(id)));
+}
+
+// backOneLevel goes from a conversation to its person or device, and from
+// there to the list.
+function backOneLevel() {
+  if ((state.dm || state.data) && state.hub) openHub(state.hub);
+  else showList();
+}
+
+// setHubBack links the open conversation back to its person or device.
+function setHubBack() {
+  state.hub = ownerOf();
+  const x = hubOf(state.hub);
+  $("hub-back").hidden = !x;
+  if (x) $("hub-back").textContent = "‹ " + x.label + (x.count > 1 ? " · " + plural(x.count, x.person ? "DM" : "conversation", x.person ? "DMs" : "conversations") : "");
 }
 
 // dmAuthor names who wrote a DM message, as the sending AgentNet says.
@@ -976,7 +1076,6 @@ function newDMDialog(p) {
     ok: "Start DM",
     run: async () => {
       const r = await api("/api/dm/new", { address: p.address });
-      state.personOpen[p.person || personKey(p)] = true;
       await loadOverview();
       if (state.lens === "zoom") await Zoom.go(2, { dm: r.id });
       else await openDM(r.id);
@@ -1012,7 +1111,6 @@ async function openDM(id) {
   const changed = beginDM(id);
   document.body.classList.add("show-conv");
   await loadDM(true);
-  if (state.dmData) state.personOpen[personKey(state.dmData.peer)] = true;
   await loadOverview();
   if (changed) api("/api/refresh", { id }).catch(() => {}); // once per open: receipts the server still holds
 }
@@ -1042,7 +1140,9 @@ async function loadDM(scrollToEnd) {
   const n = $("notice");
   n.hidden = !t.frozen;
   fill(n, t.frozen && el("p", {}, t.frozen));
+  showPane("conv");
   $("composer").hidden = false;
+  setHubBack();
   renderAgents(t);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
@@ -1382,9 +1482,10 @@ function renderThreads(threads) {
     return;
   }
   fill(list, reminders, people, devices, ...contactsOf(threads).map((c) => {
-    const expanded = state.expanded === c.peer;
-    const head = el("button", { type: "button", class: "conv-item contact", "aria-expanded": String(expanded),
-      onclick: () => { state.expanded = expanded ? null : c.peer; rerenderContacts(); } },
+    const current = sameHub(state.hub, { kind: "device", key: c.peer });
+    const only = !c.reports.length && c.conversations.length + c.singles.length === 1 && [...c.conversations, ...c.singles][0];
+    const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
+      onclick: () => (only ? openThread(only.id) : openHub({ kind: "device", key: c.peer })) },
       avatar(c.peer),
       el("span", { class: "conv-main" },
         el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), presenceBadge(c.peer), el("span", { class: "conv-time" }, when(c.lastAt))),
@@ -1393,8 +1494,7 @@ function renderThreads(threads) {
           c.keyChanged && el("span", { class: "conv-flag danger" }, "Key changed"), counts(c)),
         el("span", { class: "conv-sub" }, [plural(c.conversations.length, "conversation", "conversations"),
           c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · "))));
-    return el("li", { class: "contact-item" + (expanded ? " open" : "") }, head,
-      expanded && el("div", { class: "contact-body" }, contactBody(c, (id) => openThread(id))));
+    return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
   }), directorySection(threads));
 }
 
@@ -1437,8 +1537,8 @@ function renderSearch(threads) {
   fill($("conv-list"), ...searchItems(state.query, threads, {
     person: (p) => choosePerson(p),
     dm: (d) => { clearSearch(); if (state.lens === "zoom") Zoom.go(2, { dm: d.id }); else openDM(d.id); },
-    contact: (c) => { state.expanded = c.peer; clearSearch(); },
-    conversation: (t) => { state.expanded = t.peer; clearSearch(); openThread(t.id); },
+    contact: (c) => { clearSearch(); openHub({ kind: "device", key: c.peer }); },
+    conversation: (t) => { clearSearch(); openThread(t.id); },
   }));
 }
 
@@ -1490,8 +1590,7 @@ async function openThread(id, focusId) {
   const changed = beginThread(id);
   document.body.classList.add("show-conv");
   await loadThread(changed);
-  if (state.data) { // the sidebar opens at this conversation's contact, with the item in view
-    state.expanded = state.data.peer;
+  if (state.data) { // a single message opens with its device's single messages shown
     const s = state.overview && state.overview.threads.find((x) => x.id === state.data.messages[0].id);
     if (s && s.count === 1 && !(s.review || s.running || s.waiting)) state.singlesOpen[s.peer] = true;
   }
@@ -1540,7 +1639,9 @@ async function loadThread(scrollToEnd) {
   $("conv-presence").textContent = peerPresence(t.peer);
   renderPeerChips(t);
   renderNotice(t);
+  showPane("conv");
   $("composer").hidden = false;
+  setHubBack();
   renderBody(scrollToEnd);
   const key = t.messages[0].id; // a conversation's first message names its draft
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginThread)
@@ -1582,6 +1683,7 @@ function setLens(name) {
     if (state.overview) Zoom.refresh();
   } else {
     renderBody(true);
+    if (!state.dm && !state.data && state.hub) renderHub(); // a person's or device's conversations stay shown
   }
 }
 
@@ -2245,7 +2347,8 @@ function start() {
   for (const b of document.querySelectorAll("#lens [data-lens]")) b.addEventListener("click", () => setLens(b.dataset.lens));
   let saved = null;
   try { saved = localStorage.getItem("agentnet-lens"); } catch (e) { /* default */ }
-  $("back").addEventListener("click", () => document.body.classList.remove("show-conv"));
+  $("back").addEventListener("click", backOneLevel);
+  $("hub-back").addEventListener("click", () => state.hub && openHub(state.hub));
   $("dialog-form").addEventListener("submit", (e) => { if (e.submitter !== $("dialog-cancel")) e.preventDefault(); });
   for (const [id, what] of [["sim-arrival", "arrival"], ["sim-finish", "finish"]]) {
     $(id).addEventListener("click", async () => {
