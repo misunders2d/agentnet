@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -61,6 +62,33 @@ func (l *Live) dmOverview(o *Overview) error {
 	unread, err := l.a.ConvUnread()
 	if err != nil {
 		return err
+	}
+	// The agents each person's device runs in DMs here, from the
+	// participations as resolved (the host's person and device).
+	links := map[string][]AgentLink{}
+	for _, c := range convs {
+		infos, err := l.a.Participations(c.ID)
+		if err != nil {
+			return err
+		}
+		for _, info := range infos {
+			if info.Host.Person == "" {
+				continue
+			}
+			ls := links[info.Host.Person]
+			i := slices.IndexFunc(ls, func(x AgentLink) bool { return x.Address == info.Host.Address })
+			if i < 0 {
+				ls, i = append(ls, AgentLink{Address: info.Host.Address}), len(ls)
+			}
+			ls[i].DMs = append(ls[i].DMs, AgentInDM{Conv: c.ID, PID: info.PID, State: info.State})
+			links[info.Host.Person] = ls
+		}
+	}
+	for i := range o.People {
+		o.People[i].Agents = links[o.People[i].Person]
+	}
+	if o.Person != nil {
+		o.Person.Agents = links[o.Person.Person]
 	}
 	for _, c := range convs {
 		msgs, err := l.a.ConversationMessages(c.ID)

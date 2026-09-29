@@ -632,3 +632,17 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 @media (max-width: 720px) { .agents { padding: 8px 12px; } }
 .panel.narration { min-height: 0; justify-content: space-between; gap: 6px; }
 .panel.narration .caption { position: static; align-self: flex-start; }
+/* A person and the agents their device runs: joined by a line (ownership, not presence). */
+.agent-link { color: var(--accent-text); }
+.person-cluster { display: grid; justify-items: center; gap: 0; }
+.person-cluster.mine { justify-items: start; margin-top: 8px; }
+.agent-nodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: center; }
+.agent-node { position: relative; margin-top: 14px; display: grid; gap: 4px; justify-items: center; padding: 6px 10px; border: 1px dashed var(--accent);
+  border-radius: 12px; background: var(--accent-soft); font-size: 12.5px; text-align: center; }
+.agent-node::before { content: ""; position: absolute; top: -15px; left: 50%; width: 2px; height: 14px; background: var(--accent); }
+.agent-node-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.agent-node-dms { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center; }
+.zoom-agents { margin-top: 16px; display: grid; gap: 6px; justify-items: start; }
+.zoom-agents .agent-node { margin-top: 0; }
+.zoom-agents .agent-node::before { display: none; }
+.mini-chat .event-line { list-style: none; }

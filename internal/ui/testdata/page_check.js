@@ -683,6 +683,15 @@ const ev = { preventDefault() {} };
   await $("dialog-ok").onclick();
   check(calls.some((c) => c.path === "/api/dm/agent/dismiss" && c.body.pid === "pid2"), "either person can dismiss");
 
+  // A person is linked to the agents their device runs, in Classic and Zoom.
+  overview.people = [Object.assign({}, alice, { agents: [{ address: "alice/desk", dms: [{ conv: "d4", pid: "pid2", state: "active" }] }] })];
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("Their agent on alice/desk · 1 DM (1 active)"), "the person row names their agent and its DMs: " + side);
+  const zp = JSON.stringify(textOf(run("Zoom").people()));
+  check(zp.includes("Agent") && zp.includes("Their agent on alice/desk") && zp.includes("active"), "Zoom joins the person to their agent: " + zp);
+  overview.people = [alicePerson];
+
   // Where agents cannot be invited (the browser device), nothing offers it.
   overview.agents = false;
   dmThreads.d4.agents = [];

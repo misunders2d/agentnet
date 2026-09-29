@@ -129,6 +129,26 @@ func TestLiveAgentsInDMs(t *testing.T) {
 	}
 	eventually("active on bob's page", func() bool { a := dm(pb, conv).Agents; return len(a) == 1 && a[0].State == "active" && a[0].CanAsk })
 
+	// Each page links the agent to Alice's person, by the invitation's host.
+	o, _ := pb.Overview()
+	var linked []AgentLink
+	for _, p := range o.People {
+		if p.Address == alice.Address {
+			linked = p.Agents
+		} else if len(p.Agents) != 0 {
+			t.Fatalf("an agent linked to %s: %+v", p.Label, p.Agents)
+		}
+	}
+	if len(linked) != 1 || linked[0].Address != alice.Address || len(linked[0].DMs) != 1 || linked[0].DMs[0].Conv != conv || linked[0].DMs[0].State != "active" {
+		t.Fatalf("alice's agent as bob's page links it: %+v", linked)
+	}
+	if o.Person == nil || len(o.Person.Agents) != 0 {
+		t.Fatalf("bob's own person has an agent: %+v", o.Person)
+	}
+	if o, _ = pa.Overview(); o.Person == nil || len(o.Person.Agents) != 1 || o.Person.Agents[0].Address != alice.Address {
+		t.Fatalf("alice's page does not link her agent to her: %+v", o.Person)
+	}
+
 	// Bob asks it: the question goes to Alice's device, held for her.
 	if _, err := pb.AskAgent(AgentAsk{PID: inv.PID, Body: "  "}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("an empty question: %v", err)

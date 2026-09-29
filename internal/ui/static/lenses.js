@@ -262,6 +262,19 @@ const Comic = {
   },
 };
 
+// agentNodes are a person's agents, each joined to them by a line: the
+// device that runs it and the DMs it was invited into here (open picks one).
+function agentNodes(p, open) {
+  const agents = p.agents || [];
+  if (!agents.length) return null;
+  const dmTitle = (conv) => { const d = ((state.overview && state.overview.dms) || []).find((x) => x.id === conv); return d ? firstLine(d.title || "DM", 40) : "a DM"; };
+  return el("ul", { class: "agent-nodes", "aria-label": (isMe(p) ? "Your" : p.label + "'s") + " agents" }, agents.map((a) =>
+    el("li", { class: "agent-node" },
+      el("span", { class: "agent-node-head" }, el("span", { class: "tag" }, "Agent"), agentLinkText(a, p)),
+      el("span", { class: "agent-node-dms" }, a.dms.map((d) =>
+        el("button", { type: "button", class: "text-btn", onclick: () => open(d.conv) }, dmTitle(d.conv) + " · " + d.state))))));
+}
+
 // zoomDirectory is the directory list the sidebar shows, below the people.
 function zoomDirectory(threads) {
   const rows = directorySection(threads);
@@ -381,8 +394,8 @@ const Zoom = {
   },
 
   // people is the group of persons at the top of Level 0: each by the name
-  // they give, with their device and DMs. No line joins a person to a
-  // device or an agent.
+  // they give, with their device and DMs, and a line to each agent their
+  // device runs in DMs here (the invitation's host, never a name).
   people() {
     const o = state.overview;
     if (!o.persons) return null;
@@ -403,8 +416,10 @@ const Zoom = {
         const b = el("button", { type: "button", class: "person-card" + (p.state === "conflict" ? " danger" : ""), "aria-label": p.label + ", " + status },
           avatar(p.label || p.address, "node-face"), el("span", { class: "node-name" }, p.label), el("span", { class: "node-status" }, status));
         b.addEventListener("click", () => this.go(1, { person: personKey(p), peer: null }, b));
-        return el("li", {}, b);
-      })) : el("p", { class: "hint" }, "No one else on your server has set up a person yet."));
+        return el("li", { class: "person-cluster" }, b, agentNodes(p, (conv) => this.go(2, { person: personKey(p), dm: conv, peer: null })));
+      })) : el("p", { class: "hint" }, "No one else on your server has set up a person yet."),
+      o.person.agents && o.person.agents.length > 0 && el("div", { class: "person-cluster mine" },
+        el("p", { class: "hint" }, "You"), agentNodes(o.person, (conv) => { this.person = null; openDM(conv); })));
   },
 
   // Level 0: the people you have DMs with, and each device you talk to,
@@ -472,7 +487,9 @@ const Zoom = {
         dms.length ? el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id, from) => this.go(2, { dm: id }, from))))
           : el("p", { class: "hint" }, "No DM with " + p.label + " yet."),
         p.state === "conflict" ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
-          : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)));
+          : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)),
+      (p.agents || []).length > 0 && el("section", { class: "zoom-agents" }, el("h3", { class: "zoom-group" }, "Their agent"),
+        agentNodes(p, (conv) => this.go(2, { dm: conv }))));
   },
 
   // Level 2 for a person: one DM as a short chat.
@@ -486,6 +503,7 @@ const Zoom = {
         el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       el("ol", { class: "mini-chat" }, d.messages.map((m) => {
+        if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.at }, when(m.at)));
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),

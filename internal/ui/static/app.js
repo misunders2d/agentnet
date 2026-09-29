@@ -415,7 +415,8 @@ function personRow(p, dms) {
         held > 0 && el("span", { class: "conv-flag calm" }, held + " held"),
         unread > 0 && el("span", { class: "conv-flag unread" }, unread + " new")),
       el("span", { class: "conv-sub" }, "via " + p.address + " · " + (personStateText[p.state] || p.state) +
-        (dms.length ? " · " + plural(dms.length, "DM", "DMs") : ""))));
+        (dms.length ? " · " + plural(dms.length, "DM", "DMs") : "")),
+      (p.agents || []).map((a) => el("span", { class: "conv-sub agent-link" }, agentLinkText(a, p)))));
   return el("li", { class: "contact-item" + (open ? " open" : "") }, head,
     open && el("div", { class: "contact-body" },
       dms.length > 0 && el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id) => openDM(id)))),
@@ -629,6 +630,14 @@ function dmDetails(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
+}
+
+// agentLinkText says which agent a person's device runs, and where it is
+// in DMs here. The link is the invitation's host: that person and device.
+function agentLinkText(a, p) {
+  const active = a.dms.filter((d) => d.state === "active").length;
+  return (isMe(p) ? "Your agent" : "Their agent") + " on " + a.address + " · " + plural(a.dms.length, "DM", "DMs") +
+    (active ? " (" + active + " active)" : "");
 }
 
 // ---- agents in a DM ------------------------------------------------------------------

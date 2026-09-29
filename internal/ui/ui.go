@@ -100,6 +100,24 @@ type PersonView struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 	State       string `json:"state"`
 	Published   bool   `json:"published,omitempty"` // own person: the server holds it, as far as this installation knows
+	// Agents are the agents this person's installation runs in DMs here:
+	// each is linked to the person by the invitation's host (their person
+	// and their device), never by a name or an address alone.
+	Agents []AgentLink `json:"agents,omitempty"`
+}
+
+// AgentLink is one person's agent, on their device, and the DMs it was
+// invited into here.
+type AgentLink struct {
+	Address string      `json:"address"` // the device that runs it
+	DMs     []AgentInDM `json:"dms"`
+}
+
+// AgentInDM is an agent's participation in one DM.
+type AgentInDM struct {
+	Conv  string `json:"conv"`
+	PID   string `json:"pid"`
+	State string `json:"state"`
 }
 
 // DMSummary is one two-person conversation in the sidebar.
