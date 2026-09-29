@@ -6,7 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
-  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null,
+  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
   files: [], opened: [],
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
@@ -504,6 +504,25 @@ async function openClicked(conv) {
   else await openDM(conv);
 }
 
+// takeClicked takes a desktop alert's #conv=ID (the daemon opens this page
+// on it) from the address, so going back or reloading never opens it again.
+function takeClicked() {
+  const hash = location.hash || "";
+  if (!hash.startsWith("#conv=")) return null;
+  history.replaceState(null, "", location.pathname + location.search);
+  const m = /^#conv=([0-9a-f]{64})$/.exec(hash);
+  return m ? m[1] : null;
+}
+
+// clickedLater is an alert's click in a tab already open on this page: only
+// the fragment changes, and the page does not load again.
+function clickedLater() {
+  const conv = takeClicked();
+  if (!conv) return;
+  if (state.overview) openClicked(conv);
+  else state.clickedAtStart = conv; // the start opens it when the overview is in
+}
+
 // openNotified opens the conversation a notification names, as this
 // device resolves its channel; if it is not here yet, it waits for the
 // stream to catch up, then says so. A summary opens the conversation list.
@@ -997,7 +1016,7 @@ async function loadDM(scrollToEnd) {
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
   else if (state.dmReply && !t.messages.some((m) => m.id === state.dmReply.id)) setDMReply(null);
-  if (state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask) setDMAgent(null); // dismissed meanwhile
+  if (state.dmAgent && agentOf(state.dmAgent)) setDMAgent(agentOf(state.dmAgent)); // its state now; a dismissed one stays the target
   state.draftKey = key;
   syncComposer();
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
@@ -1086,6 +1105,10 @@ function agentLinkText(a, p) {
 // ---- agents in a DM ------------------------------------------------------------------
 
 const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) => a.pid === pid);
+// askGone: the composer asks an agent that cannot be asked now (dismissed,
+// or not active). Its draft keeps that target: nothing meant for the agent
+// goes to the person unless they remove the target themselves.
+const askGone = () => !!state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask;
 // agentName names an agent by the person whose installation runs it.
 const agentName = (a) => (a.host_here ? "Your agent" : a.host.label + "'s agent");
 const isMe = (p) => !!p && p.state === "self";
@@ -1206,7 +1229,6 @@ function dismissDialog(a) {
     ok: "Dismiss",
     run: async () => {
       await api("/api/dm/agent/dismiss", { pid: a.pid });
-      if (state.dmAgent === a.pid) setDMAgent(null);
       announce("Dismissed.");
       await loadDM();
     },
@@ -1222,7 +1244,7 @@ function setDMAgent(a) {
     state.dmReply = null;
     $("replying").hidden = false;
     $("replying-label").textContent = "Asking";
-    $("replying-text").textContent = agentName(a) + " (on " + a.host.address + ")";
+    $("replying-text").textContent = a.host ? agentName(a) + " (on " + a.host.address + ")" + (a.can_ask ? "" : ", cannot be asked now") : "an agent no longer in this DM";
     setKind("question");
   } else if (!state.dmReply && !state.answering) {
     $("replying").hidden = true;
@@ -1234,6 +1256,7 @@ async function sendDM() {
   const t = state.dmData;
   if (state.sending || !t || t.frozen) return;
   const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = agent ? [] : state.files.slice();
+  if (askGone()) { kindHint(); return; } // never sent to the person instead
   if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
   state.sending = true;
   syncComposer();
@@ -1850,8 +1873,9 @@ function restoreDraft(key, t) {
   // A DM's reply target comes back only if that message is in this DM.
   const r = state.dm && d && d.reply && t.messages.find((x) => x.id === d.reply.id);
   setDMReply(r || null);
-  // An agent target comes back only while that agent of this DM can be asked.
-  const a = state.dm && d && d.agent && (t.agents || []).find((x) => x.pid === d.agent && x.can_ask);
+  // An agent target comes back as it was, even when that agent cannot be
+  // asked any more: the person, not a dismissal, moves the text elsewhere.
+  const a = state.dm && d && d.agent && ((t.agents || []).find((x) => x.pid === d.agent) || { pid: d.agent });
   setDMAgent(a || null);
   if (a && d.kind === "task") setKind("task");
 }
@@ -1864,18 +1888,18 @@ function syncComposer() {
     const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
     const blocked = !d || !!d.frozen || revoked;
     $("body").disabled = blocked;
-    $("send").disabled = blocked || state.sending;
+    $("send").disabled = blocked || state.sending || askGone();
     const a = state.dmAgent && agentOf(state.dmAgent);
     // Asking an agent: a question, or a task when the invitation lets you give it tasks.
-    $("kind").hidden = !a;
+    $("kind").hidden = !state.dmAgent;
     for (const r of document.querySelectorAll('input[name="kind"]')) {
       const l = r.value === "message" && r.closest && r.closest("label");
-      if (l) l.hidden = !!a;
+      if (l) l.hidden = !!state.dmAgent;
     }
     if (a && kindValue() === "message") setKind("question");
     $("attach").hidden = !filesAllowed();
     $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation"
-      : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + d.peer.label;
+      : askGone() ? "This agent cannot be asked now" : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + d.peer.label;
     kindHint();
     return;
   }
@@ -1937,6 +1961,11 @@ async function send(ev) {
 function kindHint() {
   if (state.dm) {
     const a = state.dmAgent && agentOf(state.dmAgent);
+    if (askGone()) {
+      $("compose-hint").textContent = (a ? agentName(a) + " cannot be asked now" + (a.state_text ? " (" + a.state_text + ")" : "") : "That agent is no longer in this DM") +
+        ". Your text stays here. To send it to " + (state.dmData ? state.dmData.peer.label : "the person") + " instead, remove the agent (×) first.";
+      return;
+    }
     $("compose-hint").textContent = !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
       : kindValue() === "task" ? (taskFree(a) ? "It runs on " + a.host.address + " without asking " + (a.host_here ? "you" : a.host.label) + " first."
         : a.host.label + " accepts it first, unless they already allow tasks from your key.") + " Ctrl+Enter sends."
@@ -2191,12 +2220,15 @@ function start() {
   document.addEventListener("visibilitychange", reportSeen);
   window.addEventListener("focus", reportSeen);
   // A desktop alert's click opens this page on its conversation (#conv=ID,
-  // from the daemon): taken once and removed from the address.
-  const clicked = /^#conv=([0-9a-f]{64})$/.exec(location.hash);
-  if (location.hash.startsWith("#conv=")) history.replaceState(null, "", location.pathname + location.search);
+  // from the daemon), or changes only the fragment of a tab already open
+  // on it: taken once and removed from the address, either way.
+  state.clickedAtStart = takeClicked();
+  window.addEventListener("hashchange", clickedLater);
   loadOverview().then(async (o) => {
     setLens(saved);
-    if (clicked) { await openClicked(clicked[1]); return; }
+    const clicked = state.clickedAtStart;
+    state.clickedAtStart = null;
+    if (clicked) { await openClicked(clicked); return; }
     if (await restoreAfterReload()) return; // back after an update, with what was unsent
     // Open the latest conversation; reports are not conversations.
     const first = o.threads.find((t) => !t.notice_only && (t.count > 1 || t.review || t.running || t.waiting)) ||

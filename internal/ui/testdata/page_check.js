@@ -172,7 +172,8 @@ const ctx = vm.createContext({
   document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage, Notification, Blob,
   window: { innerHeight: 800, matchMedia: () => ({ matches: false }), addEventListener() {} },
   localStorage: { getItem: () => null, setItem() {} },
-  location: { reload() { reloads++; } },
+  location: { reload() { reloads++; }, hash: "", pathname: "/", search: "" },
+  history: { replaceState(a, b, url) { ctx.location.hash = ""; } },
   EventSource: FakeEventSource,
 });
 for (const f of ["lenses.js", "app.js"]) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8"), ctx, { filename: f });
@@ -701,6 +702,26 @@ const ev = { preventDefault() {} };
   check(!calls.some((c) => c.path === "/api/dm/agent/dismiss"), "dismissing waits for its button");
   await $("dialog-ok").onclick();
   check(calls.some((c) => c.path === "/api/dm/agent/dismiss" && c.body.pid === "pid2"), "either person can dismiss");
+  // A dismissal never turns a draft for the agent into a message to the
+  // person: the target stays, Send waits, and only the person's own
+  // choice (×) writes to the person.
+  run("setDMAgent")(dmThreads.d4.agents[0]);
+  $("body").value = "and the tests?";
+  Object.assign(dmThreads.d4.agents[0], { state: "dismissed", state_text: "Dismissed by Alice", can_ask: false, can_dismiss: false });
+  await run("loadDM()");
+  check(run("state.dmAgent") === "pid2" && $("send").disabled && $("body").value === "and the tests?" && $("compose-hint").textContent.includes("remove the agent"),
+    "a dismissal keeps the draft's agent target and blocks Send: " + $("compose-hint").textContent);
+  calls.length = 0;
+  await run("send")(ev);
+  check(!calls.some((c) => c.path === "/api/dm/send" || c.path === "/api/dm/agent/ask"), "nothing goes to the person (or the agent) instead");
+  await run('openDM("d2")');
+  await run('openDM("d4")');
+  check(run("state.dmAgent") === "pid2" && $("send").disabled && $("body").value === "and the tests?", "coming back, the draft still names the dismissed agent");
+  run("setDMAgent")(null); // the person's ×
+  check(!$("send").disabled && $("body").placeholder === "Write to Alice" && $("body").value === "and the tests?", "the person's own choice writes to the person, text kept");
+  $("body").value = "";
+  Object.assign(dmThreads.d4.agents[0], { state: "active", state_text: "", can_ask: true, can_dismiss: true });
+
   // A person is linked to the agents their device runs, in Classic and Zoom.
   overview.people = [Object.assign({}, alice, { agents: [{ address: "alice/desk", dms: [{ conv: "d4", pid: "pid2", state: "active" }] }] })];
   await run("loadOverview()");
@@ -799,6 +820,27 @@ const ev = { preventDefault() {} };
   check(run("state.dm") === "d2", "an alert's click opens its DM");
   await run('openClicked("' + "e".repeat(64) + '")');
   check(run("state.dm") === "d2", "a DM not here opens nothing else");
+  // A click while this page is open changes only the fragment: it opens
+  // that DM too, once, and leaves the address clean.
+  const clickedID = "c".repeat(64);
+  overview.dms = [...overview.dms, Object.assign({}, overview.dms.find((d) => d.id === "d2"), { id: clickedID })];
+  dmThreads[clickedID] = Object.assign({}, dmThreads.d2, { id: clickedID });
+  await run("loadOverview()");
+  await run('openThread("a1")');
+  ctx.location.hash = "#conv=" + clickedID;
+  run("clickedLater()");
+  await pause(20);
+  check(run("state.dm") === clickedID && ctx.location.hash === "", "a same-tab click (#conv= fragment) opens its DM and is taken from the address");
+  await run('openThread("a1")');
+  ctx.location.hash = "#conv=not-an-id";
+  run("clickedLater()");
+  await pause(20);
+  check(run("state.dm") === null && ctx.location.hash === "", "a malformed fragment is removed and opens nothing");
+  check(/window\.addEventListener\("hashchange", clickedLater\)/.test(fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8")),
+    "the page listens for a fragment change");
+  overview.dms = overview.dms.filter((d) => d.id !== clickedID);
+  delete dmThreads[clickedID];
+  await run("loadOverview()");
   delete overview.notify;
 
   // Files (MEL-489): chosen, pasted or dropped into the open DM's draft;
