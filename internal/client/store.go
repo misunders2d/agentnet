@@ -383,9 +383,14 @@ func (s *store) releaseUploads(messageID string) error {
 	return err
 }
 
+// setOutboxState records what became of a sent message. An output held back
+// here (not_delivered) never goes back to be sent (queued, waiting) or
+// failed; that it was handed over after all (a hand-over already under way)
+// is recorded as reported.
 func (s *store) setOutboxState(id, state, errText, path string) error {
-	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path) WHERE id = ?`,
-		state, errText, path, id)
+	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path)
+		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))`,
+		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed)
 	return s.done(err)
 }
 

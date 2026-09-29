@@ -423,23 +423,25 @@ func splitEmotion(out string) (text, emotion string, ok bool) {
 // holdEndedOutputs holds back agent outputs not yet handed over (queued or
 // waiting) that may no longer go out: decided like the finish, within one
 // transaction. Their text stays in the outbox; the request is marked too.
-func (a *Agent) holdEndedOutputs() error {
+// only, if set, limits it to that one output. It returns how many it held.
+func (a *Agent) holdEndedOutputs(only string) (int, error) {
+	const outputs = `o.state IN (?, ?) AND o.pid IS NOT NULL AND o.origin LIKE 'agent:%' AND (? = '' OR o.id = ?)`
 	var n int
-	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state IN (?, ?) AND pid IS NOT NULL AND origin LIKE 'agent:%'`,
-		stateQueued, stateConvWaiting).Scan(&n); err != nil || n == 0 {
-		return err
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox o WHERE `+outputs,
+		stateQueued, stateConvWaiting, only, only).Scan(&n); err != nil || n == 0 {
+		return 0, err
 	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
 		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, '')
 		FROM outbox o LEFT JOIN inbox i ON i.id = o.reply_to AND i.result_id = o.id
-		WHERE o.state IN (?, ?) AND o.pid IS NOT NULL AND o.origin LIKE 'agent:%'`, stateQueued, stateConvWaiting)
+		WHERE `+outputs, stateQueued, stateConvWaiting, only, only)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	type out struct {
 		id  string
@@ -451,7 +453,7 @@ func (a *Agent) holdEndedOutputs() error {
 		var target string
 		if err := rows.Scan(&o.id, &o.req.Conv, &o.req.PID, &o.req.ID, &o.req.Sender, &o.req.Key, &o.req.Kind, &o.req.Local, &target); err != nil {
 			rows.Close()
-			return err
+			return 0, err
 		}
 		if target != "" {
 			o.req.Target = &envelope.Target{}
@@ -463,7 +465,7 @@ func (a *Agent) holdEndedOutputs() error {
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	views := map[string]*partView{}
@@ -472,7 +474,7 @@ func (a *Agent) holdEndedOutputs() error {
 		v, why := verdictStop, "its request is not held here"
 		if o.req.ID != "" {
 			if v, why, err = agentVerdict(tx, o.req, a.Address, selfFP, true, views); err != nil {
-				return err
+				return 0, err
 			}
 		}
 		if v == verdictRun {
@@ -480,19 +482,48 @@ func (a *Agent) holdEndedOutputs() error {
 		}
 		if _, err := tx.Exec(`UPDATE outbox SET state = ?, error = ? WHERE id = ? AND state IN (?, ?)`,
 			stateNotDelivered, "not sent: "+why, o.id, stateQueued, stateConvWaiting); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE id = ? AND result_id = ? AND state = ?`,
 			stateNotDelivered, "its reply was not sent: "+why, o.req.ID, o.id, stateAnswered); err != nil {
-			return err
+			return 0, err
 		}
 		held++
 	}
 	if held == 0 {
-		return nil
+		return 0, nil
 	}
 	a.Logf("%d agent output(s) held back: their participation no longer lets them go out", held)
-	return a.store.done(tx.Commit())
+	return held, a.store.done(tx.Commit())
+}
+
+// mayDeliver decides, from what is stored now, just before each attempt to
+// hand a conversation message over, whether it may go: its row is still
+// queued (not held back, waiting or already handed over), its recipient's
+// person is not frozen, and an agent output's participation still lets it
+// go out (else it is held back here). No lock is held across the network: a
+// hand-over already started is not stopped. A version 1 envelope is not
+// looked at.
+func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
+	if env.V != envelope.Version2 {
+		return true, nil
+	}
+	var state, pid, origin string
+	var frozen bool
+	err := a.store.db.QueryRow(`SELECT o.state, coalesce(o.pid, ''), coalesce(o.origin, ''),
+		EXISTS (SELECT 1 FROM persons p WHERE p.address = o.recipient AND p.state = ?)
+		FROM outbox o WHERE o.id = ?`, personConflict, env.ID).Scan(&state, &pid, &origin, &frozen)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil // not (or no longer) stored here: nothing to send
+	case err != nil || state != stateQueued:
+		return false, err
+	case pid != "" && envelope.AgentOrigin(origin):
+		if held, err := a.holdEndedOutputs(env.ID); err != nil || held > 0 {
+			return false, err
+		}
+	}
+	return !frozen, nil // a message to a frozen person stays queued
 }
 
 // agentContext selects what is given to a participation's agent: the

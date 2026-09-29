@@ -514,7 +514,7 @@ func (a *Agent) personSendable(address, roster string) bool {
 // read them; the sync's outbox flush sends them. Agent outputs that may no
 // longer go out are held back first.
 func (a *Agent) releaseConv(ctx context.Context, feats []string) {
-	if err := a.holdEndedOutputs(); err != nil {
+	if _, err := a.holdEndedOutputs(""); err != nil {
 		a.Logf("agent outputs: %v", err)
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -723,6 +724,103 @@ func TestAgentClaimIsAtomic(t *testing.T) {
 			}
 			if why := w.bob.agentStop(j); why == "" {
 				t.Fatal("the running job is not told to stop")
+			}
+		})
+	}
+}
+
+// postHook runs after each message a daemon hands to the Hub.
+type postHook struct {
+	base  http.RoundTripper
+	after func(env envelope.Envelope)
+}
+
+func (h postHook) RoundTrip(r *http.Request) (*http.Response, error) {
+	var env envelope.Envelope
+	if r.Method == "POST" && r.URL.Path == "/v1/messages" && r.GetBody != nil {
+		if b, err := r.GetBody(); err == nil {
+			json.NewDecoder(b).Decode(&env)
+			b.Close()
+		}
+	}
+	resp, err := h.base.RoundTrip(r)
+	if err == nil && env.ID != "" {
+		h.after(env)
+	}
+	return resp, err
+}
+
+// Every hand-over is decided on from what is stored just before it: once a
+// dismissal, or a member frozen, is stored after one output went out, the
+// next queued output is held back (and stays so), and a plain message to a
+// frozen person stays queued.
+func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
+	for _, stop := range []string{"dismissal", "freeze"} {
+		t.Run(stop, func(t *testing.T) {
+			w, conv, _, stopBob := agentWorld(t)
+			pid := participate(t, w, conv, nil, nil)
+			var ids []string
+			for _, body := range []string{"first", "second"} {
+				q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ids = append(ids, q.ID)
+			}
+			eventually(t, "bob to hold both", func() bool { return inboxCount(t, w.bob, `pid = ? AND state = ?`, pid, stateAgentWaiting) == 2 })
+			stopBob()
+			injectFaults(w.bob).add("POST", "/v1/messages", 3, false)
+			for _, id := range ids {
+				w.bob.finishAgent(tctx(t), claimAt(t, w.bob, id), &Responder{Harness: "agentstub"}, envelope.StatusDone, "reply\nemotion: calm")
+			}
+			plain, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "a plain message"})
+			if err != nil || plain.State != stateQueued {
+				t.Fatalf("plain message: %+v %v", plain, err)
+			}
+			var outputs []string
+			w.bob.hub.http.Transport = postHook{w.bob.hub.http.Transport, func(env envelope.Envelope) {
+				if env.Kind != envelope.KindAnswer {
+					return
+				}
+				if outputs = append(outputs, env.ID); len(outputs) > 1 {
+					return
+				}
+				if stop == "dismissal" {
+					if _, err := w.bob.DismissParticipation(tctx(t), pid); err != nil {
+						t.Error(err)
+					}
+				} else {
+					freezeAlice(t, w)
+				}
+			}}
+			if err := w.bob.FlushOutbox(tctx(t)); err != nil {
+				t.Fatal(err)
+			}
+			if len(outputs) != 1 {
+				t.Fatalf("%d outputs handed over, the last after the %s was stored", len(outputs), stop)
+			}
+			var held, reqState string
+			w.bob.store.db.QueryRow(`SELECT o.state, i.state FROM outbox o JOIN inbox i ON i.result_id = o.id WHERE o.pid = ? AND o.id != ?`,
+				pid, outputs[0]).Scan(&held, &reqState)
+			if held != stateNotDelivered || reqState != stateNotDelivered {
+				t.Fatalf("the second output: %s, its request %s", held, reqState)
+			}
+			if stop == "freeze" {
+				if s, _, _, _ := w.bob.store.outboxState(plain.ID); s != stateQueued {
+					t.Fatalf("a plain message to a frozen person: %s", s)
+				}
+			}
+			// A held-back output is never revived by a later attempt's outcome.
+			var second string
+			w.bob.store.db.QueryRow(`SELECT id FROM outbox WHERE pid = ? AND state = ?`, pid, stateNotDelivered).Scan(&second)
+			for _, s := range []string{stateQueued, stateConvWaiting, stateFailed} {
+				w.bob.store.setOutboxState(second, s, "", "")
+				if now, _, _, _ := w.bob.store.outboxState(second); now != stateNotDelivered {
+					t.Fatalf("revived as %s", now)
+				}
+			}
+			if err := w.bob.FlushOutbox(tctx(t)); err != nil || len(outputs) != 1 {
+				t.Fatalf("a later flush sent it (%d, %v)", len(outputs), err)
 			}
 		})
 	}

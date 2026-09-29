@@ -397,6 +397,10 @@ func blobsOf(atts []envelope.Attachment) []envelope.Blob {
 // deliver tries the direct route (if any) and then the Hub. The spool is
 // released only once one of them has confirmed custody of the message.
 func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *protocol.SessionAd) (SendResult, error) {
+	if ok, err := a.mayDeliver(env); err != nil || !ok {
+		state, _, _, _ := a.store.outboxState(env.ID)
+		return SendResult{ID: env.ID, State: state}, err
+	}
 	if route != nil {
 		r, err := a.sendDirect(ctx, env, *route)
 		if err == nil {
@@ -440,7 +444,7 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 
 // FlushOutbox retries every queued message once.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
-	if err := a.holdEndedOutputs(); err != nil {
+	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
 	envs, err := a.store.queued()
