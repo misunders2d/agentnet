@@ -11,34 +11,52 @@ import (
 )
 
 // TestCLIRelease: an admin recommends a version with flags before the
-// version; a running member daemon saves it; `version` keeps its stdout line
-// and adds the recommendation on stderr; `version` for a missing home
-// creates nothing; doctor reports it.
+// version; a running member daemon saves it; `version` of a release build
+// keeps its stdout line and adds a newer recommendation on stderr, while a
+// development build that cannot be compared says nothing; `version` for a
+// missing home creates nothing; doctor reports it.
 func TestCLIRelease(t *testing.T) {
 	c := buildCLI(t)
+	devBin := c.bin
+	c.bin = filepath.Join(c.dir, "release", filepath.Base(devBin))
+	os.MkdirAll(filepath.Dir(c.bin), 0o700)
+	buildVersion(t, c.bin, "v0.3.0", "https://example.test/releases")
 	_, _ = c.setup(t, "hub")
 	c.start("bob.log", "--home", "bob", "daemon")
-	out := c.run("--home", "alice", "admin", "release", "set", "--url", "https://example.test/update", "--note", "for people", "v42")
-	if !strings.Contains(out, "recommended client version v42") {
+	out := c.run("--home", "alice", "admin", "release", "set", "--url", "https://example.test/update", "--note", "for people", "v0.3.1")
+	if !strings.Contains(out, "recommended client version v0.3.1") {
 		t.Fatalf("set: %s", out)
 	}
-	if out, err := c.try("--home", "bob", "admin", "release", "set", "--url", "https://example.test/", "v1"); err == nil {
+	if out, err := c.try("--home", "bob", "admin", "release", "set", "--url", "https://example.test/", "v9.9.9"); err == nil {
 		t.Fatalf("non-admin set: %s", out)
 	}
-	waitFor(t, "bob saves the recommendation", func() bool {
-		cmd := exec.Command(c.bin, "--home", "bob", "version")
+	version := func(bin string) (stdout, stderr string) {
+		cmd := exec.Command(bin, "--home", "bob", "version")
 		cmd.Dir = c.dir
-		stderr, _ := cmd.StderrPipe()
-		stdout, _ := cmd.StdoutPipe()
+		e, _ := cmd.StderrPipe()
+		o, _ := cmd.StdoutPipe()
 		cmd.Start()
-		o, _ := readAll(stdout)
-		e, _ := readAll(stderr)
+		stdout, _ = readAll(o)
+		stderr, _ = readAll(e)
 		cmd.Wait()
-		return strings.HasPrefix(o, "agentnet dev (protocol ") && strings.Count(o, "\n") == 1 &&
-			strings.Contains(e, "your Hub recommends agentnet v42 (this is dev)") && strings.Contains(e, "https://example.test/update")
+		return stdout, stderr
+	}
+	waitFor(t, "bob saves the recommendation", func() bool {
+		o, e := version(c.bin)
+		return strings.HasPrefix(o, "agentnet v0.3.0 (protocol ") && strings.Count(o, "\n") == 1 &&
+			strings.Contains(e, "your Hub recommends agentnet v0.3.1 (this is v0.3.0)") && strings.Contains(e, "https://example.test/update")
 	})
-	if out, _ := c.try("--home", "bob", "doctor"); !strings.Contains(out, "the Hub recommends v42; this is dev") {
+	if out, _ := c.try("--home", "bob", "doctor"); !strings.Contains(out, "the Hub recommends v0.3.1; this is v0.3.0") {
 		t.Fatalf("doctor: %s", out)
+	}
+	// A development build cannot be compared with a release: never told.
+	if o, e := version(devBin); !strings.HasPrefix(o, "agentnet dev (protocol ") || strings.Contains(e, "recommends") {
+		t.Fatalf("dev build: %q %q", o, e)
+	}
+	dev := *c
+	dev.bin = devBin
+	if out, _ := dev.try("--home", "bob", "doctor"); !strings.Contains(out, "the Hub recommends v0.3.1; this build is dev: no comparable newer recommendation") {
+		t.Fatalf("dev doctor: %s", out)
 	}
 	missing := filepath.Join(c.dir, "nobody")
 	if out, err := c.try("--home", missing, "version"); err != nil || strings.Contains(out, "recommends") {

@@ -170,9 +170,11 @@ func TestDeviceLinkRefusals(t *testing.T) {
 	}
 	forged, _ := protocol.DecodeLinkOffer(o.Code)
 	forged.Secret[0] ^= 1
-	if _, err := JoinAndLink(tctx(t), t.TempDir(), forged.Encode(), "forged"); err != nil {
+	forgedDevice, err := JoinAndLink(tctx(t), t.TempDir(), forged.Encode(), "forged")
+	if err != nil {
 		t.Fatal(err)
 	}
+	forgedDevice.Close() // the caller owns the agent JoinAndLink opens (its database stays open until closed)
 	time.Sleep(500 * time.Millisecond)
 	if links, _ := w.alice.PendingLinks(); len(links) != 0 {
 		t.Fatalf("a forged request was taken: %+v", links)

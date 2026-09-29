@@ -161,13 +161,21 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 	c.run("--home", "alice", "send", "bob/desk", "history before the update")
 	waitFor(t, "history", func() bool { return len(bp.overview().Threads) == 1 })
 
-	// An equal release is not an update of a build made after it.
+	// A latest release equal to the one this development build was made
+	// after is not an update: nothing to do, nothing replaced. Asked for by
+	// name, it is refused (code and databases only move forward).
 	rel.set("v9.0.0", false)
-	if out, err := c.try("--home", "bob", "update"); err == nil || !strings.Contains(out, "not newer than v9.0.0") {
+	if out, err := c.try("--home", "bob", "update"); err != nil || !strings.Contains(out, "is ahead of the latest stable release (v9.0.0); no update needed") {
 		t.Fatalf("equal release: %v\n%s", err, out)
+	}
+	if out, err := c.try("--home", "bob", "update", "v9.0.0"); err == nil || !strings.Contains(out, "not newer than v9.0.0") {
+		t.Fatalf("equal release by name: %v\n%s", err, out)
 	}
 	if v := c.run("version"); !strings.HasPrefix(v, "agentnet v9.0.0+0760ccc ") {
 		t.Fatalf("file changed: %s", v)
+	}
+	if pidOf(t, c, "bob") != bobPID || exeOf(bobPID) != bin {
+		t.Fatalf("an update that was no update replaced the daemon: pid %d exe %s", pidOf(t, c, "bob"), exeOf(bobPID))
 	}
 
 	// From the development build to the latest release: one command.
@@ -247,6 +255,10 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 	rel.set("v9.0.2", false)
 	if out := c.run("--home", "bob", "update"); !strings.Contains(out, "already installed") {
 		t.Fatalf("current:\n%s", out)
+	}
+	// An older release, asked for by name, is refused.
+	if out, err := c.try("--home", "bob", "update", "v9.0.1"); err == nil || !strings.Contains(out, "downgrades are not supported") {
+		t.Fatalf("downgrade: %v\n%s", err, out)
 	}
 	if pidOf(t, c, "bob") != bobPID || !strings.HasPrefix(c.run("version"), "agentnet v9.0.2 ") {
 		t.Fatal("a refused update changed something")
