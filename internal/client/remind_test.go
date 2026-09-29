@@ -9,13 +9,14 @@ import (
 )
 
 // remindWorld: alice and bob; bob's daemon runs with its notifications
-// recorded and clicks that open the thread (a harmless launcher) or the
-// page.
+// recorded and clicks that open the thread or the page. The thread's click
+// is built as on Windows (no terminal launcher to look up) on every OS,
+// macOS included, whose notifier takes no clicks; nothing is started.
 func remindWorld(t *testing.T) (w *world, n *notes, stopBob func()) {
 	t.Helper()
-	old := terminalLauncher
-	terminalLauncher = "true"
-	t.Cleanup(func() { terminalLauncher = old })
+	oldOS, oldStart := clickOS, startConsole
+	clickOS, startConsole = "windows", func([]string, string) error { return nil }
+	t.Cleanup(func() { clickOS, startConsole = oldOS, oldStart })
 	w = newWorld(t, "")
 	n = fakeNotify(w.bob)
 	runAgent(t, w.alice)

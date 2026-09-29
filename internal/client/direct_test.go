@@ -287,6 +287,19 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	runWith(t, w, w.bob, RunOptions{Listen: "127.0.0.1:0"})
 	runWith(t, w, w.alice, RunOptions{})
 
+	// Connecting starts a finite chain of event-driven upkeep: each daemon
+	// publishes its capabilities, and the Hub's members event for that makes
+	// each look once more (GET /v1/version), after runWith returns on slow
+	// CI. Wait for it to end: a daemon that kept asking never goes quiet.
+	for settle := time.Now().Add(15 * time.Second); ; {
+		rec.reset()
+		time.Sleep(4 * beat)
+		if _, others := rec.snapshot(); len(others) == 0 {
+			break
+		} else if time.Now().After(settle) {
+			t.Fatalf("daemons never went quiet after connecting: %v", others)
+		}
+	}
 	rec.reset()
 	time.Sleep(2 * time.Second) // ~8 ping intervals with both daemons connected and nothing to do
 	acks, others := rec.snapshot()

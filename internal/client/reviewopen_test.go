@@ -93,11 +93,13 @@ func TestReviewClickOpensReview(t *testing.T) {
 }
 
 // Without a terminal launcher there is no click handler and the text does
-// not promise one.
+// not promise one (Linux: Windows opens a console of its own, macOS takes
+// no clicks).
 func TestReviewClickNeedsLauncher(t *testing.T) {
 	w := newWorld(t, "")
-	terminalLauncher = "definitely-not-installed-terminal"
-	t.Cleanup(func() { terminalLauncher = "" })
+	oldOS, oldTerm := clickOS, terminalLauncher
+	clickOS, terminalLauncher = "linux", "definitely-not-installed-terminal"
+	t.Cleanup(func() { clickOS, terminalLauncher = oldOS, oldTerm })
 	if argv, click := w.bob.reviewClick(""); argv != nil || click != nil {
 		t.Fatal("click handler without a launcher")
 	}

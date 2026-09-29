@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 // dmFiles: alice and bob with a DM, both daemons running.
@@ -236,8 +237,10 @@ func TestStageUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Size() != 1000 || info.Mode().Perm()&0o077 != 0 || filepath.Dir(path) != filepath.Join(w.alice.home, "staging") {
-		t.Fatalf("staged %s: %v %v", path, info, err)
+	// secfile.Read refuses a file other users can reach (mode bits on Unix,
+	// the ACL on Windows).
+	if data, err := secfile.Read(path); err != nil || len(data) != 1000 || filepath.Dir(path) != filepath.Join(w.alice.home, "staging") {
+		t.Fatalf("staged %s: %d bytes, %v", path, len(data), err)
 	}
 	cleanup()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
