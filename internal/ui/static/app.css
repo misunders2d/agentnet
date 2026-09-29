@@ -669,7 +669,8 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 /* a person's or device's conversations, in the main pane (MEL-494) */
 .hub { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px 24px; display: grid; gap: 12px; align-content: start; }
 .hub-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.hub-list .thread-row { padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.hub .thread-list { display: grid; gap: 4px; }
+.hub .thread-row { padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
 .hub .new-conv { justify-self: start; }
 .hub-back { font-size: 13px; padding: 0; margin: 0 0 2px; color: var(--accent-text); }
 @media (max-width: 760px) { .hub { padding: 12px; } }
