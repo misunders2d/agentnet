@@ -1,0 +1,7 @@
+# The messenger's page files are embedded and served byte for byte, and the
+# vendored library is checked against its recorded digest: every checkout
+# keeps their LF line endings (Windows would otherwise write CRLF). Pictures
+# stay binary: a PNG's own signature holds "\r\n".
+/internal/ui/static/** text eol=lf
+/internal/ui/static/**/*.png binary
+/internal/ui/webvendor/** text eol=lf
