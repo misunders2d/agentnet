@@ -101,6 +101,13 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			}
 			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s lid %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
 				m.ID, m.LID, strings.ReplaceAll(m.Body, "\n", "\n  "))
+			for _, f := range m.Attachments {
+				line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
+				if f.SavedPath != "" {
+					line += " saved " + f.SavedPath
+				}
+				fmt.Fprintln(stdout, line)
+			}
 		}
 		return nil
 	case "send":
@@ -108,10 +115,12 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs.SetOutput(io.Discard)
 		question := fs.Bool("question", false, "ask the person a question")
 		task := fs.Bool("task", false, "ask the person for work")
-		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 || (*question && *task) {
-			return errors.New("usage: dm send [--question|--task] ID TEXT")
+		var files []client.OutgoingFile
+		fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, client.OutgoingFile{Path: p}); return nil })
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
+			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
 		}
-		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1)}
+		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files}
 		if *question {
 			m.Kind = envelope.KindQuestion
 		}

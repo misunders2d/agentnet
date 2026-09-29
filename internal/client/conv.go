@@ -13,6 +13,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -405,7 +406,9 @@ type ConvOutgoing struct {
 	Emotion string           // required with an agent origin
 	Target  *envelope.Target // the one execution recipient of a question or task, if any
 	PID     string           // the agent participation (AskAgent sets it with the target)
+	Files   []OutgoingFile   // files to attach (a turn only): encrypted to the recipient while sending
 
+	stored  func()                                 // the message and its files are stored: the spool is theirs
 	sub     string                                 // envelope.SubEvent for participation events (participation.go)
 	status  string                                 // an agent output's status (agentjob.go)
 	claim   func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
@@ -481,6 +484,38 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: protocol.NewID(), Root: raw,
 		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status}
+	if len(m.Files) > 0 {
+		// Files go with a turn a person sends; the ciphertext waits in the
+		// private spool until the Hub holds the message (files.go). Cleanup
+		// must not see it before the outbox refers to it.
+		if m.sub != "" || m.PID != "" || m.claim != nil || m.selfJob {
+			return ConvSent{}, errors.New("files go only with a message, question or task a person sends")
+		}
+		if len(m.Files) > envelope.MaxAttachments {
+			return ConvSent{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
+		}
+		release, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return ConvSent{}, err
+		}
+		stored := false
+		defer func() {
+			if !stored {
+				a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
+			}
+			release()
+		}()
+		for _, f := range m.Files {
+			att, err := a.spoolNamed(f, recipient)
+			if err != nil {
+				return ConvSent{}, err
+			}
+			in.Attachments = append(in.Attachments, att)
+		}
+		m.stored = func() { stored = true; release() } // idempotent release, before delivery
+	} else if m.Body == "" && m.sub == "" {
+		return ConvSent{}, errors.New("nothing to send: no text and no files")
+	}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err != nil {
 		return ConvSent{}, err
@@ -513,6 +548,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if err := a.store.addConvOutbox(env, in, state, why, m.claim, jobKey); err != nil {
 		return ConvSent{}, err
 	}
+	if m.stored != nil {
+		m.stored()
+	}
 	defer notifyDaemon(a.home)
 	if !supported {
 		return ConvSent{ID: env.ID, LID: in.LID, State: stateConvWaiting, Detail: why}, nil
@@ -524,7 +562,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		return ConvSent{ID: env.ID, LID: in.LID}, err
 	}
-	return ConvSent{ID: env.ID, LID: in.LID, State: res.State}, nil
+	return ConvSent{ID: env.ID, LID: in.LID, State: res.State, Detail: res.Detail}, nil
 }
 
 // personSendable reports whether the person on the device at address is

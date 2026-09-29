@@ -423,6 +423,17 @@ func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, w
 	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 		return err
 	}
+	for _, a := range in.Attachments { // as addOutbox: what was sent, and what must be uploaded first
+		if _, err := tx.Exec(`INSERT INTO sent_attachments(message_id, blob_id, name, size, sha256) VALUES(?, ?, ?, ?, ?)`,
+			env.ID, a.Blob.ID, a.Name, a.Size, a.SHA256); err != nil {
+			return err
+		}
+	}
+	for _, b := range env.Blobs {
+		if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
+			return err
+		}
+	}
 	if jobKey != "" {
 		// Read and acknowledged: it was never received, only asked here.
 		if _, err := tx.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, state, verified_by,
@@ -486,6 +497,10 @@ type ConvMessage struct {
 	// device's own person): the job's state and detail here (agentjob.go).
 	Job       string `json:"job,omitempty"`
 	JobDetail string `json:"job_detail,omitempty"`
+
+	// Its files: received ones with where they were saved, sent ones as
+	// sent (the sender keeps no plaintext to open).
+	Attachments []FileInfo `json:"attachments,omitempty"`
 }
 
 // convMessages lists conv's messages; a local request to this device's own
@@ -520,6 +535,43 @@ func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 			json.Unmarshal([]byte(target), m.Target)
 		}
 		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	files, err := s.convFiles(conv)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Attachments = files[out[i].Dir+"/"+out[i].ID]
+	}
+	return out, nil
+}
+
+// convFiles returns the files of conv's messages by "in/ID" and "out/ID".
+func (s *store) convFiles(conv string) (map[string][]FileInfo, error) {
+	out := map[string][]FileInfo{}
+	rows, err := s.db.Query(`
+		SELECT 'in/' || a.message_id, a.blob_id, a.name, a.size, a.sha256, a.ct_size, a.ct_sha256, coalesce(a.saved_path, ''), a.rowid, 0
+		  FROM attachments a JOIN inbox i ON i.id = a.message_id WHERE i.conv = ? AND i.local = 0
+		UNION ALL
+		SELECT 'out/' || f.message_id, f.blob_id, f.name, f.size, f.sha256, 0, '', '', f.rowid, 1
+		  FROM sent_attachments f JOIN outbox o ON o.id = f.message_id WHERE o.conv = ?
+		ORDER BY 10, 9`, conv, conv)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var f FileInfo
+		var rowid, sent int64
+		if err := rows.Scan(&key, &f.BlobID, &f.Name, &f.Size, &f.SHA256, &f.ctSize, &f.ctSHA256, &f.SavedPath, &rowid, &sent); err != nil {
+			return nil, err
+		}
+		out[key] = append(out[key], f)
 	}
 	return out, rows.Err()
 }

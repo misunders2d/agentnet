@@ -334,7 +334,7 @@ func (a *Agent) agentPrompt(j job, r *Responder) (string, error) {
 		fmt.Fprintf(&b, "\n## Context: %s\n%s\n", path, data)
 	}
 	if j.Attachments > 0 {
-		fmt.Fprintf(&b, "\n(%d attached file(s) were not opened.)\n", j.Attachments)
+		fmt.Fprintf(&b, "\n(%d attached file(s) of the request were not opened or given to you.)\n", j.Attachments)
 	}
 	heading := "Question"
 	if j.Kind == envelope.KindTask {
@@ -587,6 +587,9 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 			c.Unrelated++
 		}
 		if line != "" {
+			if n := len(msg.Attachments); n > 0 { // named, never opened or given
+				line += fmt.Sprintf(" (%d attached file(s), not given to you)", n)
+			}
 			selected = append(selected, msg)
 			lines = append(lines, line)
 		}

@@ -310,7 +310,7 @@ treated the same way (frozen, never replaced).`,
 	"dm": `Usage: agentnet dm new ADDRESS
        agentnet dm list
        agentnet dm show ID
-       agentnet dm send [--question|--task] ID TEXT
+       agentnet dm send [--question|--task] [--file PATH]... ID [TEXT]
        agentnet dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
@@ -323,7 +323,12 @@ installation speaks for; both of you need a person, and both installations
 and your Hub need a version that carries conversations.
 
 Messages are end-to-end encrypted and signed; the conversation's signed
-root travels with them. A question or task sent with dm send is for the
+root travels with them. --file attaches a file (up to 8, each within the
+size limit), encrypted to the other device like the message; with files the
+TEXT may be left out. dm show lists each file; agentnet download ID saves a
+received message's files (names made safe, contents checked against what
+the sender signed). A file is only content: nothing opens or runs it, and an
+agent in the DM is told a file exists but is never given its contents. A question or task sent with dm send is for the
 person: no agent runs it, and accept, reply and decline do not apply to it;
 answer with dm send. If the other installation
 cannot read conversations right now, dm send keeps the message as waiting

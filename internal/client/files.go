@@ -56,10 +56,35 @@ func newCountingHash() *countingHash { return &countingHash{Hash: sha256.New()} 
 
 func (c *countingHash) hex() string { return hex.EncodeToString(c.Sum(nil)) }
 
+// OutgoingFile is a file to attach: the file at Path, shown to the
+// recipient as Name (its base name if empty). The file is encrypted into the
+// private spool while sending, so the caller may remove it afterwards.
+type OutgoingFile struct {
+	Name string
+	Path string
+}
+
+// maxFileName bounds a file's shown name (bytes).
+const maxFileName = 255
+
 // spoolFile encrypts path to recipient into the private spool, returning its
 // manifest entry. The spooled ciphertext is what gets uploaded, so a resumed
 // upload always sends identical bytes.
 func (a *Agent) spoolFile(path string, recipient age.Recipient) (envelope.Attachment, error) {
+	return a.spoolNamed(OutgoingFile{Path: path}, recipient)
+}
+
+// spoolNamed is spoolFile with the shown name f.Name (base name if empty):
+// valid text of at most maxFileName bytes, without control characters. The
+// recipient treats it as a claim and makes it safe to save (SafeName).
+func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.Attachment, error) {
+	path, name := f.Path, f.Name
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	if len(name) > maxFileName || !utf8.ValidString(name) || strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return envelope.Attachment{}, fmt.Errorf("file name %q: at most %d bytes of text, no control characters", name, maxFileName)
+	}
 	var att envelope.Attachment
 	src, err := os.Open(path)
 	if err != nil {
@@ -107,7 +132,7 @@ func (a *Agent) spoolFile(path string, recipient age.Recipient) (envelope.Attach
 	}
 	att = envelope.Attachment{
 		Blob:   envelope.Blob{ID: protocol.NewID(), Size: ct.n, SHA256: ct.hex()},
-		Name:   filepath.Base(path),
+		Name:   name,
 		Size:   pt.n,
 		SHA256: pt.hex(),
 	}
@@ -445,4 +470,74 @@ func SafeName(name string) string {
 		name = name[:len(name)-size]
 	}
 	return name
+}
+
+// OpenAttachment opens attachment index of received message msgID for
+// reading, without saving it anywhere chosen: the ciphertext is fetched
+// resumably and checked against the signed digest, decrypted into a private
+// temporary file under the home and checked against the manifest, and only
+// then opened. Closing it removes the temporary file. A sent message's
+// files are not kept here in the clear, so only received ones open.
+func (a *Agent) OpenAttachment(ctx context.Context, msgID string, index int) (io.ReadCloser, FileInfo, error) {
+	files, err := a.store.attachments(msgID)
+	if err != nil {
+		return nil, FileInfo{}, err
+	}
+	if index < 0 || index >= len(files) {
+		return nil, FileInfo{}, fmt.Errorf("received message %s has no attachment %d", msgID, index)
+	}
+	f := files[index]
+	if err := a.fetchCiphertext(ctx, f); err != nil {
+		return nil, f, err
+	}
+	dir := filepath.Join(a.home, "opened")
+	if err := secfile.EnsureDir(dir); err != nil {
+		return nil, f, err
+	}
+	tmp, err := a.decryptTo(dir, f)
+	if err != nil {
+		return nil, f, err
+	}
+	r, err := os.Open(tmp)
+	if err != nil {
+		os.Remove(tmp)
+		return nil, f, err
+	}
+	return &removeOnClose{File: r}, f, nil
+}
+
+type removeOnClose struct{ *os.File }
+
+func (r *removeOnClose) Close() error {
+	err := r.File.Close()
+	os.Remove(r.Name())
+	return err
+}
+
+// StageUpload keeps bytes a local page received (a chosen or pasted file)
+// in a private file under the home until they are sent: at most MaxFileSize
+// bytes. Pass the path as OutgoingFile.Path (with name as its Name), and call
+// cleanup once SendConv returned, whatever it returned.
+func (a *Agent) StageUpload(name string, r io.Reader) (path string, cleanup func(), err error) {
+	dir := filepath.Join(a.home, "staging")
+	if err := secfile.EnsureDir(dir); err != nil {
+		return "", nil, err
+	}
+	f, err := secfile.CreateTemp(dir, "upload-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup = func() { os.Remove(f.Name()) }
+	n, err := io.Copy(f, io.LimitReader(r, MaxFileSize+1))
+	if err == nil && n > MaxFileSize {
+		err = fmt.Errorf("%q is larger than the %d byte limit", name, MaxFileSize)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return f.Name(), cleanup, nil
 }
