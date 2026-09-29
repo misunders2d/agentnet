@@ -11,9 +11,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/secfile"
+	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
 func TestUIRefusesWhatItShouldAndTouchesNoHome(t *testing.T) {
@@ -44,15 +47,36 @@ func TestUIRefusesWhatItShouldAndTouchesNoHome(t *testing.T) {
 // file that agentnet ui prints; the log gets the address without it, and
 // stopping removes the file.
 func TestDaemonUIAddressStaysOutOfTheLog(t *testing.T) {
-	home := t.TempDir()
-	var log bytes.Buffer
-	logf := func(f string, v ...any) { fmt.Fprintf(&log, f+"\n", v...) }
-	if _, err := startDaemonUI(nil, home, "0.0.0.0:0", logf); err == nil {
-		t.Fatal("served on a non-loopback address")
-	}
-	stop, err := startDaemonUI(nil, home, "127.0.0.1:0", logf)
+	// The page serves a real (synthetic) home: starting, it first removes
+	// the files an earlier run's page staged and never sent.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	hub := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, hub, "127.0.0.1:0", "")
+	home := filepath.Join(t.TempDir(), "home")
+	a, err := client.Join(ctx, home, testhub.BootstrapCode(t, hub), "laptop")
 	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	left := filepath.Join(home, "staging", "upload-left")
+	if err := secfile.EnsureDir(filepath.Dir(left)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(left, []byte("plaintext an earlier run staged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	logf := func(f string, v ...any) { fmt.Fprintf(&log, f+"\n", v...) }
+	if _, err := startDaemonUI(a, home, "0.0.0.0:0", logf); err == nil {
+		t.Fatal("served on a non-loopback address")
+	}
+	stop, err := startDaemonUI(a, home, "127.0.0.1:0", logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatalf("the page kept an earlier run's staged file (%v)", err)
 	}
 	path := filepath.Join(home, uiURLFile)
 	data, err := secfile.Read(path)
