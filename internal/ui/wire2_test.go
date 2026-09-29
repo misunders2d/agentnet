@@ -30,7 +30,7 @@ func marshal(t *testing.T, v any) string {
 // goRoster is a person record made and signed as the Go client does.
 func goRoster(id *identity.Identity, address, label string) protocol.PersonRoster {
 	r := protocol.PersonRoster{Person: protocol.NewID(), Label: label,
-		Devices: []protocol.RosterDevice{{Address: address, Fingerprint: id.Public(address).Fingerprint()}}}
+		Devices: []identity.Public{id.Public(address)}}
 	r.Sign(id.Sign)
 	return r
 }
@@ -71,10 +71,10 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 	t.Run("person rosters", func(t *testing.T) {
 		v := w.ok(map[string]any{"op": "roster", "label": "Dana <&> 😀"})
 		r, err := protocol.ParsePersonRoster([]byte(v["json"].(string)))
-		if err != nil || r.Verify(pub.SignKey) != nil {
+		if err != nil || r.VerifyFirst() != nil {
 			t.Fatalf("Go refuses the device's person: %v", err)
 		}
-		if marshal(t, r) != v["json"] || r.Hash() != v["hash"] || r.Devices[0].Address != dana || r.Devices[0].Fingerprint != pub.Fingerprint() {
+		if marshal(t, r) != v["json"] || r.Hash() != v["hash"] || r.Devices[0].Address != dana || r.Devices[0].Fingerprint() != pub.Fingerprint() {
 			t.Fatalf("person record differs from Go's:\n%s\n%s (%s vs %s)", v["json"], marshal(t, r), v["hash"], r.Hash())
 		}
 		danaRoster = r
@@ -90,7 +90,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			"later roster":      func(r *protocol.PersonRoster) { r.Seq = 1 },
 			"prev":              func(r *protocol.PersonRoster) { r.Prev = strings.Repeat("a", 64) },
 			"two devices":       func(r *protocol.PersonRoster) { r.Devices = append(r.Devices, r.Devices[0]) },
-			"bad fingerprint":   func(r *protocol.PersonRoster) { r.Devices[0].Fingerprint = "x" },
+			"bad device key":    func(r *protocol.PersonRoster) { r.Devices[0].SignKey = r.Devices[0].SignKey[:5] },
 			"bad address":       func(r *protocol.PersonRoster) { r.Devices[0].Address = "Bob" },
 			"bad id":            func(r *protocol.PersonRoster) { r.Person = "x" },
 		} {
@@ -103,9 +103,9 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		}
 		r = goRoster(bobID, bob.Address, "Bob")
 		r.Sig[0] ^= 1
-		both(t, "flipped signature", "parseRoster", marshal(t, r), bob.SignKey, r.Verify(bob.SignKey))
+		both(t, "flipped signature", "parseRoster", marshal(t, r), bob.SignKey, r.VerifyFirst())
 		r = goRoster(eveID, bob.Address, "Bob") // signed by another key
-		both(t, "other key", "parseRoster", marshal(t, r), bob.SignKey, r.Verify(bob.SignKey))
+		both(t, "other key", "parseRoster", marshal(t, r), bob.SignKey, r.VerifyFirst())
 		raw := strings.TrimSuffix(marshal(t, goRoster(bobID, bob.Address, "Bob")), "}") + `,"admin":true}`
 		_, goErr := protocol.ParsePersonRoster([]byte(raw))
 		both(t, "unknown field", "parseRoster", raw, bob.SignKey, goErr)
@@ -149,7 +149,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			if members[0].Person > members[1].Person {
 				members[0], members[1] = members[1], members[0]
 			}
-			c := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
+			c := protocol.ConvRoot{V: protocol.ConvRootVersion, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
 				Creator: protocol.ConvCreator{Person: bobRoster.Person, Roster: bobRoster.Hash(), Address: bob.Address, Fingerprint: bob.Fingerprint()}}
 			c.Sign(bobID.Sign)
 			return c

@@ -141,7 +141,7 @@ func (r *rawAgent) roster(label string) protocol.PersonRoster {
 // newRoster makes a signed person for this device without publishing it.
 func (r *rawAgent) newRoster(label string) protocol.PersonRoster {
 	p := protocol.PersonRoster{Person: protocol.NewID(), Label: label,
-		Devices: []protocol.RosterDevice{{Address: r.addr, Fingerprint: r.id.Public(r.addr).Fingerprint()}}}
+		Devices: []identity.Public{r.id.Public(r.addr)}}
 	p.Sign(r.id.Sign)
 	return p
 }
@@ -160,7 +160,7 @@ func (r *rawAgent) dmRoot(own protocol.PersonRoster, peerPub identity.Public, pe
 	if members[0].Person > members[1].Person {
 		members[0], members[1] = members[1], members[0]
 	}
-	root := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
+	root := protocol.ConvRoot{V: protocol.ConvRootVersion, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
 		Creator: protocol.ConvCreator{Person: own.Person, Roster: own.Hash(), Address: r.addr, Fingerprint: r.id.Public(r.addr).Fingerprint()}}
 	root.Sign(r.id.Sign)
 	return root, marshalBytes(r.t, root)
@@ -386,7 +386,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 	if members[0].Person > members[1].Person {
 		members[0], members[1] = members[1], members[0]
 	}
-	root := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
+	root := protocol.ConvRoot{V: protocol.ConvRootVersion, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
 		Creator: protocol.ConvCreator{Person: eveRoster.Person, Roster: eveRoster.Hash(), Address: eve.addr, Fingerprint: eve.id.Public(eve.addr).Fingerprint()}}
 	root.Sign(eve.id.Sign)
 	rootJSON := marshalBytes(t, root)
