@@ -150,12 +150,21 @@
   stand-in harness binary, no model), browser engine tests against a real
   daemon, page checks, a Chrome pass of the daemon pages; the browser
   device's agent controls have no real-browser pass yet.
-- **Notifications: contract written, not built.** Core contract
-  [`docs/revival/NOTIFY.md`](revival/NOTIFY.md) (`f678490`): envelope `attn`
-  and `chan`, Hub prefs/subscription/seen APIs, pending alerts with a grace
-  period, SSRF rules, desktop daemon alerts. The browser side (service
-  worker for push and click only, opt-in settings, per-DM mute, presented
-  acks, click to the exact DM) is frontend work on those types.
+- **Notifications (local commits, not released).** Contract
+  [`docs/revival/NOTIFY.md`](revival/NOTIFY.md). Built: the envelope's
+  `attn`/`chan` and the Hub's prefs, subscription, seen and pending-alert
+  dispatch with its SSRF rules (`a83aa4d`, core); the browser device's
+  side (`6adc18d`): the hint on typed turns when both ends read it,
+  preferences only after the person turns notifications on (senders are
+  people they started a DM with or allowed; a changed key is dropped),
+  per-DM mute by channel, presented-message reports only for a visible,
+  focused DM with its newest message in view, and a service worker for
+  push and click only (content-free "AgentNet / New activity"; a click
+  opens the DM this device resolves, or says it is not here). Evidence:
+  wire vectors both ways, engine tests against the Hub's API, service
+  worker and page checks. Not shown yet: a real push service delivering,
+  a real OS notification, any phone; the desktop daemon's alerts are in
+  progress (core).
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a
