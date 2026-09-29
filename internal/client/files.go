@@ -18,6 +18,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -349,6 +350,17 @@ func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 	}
 	if err := secfile.EnsureDir(filepath.Dir(done)); err != nil {
 		return err
+	}
+	// One fetch of a blob at a time, across goroutines and processes (the
+	// background keeping of conversation files, a person opening or saving
+	// it): both append to the same partial file.
+	release, err := lockfile.Wait(done + ".lock")
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err := os.Stat(done); err == nil {
+		return nil // fetched meanwhile
 	}
 	part := done + ".part"
 	w, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)

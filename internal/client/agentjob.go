@@ -509,15 +509,28 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 		return true, nil
 	}
 	var state, pid, origin string
-	var frozen bool
+	var frozen, member bool
+	// member: the recipient is now a current device of the conversation's
+	// other member, or of this installation's own person (its other
+	// devices' copies, history and files). A copy sealed for a device that
+	// has since left its person never goes: an admin-admitted device stays
+	// a Hub member, so only this check stops it.
 	err := a.store.db.QueryRow(`SELECT o.state, coalesce(o.pid, ''), coalesce(o.origin, ''),
-		EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person WHERE d.address = o.recipient AND p.state = ?)
-		FROM outbox o WHERE o.id = ?`, personConflict, env.ID).Scan(&state, &pid, &origin, &frozen)
+		EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person WHERE d.address = o.recipient AND p.state = ?),
+		o.conv IS NULL OR EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person JOIN conversations c ON c.id = o.conv
+		                          WHERE d.address = o.recipient AND (p.person = c.peer OR p.state = ?))
+		FROM outbox o WHERE o.id = ?`, personConflict, personSelf, env.ID).Scan(&state, &pid, &origin, &frozen, &member)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil // not (or no longer) stored here: nothing to send
 	case err != nil || state != stateQueued:
 		return false, err
+	case !frozen && !member:
+		if err := a.store.setOutboxState(env.ID, stateNotDelivered, "that device is no longer a device of a member of this conversation", ""); err != nil {
+			return false, err
+		}
+		a.releaseSpool(env) // its files were encrypted for that device only
+		return false, nil
 	case pid != "" && envelope.AgentOrigin(origin):
 		if held, err := a.holdEndedOutputs(env.ID); err != nil || held > 0 {
 			return false, err
