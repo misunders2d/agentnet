@@ -455,6 +455,7 @@ export class Engine {
     try {
       [ok, why] = await this.supports(peer.address, pin);
     } catch (e) {
+      if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
       why = "cannot reach your server";
     }
     if ((await this.store.get("persons", c.peer)).state === "conflict") throw new Error("This person's record conflicts with the one kept here; the conversation is frozen.");
@@ -698,8 +699,22 @@ export class Engine {
     if (this.wake) this.wake();
   }
 
-  // kick reconnects now (the browser came back online).
+  // kick reconnects now, if it is waiting to.
   kick() { if (this.wake) this.wake(); }
+
+  // online: the browser says the network is back. What is kept is tried at
+  // once, over the open connection or a new one.
+  online() {
+    if (this.connected) this.flushOutbox().catch(() => {});
+    else this.kick();
+  }
+
+  // offline: the browser says the network is gone. The connection is
+  // dropped now, so the page does not claim one; it is tried again with
+  // backoff, and at once when the network is back.
+  offline() {
+    if (this.abort) this.abort.abort();
+  }
 
   async loop() {
     let backoff = 1000;

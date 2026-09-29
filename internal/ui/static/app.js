@@ -690,7 +690,9 @@ function renderThreads(threads) {
   const people = peopleSection();
   const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices: messages per installation");
   if (!threads.length) {
-    fill(list, people, devices, el("li", { class: "hint empty-list" }, "No conversations yet. Start one with the + button, or with someone below."),
+    fill(list, people, devices, el("li", { class: "hint empty-list" }, state.overview.device
+      ? "No messages from devices here. Start a DM with a person above."
+      : "No conversations yet. Start one with the + button, or with someone below."),
       directorySection(threads));
     return;
   }
@@ -1224,11 +1226,12 @@ function restoreDraft(key, t) {
 function syncComposer() {
   if (state.dm) { // a DM: messages only, to the person
     const d = state.dmData;
-    const blocked = !d || !!d.frozen;
+    const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
+    const blocked = !d || !!d.frozen || revoked;
     $("body").disabled = blocked;
     $("send").disabled = blocked || state.sending;
     $("kind").hidden = true;
-    $("body").placeholder = !d ? "" : d.frozen ? "Nothing more can be sent in this conversation" : "Write to " + d.peer.label;
+    $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation" : "Write to " + d.peer.label;
     kindHint();
     return;
   }

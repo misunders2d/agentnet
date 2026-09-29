@@ -33,8 +33,8 @@ async function handle(req) {
     return { v: await engine.api(req.path, req.body) };
   case "offline":
     offline = req.on;
-    if (offline && engine.abort) engine.abort.abort();
-    if (!offline) engine.kick();
+    if (offline) engine.offline();
+    else engine.online();
     return {};
   case "reload": { // the page is reloaded: a new engine over the same stored data
     engine.stop();
@@ -43,11 +43,11 @@ async function handle(req) {
     engine.start();
     return { joined: engine.joined };
   }
-  case "tamperPin": { // the pin of address now names another key (as if it changed)
+  case "tamperPin": { // the pin of address now names another key (as if it changed); returns the one it named
     const pin = await store.get("pins", req.address);
-    await store.write([{ s: "pins", k: req.address, v: { ...pin, json: req.json, fingerprint: req.fingerprint } }]);
+    await store.write([{ s: "pins", k: req.address, v: { ...pin, json: req.json, fingerprint: req.fingerprint, pending: null } }]);
     engine.pubs.clear();
-    return {};
+    return { json: pin.json, fingerprint: pin.fingerprint };
   }
   case "sameOrigin":
     sameOrigin(req.hub, req.base);

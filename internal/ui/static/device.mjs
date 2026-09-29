@@ -111,7 +111,8 @@ async function start(engine) {
   document.querySelector(".app").hidden = false;
   window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn) };
   engine.start();
-  window.addEventListener("online", () => engine.kick());
+  window.addEventListener("online", () => engine.online());
+  window.addEventListener("offline", () => engine.offline());
   for (const src of ["/assets/lenses.js", "/assets/app.js"]) {
     await new Promise((res, rej) => { const s = el("script", { src }); s.onload = res; s.onerror = () => rej(new Error("could not load " + src)); document.head.append(s); });
   }

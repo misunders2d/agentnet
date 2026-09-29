@@ -380,7 +380,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 	// Alice's key "changes" (the pin now names Eve's key): her next message
 	// is held, not opened with a key that is not hers.
 	evePub := eve.id.Public(eve.addr)
-	w.ok(map[string]any{"op": "tamperPin", "address": alice.Address, "json": publicJSON(t, evePub), "fingerprint": evePub.Fingerprint()})
+	alicePin := w.ok(map[string]any{"op": "tamperPin", "address": alice.Address, "json": publicJSON(t, evePub), "fingerprint": evePub.Fingerprint()})
 	if _, err := alice.SendConv(ctx, c1, client.ConvOutgoing{Body: "is this still me?"}); err != nil {
 		t.Fatal(err)
 	}
@@ -403,12 +403,18 @@ func TestBrowserEngineJourney(t *testing.T) {
 		}
 	}
 
-	// Revoked: the device stops and says so.
+	// Revoked: the device stops and says so. (Alice's pin is set back first,
+	// so her DM is not frozen and a send reaches the Hub.)
+	w.ok(map[string]any{"op": "tamperPin", "address": alice.Address, "json": alicePin["json"], "fingerprint": alicePin["fingerprint"]})
 	if err := alice.Revoke(ctx, "dana/phone"); err != nil {
 		t.Fatal(err)
 	}
-	w.call(map[string]any{"op": "api", "path": "/api/dm/new", "body": map[string]any{"address": alice.Address}})
+	// The send that finds out is refused, not kept as if the server were away.
+	w.refuses("send that finds the revocation", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": c2, "body": "still here?"}}), "removed")
 	w.until("revoked", func() bool { return w.ok(map[string]any{"op": "status"})["revoked"] == true })
+	if strings.Contains(dmBodies(w.api("/api/dm?id="+c2, nil)), "still here?") {
+		t.Fatal("a message was kept after the device was removed")
+	}
 	if o := w.api("/api/overview", nil); o["device"].(map[string]any)["revoked"] != true {
 		t.Fatalf("overview after revoke: %v", o["device"])
 	}
