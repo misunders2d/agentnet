@@ -162,9 +162,23 @@
   push and click only (content-free "AgentNet / New activity"; a click
   opens the DM this device resolves, or says it is not here). Evidence:
   wire vectors both ways, engine tests against the Hub's API, service
-  worker and page checks. Not shown yet: a real push service delivering,
-  a real OS notification, any phone; the desktop daemon's alerts are in
-  progress (core).
+  worker and page checks, and one real pass in desktop Chrome 154 on
+  Linux with Google's push service (synthetic Hub and messages on
+  loopback, the Hub behind a test-only port that serves the browser over
+  plain HTTP and the command-line peer over pinned TLS): opt-in from the
+  page's button (the browser's permission answered for that test origin),
+  a real FCM subscription; a message in the DM on screen raised a pending
+  alert that the page's report cancelled within 0.2 s, no banner; with
+  the page closed, the Hub pushed at its 5 s deadline and the desktop's
+  notification server showed one "AgentNet / New activity" banner per
+  alert (never a second one from the page); a click through the
+  notification server opened the exact DM, in the open page (switching
+  from another DM) and with the page closed (one tab in the same window),
+  and a person's own click did the same; a muted DM raised nothing while
+  the other DM with the same person still alerted; off raised nothing.
+  Not shown: a deployed HTTPS relay, a phone or iPhone, other browsers,
+  macOS or Windows; the desktop daemon's alerts are core work in
+  progress.
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a
