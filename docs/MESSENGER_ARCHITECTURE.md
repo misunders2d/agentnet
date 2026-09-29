@@ -60,8 +60,8 @@
   - linking devices, groups, browser devices.
 
   Human DMs are **not** complete.
-- **Human DMs on the page: a candidate, review pending (2026-09-28).**
-  `4a0659c` adds to the daemon's page, through the core's APIs only:
+- **Human DMs on the page: accepted (2026-09-29).** `4a0659c` (Agy's review
+  passed, no defects) adds to the daemon's page, through the core's APIs only:
   - setting up your person by hand (never automatically);
   - people on your server shown by the name they claim until checked (the
     check happens when you start a DM);
@@ -69,10 +69,13 @@
   - a message-only DM composer, with receipts. A question or task from them is
     held for you and nothing runs it; a frozen DM sends nothing.
 
-  DMs stay apart from device history (the contacts by address), and Comic and
-  Zoom do not draw them yet. Not built: agent invitation and participation,
-  Zoom's human–agent links, linking devices, searching people, DMs on the
-  relay's browser page. Agy's review of this page is pending.
+  DMs stay apart from device history (the contacts by address). `9c1d4b4`
+  (candidate, review pending) adds people search (by the name they give or
+  their device, and DMs by their lines), a DM as an issue in Comic (held and
+  kept captions, no decision controls), and Zoom's People group, a person's
+  DMs, one DM and a write dialog that sends only to it. Not built: agent
+  invitation and participation, Zoom's human–agent links (they wait for real
+  participation data), linking devices, DMs on the relay's browser page.
 - **Also built since the design was written:** the People directory (`aec4d4f`,
   `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
   `docs/revival/M4.md`); the browser device's wire format and the relay's page
@@ -470,6 +473,11 @@ The rollout is relay-first: upgrade the relay, then clients.
 - **dismissed.** Only an explicit, authorized dismissal ends it. After that there
   is no context and there are no jobs. History stays, and nothing already read is
   erased. A new invite starts a new participation.
+- **Owner decisions for a two-person DM (2026-09-29):** either person may
+  dismiss an invited agent. Selected earlier messages of the DM may be shared
+  with the agent; the selection is visible to both people, and the other person
+  gives no separate approval. The agent's host still accepts the invitation
+  explicitly.
 - **Not dismissals:** the first report, silence, a restart, a thank-you. No
   automatic expiry.
 
@@ -720,6 +728,12 @@ option, not a gate.
    epochs, any member may request, and the creator's device is keeper.
    Alternatives: several keepers, or any member authorizes, with weaker
    fork/removal guarantees.
+**Decided by the owner (2026-09-29), for two-person DMs:**
+- Either person may dismiss an invited agent.
+- Selected earlier DM messages may be shared with an invited agent, the choice
+  visible to both people, with no separate approval from the other person.
+- The host's acceptance of an invitation stays explicit.
+
 **Later (not blocking S-A or S-B).**
 
 3. Recovery authority after losing all devices (DECISIONS §2).
@@ -1316,9 +1330,9 @@ inferred from a build string.
 ## 20. Owner requests for later (backlog, not this release)
 
 Recorded 2026-09-29. Neither is designed or scheduled; nothing here widens the
-current release. Linear: to be linked.
+current release.
 
-**Custom visual plugins.** Every user can bundle their own presentation of the
+**Custom visual plugins** ([MEL-475](https://linear.app/mellanni/issue/MEL-475/secure-custom-messenger-ui-plugins)). Every user can bundle their own presentation of the
 messenger, as Classic, Comic and Zoom are, without changing how messages flow.
 It must be secure:
 - *Isolation:* a plugin runs apart from the page's own code and from other
@@ -1337,7 +1351,7 @@ Undecided: the architecture, the API, the package format, and how plugins are
 installed, reviewed and updated. Signing a plugin, or running it in a sandbox,
 is not by itself shown to meet these requirements.
 
-**Editing sent messages.** As in Slack or Telegram, a sender can edit a message
+**Editing sent messages** ([MEL-476](https://linear.app/mellanni/issue/MEL-476/edit-sent-messages)). As in Slack or Telegram, a sender can edit a message
 they sent:
 - the message visibly shows that it was edited;
 - an edit is an authenticated revision by the same sender, delivered as

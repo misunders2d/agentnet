@@ -70,18 +70,19 @@ Every change to AgentNet must uphold these fundamental invariants:
      - Codex CLI: `--sandbox read-only -c approval_policy="never"`.
      - Pi: `--tools read,grep,find,ls` (read-only tool subset).
      - Tools and Bash commands already permitted by user settings keep their native effects (not a blanket sandbox). If the model cannot answer without forbidden tools, it responds `AGENTNET: NEEDS-HUMAN`.
-   - **Task (`agentnet task`)**: **Never auto-executes.** Always stored as `awaiting` for human review. Must be explicitly accepted via local database transition (`agentnet accept <id>`) or rejected via `agentnet decline <id>`. Workers never touch open user sessions.
+   - **Task (`agentnet task`)**: Stored as `awaiting` for the person and run only after `agentnet accept <id>` (or declined with `agentnet decline <id>`), unless the recipient has given that sender's **exact verified key** standing permission (`agentnet approve --tasks ADDRESS` or `agentnet accept --always <id>`). A grant is local only, never set by anything received or by names, stops holding when that key changes (until granted again), and never reruns failed or interrupted work; either way the responder runs with the recipient's normal permissions. A task inside a DM (conversation) is held for the person and nothing runs it. Workers never touch open user sessions.
    - **Follow-Up (`--follow-up <text>`)**: Stored locally on the sender's machine with the outgoing request. When the peer's first reply arrives, it triggers a single local summary run (`summarized` or `needs_human`). It sends nothing back to the coworker and never auto-executes tasks.
 
 6. **Interactive Session Awareness & Hooks Contract**:
-   - `agentnet hooks install claude|codex`: Installs handlers (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`).
+   - `agentnet hooks install claude|codex|pi`: Installs handlers (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`; for Pi, an extension with the matching events and an idle watch).
    - **Durable History vs Model Context**: Hooks provide metadata only (arrival summaries, at most 8 items per call). Full conversation text stays behind explicit `agentnet conversation <id>` reads.
    - **Per-Harness & Per-Session Cursors**: Each interactive session maintains its own cursor over `inbox.arrival`, independent of other sessions.
-   - **No Idle Wake**: Sessions check arrivals only at natural turn hook points; an idle session waiting at a prompt is not woken up.
+   - **No Idle Wake**: Claude and Codex sessions check arrivals only at natural turn hook points; an idle session waiting at a prompt is not woken up. Pi (below) shows a notice while idle without starting a model turn.
    - **Claude Stop Hook**: Live (`decision: "block"`, `reason: text`).
    - **Codex Hooks Adoption**: Installed into `~/.codex/hooks.json`; adoption requires manual user trust in `/hooks`.
    - **Windows Hooks Refused**: Hook installation is explicitly refused on Windows (`MEL-414`).
-   - **Pi & Antigravity Hooks**: Unsupported.
+   - **Pi Hooks**: `agentnet hooks install pi` writes an extension for upstream Pi 0.87.1 (see [M4](revival/M4.md)): metadata-only notices at session start, with a prompt, at the end of a run, and while idle (a notice plus a message for the next turn, without starting a model turn). Evidence: tests and a live Pi run in RPC mode without a model; not run in an interactive Pi TUI or with OMP.
+   - **Antigravity Hooks**: Unsupported (no verified hook contract).
    - Parallel hook calls in one session may repeat an arrival. Codex trust/adoption on the operator laptop remains unconfirmed; installation is not live proof. No request-origin routing chooses one foreground session: cursors are independent for each hooked session.
 
 7. **Persistent Background Sessions & Context Retention (MEL-425)**:
@@ -315,10 +316,14 @@ If a local database or key file is damaged:
   frozen-person deferred send are fixed (`9f5bea1`, `5da7fa1`, `7247759`); root accepted `7247759` with focused
   race tests, closing the core correction gate. Not built: agent participation/execution, Zoom human–agent
   links, device linking, groups, browser devices. Human DMs are not complete.
-- **Human DMs on the page (`4a0659c`, candidate; Agy review pending)**: person setup by hand, people listed by their claimed name until checked,
+- **Human DMs on the page (`4a0659c`, accepted after Agy's review)**: person setup by hand, people listed by their claimed name until checked,
   separate persistent DMs, a message-only DM composer with receipts, held questions/tasks (nothing runs), frozen
-  DMs; apart from device history. Not yet in Comic/Zoom; no agent invitation, Zoom human–agent links, device
-  linking, people search or relay browser DMs.
+  DMs; apart from device history. `9c1d4b4` (candidate, review pending) adds people search and DMs in Comic and
+  Zoom (no person–agent links: they wait for participation data). Not built: agent invitation, Zoom human–agent
+  links, device linking, relay browser DMs.
+- **Owner decisions for two-person DMs (2026-09-29)**: either person may dismiss an invited agent; selected earlier
+  DM messages may be shared with an agent, the choice visible to both people, with no separate approval from the
+  other person; the host's acceptance stays explicit. See [MESSENGER_ARCHITECTURE.md §9.2 and §15](MESSENGER_ARCHITECTURE.md).
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon
@@ -338,11 +343,15 @@ If a local database or key file is damaged:
   built. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
-- **Owner requests for later (2026-09-29; backlog, not this release; Linear to be linked)**: custom visual plugins
-  (each user bundles presentations like Classic/Comic/Zoom; isolated, least permission, no secret access or silent
-  export, core keeps all authority; architecture, API and package format undecided) and editing sent messages
-  (visible edited state, authenticated sender revisions synced to offline devices, never a silent rewrite or rerun of
-  accepted/run work; edit windows, history visibility, attachments and conflicts undecided). See
+- **Owner requests for later (2026-09-29; backlog, not this release)**:
+  - custom visual plugins, [MEL-475](https://linear.app/mellanni/issue/MEL-475/secure-custom-messenger-ui-plugins):
+    each user bundles presentations like Classic/Comic/Zoom; isolated, least permission, no secret access or silent
+    export, core keeps all authority; architecture, API and package format undecided;
+  - editing sent messages, [MEL-476](https://linear.app/mellanni/issue/MEL-476/edit-sent-messages): visible edited
+    state, authenticated sender revisions synced to offline devices, never a silent rewrite or rerun of accepted/run
+    work; edit windows, history visibility, attachments and conflicts undecided.
+
+  See
   [MESSENGER_ARCHITECTURE.md §20](MESSENGER_ARCHITECTURE.md#20-owner-requests-for-later-backlog-not-this-release).
 - **Live Daemon Web UI Integration (`MEL-429`, slice S-A)**: `agentnet daemon --ui 127.0.0.1:0` serves the
   messenger page over this home's real inbox from the daemon that owns the home; `agentnet ui` prints its
