@@ -223,7 +223,8 @@ func (a *Agent) startHistory(dev identity.Public) error {
 		return err
 	}
 	a.convWork.due(convHistory)
-	a.kickNow()
+	a.kickNow()          // this process's daemon, if it is one (the page approved)
+	notifyDaemon(a.home) // or the daemon running beside this command (agentnet person approve)
 	return nil
 }
 

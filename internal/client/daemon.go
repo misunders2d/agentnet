@@ -391,8 +391,15 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		}
 	}
 	// A wake from another agentnet process means it changed local state:
-	// the worker looks again, and so does a messenger page.
-	stopKicks, err := listenKicks(a.home, func() { a.wakeWorker(); a.changes.bump() })
+	// the worker looks again, and so does a messenger page; the stream's
+	// worker picks up what it queued (history for a device it linked, file
+	// requests) and sends it now.
+	stopKicks, err := listenKicks(a.home, func() {
+		a.wakeWorker()
+		a.changes.bump()
+		a.convWork.due(convHistory | convServe | convFetch)
+		a.kickNow()
+	})
 	if err != nil {
 		// Still works: new messages and Hub pings wake the worker.
 		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)
