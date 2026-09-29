@@ -833,7 +833,7 @@ A responder harness (e.g. claude) must be on the PATH the daemon sees.`,
        agentnet update --status
 
 Install an official release of agentnet over this program's file: the
-latest release by default, or the one named. It downloads the file for this
+latest stable release by default, or the one named. It downloads the file for this
 system (agentnet-OS-ARCH, .exe on Windows) from
 https://github.com/misunders2d/agentnet/releases, checks it against that
 release's SHA256SUMS, runs it to confirm its version and that it can open
@@ -847,7 +847,8 @@ the release's HTTPS and checksum; there is no separate signature.
   --check    show the current and target versions and the file; change nothing
   --status   say whether this home's daemon switched after the last update
 
-- Same version: nothing to do. Older versions are refused: databases only
+- Same version, or a build ahead of the latest stable release: no update
+  needed. Explicitly requested older versions are refused: databases only
   move forward. A development build stamped from a release (vX.Y.Z-N-gHASH
   or vX.Y.Z+...) takes only a release newer than vX.Y.Z, and only one that
   says it can open this home's database; other development builds must name

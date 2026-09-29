@@ -129,6 +129,7 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	cur, isRelease := parseRelease(current)
 	base, isDev := devBase(current)
 	target := fs.Arg(0)
+	explicit := target != ""
 	switch {
 	case target != "":
 		if _, ok := parseRelease(target); !ok {
@@ -149,9 +150,17 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 		return nil
 	}
 	if isRelease && olderRelease(tv, cur) {
+		if !explicit {
+			fmt.Printf("agentnet %s is newer than the latest stable release (%s); no update needed\n", current, target)
+			return nil
+		}
 		return fmt.Errorf("%s is older than this %s; downgrades are not supported (databases only move forward; see agentnet help update)", target, current)
 	}
 	if isDev && !olderRelease(base, tv) {
+		if !explicit {
+			fmt.Printf("agentnet %s is ahead of the latest stable release (%s); no update needed\n", current, target)
+			return nil
+		}
 		return fmt.Errorf("%s is not newer than %s, the release this development build (%s) was made after; installing it could take code and database backwards, so nothing was changed", target, releaseName(base), current)
 	}
 	started, err := executable()

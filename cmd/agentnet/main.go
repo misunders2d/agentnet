@@ -63,7 +63,7 @@ func run(args []string) error {
 		}
 		// A saved recommendation goes to stderr, so the line above stays
 		// parseable; nothing is created and the Hub is not contacted.
-		if r, ok := client.LocalRelease(*home); ok && r.Version != protocol.Version {
+		if r, ok := client.LocalRelease(*home); ok && protocol.Newer(r.Version, protocol.Version) {
 			fmt.Fprintf(os.Stderr, "your Hub recommends agentnet %s (this is %s): see agentnet help update and %s\n", r.Version, protocol.Version, r.URL)
 		}
 		return nil

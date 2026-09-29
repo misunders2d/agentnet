@@ -237,6 +237,29 @@ func TestUpdateRefusals(t *testing.T) {
 	}
 }
 
+// A newer preview or development build needs no update from the stable
+// channel. An explicitly requested downgrade must still fail closed.
+func TestUpdateAheadOfStable(t *testing.T) {
+	for _, current := range []string{"v0.3.0", "v0.2.1+abc123", "v0.3.0-2-gabc123"} {
+		t.Run(current, func(t *testing.T) {
+			fakeReleaseServer(t, &releaseStub{latest: "v0.2.1"})
+			exe, before := installed(t, current)
+			for _, args := range [][]string{nil, {"--check"}} {
+				out, err := updateIn(t, filepath.Join(t.TempDir(), "no-home"), args...)
+				if err != nil || !strings.Contains(out, "no update needed") || !strings.Contains(out, "latest stable release (v0.2.1)") {
+					t.Fatalf("%v: %q, %v", args, out, err)
+				}
+			}
+			if err := update(t, "v0.2.1"); err == nil {
+				t.Fatal("explicit downgrade accepted")
+			}
+			if !unchanged(exe, before) || len(leftovers(t, exe)) != 0 {
+				t.Fatal("no-update check changed or staged an executable")
+			}
+		})
+	}
+}
+
 // Every download or validation failure leaves the installed file as it was
 // and removes the staged copy.
 func TestUpdateRejectsBadDownloads(t *testing.T) {
@@ -421,8 +444,8 @@ func TestUpdateFromDevelopmentBuilds(t *testing.T) {
 		args                    []string
 		want                    string // "" installs
 	}{
-		{"v9.9.8+0760ccc", "v9.9.8", "999", nil, "not newer than v9.9.8"},
-		{"v9.9.8-28-gcc5d858-dirty", "v9.9.8", "999", nil, "not newer than v9.9.8"},
+		{"v9.9.8+0760ccc", "v9.9.8", "999", []string{"v9.9.8"}, "not newer than v9.9.8"},
+		{"v9.9.8-28-gcc5d858-dirty", "v9.9.8", "999", []string{"v9.9.8"}, "not newer than v9.9.8"},
 		{"v9.9.8+0760ccc", "v9.9.9", "999", []string{"v9.9.7"}, "not newer than v9.9.8"},
 		{"v0.1.50-143-gcc5d858", "v9.9.9", "", nil, "does not say which home databases"},
 		{"cc5d858", "v9.9.9", "999", nil, "not made from a release"},
