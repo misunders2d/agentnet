@@ -31,6 +31,13 @@ func (l *Live) identityOverview(o *Overview) error {
 	default:
 		o.Link = &LinkState{State: st.State, Detail: st.Detail}
 	}
+	jobs, err := l.a.HistoryProgress()
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		o.History = append(o.History, HistoryCopy{Device: j.Device, Name: j.Name, Done: j.ConvsDone, Total: j.ConvsTotal, State: j.State})
+	}
 	reqs, err := l.a.PendingLinks()
 	if err != nil {
 		return err
@@ -164,4 +171,12 @@ func laggingCopy(m client.ConvMessage, peer string) string {
 		}
 	}
 	return peer
+}
+
+// syncedFrom is the device m came from as history, or "".
+func syncedFrom(m client.ConvMessage) string {
+	if m.History {
+		return m.SyncedFrom
+	}
+	return ""
 }

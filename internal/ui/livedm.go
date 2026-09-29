@@ -200,7 +200,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, m := range msgs {
 			dm := DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies)}
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m)}
 			if m.Target != nil {
 				dm.To = m.Target.Address
 			}

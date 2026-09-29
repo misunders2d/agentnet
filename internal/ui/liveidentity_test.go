@@ -15,8 +15,8 @@ import (
 // One person on two devices through the daemon's page (MEL-433): a link
 // made on the page, a new device joining with it, approved (or refused)
 // on the page; its devices listed, one removed; a service never has a
-// person. (Messages between one's own devices: TestLiveOwnDeviceCopies,
-// once the core admits them.)
+// person; the chats before the link come to the new device as history,
+// and a message sent from either device shows on the other as yours.
 func TestLiveIdentity(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -70,6 +70,16 @@ func TestLiveIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	pb.CreatePerson("Bob")
+	// A DM from before the phone: it reaches the phone as history.
+	var before string
+	eventually("a DM before the phone", func() bool {
+		var err error
+		before, err = pl.NewDM(bob.Address)
+		return err == nil
+	})
+	if _, err := pl.SendDM(DMDraft{Conv: before, Body: "before the phone"}); err != nil {
+		t.Fatal(err)
+	}
 	o := over(pl)
 	if o.Role != RolePerson || o.Person == nil || len(o.Person.Devices) != 1 || !o.Person.Devices[0].This || o.Person.Devices[0].Name != "laptop" {
 		t.Fatalf("your person on one device: %q %+v", o.Role, o.Person)
@@ -118,6 +128,15 @@ func TestLiveIdentity(t *testing.T) {
 		t.Fatalf("a request decided twice: %v", err)
 	}
 
+	eventually("the old DM on the phone, as history from the laptop", func() bool {
+		d, err := pp.DM(before)
+		return err == nil && len(d.Messages) == 1 && d.Messages[0].Body == "before the phone" && d.Messages[0].SyncedFrom == laptop.Address
+	})
+	eventually("the laptop's copy of it done", func() bool {
+		o := over(pl)
+		return len(o.History) == 1 && o.History[0].Name == "phone" && o.History[0].State == "done" && o.History[0].Done == o.History[0].Total
+	})
+
 	// Bob's page shows one Alice with two devices.
 	eventually("Alice on two devices at Bob", func() bool {
 		for _, p := range over(pb).People {
@@ -127,6 +146,38 @@ func TestLiveIdentity(t *testing.T) {
 		}
 		return false
 	})
+	// A DM the phone starts is the laptop's too, shown as sent from the
+	// phone with one copy per other device; the laptop's reply shows on
+	// the phone as sent from the laptop.
+	var conv string
+	eventually("a DM from the phone", func() bool { conv, err = pp.NewDM(bob.Address); return err == nil })
+	if _, err := pp.SendDM(DMDraft{Conv: conv, Body: "from my phone"}); err != nil {
+		t.Fatal(err)
+	}
+	fromOther := func(p *Live, body, via string) func() bool {
+		return func() bool {
+			d, err := p.DM(conv)
+			if err != nil {
+				return false
+			}
+			for _, m := range d.Messages {
+				if m.Body == body && m.Dir == "out" && m.Via == via {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	eventually("the phone's message on the laptop, from the phone", fromOther(pl, "from my phone", phone.Address))
+	if d, _ := pp.DM(conv); len(d.Messages) != 1 || len(d.Messages[0].Copies) != 2 || d.Messages[0].Via != "" {
+		t.Fatalf("the phone's own view (two copies: Bob's device and the laptop): %+v", d.Messages)
+	}
+	if _, err := pl.SendDM(DMDraft{Conv: conv, Body: "and from my laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually("the laptop's reply on the phone, from the laptop", fromOther(pp, "and from my laptop", laptop.Address))
+	eventually("both at Bob", func() bool { d, err := pb.DM(conv); return err == nil && len(d.Messages) == 2 })
+
 	// Removing the phone; the last device stays.
 	if _, err := pl.RemoveDevice(phone.Address); err != nil {
 		t.Fatal(err)

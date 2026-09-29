@@ -150,7 +150,7 @@ type HistoryCopy struct {
 	Name   string `json:"name"`
 	Done   int    `json:"done"`
 	Total  int    `json:"total"`
-	State  string `json:"state"` // running, waiting (for this device to be online) or done
+	State  string `json:"state"` // running, done, or ended (that device is no longer yours)
 }
 
 // Persons is implemented by providers that hold human DMs.
@@ -254,8 +254,12 @@ type DMMessage struct {
 	// to (the other person's and your own), with how far each got.
 	Via    string     `json:"via,omitempty"`
 	Copies []CopyView `json:"copies,omitempty"`
-	To     string     `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
-	Event  string     `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	// SyncedFrom is the device of yours this message came from as history
+	// (copied when this device was added): who sent it is that device's
+	// word, not checked here, and nothing runs it.
+	SyncedFrom string `json:"synced_from,omitempty"`
+	To         string `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
+	Event      string `json:"event,omitempty"` // a participation record, said in words (its body is the record)
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`

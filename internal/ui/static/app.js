@@ -1202,9 +1202,9 @@ function linkDialog(l) {
 // historyLine says how far a new device has your chats.
 function historyLine(h) {
   if (h.state === "done") return h.name + " has your chats.";
+  if (h.state === "ended") return "Copying your chats to " + h.name + " stopped: it is no longer one of your devices.";
   const where = state.overview.device ? "Keep this page open until it is done." : "AgentNet on this computer copies them while it runs.";
-  return (h.state === "waiting" ? "Your chats go to " + h.name + " when it is online" : "Copying your chats to " + h.name) +
-    ": " + h.done + " of " + h.total + ". " + where;
+  return "Copying your chats to " + h.name + ": " + h.done + " of " + h.total + " conversations. " + where;
 }
 
 // devicesDialog lists the person's devices, adds one, removes one.
@@ -1433,6 +1433,7 @@ function dmDetails(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
+      m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
         el("li", {}, c.to + ": " + (copyWord[c.state] || c.state) + (c.detail ? " (" + c.detail + ")" : "")))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
