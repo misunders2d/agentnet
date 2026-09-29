@@ -124,11 +124,19 @@ func (l *Live) OpenFile(ctx context.Context, msgID string, index int) (io.ReadCl
 	return r, client.SafeName(f.Name), nil
 }
 
+// RequestFile implements HistoryFiles.
+func (l *Live) RequestFile(ctx context.Context, msgID string, index int) error {
+	if err := l.a.RequestFile(ctx, msgID, index); err != nil {
+		return Refuse(sentence(err))
+	}
+	return nil
+}
+
 // fileViews are a message's files for the page.
 func fileViews(files []client.FileInfo) []FileView {
 	var out []FileView
 	for i, f := range files {
-		out = append(out, FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath})
+		out = append(out, FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Availability: f.Availability})
 	}
 	return out
 }

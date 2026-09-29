@@ -278,7 +278,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			}
 		}
 		for what, raw := range map[string]string{
-			"another version": strings.Replace(marshal(t, bare), `"v":1`, `"v":2`, 1),
+			"another version":  strings.Replace(marshal(t, bare), `"v":1`, `"v":2`, 1),
 			"an unknown field": strings.Replace(marshal(t, bare), `"v":1`, `"v":1,"extra":true`, 1),
 			"a bad key":        strings.Replace(marshal(t, bare), pub.Fingerprint(), "nope", 1),
 			"a bad address":    strings.Replace(marshal(t, bare), dana, "dana", 1),

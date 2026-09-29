@@ -237,17 +237,42 @@ function discardStaged(files) {
   if (ids.length) api("/api/upload/discard", { ids }).catch(() => {});
 }
 
-// fileChips are a message's files: name and size, and Open for a received one.
+// fileChips are a message's files: name and size, and Open for one that
+// came to this device (received, from another device of yours, or as
+// history once it is here). A history file not here yet is asked for from
+// the device it came from.
 function fileChips(m, files) {
   if (!files || !files.length) return null;
+  const sentHere = m.dir === "out" && !m.via && !m.synced_from;
+  const from = m.synced_from ? m.synced_from.split("/")[1] : "";
   return el("div", { class: "files" }, files.map((f, i) => {
     const idx = f.index === undefined ? i : f.index;
     const slot = el("span", { class: "file-open" });
+    const action = sentHere ? null
+      : f.availability === "requestable" ? el("button", { type: "button", class: "text-btn", onclick: (e) => requestFile(m, idx, from, e.currentTarget) }, "Get it from " + from)
+        : f.availability === "requested" ? el("span", { class: "file-state" }, "Asked " + from + " for it")
+          : f.availability === "unavailable" ? el("span", { class: "file-state" }, "Not available")
+            : el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot) }, "Open");
     return el("span", { class: "file" }, el("span", { class: "file-icon", "aria-hidden": "true" }, fileExt(f.name)),
       el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name),
-        el("span", { class: "file-size" }, f.saved ? "Saved: " + f.saved : size(f.size))),
-      m.dir === "in" && el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot) }, "Open"), slot);
+        el("span", { class: "file-size" }, f.saved ? "Saved: " + f.saved : size(f.size)),
+        f.note && el("span", { class: "file-note" }, f.note)),
+      action, slot);
   }));
+}
+
+// requestFile asks the device of yours a history message came from for
+// one of its files; it opens once that device sends it.
+async function requestFile(m, i, from, button) {
+  button.disabled = true;
+  try {
+    await api("/api/file/request", { id: m.id, index: i });
+    announce("Asked " + from + " for it: it opens here once that device sends it (it has to be online).");
+    await loadDM();
+  } catch (e) {
+    button.disabled = false;
+    announce(e.message);
+  }
 }
 
 // fetchFile gets a received file checked and decrypted: by the browser

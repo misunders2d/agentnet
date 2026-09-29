@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,6 +82,14 @@ func TestLiveIdentity(t *testing.T) {
 	if _, err := pl.SendDM(DMDraft{Conv: before, Body: "before the phone"}); err != nil {
 		t.Fatal(err)
 	}
+	// Bob's file in it, which the phone asks the laptop for later.
+	eventually("Bob has the DM", func() bool { ms, _ := bob.ConversationMessages(before); return len(ms) == 1 })
+	filePath := filepath.Join(t.TempDir(), "plan.txt")
+	os.WriteFile(filePath, []byte("the plan, from bob"), 0o600)
+	if _, err := bob.SendConv(ctx, before, client.ConvOutgoing{Body: "a file", Files: []client.OutgoingFile{{Path: filePath}}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually("the laptop has Bob's file", func() bool { ms, _ := laptop.ConversationMessages(before); return len(ms) == 2 })
 	o := over(pl)
 	if o.Role != RolePerson || o.Person == nil || len(o.Person.Devices) != 1 || !o.Person.Devices[0].This || o.Person.Devices[0].Name != "laptop" {
 		t.Fatalf("your person on one device: %q %+v", o.Role, o.Person)
@@ -130,8 +140,22 @@ func TestLiveIdentity(t *testing.T) {
 
 	eventually("the old DM on the phone, as history from the laptop", func() bool {
 		d, err := pp.DM(before)
-		return err == nil && len(d.Messages) == 1 && d.Messages[0].Body == "before the phone" && d.Messages[0].SyncedFrom == laptop.Address
+		return err == nil && len(d.Messages) == 2 && d.Messages[0].Body == "before the phone" && d.Messages[0].SyncedFrom == laptop.Address &&
+			len(d.Messages[1].Attachments) == 1 && d.Messages[1].Attachments[0].Availability == "requestable"
 	})
+	d, _ := pp.DM(before)
+	if err := pp.RequestFile(ctx, d.Messages[1].ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	eventually("the laptop's answer", func() bool {
+		d, _ := pp.DM(before)
+		return d.Messages[1].Attachments[0].Availability == ""
+	})
+	if rc, name, err := pp.OpenFile(ctx, d.Messages[1].ID, 0); err != nil {
+		t.Fatal(err)
+	} else if got, _ := io.ReadAll(rc); string(got) != "the plan, from bob" || name != "plan.txt" {
+		t.Fatalf("the file: %q %q", got, name)
+	}
 	eventually("the laptop's copy of it done", func() bool {
 		o := over(pl)
 		return len(o.History) == 1 && o.History[0].Name == "phone" && o.History[0].State == "done" && o.History[0].Done == o.History[0].Total

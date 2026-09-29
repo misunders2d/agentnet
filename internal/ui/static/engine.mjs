@@ -16,7 +16,10 @@ import * as wire from "./wire.mjs";
 
 const HEARTBEAT = 90_000;
 const MAX_BACKOFF = 60_000;
-const stores = ["kv", "pins", "persons", "convs", "inbox", "outbox", "held", "lids", "receipts"];
+// files keeps file ciphertext: received files ("ct/" + blob id) and a copy
+// of each file sent here, encrypted to this device ("kept/" + its SHA-256),
+// so another device of your person can ask for them.
+const stores = ["kv", "pins", "persons", "convs", "inbox", "outbox", "held", "lids", "receipts", "files"];
 // heldPage bounds the held messages read in one step (the Go client's proofPage).
 const heldPage = 50;
 // historyPage bounds the messages one step of copying your chats to a new
@@ -35,8 +38,8 @@ const request = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.res
 // sent.
 export async function openIDB(name = "agentnet") {
   const db = await new Promise((res, rej) => {
-    const r = indexedDB.open(name, 1);
-    r.onupgradeneeded = () => { for (const s of stores) r.result.createObjectStore(s); };
+    const r = indexedDB.open(name, 2);
+    r.onupgradeneeded = () => { for (const s of stores) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s); };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
     r.onblocked = () => rej(new Error("storage is blocked by another tab"));
@@ -187,6 +190,8 @@ export class Engine {
     this.running = false;
     this.version = "";
     this.featureList = null;
+    this.notKept = new Map(); // received file blob id -> why its ciphertext is not kept here (gone, full, large)
+    this.fetching = new Map(); // "ct/" + blob id -> the one fetch of it under way
   }
 
   // ---- lifecycle
@@ -696,7 +701,7 @@ export class Engine {
     }
     const first = new Map();
     for (const r of await this.store.all("outbox")) {
-      if (!r.conv || r.history || !convs.has(r.conv)) continue;
+      if (!r.conv || r.aside || !convs.has(r.conv)) continue;
       const f = first.get(r.lid);
       if (!f || r.id < f.id) first.set(r.lid, r);
     }
@@ -715,6 +720,201 @@ export class Engine {
     this.changed();
     if (this.connected) for (const c of copies) await this.post(c);
     return state === "running";
+  }
+
+  // ---- files between your devices (client/historyfiles.go): a copy of
+  // each file sent here is kept encrypted to this device; received files'
+  // ciphertext is kept, fetched one at a time while the page is connected
+  // (an open and the keeping share one fetch); a device of your person
+  // asks for a history message's file and this one answers with it,
+  // encrypted to that device, or says why not. Storage that fails (full)
+  // never keeps a message from being admitted: the file is then not kept,
+  // and the page says so.
+
+  async keepSent(plain) {
+    for (const f of plain) {
+      try {
+        const sha = wire.hex(await wire.sha256(f.bytes));
+        if (await this.store.get("files", "kept/" + sha)) continue;
+        if (!this.selfPub) this.selfPub = await wire.publicEntry(this.keys, this.address);
+        const e = await wire.encryptFile(f.bytes, f.name, this.selfPub);
+        await put(this.store, "files", "kept/" + sha, { attachment: e.attachment, ct: e.ct });
+      } catch (e) { /* not kept: another device asking for it is told so */ }
+    }
+  }
+
+  // cipherOf is received file att's ciphertext: kept here, or fetched (one
+  // fetch at a time for each file) and kept when it fits.
+  cipherOf(att) {
+    const k = "ct/" + att.blob.id;
+    if (this.fetching.has(k)) return this.fetching.get(k);
+    const p = (async () => {
+      const kept = await this.store.get("files", k);
+      if (kept) return kept.ct;
+      const ct = await this.getBytes("/v1/blobs/" + att.blob.id + "/data");
+      if (ct.length !== att.blob.size || wire.hex(await wire.sha256(ct)) !== att.blob.sha256) throw new Error("the file is not the one the sender signed");
+      if (att.size > wire.BrowserMaxFile) {
+        this.notKept.set(att.blob.id, "large");
+      } else {
+        try {
+          await put(this.store, "files", k, { ct });
+          this.notKept.delete(att.blob.id);
+        } catch (e) {
+          this.notKept.set(att.blob.id, "full");
+        }
+      }
+      return ct;
+    })().finally(() => this.fetching.delete(k));
+    this.fetching.set(k, p);
+    return p;
+  }
+
+  keepFiles() {
+    if (!this.keeping) this.keeping = this.keepPass().finally(() => { this.keeping = null; });
+    return this.keeping;
+  }
+
+  // keepPass keeps received conversation files not kept yet, newest first,
+  // one at a time while connected; the server out of reach ends it (the
+  // next connection goes on), storage full too.
+  async keepPass() {
+    for (;;) {
+      if (!this.connected) return;
+      let todo = null;
+      for (const m of (await this.store.all("inbox")).filter((x) => x.conv).sort((a, b) => b.at - a.at)) {
+        for (const a of m.attachments || []) {
+          if (todo || !a.blob || this.notKept.has(a.blob.id)) continue;
+          if (a.size > wire.BrowserMaxFile) this.notKept.set(a.blob.id, "large");
+          else if (!(await this.store.get("files", "ct/" + a.blob.id))) todo = a;
+        }
+        if (todo) break;
+      }
+      if (!todo) return;
+      try {
+        await this.cipherOf(todo);
+      } catch (e) {
+        if (retryable(e)) return;
+        this.notKept.set(todo.blob.id, e.status === 404 ? "gone" : "failed");
+      }
+      this.changed();
+      if (this.notKept.get(todo.blob.id) === "full") return;
+    }
+  }
+
+  // fileState is where a file of a message stands for the page: a history
+  // file not here (requestable, requested, unavailable), or a received one
+  // neither kept here nor on the server any more.
+  fileState(a) {
+    if (!a.blob) return { availability: a.availability || "requestable", note: a.detail || "" };
+    const why = this.notKept.get(a.blob.id);
+    if (why === "gone") return { availability: "unavailable", note: "Your server no longer holds it, and this browser did not keep it." };
+    if (why === "full") return { note: "Not kept in this browser: its storage is full." };
+    if (why === "large") return { note: "Not kept in this browser: it is larger than " + (wire.BrowserMaxFile >> 20) + " MiB." };
+    return {};
+  }
+
+  // requestFile asks the device of yours that forwarded history message id
+  // for its file index; it opens here once that device's answer comes.
+  async requestFile(id, i) {
+    const m = await this.store.get("inbox", id);
+    if (!m || !m.history) throw new Error("That message is not a history message here.");
+    const a = (m.attachments || [])[i];
+    if (!a) throw new Error("That message has no such file.");
+    if (a.blob) return { note: "It is here already." };
+    const dev = this.me && this.me.devices.find((d) => d.address === m.synced_from);
+    if (!dev) throw new Error(m.synced_from + " is no longer one of your devices: the file cannot be asked from it.");
+    const rec = await this.ownCopy(dev, await this.store.get("convs", m.conv), "file", wire.fileMsgJSON({ type: "request", lid: m.lid, sha256: a.sha256 }));
+    m.attachments[i] = { ...a, availability: "requested", detail: "" };
+    await this.store.write([{ s: "outbox", k: rec.id, v: rec }, { s: "inbox", k: m.id, v: m }]);
+    this.changed();
+    if (this.connected) await this.post(rec);
+    return { note: "Asked " + dev.address.split("/")[1] + " for it: it opens here once that device sends it (it has to be online)." };
+  }
+
+  // admitFile takes a file message from another device of yours: a request
+  // is kept for runServes; an offer completes a history message's file.
+  async admitFile(n, env, ops) {
+    let m;
+    try {
+      m = wire.parseFileMsg(n.body);
+    } catch (e) {
+      throw new Hold("invalid", "a malformed file message");
+    }
+    if (m.type === "request") {
+      if (await this.store.get("kv", "serve/" + env.id)) return ops;
+      return [...ops, { s: "kv", k: "serve/" + env.id, v: { serve: true, id: env.id, device: env.from, conv: n.conv, lid: m.lid, sha256: m.sha256, state: "pending", at: this.now() } }];
+    }
+    const rec = (await this.store.all("inbox")).find((x) => x.conv === n.conv && x.lid === m.lid && x.history && (x.attachments || []).some((a) => !a.blob && a.sha256 === m.sha256));
+    if (!rec) return ops; // not waiting for it (any more)
+    const i = rec.attachments.findIndex((a) => !a.blob && a.sha256 === m.sha256);
+    if (!m.available) {
+      rec.attachments[i] = { ...rec.attachments[i], availability: "unavailable", detail: m.detail };
+    } else {
+      if (n.attachments.length !== 1 || n.attachments[0].sha256 !== m.sha256) throw new Hold("invalid", "a file offer without that file");
+      const a = rec.attachments[i];
+      rec.attachments[i] = { blob: n.attachments[0].blob, name: a.name, size: a.size, sha256: a.sha256 };
+    }
+    return [...ops, { s: "inbox", k: rec.id, v: rec }];
+  }
+
+  runServes() {
+    if (!this.serving) this.serving = this.servePass().finally(() => { this.serving = null; });
+    return this.serving;
+  }
+
+  // servePass answers the file requests kept here, oldest first, while
+  // connected; the server out of reach ends it (the next connection goes on).
+  async servePass() {
+    for (;;) {
+      if (!this.connected) return;
+      const s = (await this.store.all("kv")).filter((v) => v && v.serve && v.state === "pending").sort((a, b) => a.at - b.at)[0];
+      if (!s) return;
+      let state = "served", detail = "";
+      try {
+        await this.serveFile(s);
+      } catch (e) {
+        if (retryable(e)) return;
+        [state, detail] = ["unavailable", e.message];
+        await this.offerFile(s, [], detail).catch(() => {});
+      }
+      await put(this.store, "kv", "serve/" + s.id, { ...s, state, detail });
+    }
+  }
+
+  // serveFile sends the file request s asks for, encrypted to the asking
+  // device: from a received file's ciphertext, or the copy kept of one
+  // sent here.
+  async serveFile(s) {
+    const dev = this.me && this.me.devices.find((d) => d.address === s.device);
+    if (!dev) throw new Error(s.device + " is no longer a device of your person");
+    let src = null;
+    for (const m of await this.store.all("inbox")) {
+      const a = m.conv === s.conv && m.lid === s.lid && (m.attachments || []).find((x) => x.blob && x.sha256 === s.sha256);
+      if (a) {
+        src = { name: a.name, bytes: await wire.decryptFile(await this.cipherOf(a), a, this.keys) };
+        break;
+      }
+    }
+    if (!src) {
+      const sent = (await this.store.all("outbox")).some((r) => r.conv === s.conv && r.lid === s.lid && !r.aside && (r.attachments || []).some((x) => x.sha256 === s.sha256));
+      if (!sent) throw new Error("this device holds no such file");
+      const k = await this.store.get("files", "kept/" + s.sha256);
+      if (!k) throw new Error("this device kept no copy of that file");
+      src = { name: k.attachment.name, bytes: await wire.decryptFile(k.ct, k.attachment, this.keys) };
+    }
+    const f = await wire.encryptFile(src.bytes, src.name, await wire.parsePublic(JSON.parse(dev.json)));
+    await this.offerFile(s, [f], "");
+  }
+
+  // offerFile answers request s with files (the file, or none: detail says why).
+  async offerFile(s, files, detail) {
+    const dev = this.me && this.me.devices.find((d) => d.address === s.device);
+    const c = await this.store.get("convs", s.conv);
+    if (!dev || !c) return; // not your device (any more): nothing is sent to it
+    const rec = await this.ownCopy(dev, c, "file", wire.fileMsgJSON({ type: "offer", lid: s.lid, sha256: s.sha256, available: files.length > 0, detail }), files);
+    await put(this.store, "outbox", rec.id, rec);
+    this.changed();
+    await this.post(rec);
   }
 
   // ---- keys and persons of others
@@ -1003,6 +1203,7 @@ export class Engine {
     if (final) throw new Error(final);
     await this.store.write(recs.map((r) => ({ s: "outbox", k: r.id, v: r })));
     this.changed();
+    await this.keepSent(plain);
     for (const r of recs) if (r.state === "queued") await this.post(r);
     const least = copyOrder(recs);
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map((r) => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
@@ -1160,6 +1361,8 @@ export class Engine {
       await this.store.write(ops);
       this.changed();
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
+      if (ops.some((o) => o.s === "kv" && o.v && o.v.serve)) this.runServes().catch(() => {});
+      if (ops.some((o) => o.s === "inbox" && o.v && (o.v.attachments || []).some((a) => a.blob))) this.keepFiles().catch(() => {});
     } catch (e) {
       if (e instanceof Hold) {
         if (!fromHeld) await this.hold(env, data, e.reason);
@@ -1265,6 +1468,10 @@ export class Engine {
       if (!own) throw new Hold("invalid", "history comes only from another device of your person");
       return this.admitHistory(n, env, root, ops);
     }
+    if (n.sub === "file") {
+      if (!own) throw new Hold("invalid", "file requests come only from another device of your person");
+      return this.admitFile(n, env, ops);
+    }
     if (n.sub === "event") { // a participation record: the sending device's own, for this very conversation, signed
       let e;
       try {
@@ -1309,16 +1516,21 @@ export class Engine {
       emotion: m.emotion || "", target: m.target || null, pid: m.pid || "", attachments: (m.attachments || []).map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })) };
   }
 
-  // historyCopy seals item as history for your device dev (address,
-  // fingerprint, json) in conversation c: kept in the outbox, sent as any
-  // copy is, never shown as a message here.
-  async historyCopy(dev, c, item) {
+  // ownCopy seals a message of sub ("history", or "file": a file request
+  // or offer) for your device dev (address, fingerprint, json) in
+  // conversation c, with sealed files (attachment and ciphertext) if any:
+  // kept in the outbox and sent as any copy is, never a message here (aside).
+  async ownCopy(dev, c, sub, body, files = []) {
     const recipient = await wire.parsePublic(JSON.parse(dev.json));
     const id = wire.newID(), lid = wire.newID();
+    const attachments = files.map((f) => f.attachment);
     const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(this.now() / 1000), kind: "message",
-      body: wire.historyJSON(item), conv: c.id, lid, root: c.root, replica: true, sub: "history" }, this.keys, recipient);
-    return { id, conv: c.id, lid, kind: "message", sub: "history", at: this.now(), to: dev.address, own: true, history: true, envelope, state: "queued", detail: "" };
+      body, conv: c.id, lid, root: c.root, replica: true, sub, attachments }, this.keys, recipient);
+    return { id, conv: c.id, lid, kind: "message", sub, at: this.now(), to: dev.address, own: true, aside: true, envelope,
+      attachments: attachments.length ? attachments : undefined, files: files.length ? files.map((f) => ({ ...f, uploaded: false })) : undefined, state: "queued", detail: "" };
   }
+
+  historyCopy(dev, c, item) { return this.ownCopy(dev, c, "history", wire.historyJSON(item)); }
 
   // forwardStale forwards, as history, a message the other person sent to
   // an older roster step of yours (fan) to your devices that step lacked:
@@ -1559,6 +1771,8 @@ export class Engine {
       await this.flushOutbox();
       await this.retryApproved();
       this.runHistory().catch(() => {});
+      this.runServes().catch(() => {});
+      this.keepFiles().catch(() => {});
       await this.reconcileNotify().catch(() => {});
     } catch (e) { /* tried again on the next ping */ }
   }
@@ -1637,7 +1851,7 @@ export class Engine {
   convMessages(convId, inbox, outbox) {
     const groups = new Map();
     for (const r of outbox) {
-      if (r.conv !== convId || r.history) continue; // history for your other devices is not a message here
+      if (r.conv !== convId || r.aside) continue; // history and files for your other devices are no messages here
       const g = groups.get(r.lid || r.id) || [];
       g.push(r);
       groups.set(r.lid || r.id, g);
@@ -1727,7 +1941,7 @@ export class Engine {
           origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? m.copies : undefined,
           synced_from: m.history ? m.synced_from : "",
-          attachments: (m.attachments || []).map((a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size })),
+          attachments: (m.attachments || []).map((a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size, ...this.fileState(a) })),
           state_text: event ? "" : here ? outText(m.state, m.lagging || (peer ? peer.address : ""), m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
   }
@@ -2076,9 +2290,8 @@ export class Engine {
     if (!m) throw new Error((await this.store.get("outbox", id)) ? "Files you sent are not kept here after sending." : "No such message here.");
     const att = (m.attachments || [])[i];
     if (!att) throw new Error("That message has no such file.");
-    if (!att.blob) throw new Error("This file came with the conversation's history: it is on " + (m.synced_from || "your other device") + ", not here.");
-    const bytes = wire.decryptFile(await this.getBytes("/v1/blobs/" + att.blob.id + "/data"), att, this.keys);
-    const plain = await bytes;
+    if (!att.blob) throw new Error("This file came with the conversation's history: get it from " + (m.synced_from || "your other device") + " first.");
+    const plain = await wire.decryptFile(await this.cipherOf(att), att, this.keys);
     return { name: wire.safeName(att.name), size: att.size, image: wire.sniffImage(plain), bytes: plain };
   }
 
@@ -2149,6 +2362,7 @@ export class Engine {
     case "/api/dm/send": return this.sendDM(body);
     case "/api/dm/agent/invite": return this.inviteAgent(body);
     case "/api/file": return this.openFile(u.searchParams.get("id"), Number(u.searchParams.get("i")));
+    case "/api/file/request": return this.requestFile(body.id, Number(body.index));
     case "/api/notify/enable": return this.enableNotify();
     case "/api/notify/disable": return this.disableNotify();
     case "/api/notify/mute": return this.muteDM(body.conv, !!body.muted);

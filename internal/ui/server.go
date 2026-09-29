@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/upload", s.upload)
 	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
+	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
 	mux.HandleFunc("GET /events", s.events)
@@ -374,6 +375,23 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "application/octet-stream")
 	h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	io.Copy(w, rc)
+}
+
+// requestFile asks the device a history message came from for its file.
+func (s *Server) requestFile(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(HistoryFiles)
+	if !ok {
+		writeErr(w, NotFound("files from your other devices are not available here"))
+		return
+	}
+	var v struct {
+		ID    string `json:"id"`
+		Index int    `json:"index"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	writeResult(w, map[string]bool{"ok": true}, p.RequestFile(r.Context(), v.ID, v.Index))
 }
 
 // remind sets (or moves) a reminder, or marks it done or cancels it.

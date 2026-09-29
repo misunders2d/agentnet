@@ -1052,6 +1052,22 @@ const ev = { preventDefault() {} };
   check(run("state.opened").length === 2, "opened files are tracked to be freed");
   await run('openDM("d1")');
   check(run("state.opened").length === 0, "leaving the conversation frees them");
+  // History files (MEL-433): asked for from the device of yours they came
+  // from; one asked for, or that no device has, says so; none opens yet.
+  m3f.synced_from = "alice/laptop";
+  m3f.attachments = [{ index: 0, name: "old.txt", size: 3, availability: "requestable" }, { index: 1, name: "asked.txt", size: 3, availability: "requested" },
+    { index: 2, name: "gone.txt", size: 3, availability: "unavailable", note: "Your server no longer holds it, and this browser did not keep it." }];
+  await run('openDM("d2")');
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("Get it from laptop") && tl.includes("Asked laptop for it") && tl.includes("Not available") && tl.includes("did not keep it") &&
+    !/old\.txt[^"]*Open/.test(tl) && (tl.match(/Open/g) || []).length === 0, "history files: asked for, asked, not available; none opens: " + tl);
+  const getIt = (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })($("timeline"))
+    .find((e) => e.tagName === "button" && textOf(e) === "Get it from laptop");
+  calls.length = 0;
+  getIt.click();
+  await new Promise((r) => setTimeout(r, 0));
+  check(calls.some((c) => c.path === "/api/file/request" && c.body.id === "m3" && c.body.index === 0), "Get it asks for that file: " + JSON.stringify(calls));
+  delete m3f.synced_from;
   delete m3f.attachments;
   delete dmThreads.d2.messages.find((x) => x.id === "m2").attachments;
   delete overview.files;
@@ -1140,6 +1156,18 @@ const ev = { preventDefault() {} };
   await run("loadOverview()");
   side = JSON.stringify($("conv-list").children.map(textOf));
   check(side.includes("This computer is a service or bot") && !side.includes("set up my person"), "a service is never asked to set up a person: " + side);
+  // A browser is always a person's device; one waiting for approval sets up nothing.
+  Object.assign(overview, { role: "unset", device: { online: true, persisted: true, revoked: false } });
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("Set up your person") && !side.includes("service or bot") && !side.includes("Add this device from there"), "a browser is offered a person only: " + side);
+  overview.link = { state: "pending" };
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("Waiting for your other device to approve this one") && !side.includes("Set up your person"), "a browser waiting for approval sets up nothing: " + side);
+  delete overview.link;
+  delete overview.device;
+  overview.role = "service";
   const bobPerson2 = { person: "p-bob", label: "Bob", address: "bob/desk", state: "pinned", devices: [
     { address: "bob/desk", name: "desk", fingerprint: "SHA256:b1" }, { address: "bob/phone", name: "phone", fingerprint: "SHA256:b2" }] };
   Object.assign(overview, { role: "person", person: Object.assign({}, keepPerson, { devices: [

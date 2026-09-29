@@ -343,7 +343,7 @@ function marshalInner(n) {
   return s + "}";
 }
 
-const subs = new Set(["", "event", "excerpt", "history"]);
+const subs = new Set(["", "event", "excerpt", "history", "file"]);
 const agentOrigin = (o) => typeof o === "string" && o.startsWith("agent:");
 
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
@@ -799,6 +799,26 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
+}
+
+// File messages (client/historyfiles.go): between devices of one person,
+// a request for a history message's file (by its message's logical id and
+// the file's SHA-256), and the offer answering it: the file attached,
+// encrypted to the asking device, or why not.
+
+// fileMsgJSON is json.Marshal of a fileMsg.
+export function fileMsgJSON(m) {
+  let s = '{"v":1,"type":' + goString(m.type) + ',"lid":' + goString(m.lid) + ',"sha256":' + goString(m.sha256);
+  if (m.available) s += ',"available":true';
+  if (m.detail) s += ',"detail":' + goString(m.detail);
+  return s + "}";
+}
+
+// parseFileMsg reads a file message strictly (as the core's decodeStrict).
+export function parseFileMsg(json) {
+  const f = strict(JSON.parse(json), "file message", { v: "int", type: "string", lid: "string", sha256: "string", available: "boolean", detail: "string" });
+  if (f.v !== 1 || !validID(f.lid) || !validHash(f.sha256) || (f.type !== "request" && f.type !== "offer")) throw new Error("a malformed file message");
+  return { type: f.type, lid: f.lid, sha256: f.sha256, available: !!f.available, detail: f.detail || "" };
 }
 
 // DM root (E0).

@@ -307,6 +307,11 @@ type FileView struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
 	Saved string `json:"saved,omitempty"`
+	// Availability is where a history message's file stands: "" (here),
+	// requestable, requested or unavailable (client.FileInfo). Note says
+	// more when there is more to say (the browser device: not kept here).
+	Availability string `json:"availability,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
 
 // Files is implemented by providers that send files and open received ones
@@ -322,6 +327,13 @@ type Files interface {
 	StageFile(name string, r io.Reader) (id string, err error)
 	DiscardFiles(ids []string)
 	OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error)
+}
+
+// HistoryFiles is implemented by providers whose person's devices share
+// their chats (MEL-433): a history message's file is asked for from the
+// device of yours it came from, and opens once that device sends it.
+type HistoryFiles interface {
+	RequestFile(ctx context.Context, msgID string, index int) error
 }
 
 // ReminderView is a pending reminder on a received message (S-R): it only

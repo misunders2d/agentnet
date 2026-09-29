@@ -1245,6 +1245,9 @@ func TestBrowserEngineFiles(t *testing.T) {
 	if !bytes.Equal(gotPhoto, photo) || gp["image"] != "image/png" || gp["name"] != "photo.png" {
 		t.Fatalf("Go's PNG in the browser: name %v image %v equal %v", gp["name"], gp["image"], bytes.Equal(gotPhoto, photo))
 	}
+	// Offline while it is sent and changed: the browser fetches (and keeps)
+	// nothing before the change.
+	w.ok(map[string]any{"op": "offline", "on": true})
 	gs2, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "and this", Files: []client.OutgoingFile{{Name: "photo.png", Path: photoPath}}})
 	if err != nil {
 		t.Fatal(err)
@@ -1255,6 +1258,7 @@ func TestBrowserEngineFiles(t *testing.T) {
 			flip(m.Attachments[0].BlobID)
 		}
 	}
+	w.ok(map[string]any{"op": "offline", "on": false})
 	w.until("the flipped Go file in the browser", func() bool { return w.ok(map[string]any{"op": "inboxRec", "id": gs2.ID})["rec"] != nil })
 	w.refuses("a Go file changed at the Hub", w.call(map[string]any{"op": "openFile", "id": gs2.ID, "i": 0}), "not the one the sender signed")
 

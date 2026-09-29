@@ -269,6 +269,10 @@ button.replyref:hover { text-decoration: underline; }
 .file-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-size { color: var(--muted); font-size: 12px; }
 .msg.out .file-size { color: #5d6370; }
+.file-note { display: block; color: var(--muted); font-size: 12px; }
+.msg.out .file-note { color: #5d6370; }
+.file-state { color: var(--muted); font-size: 12px; align-self: center; }
+.msg.out .file-state { color: #5d6370; }
 .file .text-btn { font-size: 13px; }
 .msg.out .file .text-btn { color: #3f39c4; }
 

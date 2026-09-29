@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -309,6 +310,12 @@ type filesFixture struct {
 	*Fixture
 	staged    map[string][]byte
 	discarded []string
+	requested []string
+}
+
+func (f *filesFixture) RequestFile(ctx context.Context, id string, i int) error {
+	f.requested = append(f.requested, fmt.Sprintf("%s/%d", id, i))
+	return nil
 }
 
 func (f *filesFixture) DiscardFiles(ids []string) { f.discarded = append(f.discarded, ids...) }
@@ -374,6 +381,10 @@ func TestFileRoutes(t *testing.T) {
 	if r := do(t, ts, "GET", "/api/files/m1/9", "", authed(ts, nil)); r.StatusCode == 200 {
 		t.Fatal("a file that is not there was served")
 	}
+	// A history file is asked for from your other device; the demo has none.
+	if r := do(t, ts, "POST", "/api/file/request", `{"id":"m2","index":1}`, js); r.StatusCode != 200 || strings.Join(f.requested, ",") != "m2/1" {
+		t.Fatalf("request: %d %v", r.StatusCode, f.requested)
+	}
 	var o map[string]any
 	json.NewDecoder(do(t, ts, "GET", "/api/overview", "", authed(ts, nil)).Body).Decode(&o)
 	if _, ok := o["files"]; ok {
@@ -384,6 +395,7 @@ func TestFileRoutes(t *testing.T) {
 	for _, c := range []struct{ path, body string }{
 		{"/api/send", `{"to":"alice/desk","kind":"message","body":"x","files":["up-1"]}`},
 		{"/api/dm/send", `{"conv":"d1","body":"x","files":["up-1"]}`},
+		{"/api/file/request", `{"id":"m1","index":0}`},
 	} {
 		if r := do(t, demo, "POST", c.path, c.body, post(demo)); r.StatusCode != http.StatusNotFound {
 			t.Errorf("%s with files in the demo: %d", c.path, r.StatusCode)

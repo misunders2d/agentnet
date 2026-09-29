@@ -1,7 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +13,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/hub"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
@@ -107,6 +112,14 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the laptop has Bob's", goHas(laptop, conv, "bob before", nil))
+	sentData, recvData := bytes.Repeat([]byte("laptop "), 400), bytes.Repeat([]byte("bob "), 500)
+	if _, err := laptop.SendConv(ctx, conv, client.ConvOutgoing{Body: "laptop file", Files: []client.OutgoingFile{{Path: goFile(t, "l.txt", sentData)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.SendConv(ctx, conv, client.ConvOutgoing{Body: "bob file", Files: []client.OutgoingFile{{Path: goFile(t, "b.txt", recvData)}}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the laptop has Bob's file", func() bool { return len(goMessage(laptop, conv, "bob file").Attachments) == 1 })
 
 	// The laptop's link, as its QR opens this server's page (the invite in
 	// it for a browser: this test Hub's certificate is trusted by node).
@@ -149,10 +162,35 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 
 	// The chats from before, as history from the laptop: the laptop's own
 	// message is yours, Bob's is his.
-	w.until("the history", func() bool { return dmMessage(w, conv, "before the tablet") != nil && dmMessage(w, conv, "bob before") != nil })
+	w.until("the history", func() bool {
+		return dmMessage(w, conv, "before the tablet") != nil && dmMessage(w, conv, "bob before") != nil
+	})
 	mine, his := dmMessage(w, conv, "before the tablet"), dmMessage(w, conv, "bob before")
 	if mine["dir"] != "out" || his["dir"] != "in" || mine["synced_from"] != laptop.Address || his["synced_from"] != laptop.Address || his["unread"] == true {
 		t.Fatalf("history: %v / %v", mine, his)
+	}
+
+	// The files from before: asked for from the laptop, then opened here.
+	for body, want := range map[string][]byte{"laptop file": sentData, "bob file": recvData} {
+		w.until("the history of "+body, func() bool { m := dmMessage(w, conv, body); return m != nil && len(m["attachments"].([]any)) == 1 })
+		m := dmMessage(w, conv, body)
+		if a := m["attachments"].([]any)[0].(map[string]any); a["availability"] != "requestable" {
+			t.Fatalf("%s: %v", body, a)
+		}
+		if v := w.call(map[string]any{"op": "openFile", "id": m["id"], "i": 0}); v["error"] == nil {
+			t.Fatal("a history file opened before it was asked for")
+		}
+		w.api("/api/file/request", map[string]any{"id": m["id"], "index": 0})
+		if a := dmMessage(w, conv, body)["attachments"].([]any)[0].(map[string]any); a["availability"] != "requested" {
+			t.Fatalf("%s after asking: %v", body, a)
+		}
+		w.until("the laptop's answer for "+body, func() bool {
+			a := dmMessage(w, conv, body)["attachments"].([]any)[0].(map[string]any)
+			return a["availability"] == nil
+		})
+		if f := w.ok(map[string]any{"op": "openFile", "id": m["id"], "i": 0}); f["b64"] != base64.StdEncoding.EncodeToString(want) {
+			t.Fatalf("%s: not the file", body)
+		}
 	}
 
 	// After: Bob's new message reaches the tablet (directly, or forwarded
@@ -288,5 +326,137 @@ func TestBrowserEngineApprovesNewDevice(t *testing.T) {
 	}
 	if v := w.call(map[string]any{"op": "api", "path": "/api/device/service", "body": map[string]any{}}); v["error"] == nil {
 		t.Fatal("a browser became a service")
+	}
+}
+
+// goMessage is the message of conv with body on a, or a zero one.
+func goMessage(a *client.Agent, conv, body string) client.ConvMessage {
+	ms, _ := a.ConversationMessages(conv)
+	for _, m := range ms {
+		if m.Body == body {
+			return m
+		}
+	}
+	return client.ConvMessage{}
+}
+
+// goFile writes data to a file of its own and returns its path.
+func goFile(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// dropDelivered stops the Hub, removes the files of every delivered
+// message (as its cleanup does once they are old enough) and starts it
+// again at the same address.
+func dropDelivered(t *testing.T, p *testhub.Proc) *testhub.Proc {
+	t.Helper()
+	p.Stop()
+	m, err := hub.OpenMaintenance(p.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := m.Cleanup(-time.Hour, time.Hour, time.Hour)
+	m.Close()
+	if err != nil || gone.Files == 0 {
+		t.Fatalf("cleanup: %+v %v", gone, err)
+	}
+	return testhub.Start(t, p.Dir, p.Addr, "")
+}
+
+// The browser keeps what it needs to give a new device of its person the
+// files of its chats: a copy of each file it sent, and the ciphertext of
+// each it received. With the server's copies gone, a Go device linked
+// afterwards asks it for both and gets the same bytes; opening a received
+// file uses the kept copy too.
+func TestBrowserEngineServesHistoryFiles(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	h := testhub.Start(t, dir, "127.0.0.1:0", "")
+	base := "https://" + h.Addr
+	laptop := personAgent(t, ctx, testhub.BootstrapCode(t, dir), "laptop", "Alice")
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	code, _ := laptop.Invite(ctx, "dana", time.Hour, false)
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	var conv string
+	w.until("a DM with Alice", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/dm/new", "body": map[string]any{"address": laptop.Address}})
+		if v["error"] != nil {
+			return false
+		}
+		conv = v["v"].(map[string]any)["id"].(string)
+		return true
+	})
+	w.api("/api/dm/send", map[string]any{"conv": conv, "body": "hello"})
+	waitFor(t, "Alice has the DM", goHas(laptop, conv, "hello", nil))
+	received, sent := bytes.Repeat([]byte("alice's file "), 300), bytes.Repeat([]byte("dana's file "), 200)
+	if _, err := laptop.SendConv(ctx, conv, client.ConvOutgoing{Body: "a file for you", Files: []client.OutgoingFile{{Path: goFile(t, "for-dana.txt", received)}}}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("Alice's file", func() bool { return dmMessage(w, conv, "a file for you") != nil })
+	w.ok(map[string]any{"op": "sendFiles", "conv": conv, "body": "a file for alice", "files": []any{map[string]any{"name": "for-alice.txt", "b64": base64.StdEncoding.EncodeToString(sent)}}})
+	waitFor(t, "Alice has Dana's file", func() bool { return len(goMessage(laptop, conv, "a file for alice").Attachments) == 1 })
+	w.until("both kept here", func() bool { return w.ok(map[string]any{"op": "count", "store": "files"})["n"].(float64) == 2 })
+	w.until("Dana's file delivered", func() bool { m := dmMessage(w, conv, "a file for alice"); return m != nil && m["state"] == "delivered" })
+
+	h = dropDelivered(t, h)
+	w.until("connected again", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == true })
+	in := dmMessage(w, conv, "a file for you")
+	if f := w.ok(map[string]any{"op": "openFile", "id": in["id"], "i": 0}); f["b64"] != base64.StdEncoding.EncodeToString(received) {
+		t.Fatal("the kept received file does not open as it was")
+	}
+
+	l := w.api("/api/device/link", map[string]any{})
+	url := l["url"].(string)
+	tablet, err := client.JoinAndLink(ctx, filepath.Join(t.TempDir(), "tablet"), url[strings.Index(url, "#")+1:], "tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tablet.Close() })
+	runDaemon(t, tablet)
+	var ask map[string]any
+	w.until("the tablet's request", func() bool {
+		ls, _ := w.api("/api/overview", nil)["links"].([]any)
+		if len(ls) == 1 {
+			ask = ls[0].(map[string]any)
+		}
+		return ask != nil
+	})
+	w.api("/api/device/decide", map[string]any{"id": ask["id"], "accept": true})
+	requestable := func(body string) func() bool {
+		return func() bool {
+			m := goMessage(tablet, conv, body)
+			return m.History && len(m.Attachments) == 1 && m.Attachments[0].Availability == "requestable"
+		}
+	}
+	waitFor(t, "the received file in history", requestable("a file for you"))
+	waitFor(t, "the sent file in history", requestable("a file for alice"))
+	for body, want := range map[string][]byte{"a file for you": received, "a file for alice": sent} {
+		m := goMessage(tablet, conv, body)
+		if err := tablet.RequestFile(ctx, m.ID, 0); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "the browser's answer for "+body, func() bool {
+			a := goMessage(tablet, conv, body).Attachments
+			return len(a) == 1 && a[0].Availability == ""
+		})
+		r, _, err := tablet.OpenAttachment(ctx, m.ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(r)
+		r.Close()
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s: %d bytes, not the file", body, len(got))
+		}
 	}
 }
