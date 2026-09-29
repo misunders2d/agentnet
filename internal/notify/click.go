@@ -13,17 +13,22 @@ const (
 )
 
 // The callback names the icon, not the notification, so each notification
-// gets an icon of its own: its id is the notification's identity. Ids run
-// 1..65535 and wrap to 1 (0 is never used); a callback for any id but the
-// current one is ignored, so a click on a replaced (or closed)
-// notification, delivered late, never runs a newer one's action. A stale
-// callback would have to wait out 65535 notifications to be mistaken.
-func nextIconID(id uint16) uint16 {
-	if id == 65535 {
-		return 1
+// gets an icon of its own: its id is the notification's identity, and an id
+// is never used twice in a process. Ids run 1..65535; once they are used up
+// (65535 notifications in one daemon run), nextIconID gives 0 from then on
+// and later notifications are shown without a click action (clicks come
+// back when the daemon restarts). A callback for any id but the current
+// one's is ignored, so a click on a replaced or closed notification,
+// delivered late, never runs a newer one's action.
+func nextIconID(last uint16) uint16 {
+	if last == 0 || last == 65535 { // used up (0 stays 0)
+		return 0
 	}
-	return id + 1
+	return last + 1
 }
+
+// firstIconID is the id of a process's first notification.
+const firstIconID = 1
 
 // clickTarget is the click action of the notification shown last (the icon
 // with id). It runs once, and only when that notification is clicked: a

@@ -52,10 +52,24 @@ func TestClickTarget(t *testing.T) {
 	expect("")
 }
 
-func TestNextIconIDWraps(t *testing.T) {
-	for in, want := range map[uint16]uint16{0: 1, 1: 2, 65534: 65535, 65535: 1} {
-		if got := nextIconID(in); got != want {
-			t.Errorf("next(%d) = %d, want %d", in, got, want)
+// Ids are never used twice: after 65535 they are used up for good, and a
+// click on the old first notification can never run a later one's action.
+func TestIconIDsNeverReused(t *testing.T) {
+	seen := map[uint16]bool{}
+	id := uint16(firstIconID)
+	for n := 0; id != 0; n++ {
+		if seen[id] || n > 65535 {
+			t.Fatalf("id %d given twice (after %d)", id, n)
 		}
+		seen[id] = true
+		id = nextIconID(id)
+	}
+	if len(seen) != 65535 || nextIconID(0) != 0 {
+		t.Fatalf("%d ids, then %d", len(seen), nextIconID(0))
+	}
+	var c clickTarget
+	c.set(nextIconID(65535), func() { t.Error("ran") }) // used up: no identity
+	if c.callback(lparam(ninBalloonUserClick, firstIconID)) || c.callback(lparam(ninBalloonUserClick, 0)) {
+		t.Fatal("a click after the ids were used up ran something")
 	}
 }

@@ -222,11 +222,30 @@ func TestReviewClickOnWindows(t *testing.T) {
 	self, _ := os.Executable()
 	home, _ := filepath.Abs(w.bob.home)
 	clickOS = "windows"
+	oldStart := startConsole
+	t.Cleanup(func() { startConsole = oldStart })
+	type started struct {
+		argv []string
+		dir  string
+	}
+	got := make(chan started, 2)
+	startConsole = func(argv []string, dir string) error { got <- started{argv, dir}; return nil }
 	id := strings.Repeat("a", 32)
 	for target, last := range map[string]string{id: id, "": "--review"} {
 		argv, onClick := w.bob.reviewClick(target)
 		if strings.Join(argv, "|") != strings.Join([]string{self, "--home", home, "open", last}, "|") || onClick == nil {
 			t.Fatalf("windows click for %q: %q", target, argv)
+		}
+		// The click starts it in a console of its own (native stdio), not
+		// through os/exec with captured pipes.
+		onClick()
+		select {
+		case s := <-got:
+			if strings.Join(s.argv, "|") != strings.Join(argv, "|") || s.dir != w.bob.reviewDir() {
+				t.Fatalf("started %q in %q", s.argv, s.dir)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("the click did not start a console")
 		}
 	}
 	clickOS = "darwin"

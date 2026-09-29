@@ -296,14 +296,19 @@ Built: `internal/client/alerts.go`; client schema step 18.
   **Windows:** the notification-area icon names a callback message; the
   daemon's message-only window runs a message loop on the notifier's own
   thread, and only `NIN_BALLOONUSERCLICK` for the current notification's
-  icon runs its action (each notification gets an icon id of its own, 1 to
-  65535 then 1 again, never 0, so a late click on a replaced or closed one
-  is ignored and never opens another conversation). The action opens the
+  icon runs its action (each notification gets an icon id of its own, never
+  used twice in a daemon run, so a late click on a replaced or closed one is
+  ignored and never opens another conversation; after 65535 notifications in
+  one run the ids are used up and later ones show without a click action
+  until the daemon restarts). The action opens the
   page with `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler
   http://127.0.0.1:PORT/#conv=ID` (one argument, no shell, no token); a
   reminder or review on a direct message runs `agentnet open ID` in a new
-  console. Tested: the id rule and one-shot dispatch (all platforms), the
-  window procedure with synthetic callback messages (Windows); NOT yet
+  console that is its standard input and output (CreateProcess with
+  CREATE_NEW_CONSOLE and no inherited or redirected handles; not os/exec,
+  whose pipes a new console does not replace). Tested: the id rule and one-shot dispatch (all platforms), the
+  window procedure with synthetic callback messages and that the new
+  console is the child's standard input and output (Windows); NOT yet
   proven: that the Shell sends the click when a person clicks the Windows
   10/11 banner, a click from the Windows 10 Notification Center after it
   timed out, and that the URL handler keeps the `#conv=` fragment. Those

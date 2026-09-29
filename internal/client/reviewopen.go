@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -30,6 +29,10 @@ var terminalLauncher = "xdg-terminal-exec"
 
 // clickOS is the platform whose click routes are built (tests change it).
 var clickOS = runtime.GOOS
+
+// startConsole starts agentnet open in a console of its own (Windows;
+// console_windows.go). Tests replace it.
+var startConsole = startInOwnConsole
 
 // reviewClick returns what clicking a review notification does for target
 // (one item id, or "" for the review list): the argument list that runs
@@ -84,6 +87,11 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 // can be seen from here are returned or logged (bounded); a terminal that
 // fails after it started is only in its own logs.
 func (a *Agent) launch(argv []string) error {
+	if self, err := os.Executable(); err == nil && argv[0] == self && clickOS == "windows" {
+		// agentnet itself (Windows has no terminal launcher): in a console
+		// of its own, which is its standard input and output.
+		return startConsole(argv, a.reviewDir())
+	}
 	if os.Getenv("INVOCATION_ID") != "" {
 		if sr, err := exec.LookPath("systemd-run"); err == nil {
 			// Type=exec: systemd-run returns only after the program was
@@ -97,20 +105,15 @@ func (a *Agent) launch(argv []string) error {
 		}
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	if self, err := os.Executable(); err == nil && argv[0] == self {
-		// agentnet itself (on Windows, where no terminal launcher is
-		// used): in a console of its own, in the review directory.
-		cmd.Dir = a.reviewDir()
-		cmd.SysProcAttr = ownConsole()
-	}
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	// The launcher's own output, kept (bounded) for the log if it fails.
+	out := &limitedBuffer{max: 4 << 10}
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			a.Logf("notification click: %s: %v: %s", filepath.Base(argv[0]), err, clip(out.Bytes()))
+			a.Logf("notification click: %s: %v: %s", filepath.Base(argv[0]), err, clip([]byte(out.String())))
 		}
 	}()
 	return nil

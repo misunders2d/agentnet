@@ -126,7 +126,8 @@ var (
 	queue    []request
 	clicks   clickTarget
 	iconID   uint16 // owner thread only: the current notification's icon, 0 for none
-	lastID   uint16 // owner thread only: the last icon id given out (ids advance even when a notification fails)
+	lastID   uint16 // owner thread only: the last click identity given out (0 once used up)
+	anyID    bool   // owner thread only: an identity was given out (lastID is valid)
 )
 
 // Show displays a silent balloon, replacing this process's previous one.
@@ -252,8 +253,18 @@ func handle(wnd uintptr, r request) error {
 		iconID = 0
 		return nil
 	}
-	lastID = nextIconID(lastID)
-	id := lastID
+	// A new identity for this notification (ids advance even when it fails
+	// to show); once they are used up, it shows without a click action on
+	// the last icon id, which by then runs nothing.
+	click := uint16(firstIconID)
+	if anyID {
+		click = nextIconID(lastID)
+	}
+	anyID, lastID = true, click
+	id, onClick := click, r.onClick
+	if click == 0 {
+		id, onClick = 65535, nil
+	}
 	iconID = 0
 	ok := false
 	for attempt := 0; attempt < 2 && !ok; attempt++ { // a second try re-adds a lost icon (e.g. Explorer restarted)
@@ -265,7 +276,7 @@ func handle(wnd uintptr, r request) error {
 		return errors.New(errNoNotifyArea)
 	}
 	iconID = id
-	clicks.set(id, r.onClick)
+	clicks.set(click, onClick)
 	return nil
 }
 
