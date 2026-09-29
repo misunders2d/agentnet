@@ -101,14 +101,61 @@
   - R9 truthful directory, presence and search;
   - R10 Pi attention, onboarding and the bundled skill;
   - R11 migration, dedupe, offline retry, key replacement, mixed versions;
-  - R12 the complete inventory, known limits and platform qualification.
+  - R12 the complete inventory, known limits and platform qualification;
+  - R13 optional notifications for ordinary messages on desktop and mobile,
+    including when the app or page is closed (added below).
 
   All rows were pending when recorded; the inventory is not approval.
+- **Notifications are required for this release (owner, 2026-09-29).** Sergey:
+  "it's messenger! it's supposed to notify people. optionally, of course."
+  Optional notifications for ordinary messages, on desktop and on mobile, are
+  now part of this release; the earlier deferral to a later slice S-P (§12.3,
+  §16) is superseded, and §12.3 is input to the new contract, not its limit.
+  The requirement:
+  - opt-in: nothing asks for permission on page load; with permission denied
+    or notifications off, the messenger stays fully usable;
+  - it works in the background and with the app or page closed, not only as
+    unread counts inside an open page;
+  - no polling; no message plaintext reaches the relay or a push service; no
+    model calls;
+  - mutes, and a click that opens the right conversation;
+  - each platform that cannot do this says so plainly.
+
+  Root and Agy prepare a bounded shared contract with official platform
+  evidence first. Then core owns relay and desktop delivery, and frontend
+  Claude the browser's service worker, push subscription, opt-in settings,
+  mutes and click handling. Nothing of it is built yet.
 - **Also built since the design was written:** the People directory (`aec4d4f`,
   `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
   `docs/revival/M4.md`); the browser device's wire format and the relay's page
-  handler (`306adaf`, `421f3b6`, `b61a494`), with nothing mounted and no
-  browser device yet (§16, S-W).
+  handler (`306adaf`, `421f3b6`, `b61a494`).
+- **The browser device (2026-09-29; local commits, review in progress).**
+  `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
+  the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a
+  browser invitation link, refused for a Hub whose invites pin its own
+  certificate (`3a588c3`, core). The page is a human-only device:
+  - wire v2, person/root/caps records and participation events match Go
+    byte for byte (`0af3125`, `daf6d75`);
+  - the engine (`6061c11`, fixes `9ecd3c8`, `2d05b2c`, `e971c16`): explicit
+    join and person, TOFU pins with changed keys and person conflicts held
+    and frozen, the core's admission rules and dedupe, separate DMs, a
+    durable IndexedDB outbox written before any post and receipts only after
+    storage, every kept send gated again, held messages retried page by page,
+    offline and reload, one tab only (Web Locks), revocation; questions and
+    tasks are held and nothing runs;
+  - a plain join page (`e971c16`; one name field with a usable link, one
+    recovery message otherwise, "Privacy and storage" one click away);
+  - install as an app (`1cab993`): a manifest and 192/512 icons drawn from
+    the current two-dot mark. They are **provisional**: the owner has not
+    chosen a logo, and the final favicon and app icon are a release gate.
+
+  Evidence: Node journeys against a real test Hub, an opt-in real IndexedDB
+  test (`AGENTNET_CHROME=google-chrome-stable go test ./internal/ui/static`),
+  and a real Chrome 154 journey on loopback (two DMs both ways, a held
+  question, offline, reload, second tab, revocation; install and a
+  standalone launch of the same device). Not shown: a deployed HTTPS relay, a
+  phone, Firefox or Safari; storage persistence was denied in the test
+  browser, and the page says so.
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and
@@ -682,6 +729,10 @@ The same phone is added to "Deploy freeze" through a keeper-approved epoch with
 selected history, participates, goes offline and returns to the conversation by id.
 
 ### 12.3 Push: attention only (slice S-P, after S-B; contract reviewed before coding)
+
+**Superseded in scope (owner, 2026-09-29):** notifications for ordinary
+messages are required in this release (see the status notes). What follows is
+input to the new contract, not its limit.
 
 **What wakes the phone.** Only messages meant for Dana's attention. Background
 agent traffic, replicas, events and excerpts stay quiet.

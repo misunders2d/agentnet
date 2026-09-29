@@ -272,7 +272,7 @@ If a local database or key file is damaged:
 - Use `conversation ID` for durable two-way history without changing read state. Ordinary `inbox` marks listed messages read; `inbox --review` does not. Read state never proves a model or person understood the message.
 - The daemon's service environment can differ from an interactive shell. Resolve the actual harness on its PATH and its canonical credential bootstrap. In the live Pi task, an AgentNet-only wrapper reused the host's existing secret runner for the child; the daemon received no injected Telegram secret. This was host configuration, not a mandatory Infisical dependency. Preserve the host's non-poller setting and AgentNet background-hook isolation.
 - A timeout does not prove an external effect failed. Before retrying an effectful task, check its provider/ledger evidence and any human confirmation needed to rule out duplicates. The successful Telegram acceptance was independently verified once; it did not prove the person read it.
-- `review-to ADDRESS` forwards count-only attention to a chosen installation; both ends need the feature. It neither grants remote acceptance nor forwards request content. Only review items should notify the human; ordinary replies stay quiet.
+- `review-to ADDRESS` forwards count-only attention to a chosen installation; both ends need the feature. It neither grants remote acceptance nor forwards request content. Today only review items notify the human and ordinary replies stay quiet; optional notifications for ordinary messages are now required for this release (see the notifications item above).
 - On an existing host, discover the actual service, home, responder directory, private stopped backups and rollback record locally with authorized access. Never assume another machine has the operator's paths or credentials. The repository deliberately contains no private deployment inventory or recovery secrets.
 
 ---
@@ -327,6 +327,21 @@ If a local database or key file is damaged:
   [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status); the working checklist is root's temporary
   `/tmp/agentnet-release-review-20260929.md`. Nothing is released until each outcome is verified or explicitly
   excluded by Sergey; the inventory is not approval.
+- **Notifications required for this release (owner, 2026-09-29)**: "it's messenger! it's supposed to notify
+  people. optionally, of course." Optional notifications for ordinary messages on desktop and mobile, also with
+  the app or page closed; opt-in only (no permission request on page load; denied or off leaves a fully usable
+  messenger); no polling, no plaintext to the relay or a push service, no model calls; mutes and click to the
+  conversation; platform limits stated plainly. This supersedes the S-P deferral (release row R13). Root and Agy
+  write the shared contract with platform evidence first; then core builds relay and desktop delivery and frontend
+  Claude the browser service worker, subscription, settings, mutes and clicks. Not built yet. See
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
+- **Browser device (2026-09-29, local commits, review in progress)**: `hub serve --web` serves the page at the Hub
+  origin (`7a97aaf`), `admin invite --link` prints browser invite links (`3a588c3`); the human-only browser engine,
+  plain join page and installable manifest are `6061c11`, `9ecd3c8`, `2d05b2c`, `e971c16`, `1cab993`. The app icon
+  is **provisional** (current two-dot mark) until the owner chooses a logo. Verified: Node journeys against a real
+  test Hub, the opt-in real IndexedDB test (`AGENTNET_CHROME=google-chrome-stable go test ./internal/ui/static`), a
+  real Chrome 154 journey on loopback including install and standalone launch. Not verified: deployed HTTPS relay,
+  phone, Firefox, Safari. See [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
 - **Owner decisions for two-person DMs (2026-09-29)**: either person may dismiss an invited agent; selected earlier
   DM messages may be shared with an agent, the choice visible to both people, with no separate approval from the
   other person; the host's acceptance stays explicit. See [MESSENGER_ARCHITECTURE.md §9.2 and §15](MESSENGER_ARCHITECTURE.md).
@@ -338,8 +353,9 @@ If a local database or key file is damaged:
   direction, corrected by the owner: one row per exact address holding separate conversations,
   never merged; grouped remote notices; no remote approval), and one search for agents and
   conversations (kinds shown, opens exactly the chosen item, grants no trust; people are not searchable yet). See
-  [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
-  remains an open request; S-R reminders unchanged. One-command `agentnet update` (latest stable,
+  [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome install: the relay page's
+  manifest is built (`1cab993`, provisional icon) and was installed and launched in Chrome 154 on loopback, not
+  on a deployed relay; S-R reminders unchanged. One-command `agentnet update` (latest stable,
   same home, daemon and page switch safely): in source, not released; Windows switches only a daemon
   started by the scheduled task `\agentnet` (native test passed in Actions run 36458378377; a standalone
   daemon is not stopped, an explicit limit)
