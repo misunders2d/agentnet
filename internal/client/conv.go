@@ -692,6 +692,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		raw := []byte(in.Body)
 		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
 	}
+	now, event := time.Now(), also
+	also = func(tx *sql.Tx) error { // with the message, or not at all
+		if event != nil {
+			if err := event(tx); err != nil {
+				return err
+			}
+		}
+		return queueAlert(tx, in, sender.Fingerprint(), now)
+	}
 	state := ""
 	if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
 		switch t := in.Target; {
@@ -715,6 +724,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if res == admitted {
 		a.wakeWorker() // a request, or an event that may let one run or stop
+		a.wakeAlerts()
 	}
 	return nil
 }

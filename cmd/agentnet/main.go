@@ -245,6 +245,7 @@ func run(args []string) error {
 				}
 				return stop, nil
 			}
+			opts.OpenConv = func(conv string) []string { return convPageCommand(*home, conv) }
 		}
 		err := a.Run(ctx, opts)
 		var rs *client.RestartForUpdate

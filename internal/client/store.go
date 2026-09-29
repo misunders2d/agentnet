@@ -201,6 +201,19 @@ CREATE INDEX participation_events_prev ON participation_events(conv, pid, type, 
 `, `
 ALTER TABLE inbox ADD COLUMN local INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX inbox_agent_jobs ON inbox(arrival) WHERE pid IS NOT NULL AND state IN ('part_waiting', 'accepted');
+`, `
+CREATE TABLE alert_senders(
+  address TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL);
+CREATE TABLE alert_mutes(
+  conv TEXT PRIMARY KEY);
+CREATE TABLE alerts(
+  conv TEXT PRIMARY KEY,
+  sender TEXT NOT NULL,
+  last_id TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  due_ms INTEGER NOT NULL);
+CREATE INDEX alerts_due ON alerts(due_ms);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

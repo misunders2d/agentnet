@@ -48,6 +48,10 @@ type RunOptions struct {
 	// helper that has the scheduled task start the new program) is started
 	// and confirmed here. An error means the daemon does not stop.
 	PrepareSwitch func(r UpdateRequest) error
+	// OpenConv, if set, gives the command that opens the local page on a
+	// conversation ("" : the page itself), for a click on a DM alert
+	// (alerts.go); nil or an empty command: the alert is a banner only.
+	OpenConv func(conv string) []string
 }
 
 // Direct delivery limits. Variables so tests can shorten them.

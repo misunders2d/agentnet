@@ -5,8 +5,9 @@ activity on desktop and mobile, in this release, off until the person turns
 them on. This file is the core side (protocol, envelope, Hub, desktop
 daemon). The browser device's service worker, permission prompt, settings,
 mutes and click handling are the frontend's, built on the types here.
-Status: §2-7 built for the Hub, protocol and Go sender (checkpoint 2);
-the desktop daemon (§8) and the browser device are not built yet.
+Status: §2-8 built in core (protocol, envelope, Go sender, Hub, desktop
+daemon); the browser device (service worker, settings, page controls,
+`#conv=` on the daemon page) is the frontend's.
 
 ## 1. Model
 
@@ -249,31 +250,46 @@ The Hub makes HTTPS requests to URLs an enrolled device supplied.
 - Not learned: plaintext, the conversation id, labels, history, who the
   other member is beyond the existing sender/recipient.
 
-## 8. Desktop daemon (not built yet)
+## 8. Desktop daemon
 
-- Preferences are local (on/off, allowed sender keys, per-conversation
-  mutes by conversation id), in the client store; no Hub API.
-- On admitting a DM turn that asks for attention (decided from the
-  decrypted message, §1; the outer hint is not needed), from a pinned
-  member whose key is allowed, in a conversation not muted: a local pending
-  alert, written in the message's admission transaction (persisted), same
-  grace, coalesced per conversation, one earliest-deadline timer, no
-  polling. The local page reports presented messages (same shape as
-  `NotifySeen`, conversation id instead of channel) through the daemon's
-  local API; nothing else cancels.
-- At the deadline the alert is marked shown in the store, then the native
-  notification is asked for. Order and limits, plainly: a crash between the
-  mark and the OS call loses that alert (it is not repeated); the OS may
-  drop, delay or hide it (Focus, permissions, no notification server); on
-  Linux a new alert replaces the previous one of this daemon; Windows and
-  macOS keep their own stacking. Nothing claims exactly-once display.
-- **Click:** Linux (freedesktop, `notify-send` actions) can open the local
-  page on that conversation. macOS (osascript) and Windows (the shell
-  notification icon) have no click callback in `internal/notify`: there the
-  alert is a banner only, an interim state that does not close the
-  click-to-chat release acceptance. That gap stays open and explicit until
-  a supported click route exists; proof per OS is a native run, not a
-  cross-compile.
+Built: `internal/client/alerts.go`; client schema step 18.
+
+- **Preferences** are local, in the client store, off by default:
+  `Agent.AlertPrefs` / `SetAlertPrefs(AlertPrefs{Enabled, Senders
+  (exact keys, ≤ 256), Mutes (conversation ids, ≤ 1024)})`; no Hub API.
+  The daemon page (frontend) offers the controls; turning off drops
+  pending alerts.
+- **Queue:** admitting a DM turn that asks for attention (decided from the
+  decrypted message, §1; the outer hint is not needed), from an allowed
+  exact key, in a conversation not muted, with alerts on, writes the alert
+  in the message's own admission transaction (persisted), keyed by
+  conversation: the first message sets the deadline (grace 5 s), later ones
+  replace `last_id` without moving it.
+- **Presentation:** `Agent.AlertPresented(conv, ids)` (the local page's
+  report: visible, focused, that conversation, newest in view) cancels the
+  alert whose `last_id` is among the ids; nothing else cancels.
+- **Show:** one loop in the daemon, a timer on the earliest deadline, woken
+  by admissions and preference changes; no polling. At the deadline it
+  checks again (on, not muted, the sender still allowed with the key of a
+  pinned, not frozen, person), removes the due alerts in one transaction,
+  and only then asks for one native notification "AgentNet" / "New
+  activity" (one conversation: its click; several: the page).
+- **Order and limits, plainly:** removal is committed before the OS call,
+  so a crash in between loses that alert (never repeats it); the OS may
+  drop, delay or hide it (Focus, permissions, no notification server). On
+  Linux a new alert replaces this daemon's previous one; Windows and macOS
+  stack as they do. A pending alert survives a daemon restart and is shown
+  once after it. Nothing claims exactly-once display.
+- **Click:** on Linux, with `agentnet daemon --ui`, the click runs
+  `xdg-open http://127.0.0.1:PORT/#conv=ID`: the page's address WITHOUT its
+  token (a command line is readable by other local users), so it opens
+  where the browser still holds the page's session cookie; otherwise the
+  person runs `agentnet ui`. The page must honour `#conv=` (frontend).
+  macOS (osascript) and Windows (the shell notification icon) have no click
+  callback in `internal/notify`: there the alert is a banner only, an
+  interim state that does not close the click-to-chat release acceptance.
+  That gap stays open and explicit until a supported click route exists;
+  proof per OS is a native run, not a cross-compile.
 
 ## 9. Tests the core owns
 

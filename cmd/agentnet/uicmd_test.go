@@ -127,3 +127,30 @@ func TestUIDemoServesAndStops(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 }
+
+// A DM alert's click opens the page on that conversation without the
+// page's token (a command line is readable by other local users); Linux
+// only, and nothing without a page.
+func TestConvPageCommand(t *testing.T) {
+	home := t.TempDir()
+	conv := strings.Repeat("ab", 32)
+	if argv := convPageCommand(home, conv); argv != nil {
+		t.Fatalf("a command with no page: %v", argv)
+	}
+	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:4567/?t=SECRETTOKEN\n")); err != nil {
+		t.Fatal(err)
+	}
+	argv := convPageCommand(home, conv)
+	if runtime.GOOS != "linux" {
+		if argv != nil {
+			t.Fatalf("a click command on %s: %v", runtime.GOOS, argv)
+		}
+		return
+	}
+	if len(argv) != 2 || argv[0] != "xdg-open" || argv[1] != "http://127.0.0.1:4567/#conv="+conv || strings.Contains(strings.Join(argv, " "), "SECRET") {
+		t.Fatalf("click command: %v", argv)
+	}
+	if argv := convPageCommand(home, "not-a-conversation"); len(argv) != 2 || argv[1] != "http://127.0.0.1:4567/" {
+		t.Fatalf("page command: %v", argv)
+	}
+}

@@ -56,6 +56,11 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return a.startFailed(err)
 	}
 	defer stopWorker()
+	a.openConv = opts.OpenConv
+	alertCtx, stopAlerts := context.WithCancel(ctx)
+	alertsDone := make(chan struct{})
+	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()
+	defer func() { stopAlerts(); <-alertsDone }()
 	if opts.Owned != nil {
 		stopOwned, err := opts.Owned()
 		if err != nil {

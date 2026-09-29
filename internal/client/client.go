@@ -46,14 +46,16 @@ type Agent struct {
 	store      *store
 	hub        *hubConn
 	heartbeat  time.Duration
-	adQuery    string      // this run's signed session ad, for the push stream
-	kick       func()      // wakes the current stream's retry worker
-	wakeWorker func()      // wakes the question/task worker; a no-op outside Run
-	changes    *changeFeed // local state changed (changes.go)
-	members    memberState // the Hub's member list from the push stream (members.go)
-	session    string      // this run's session id (Run); "" outside Run
-	convWork   convWork    // conversation upkeep due on the next sync (conv.go)
-	agentSweep agentSweep  // the worker's look at requests to its agent (agentjob.go)
+	adQuery    string                     // this run's signed session ad, for the push stream
+	kick       func()                     // wakes the current stream's retry worker
+	wakeWorker func()                     // wakes the question/task worker; a no-op outside Run
+	changes    *changeFeed                // local state changed (changes.go)
+	members    memberState                // the Hub's member list from the push stream (members.go)
+	session    string                     // this run's session id (Run); "" outside Run
+	convWork   convWork                   // conversation upkeep due on the next sync (conv.go)
+	agentSweep agentSweep                 // the worker's look at requests to its agent (agentjob.go)
+	alertWake  chan struct{}              // wakes the desktop alert loop (alerts.go)
+	openConv   func(conv string) []string // RunOptions.OpenConv
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
@@ -173,7 +175,7 @@ func Open(home string) (*Agent, error) {
 			"(with another NAME if the Hub said the address was taken)", home)
 	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
-		changes: newChangeFeed()}
+		changes: newChangeFeed(), alertWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {

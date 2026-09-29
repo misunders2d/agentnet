@@ -9,8 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -25,6 +27,31 @@ import (
 // its token (good for that daemon's lifetime), owner-only in the home. It is
 // never logged.
 const uiURLFile = "ui-url"
+
+// convPageCommand returns the command that opens this daemon's messenger
+// page on a conversation ("" : the page itself), for a click on a DM alert:
+// the page's address without its token (a command line can be read by
+// other local users), so it opens where the browser still holds the page's
+// session and otherwise asks for `agentnet ui`. Linux only (xdg-open), as
+// only the Linux notifier takes clicks; nil elsewhere or with no page.
+func convPageCommand(home, conv string) []string {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	data, err := secfile.Read(filepath.Join(home, uiURLFile))
+	if err != nil {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(string(data)))
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return nil
+	}
+	page := url.URL{Scheme: "http", Host: u.Host, Path: "/"}
+	if protocol.ValidHash(conv) {
+		page.Fragment = "conv=" + conv
+	}
+	return []string{"xdg-open", page.String()}
+}
 
 // runUI prints the running daemon's messenger page address, or serves the
 // invented demo data with --demo (no home, Hub, network or harness).
