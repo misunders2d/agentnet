@@ -36,7 +36,7 @@
 | **MEL-430** | Clear the SSE write deadline after each flush to stop idle reconnect churn | **Done** | Hub push stream SSE writer clears 15s write deadline after successful flush (heartbeat is 90s), preventing stale deadline disconnect churn on idle connections. |
 | **MEL-431** | Announce AgentNet updates without polling and support agent-operated upgrades | **Done** | `agentnet admin release set` publishes version recommendations over push stream; string equality comparison; content-free desktop banner and hook notice; agent upgrade playbook. |
 | **MEL-432** | Synchronize interrupted-worker test with actual subprocess startup | **Done** | Test synchronization in `internal/client/background_test.go` and `worker_test.go` (`5aae937`) waiting for actual subprocess startup before simulating worker interruption. |
-| **MEL-433** | Decide human identity, linked devices and shared conversations for messenger rollout | **In Progress** | Architecture debate synthesized: stable opaque human ID, per-device keys (zero key sharing across devices), admin admission + existing-device signature, non-executable history replicas. Implementation deferred to scoped next slice. |
+| **MEL-433** | Decide human identity, linked devices and shared conversations for messenger rollout | **In Progress** | Next release in progress: one person across devices, own-device admission confirmed on an existing device, shared chats/history, and visible person-to-device linkage. See §2. |
 | **MEL-434** | Explore comic-book conversations, expressive avatars and message expressions | **Backlog** | Specification synthesized: comic speech balloons; required avatar facial emotion attribute (`happy`, `sad`, `curious`, `concerned`, `excited`, `focused`, `confused`) emitted with turn and distinct from operational status indicators (`searching`, `working`, `blocked`, `done`); cached predefined emotional reaction set at enrollment/avatar change (no extra per-message model call). |
 | **MEL-435** | Open the exact conversation from a review notification | **Backlog** | Specification synthesized: notification click opens/focuses exact conversation without auto-accept side effects. Native OS action handlers unimplemented in v0.2.1. |
 
@@ -52,47 +52,79 @@ In AgentNet v0.2.x, identity is bound to a single device keypair (`person/agent`
 
 Linear ticket **MEL-433** convened an architecture debate between UI Claude (`p7`), Critic Agy (`p4`), Core Claude (`p3`), and Supervisor Codex (`p1`).
 
-### 2.2 Accepted Engineering Direction (Recorded Decision)
-1. **Opaque Stable Human ID**:
-   - Human identity is a stable opaque identifier (e.g. UUID), completely separated from mutable human labels or device names.
-   - Labels are human display aids, never cryptographic merge keys or directory authority.
+### 2.2 Owner Decisions — 2026-09-29
 
-2. **Per-Device Keys (Zero Key Copying Across Devices)**:
-   - Private keys are generated locally and are never copied between devices for device linking, exported across the network, or backed up on the Hub. Protected local backups of the device's home directory are authorized and allowed.
+These decisions replace the earlier forward-only-history and admin-invite-per-device
+proposal. Implementation is in progress; they are not claims about shipped v0.3.0.
 
-3. **Device Linking via Admin Admission & Existing-Device Proof**:
-   - A new device requires admin admission to the network PLUS Proof-of-Possession and an existing-device cryptographic signature over the exact roster, accompanied by explicit human confirmation.
-   - Signed roster transitions are pinned by peers.
-   - The Hub admin **cannot** silently inject a new device key into an already-pinned human identity without a signed roster transition.
+- **One person, several devices.** A stable person ID has a signed roster of up to
+  eight devices. Each device generates and keeps its own keys. Names never merge
+  identities, and the address prefix is not proof of a human identity.
+- **Admission and linking.** The first installation needs an admin invitation.
+  An admitted person's existing device may create a short-lived, one-use invite
+  restricted to adding a device to that same person. One QR/link covers joining
+  and requesting linkage. Explicit confirmation on the existing device activates
+  the new device; neither an admin nor possession of the link alone can add a key
+  to an already-pinned person. No admin privilege is inherited.
+- **Independent services.** Servers and bots can enroll through admin invitations
+  without a human person. Choosing this role is stored. A responsible human is
+  not implicitly their author, conversation member or execution authority.
+- **Same chats on all personal devices.** New messages fan out to the peer's
+  devices and the sender's other devices. Linking also synchronizes existing
+  conversations. Each encrypted delivery keeps its own receipts and retry state.
+  History supplied by one's own device carries its provenance; it does not become
+  independently verified authorship by the original sender.
+- **One execution host.** Questions/tasks for an agent retain an exact host
+  device. History and replicas confer no execution authority and never trigger
+  jobs, notifications or reminders. A separately verified direct request still
+  receives normal admission checks if its history copy arrived first.
+- **Visible belonging.** Show one person, including one Me, with devices visibly
+  beneath that person. In Zoom, expand the person node to show linked devices.
+  In Classic/mobile, keep chats directly accessible and show a device-count
+  disclosure beside the person's name. Mark the current device. Standalone
+  services stay separate; do not repeat personal devices as unrelated contacts.
+- **Uncluttered conversations.** The sidebar lists people/services once. Their
+  separate conversations open inside that person's view, with clear unread,
+  search and back navigation. Do not silently merge discussions.
+- **Clean preview replacement.** Re-enrollment is acceptable. Old preview persons
+  and DMs need not migrate; existing rows stay unused on disk. This does not waive
+  synchronization of chats created under the new model. No live deletion is
+  authorized or scheduled by this design record.
+- **Removal and loss.** A current roster device may sign removal of another
+  device or itself; the last device cannot be removed. A device admitted only
+  through linking loses that admission when removed. Losing all devices means a
+  visible identity reset, not silent admin recovery.
 
-4. **Honest Trust & Verification Limits**:
-   - TOFU on first contact, withheld-freshness, and equivocation limits are explicitly acknowledged.
-   - Cryptographic signatures prove control of a device key, NOT biometric human presence or authorship.
+### 2.3 Implementation Boundaries and Acceptance
 
-5. **Transport & Execution Fencing**:
-   - Senders continue sending per-device encrypted envelopes to the recipient's authorized devices using existing transport and shared logical message/conversation IDs.
-   - Questions and tasks target **one execution recipient** (no duplicate execution across devices).
-   - **History Replicas Carry No Execution Entitlement**: Replicated messages received for history sync must be validated before indexing and must **never** trigger auto-responders, summaries, or task executions on the second device.
+Use the existing signed requests, per-device envelopes, push stream and durable
+outbox. The replacement uses the `agentnet-person-v2` roster domain, version-2
+conversation roots and `person2` capability; unsupported peers get an explicit
+update requirement, not a partial single-device fallback. Standalone device
+messaging remains separate.
 
-6. **History Sync & Recovery Policy (Open Owner Decisions)**:
-   - History sync is forward-only by default; explicit access to past history requires separate operator policy.
-   - Lost-all-devices scenario results in a visible identity reset and re-verification until explicit owner recovery policy is settled.
-   - No mandatory extra human root key or complex recovery ceremonies.
+Pairing uses a random secret carried in the QR/link fragment, a bound HMAC
+transcript, the new device's proof of possession, and the existing device's signed
+roster approval. Offers expire and are single-use. Pending devices cannot exchange
+messages before activation. Public keys remain in the signed roster chain for
+verification after removal. No private keys move between devices.
 
-7. **Status & Roadmap**:
-   - The owner explicitly directed that human identity and messenger rollout be addressed in a subsequent scoped assignment.
-   - Wire metadata field names (e.g. `is_replica`) are illustrative and are not frozen.
+Initial history transfer is resumable. Subsequent messages addressed to an older
+roster are forwarded to missing current devices without a fixed catch-up cutoff.
+History alone never grants authority. Historical files may need an online device
+holding the encrypted copy; show that limitation plainly. Browser work pauses
+while its page is closed and resumes when reopened.
 
-### 2.3 Alternatives, Delivery Model & Rollout Gates
-- **Buzz reference, not a dependency:** reuse the dual-screen short authentication string (SAS) confirmation pattern; select and review a maintained pairing mechanism and its exact transcript before implementation. Reject copying Buzz's private master key between devices and importing its application stack.
-- **Roster trust:** pinned, device-signed transitions prevent an admin-only addition to an already-pinned identity. Sequence numbers detect observed rollback, not withheld updates or globally consistent freshness. A compromised authorized device remains a threat. Loss of all devices requires a visible trust reset until the owner decides recovery authority.
-- **Human versus device addressing:** human chat fans out to authorized recipient devices and syncs to the sender's other linked devices. Questions/tasks retain one execution target. Keep per-device receipts and read state; a replica cannot create another execution or summary job. Multi-recipient age is deferred to preserve current delivery accounting, not because the primitive is impossible.
-- **Attribution:** future UI-origin, agent-origin and unspecified fields are signed assertions, not proof of keystrokes or positive permissions. Same-user software can imitate UI-origin. Existing messages must not acquire invented authorship.
-- **UI entitlement:** show locally available authorized conversations; distinguish history not yet synced. Local daemon web UI comes first. A relay-hosted/browser-only client is deferred pending its key-custody and delivery design, not declared inherently impossible.
-- **Migration:** never merge existing installations by matching labels. Explicit linking joins identities; forward-only history is the initial default. Older history requires an explicit authorized transfer, with provenance and entitlement checked before indexing.
-- **Owner decisions still open:** lost-all-devices recovery authority and prior-history entitlement for a newly linked device. Engineering defaults are not owner consent.
+Acceptance is the full laptop/phone journey: one person on both devices; existing
+chats and new replies visible on both; files survive source deletion and restart;
+offline recovery without duplicate messages or execution; explicit removal;
+forged, expired and replayed linking refused; independent service enrollment;
+and readable desktop/mobile navigation with visible device relationships.
 
-Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negotiated wire attribution/logical IDs, fan-out/self-sync and real UI integration; S3 explicit historical transfer. Their implementation order must be scoped at the next design session. Required cases include forged/stale/branched rosters, pairing replay/mismatch, offline removed devices, mixed versions, duplicate deliveries, replicas never executing, recovery and history entitlement.
+Reuse established libraries and the current transport. No generic synchronization
+framework, name-based merging, legacy-history salvage or hidden compatibility
+path is required. TOFU, withheld updates and compromised authorized devices remain
+trust limits; signatures prove control of keys, not human authorship.
 
 ---
 

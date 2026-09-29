@@ -6,6 +6,8 @@
 >
 > **Live rollout:** `https://agentnet.bezosapp.uk` and the operator's Linux laptop run the v0.3.0 build. `agentnet ui` opens the laptop's existing device; the hosted page enrolls a separate browser device. Device linking is not built. The legacy pinned endpoint remains available. Physical Android join/install/files/background push/click is the next user test, not yet qualified. Real Windows banner clicks and physical suspend/resume remain unverified; macOS is banner-only. See the release notes for remaining limits.
 >
+> **Next release in progress — identity and UI:** the owner requires one person across laptop/phone, self-service linking confirmed on an existing device, synchronized existing chats, independent service enrollment, and visible person-to-device relationships. Person-centered navigation and footer/update corrections have local implementation evidence; complete linking/sync and combined qualification are still pending. Old preview DMs need not migrate; no live reset has been performed. [DECISIONS §2](DECISIONS.md#2-human-identity--multi-device-linking-mel-433-synthesis) records the current scope.
+>
 > **Dated baseline — 2026-09-27:** [Client release v0.2.1](https://github.com/misunders2d/agentnet/releases/tag/v0.2.1) (Binary: `611b633`, prior evidence docs: `2395d11`, CI: `36341139910`), compatible with deployed Hub relay `v0.2.0`. Recheck current state before operations.
 >
 > **Linear Tracking:** Project [Agent Net Revived](https://linear.app/mellanni/project/agent-net-revived-c2f1212b3580) (Tickets `MEL-409` through `MEL-435`; this repository stands completely alone if Linear is inaccessible).
