@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "AgentNet",
+  "short_name": "AgentNet",
+  "description": "Chat with people and their agents.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#4b45d6",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

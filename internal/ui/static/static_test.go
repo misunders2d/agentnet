@@ -1,6 +1,10 @@
 package static
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -42,20 +46,30 @@ func securityHeaders(t *testing.T, what string, resp *http.Response) {
 // type, cache rule and the security headers.
 func TestRelayServesThePage(t *testing.T) {
 	for _, want := range []string{"default-src 'none'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'",
-		"base-uri 'none'", "form-action 'none'"} {
+		"base-uri 'none'", "form-action 'none'", "manifest-src 'self'"} {
 		if !strings.Contains(relayCSP, want) {
 			t.Errorf("CSP lacks %q", want)
 		}
 	}
+	want := map[string][]byte{}
 	for p, name := range relayFiles {
-		resp := serve("GET", p)
-		body, _ := io.ReadAll(resp.Body)
 		data, err := devicePage(), error(nil)
 		if name != "" {
 			data, err = fs.ReadFile(Files, name)
 		}
-		if err != nil || resp.StatusCode != 200 || string(body) != string(data) {
-			t.Fatalf("%s: %d, %d bytes (%v)", p, resp.StatusCode, len(body), err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[p] = data
+	}
+	for p, size := range relayIcons {
+		want[p] = provisionalIcon(size)
+	}
+	for p, data := range want {
+		resp := serve("GET", p)
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 || string(body) != string(data) {
+			t.Fatalf("%s: %d, %d bytes", p, resp.StatusCode, len(body))
 		}
 		securityHeaders(t, p, resp)
 		ct, cache := resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control")
@@ -66,6 +80,14 @@ func TestRelayServesThePage(t *testing.T) {
 			}
 		case strings.HasSuffix(p, ".css"):
 			if ct != "text/css; charset=utf-8" || cache != "no-cache" {
+				t.Errorf("%s: %q %q", p, ct, cache)
+			}
+		case strings.HasSuffix(p, ".webmanifest"):
+			if ct != "application/manifest+json" || cache != "no-cache" {
+				t.Errorf("%s: %q %q", p, ct, cache)
+			}
+		case strings.HasSuffix(p, ".png"):
+			if ct != "image/png" || cache != "no-cache" {
 				t.Errorf("%s: %q %q", p, ct, cache)
 			}
 		default:
@@ -113,7 +135,7 @@ func TestRelayServesNothingElse(t *testing.T) {
 // module loads code any other way.
 func TestRelayPageLoadsOnlyServedFiles(t *testing.T) {
 	served := map[string]bool{}
-	for p := range relayFiles {
+	for p := range relayContent() {
 		served[p] = true
 	}
 	page := devicePage()
@@ -155,5 +177,58 @@ func TestDaemonPageInBundle(t *testing.T) {
 		if _, err := fs.ReadFile(Files, name); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// The manifest has what Chrome needs to offer an install (web.dev install
+// criteria: name, 192 and 512 pixel icons, start_url, display,
+// prefer_related_applications not true; no service worker), and each icon
+// it names is served at its stated size.
+func TestRelayManifest(t *testing.T) {
+	resp := serve("GET", "/manifest.webmanifest")
+	var m struct {
+		ID, Name, ShortName, StartURL, Scope, Display string
+		ShortNameJSON                                 string `json:"short_name"`
+		StartURLJSON                                  string `json:"start_url"`
+		Prefer                                        *bool  `json:"prefer_related_applications"`
+		Icons                                         []struct{ Src, Sizes, Type string }
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "AgentNet" || m.ShortNameJSON == "" || m.StartURLJSON != "/" || m.Scope != "/" || m.Display != "standalone" ||
+		m.Prefer == nil || *m.Prefer {
+		t.Fatalf("manifest: %+v", m)
+	}
+	sizes := map[string]bool{}
+	for _, icon := range m.Icons {
+		r := serve("GET", icon.Src)
+		data, _ := io.ReadAll(r.Body)
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if r.StatusCode != 200 || err != nil || icon.Type != "image/png" || icon.Sizes != fmt.Sprintf("%dx%d", cfg.Width, cfg.Height) {
+			t.Fatalf("icon %+v: %d %v %+v", icon, r.StatusCode, err, cfg)
+		}
+		sizes[icon.Sizes] = true
+	}
+	if !sizes["192x192"] || !sizes["512x512"] {
+		t.Fatalf("icon sizes: %v", sizes)
+	}
+	if page := string(devicePage()); !strings.Contains(page, `<link rel="manifest" href="/manifest.webmanifest">`) {
+		t.Fatal("the device page does not link its manifest")
+	}
+	// The icon is the mark: an indigo tile, a white dot, clear corners.
+	img, _ := png.Decode(bytes.NewReader(provisionalIcon(192)))
+	at := func(x, y int) [4]uint32 {
+		r, g, b, a := img.At(x, y).RGBA()
+		return [4]uint32{r >> 8, g >> 8, b >> 8, a >> 8}
+	}
+	if c := at(0, 0); c[3] != 0 {
+		t.Errorf("corner not clear: %v", c)
+	}
+	if c := at(96, 50); c != [4]uint32{0x4b, 0x45, 0xd6, 255} {
+		t.Errorf("tile: %v", c)
+	}
+	if c := at(70, 70); c != [4]uint32{255, 255, 255, 255} {
+		t.Errorf("dot: %v", c)
 	}
 }

@@ -90,7 +90,7 @@ async function main() {
   // writes anything.
   navigator.locks.request("agentnet-device", { ifAvailable: true }, async (lock) => {
     if (!lock) {
-      show("AgentNet", "AgentNet is already open in another tab. Use that tab: this one stays idle, so nothing is sent or received twice.");
+      show("AgentNet", "AgentNet is already open in another tab or window. Use that one: this one stays idle, so nothing is sent or received twice.");
       return;
     }
     await run(link);
