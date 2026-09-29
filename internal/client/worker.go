@@ -68,6 +68,12 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 		return false // no responder selected: everything waits for a human
 	}
 	j, ok, err := a.store.claimJob(r.Harness)
+	if err == nil && !ok {
+		var more bool
+		if j, ok, more, err = a.claimAgentJob(r.Harness); err == nil && !ok {
+			return more // more requests to its agent to look at: go on at once
+		}
+	}
 	if err != nil {
 		a.Logf("worker: %v", err)
 		return false
@@ -80,7 +86,17 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 }
 
 func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan struct{}) {
-	prompt, err := a.prompt(j, r)
+	var prompt string
+	var err error
+	if j.PID != "" {
+		if why := a.agentStop(j); why != "" {
+			a.store.finishJob(j.ID, stateNotRun, "not run: "+why)
+			return
+		}
+		prompt, err = a.agentPrompt(j, r)
+	} else {
+		prompt, err = a.prompt(j, r)
+	}
 	if err != nil {
 		a.store.finishJob(j.ID, stateJobFailed, err.Error())
 		return
@@ -106,20 +122,36 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	runCtx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
-	// A cancel request from another process arrives as a wake-up.
+	// A cancel request from another process arrives as a wake-up. A request
+	// to this device's agent is also looked at again on every local change
+	// (an event stored, a person frozen): if it could no longer run, the
+	// run stops (stopWhy).
 	var cancelled atomic.Bool
+	var stopWhy string
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
-		for {
-			select {
-			case <-runCtx.Done():
-				return
-			case <-wake:
-				a.reviewAttention(ctx) // new items may arrive while a job runs
-				a.notifyRelease()
+		_, changed := a.Changed()
+		for first := true; ; first = false {
+			if !first {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-wake:
+					a.reviewAttention(ctx) // new items may arrive while a job runs
+					a.notifyRelease()
+				case <-changed:
+					_, changed = a.Changed()
+				}
 				if s, _ := a.store.jobState(j.ID); s == stateCancelReq {
 					cancelled.Store(true)
+					cancel()
+					return
+				}
+			}
+			if j.PID != "" {
+				if why := a.agentStop(j); why != "" {
+					stopWhy = why
 					cancel()
 					return
 				}
@@ -206,6 +238,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		// The daemon is stopping; the job's outcome is unknown.
 		a.store.finishJob(j.ID, stateInterrupt, "the daemon stopped while this was running")
 		return
+	case stopWhy != "":
+		detail := "stopped and not sent: " + stopWhy
+		if out := strings.TrimSpace(stdout.String()); out != "" {
+			detail += ". Its output so far:\n" + out
+		}
+		a.store.finishJob(j.ID, stateNotDelivered, detail)
+		a.Logf("%s %s: stopped: %s", j.Kind, j.ID, stopWhy)
+		return
 	case cancelled.Load():
 		status, body = envelope.StatusCancelled, "cancelled by the recipient"
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
@@ -235,11 +275,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		a.Logf("%s %s: needs your decision", j.Kind, j.ID)
 		return
 	}
-	if j.followUp() {
+	switch {
+	case j.PID != "":
+		a.finishAgent(ctx, j, r, status, body)
+	case j.followUp():
 		a.finishFollowUp(j, status, body)
-		return
+	default:
+		a.finish(ctx, j, status, body)
 	}
-	a.finish(ctx, j, status, body)
 }
 
 // finishFollowUp stores a follow-up job's summary for the local user. It

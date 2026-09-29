@@ -198,6 +198,9 @@ ALTER TABLE outbox ADD COLUMN sub TEXT;
 ALTER TABLE participation_events ADD COLUMN prev TEXT;
 UPDATE participation_events SET prev = json_extract(event, '$.prev');
 CREATE INDEX participation_events_prev ON participation_events(conv, pid, type, author);
+`, `
+ALTER TABLE inbox ADD COLUMN local INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX inbox_agent_jobs ON inbox(arrival) WHERE pid IS NOT NULL AND state IN ('part_waiting', 'accepted');
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -450,7 +453,7 @@ const (
 	statePending   = "pending"   // eligible for the worker because the sender is approved
 	stateAccepted  = "accepted"  // eligible for the worker because the local user accepted it
 	stateHeld      = "held"      // question from a sender not approved for automatic answers
-	stateConvHeld  = "conv_held" // a conversation (version 2) question or task: never run until participation exists
+	stateConvHeld  = "conv_held" // a conversation (version 2) question or task for the person (no participation): never run
 	stateAwaiting  = "awaiting"  // task waiting for the local human to accept
 	stateRunning   = "running"   // the worker owns it
 	stateCancelReq = "cancel_requested"
@@ -463,6 +466,11 @@ const (
 	stateSummary   = "summarized"  // a follow-up job stored its summary in detail
 	stateNeedHuman = "needs_human" // the responder said the local human must decide
 	stateResolved  = "resolved"    // the local human dealt with a needs_human item
+
+	// Requests to this device's agent in a DM (agentjob.go).
+	stateAgentWaiting = "part_waiting"  // waits until it may run (claim-time authority)
+	stateNotRun       = "not_run"       // never runs: its participation ended, or it is not for this agent
+	stateNotDelivered = "not_delivered" // it ran, but its output was held back (also an outbox state); kept here
 )
 
 // reviewStates are the states that wait for the local human's decision.
@@ -536,6 +544,12 @@ func (s *store) followUp(replyID string) (string, error) {
 
 type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+// dbq reads the store, directly or within a transaction.
+type dbq interface {
+	querier
+	Query(query string, args ...any) (*sql.Rows, error)
 }
 
 // insertInner stores a verified message and its attachment manifest.
@@ -701,10 +715,12 @@ type FileInfo struct {
 	ctSHA256 string
 }
 
+// inbox lists received messages; a local request to this device's own
+// agent (agentjob.go) is not one.
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
-	where := ""
+	where := ` WHERE local = 0`
 	if unreadOnly {
-		where = ` WHERE read_at IS NULL`
+		where += ` AND read_at IS NULL`
 	}
 	return s.messages(where)
 }
@@ -812,6 +828,11 @@ func (s *store) disposition(id string) (string, error) {
 type job struct {
 	ID, From, Kind, Body, ReplyTo, Status string
 	Attachments                           int
+
+	// A request to this device's agent in a DM (agentjob.go).
+	Conv, PID, Key string // Key: the fingerprint that verified it
+	Target          *envelope.Target
+	Local           bool // asked here, by this device's own person
 }
 
 // followUp reports whether j processes a reply to one of our requests,

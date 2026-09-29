@@ -77,12 +77,20 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		}
 		for _, m := range msgs {
 			who := m.From
-			if m.Origin != "" {
+			if m.Origin != "" && m.Emotion != "" {
+				who += " [" + m.Origin + ", " + m.Emotion + "]"
+			} else if m.Origin != "" {
 				who += " [" + m.Origin + "]"
 			}
 			state := m.State
 			if m.Detail != "" {
 				state += ": " + m.Detail
+			}
+			if m.Job != "" && m.Job != m.State { // a request to this device's agent, asked here
+				state += "; agent job " + m.Job
+				if m.JobDetail != "" {
+					state += ": " + m.JobDetail
+				}
 			}
 			kind := m.Kind
 			if m.Sub != "" {
@@ -91,8 +99,8 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			if m.PID != "" {
 				kind += " pid " + m.PID
 			}
-			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
-				m.ID, strings.ReplaceAll(m.Body, "\n", "\n  "))
+			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s lid %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
+				m.ID, m.LID, strings.ReplaceAll(m.Body, "\n", "\n  "))
 		}
 		return nil
 	case "send":

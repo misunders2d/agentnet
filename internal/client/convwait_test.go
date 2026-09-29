@@ -81,7 +81,7 @@ func TestQueuedNotSentToFrozenPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.alice.store.addConvOutbox(env, in, stateQueued, ""); err != nil {
+	if err := w.alice.store.addConvOutbox(env, in, stateQueued, "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	me, _, _ := w.bob.store.selfPerson()

@@ -104,7 +104,8 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 	eventually(t, "alice to see it active", func() bool { return stateAt(t, w.alice, pid).State == PartActive })
 
 	// Context: the two granted earlier messages, not the third; then the
-	// question to the agent. Nothing runs it.
+	// question to the agent. Bob has no responder: it waits for his agent,
+	// and neither the legacy claim nor a legacy accept takes it.
 	c, err := w.bob.ParticipationContext(pid, 0)
 	if err != nil || len(c.Messages) != 2 || c.Messages[0].Body != "deploy failed at step 3" || c.Unrelated != 1 || c.Missing != 0 {
 		t.Fatalf("context: %+v %v", c, err)
@@ -114,14 +115,14 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to hold the question", func() bool {
-		return inboxCount(t, w.bob, `id = ? AND pid = ? AND state = ?`, q.ID, pid, stateConvHeld) == 1
+		return inboxCount(t, w.bob, `id = ? AND pid = ? AND state = ?`, q.ID, pid, stateAgentWaiting) == 1
 	})
 	if c, _ = w.bob.ParticipationContext(pid, 0); c.Addressed != 1 || c.Messages[len(c.Messages)-1].Body != "what failed?" {
 		t.Fatalf("context with the question: %+v", c)
 	}
 	time.Sleep(200 * time.Millisecond) // bob's worker is running
-	if _, ok, _ := w.bob.store.claimJob("test"); ok || inboxCount(t, w.bob, `id = ? AND state = ?`, q.ID, stateConvHeld) != 1 {
-		t.Fatal("participation work was claimed")
+	if _, ok, _ := w.bob.store.claimJob("test"); ok || inboxCount(t, w.bob, `id = ? AND state = ?`, q.ID, stateAgentWaiting) != 1 {
+		t.Fatal("participation work was claimed by the legacy worker")
 	}
 	if err := w.bob.Accept(q.ID); err == nil {
 		t.Fatal("legacy accept ran a participation request")

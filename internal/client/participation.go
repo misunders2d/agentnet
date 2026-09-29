@@ -13,12 +13,9 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Agent participation in a DM, first checkpoint: signed invite, accept and
-// decline records, their resolution into a state, and read-only views.
-// Nothing here runs anything: a request to a participation's agent is held
-// for the host's person like any other DM question or task (stateConvHeld),
-// and the worker's claim excludes every conversation row. Dismissal is not
-// here yet.
+// Agent participation in a DM: signed invite, accept, decline and dismiss
+// records, their resolution into a state, and views. Running a request to
+// a participation's agent is agentjob.go's.
 //
 // Resolution: a participation's state is computed from the set of events
 // held, never from the order they arrived in, and with the DM's persons as
@@ -69,8 +66,12 @@ type dmMembers struct {
 	persons map[string]personRow
 }
 
-func (a *Agent) dmMembers(conv string) (dmMembers, error) {
-	root, _, found, err := a.store.conversation(conv)
+func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
+
+// membersIn reads a DM's members from q (the store, or a transaction that
+// must decide on the members as they are within it).
+func membersIn(q querier, conv string) (dmMembers, error) {
+	root, _, found, err := conversationIn(q, conv)
 	if err != nil {
 		return dmMembers{}, err
 	}
@@ -79,7 +80,7 @@ func (a *Agent) dmMembers(conv string) (dmMembers, error) {
 	}
 	m := dmMembers{root: root, persons: map[string]personRow{}}
 	for _, mem := range root.Members {
-		p, ok, err := a.store.personByID(mem.Person)
+		p, ok, err := personByIDIn(q, mem.Person)
 		if err != nil {
 			return dmMembers{}, err
 		}
@@ -101,6 +102,17 @@ func (m dmMembers) host(h *protocol.ParticipationHost) (personRow, bool) {
 	}
 	p, ok := m.persons[h.Person]
 	return p, ok && p.info.Address == h.Address && p.info.Fingerprint == h.Fingerprint
+}
+
+// device reports whether address with key fingerprint fp is the device of
+// a member person as pinned here now.
+func (m dmMembers) device(address, fp string) bool {
+	for _, p := range m.persons {
+		if p.info.Address == address && p.info.Fingerprint == fp {
+			return true
+		}
+	}
+	return false
 }
 
 func (m dmMembers) memberKey(fp string) bool {
@@ -212,7 +224,6 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 
 // Claimable reports whether the participation could have work run now: it
 // is active and no event of it is held (a held one may end or change it).
-// Nothing runs participation work in this checkpoint either way.
 func (p ParticipationInfo) Claimable() bool { return p.State == PartActive && p.Held == 0 }
 
 // Participation resolves one participation.
@@ -229,7 +240,13 @@ func (a *Agent) participation(conv, pid string) (ParticipationInfo, error) {
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
-	events, err := a.store.participationEvents(conv, pid)
+	return participationIn(a.store.db, conv, pid, m, a.Address)
+}
+
+// participationIn resolves a participation from the events q holds, with
+// the DM's members m; self is this installation's address.
+func participationIn(q dbq, conv, pid string, m dmMembers, self string) (ParticipationInfo, error) {
+	events, err := participationEventsIn(q, conv, pid)
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
@@ -237,7 +254,7 @@ func (a *Agent) participation(conv, pid string) (ParticipationInfo, error) {
 		return ParticipationInfo{}, ErrNoParticipation
 	}
 	info := resolve(conv, pid, events, m)
-	info.HostHere = info.Host.Address == a.Address && info.Host.State == personSelf
+	info.HostHere = info.Host.Address == self && info.Host.State == personSelf
 	return info, nil
 }
 
@@ -453,8 +470,9 @@ func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEven
 }
 
 // AskAgent sends a question (or task) to a participation's agent: it names
-// the host device as its one execution target. Nothing runs it yet: the
-// host holds it for its person like any other DM question or task.
+// the host device as its one execution target, whose worker decides when
+// it may run (agentjob.go). Asked on the host itself, the message and its
+// local job are recorded together.
 func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string) (ConvSent, error) {
 	info, err := a.Participation(pid)
 	if err != nil {
@@ -466,7 +484,7 @@ func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string) (ConvSent,
 	if kind != envelope.KindQuestion && kind != envelope.KindTask {
 		return ConvSent{}, errors.New("an agent is asked a question or given a task")
 	}
-	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, PID: pid,
+	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, PID: pid, selfJob: info.HostHere,
 		Target: &envelope.Target{Address: info.Host.Address, Fingerprint: info.Host.Fingerprint}})
 }
 
@@ -489,8 +507,8 @@ func checkParticipationEvent(in envelope.Inner, senderFP string, senderKey []byt
 	return ev, ev.Verify(senderKey)
 }
 
-// ParticipationContext is what would be given to a participation's agent
-// (read-only; nothing uses it to run anything yet).
+// ParticipationContext is what is given to a participation's agent with a
+// request (agentjob.go), besides the request itself.
 type ParticipationContext struct {
 	PID       string              `json:"pid"`
 	Note      string              `json:"note,omitempty"`
@@ -500,25 +518,25 @@ type ParticipationContext struct {
 	Addressed int                 `json:"addressed"` // of Messages, requests to or outputs of this participation
 	State     string              `json:"state"`     // the participation's state now
 	Grant     []protocol.GrantRef `json:"grant"`     // as invited
-	Bytes     int                 `json:"bytes"`     // body bytes included
+	Bytes     int                 `json:"bytes"`     // bytes of the messages as rendered for the agent
 	Limit     int                 `json:"limit"`     // the bound used
 	Replicas  int                 `json:"replicas"`  // history copies left out (never context)
 	Events    int                 `json:"events"`    // event messages left out (records, not context)
 	Unrelated int                 `json:"unrelated"` // other messages of the DM left out (not granted, not addressed)
+
+	lines []string // Messages as rendered for the agent
 }
 
 // defaultContextBytes bounds the message bodies given to an agent.
 const defaultContextBytes = 64 << 10
 
-// ParticipationContext selects, for an invited or active participation,
-// what would be given to its agent: the granted earlier messages held here,
-// each matched exactly (logical id and sender key, whatever participation it
-// was part of), then the requests to this participation (questions and
-// tasks naming its host) and its agent's outputs (answers and results sent
-// by the host device itself), newest kept first within limit bytes of
-// bodies (limit <= 0: the default). Nothing else of the DM, no replicas or
-// event records, nothing of any other conversation; an output claimed by
-// any other device is not the agent's.
+// ParticipationContext shows, for an invited or active participation, what
+// its agent would be given with a new request now (agentContext): the
+// granted earlier messages held here, then the requests to it and its
+// outputs, newest kept first within limit bytes as rendered for the agent
+// (limit <= 0: the default). Nothing else of the DM, no replicas or event
+// records, nothing of any other conversation; an output claimed by any
+// other device is not the agent's.
 func (a *Agent) ParticipationContext(pid string, limit int) (ParticipationContext, error) {
 	info, err := a.Participation(pid)
 	if err != nil {
@@ -527,53 +545,5 @@ func (a *Agent) ParticipationContext(pid string, limit int) (ParticipationContex
 	if info.State != PartInvited && info.State != PartActive {
 		return ParticipationContext{}, fmt.Errorf("the participation is %s: it has no context", info.State)
 	}
-	if limit <= 0 {
-		limit = defaultContextBytes
-	}
-	msgs, err := a.ConversationMessages(info.Conv)
-	if err != nil {
-		return ParticipationContext{}, err
-	}
-	c := ParticipationContext{PID: pid, Note: info.Note, State: info.State, Grant: info.Grant, Limit: limit}
-	granted := map[protocol.GrantRef]bool{}
-	for _, g := range info.Grant {
-		granted[g] = true
-	}
-	found := map[protocol.GrantRef]bool{}
-	var selected []ConvMessage
-	for _, m := range msgs {
-		ref := protocol.GrantRef{LID: m.LID, Fingerprint: m.Key}
-		switch {
-		case m.Replica:
-			c.Replicas++
-		case m.Sub != "":
-			c.Events++
-		case granted[ref] && !found[ref]:
-			selected = append(selected, m)
-			found[ref] = true
-		case m.PID == pid && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) &&
-			m.Target != nil && m.Target.Address == info.Host.Address && m.Target.Fingerprint == info.Host.Fingerprint:
-			selected = append(selected, m)
-			c.Addressed++
-		case m.PID == pid && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) &&
-			m.From == info.Host.Address && m.Key == info.Host.Fingerprint:
-			selected = append(selected, m)
-			c.Addressed++
-		default:
-			c.Unrelated++
-		}
-	}
-	c.Missing = len(info.Grant) - len(found)
-	// Keep the newest within the bound.
-	keep := len(selected)
-	for i := len(selected) - 1; i >= 0; i-- {
-		if c.Bytes+len(selected[i].Body) > limit {
-			break
-		}
-		c.Bytes += len(selected[i].Body)
-		keep = i
-	}
-	c.Omitted = keep
-	c.Messages = selected[keep:]
-	return c, nil
+	return a.agentContext(info, "", limit)
 }

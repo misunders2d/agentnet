@@ -69,7 +69,7 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	if j.Kind == envelope.KindTask {
 		mode, base = "task", h.task
 	}
-	if h.sessions == noSessions || j.followUp() {
+	if h.sessions == noSessions || j.followUp() || j.PID != "" { // an agent's request: a fresh session, its context given anew
 		return sessionPlan{args: slices.Clone(base)}, nil
 	}
 	dir, err := filepath.EvalSymlinks(r.Dir)

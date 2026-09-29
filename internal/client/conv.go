@@ -16,12 +16,12 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Human DMs, first checkpoint: this installation's person, two-person
-// conversations with a signed root (E0), and version 2 messages admitted
-// once per (verifying key, logical id). Nothing here runs anything: a
-// conversation question or task is held for the person (stateConvHeld)
-// until agent participation exists, and no conversation message enters the
-// address-approved legacy worker.
+// Human DMs: this installation's person, two-person conversations with a
+// signed root (E0), and version 2 messages admitted once per (verifying
+// key, logical id). A conversation question or task is held for the person
+// (stateConvHeld), unless it is addressed to this device's agent within an
+// agent participation (agentjob.go decides whether that runs); no
+// conversation message enters the address-approved legacy worker.
 //
 // Trust: a person record is pinned the first time it is seen, verified
 // against its device's pinned key (first contact is TOFU, as for keys); a
@@ -387,7 +387,10 @@ type ConvOutgoing struct {
 	Target  *envelope.Target // the one execution recipient of a question or task, if any
 	PID     string           // the agent participation (AskAgent sets it with the target)
 
-	sub string // envelope.SubEvent for participation events (participation.go)
+	sub     string                                 // envelope.SubEvent for participation events (participation.go)
+	status  string                                 // an agent output's status (agentjob.go)
+	claim   func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
+	selfJob bool                                   // a request to this device's own agent: its job is recorded with it
 }
 
 // ConvSent is what became of a conversation message.
@@ -458,7 +461,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: protocol.NewID(), Root: raw,
-		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub}
+		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err != nil {
 		return ConvSent{}, err
@@ -479,7 +482,11 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if !supported {
 		state = stateConvWaiting
 	}
-	if err := a.store.addConvOutbox(env, in, state, why); err != nil {
+	jobKey := ""
+	if m.selfJob {
+		jobKey = me.info.Fingerprint
+	}
+	if err := a.store.addConvOutbox(env, in, state, why, m.claim, jobKey); err != nil {
 		return ConvSent{}, err
 	}
 	defer notifyDaemon(a.home)
@@ -504,8 +511,13 @@ func (a *Agent) personSendable(address, roster string) bool {
 }
 
 // releaseConv queues waiting conversation messages whose recipient can now
-// read them; the sync's outbox flush sends them.
+// read them; the sync's outbox flush sends them. Agent outputs that may no
+// longer go out are held back first.
 func (a *Agent) releaseConv(ctx context.Context, feats []string) {
+	if err := a.holdEndedOutputs(); err != nil {
+		a.Logf("agent outputs: %v", err)
+		return
+	}
 	waiting, err := a.store.convWaiting()
 	if err != nil || len(waiting) == 0 {
 		return
@@ -654,7 +666,14 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	state := ""
 	if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
-		state = stateConvHeld // for the person; nothing runs a conversation request yet, participation or not
+		switch t := in.Target; {
+		case in.PID == "":
+			state = stateConvHeld // for the person: nothing runs it
+		case !in.Replica && t != nil && t.Address == a.Address && t.Fingerprint == a.id.Public(a.Address).Fingerprint():
+			state = stateAgentWaiting // for this device's agent: the worker decides when it may run (agentjob.go)
+		default:
+			// A request to another device's agent: history here.
+		}
 	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
 	if errors.Is(err, errTooManyEvents) {
@@ -665,6 +684,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if res == admitConflict {
 		return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
+	}
+	if res == admitted {
+		a.wakeWorker() // a request, or an event that may let one run or stop
 	}
 	return nil
 }

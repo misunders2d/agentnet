@@ -231,7 +231,7 @@ func ownOutbox(t *testing.T, a *Agent, conv, lid, kind, pid, body string) {
 	_, raw, _, _ := a.store.conversation(conv)
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: "x/y", TS: time.Now().Unix(), Kind: kind, Body: body,
 		Conv: conv, LID: lid, Root: raw, PID: pid, Origin: "agent:fake", Emotion: "calm"}
-	if err := a.store.addConvOutbox(envelope.Envelope{ID: in.ID, To: in.To}, in, protocol.StateDelivered, ""); err != nil {
+	if err := a.store.addConvOutbox(envelope.Envelope{ID: in.ID, To: in.To}, in, protocol.StateDelivered, "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 }

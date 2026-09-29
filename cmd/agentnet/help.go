@@ -322,9 +322,9 @@ installation speaks for; both of you need a person, and both installations
 and your Hub need a version that carries conversations.
 
 Messages are end-to-end encrypted and signed; the conversation's signed
-root travels with them. A question or task in a DM is for the person: no
-agent runs it (agent participation comes later), and accept, reply and
-decline do not apply to it; answer with dm send. If the other installation
+root travels with them. A question or task sent with dm send is for the
+person: no agent runs it, and accept, reply and decline do not apply to it;
+answer with dm send. If the other installation
 cannot read conversations right now, dm send keeps the message as waiting
 and sends it when it can; it is never sent in the older format. dm show
 lists the messages and their states; an origin shown (ui, agent:NAME) is
@@ -336,8 +336,25 @@ dm accept-agent / dm decline-agent, all or nothing), the earlier messages it
 may be shown (--grant, logical ids from dm show; nothing else earlier) and
 who may give it follow-up tasks (--tasks). Both people see the invite.
 Either person can end it with dm dismiss-agent; inviting again starts a new
-participation. dm ask-agent sends it a question or task, but nothing runs
-agents in DMs yet: the host holds it for its person.`,
+participation.
+
+dm ask-agent sends the agent a question or task; both people see it. The
+host installation's daemon runs it with its own responder and setup (agentnet
+help responder), in a fresh session given the shared messages, this
+participation's earlier requests and replies (bounded; it is told what was
+left out) and the request, and sends the agent's reply to the DM. It runs
+only while the participation is active with nothing unresolved, and only for
+a member's current key. A task also needs the host person's say: listed in
+--tasks when invited, standing permission for that exact key (approve
+--tasks), or accept ID once (it waits for review until then). The reply goes out only with the
+emotion the agent itself chose ("emotion: WORD" as its last line); without
+one, or when the agent says the person must decide, nothing is sent and the
+host sees it in review. Failures and cancellations are not sent. A dismissal
+(or a member's person freezing) stops what has not run, stops a running
+request and holds back output not yet handed over, which the host keeps;
+output already sent cannot be recalled. dm show gives each request's state
+on the host (part_waiting, awaiting, running, answered, needs_human,
+not_run, not_delivered, …).`,
 
 	"members": `Usage: agentnet members
 
@@ -358,9 +375,11 @@ members.`,
 Let your responder run a task that awaits acceptance, answer a held question,
 or rerun one that was interrupted, failed, cancelled or marked needs_human.
 A rerun starts afresh; it does not resume the earlier run. Only you can do
-this; nothing a sender does can.
+this; nothing a sender does can. In a DM this applies only to a request to
+your own agent (agentnet help dm), which still runs only while its
+participation allows it.
 
---always (tasks only) also lets future tasks from the same sender run without
+--always (tasks only, not in a DM) also lets future tasks from the same sender run without
 asking, in one step: only for the exact key that signed this task, and only
 while that key is still the one you trust. Like approve --tasks; stop with
 agentnet unapprove --tasks ADDRESS.`,
@@ -545,7 +564,7 @@ With the daemon stopped, remove encrypted copies of messages that failed or
 were abandoned, and direct uploads never attached to a message.
   --saved   also remove directly received ciphertext of files already saved`,
 
-	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
+	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw | --link] LABEL
        agentnet admin revoke ADDRESS
        agentnet admin release set --url URL [--note TEXT] VERSION
        agentnet admin release show | clear
@@ -578,7 +597,11 @@ off.
 
   --ttl D    how long the invite is valid (max 720h)
   --admin    the invited agent becomes an admin too
-  --raw      print only the invite code (for scripts)`,
+  --raw      print only the invite code (for scripts)
+  --link     print only a private, single-use browser invitation link (the
+             code travels in the link's #fragment); needs a Hub served with
+             --web and browser-trusted HTTPS (not a pinned certificate).
+             Share it privately, as you would the code`,
 
 	"hub": `Usage: agentnet hub serve|bootstrap-invite|storage|cleanup|backup|restore [flags]
 

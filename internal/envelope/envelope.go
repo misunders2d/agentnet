@@ -177,7 +177,7 @@ func checkVersion2(in Inner) error {
 	if in.Origin != "" && in.Origin != OriginUI && !(AgentOrigin(in.Origin) && validToken(strings.TrimPrefix(in.Origin, OriginAgentPrefix), 32)) {
 		return fmt.Errorf("invalid origin %q", in.Origin)
 	}
-	if in.Emotion != "" && !validToken(in.Emotion, 24) {
+	if in.Emotion != "" && !ValidEmotion(in.Emotion) {
 		return fmt.Errorf("invalid emotion %q", in.Emotion)
 	}
 	if t := in.Target; t != nil {
@@ -205,6 +205,10 @@ func checkVersion2(in Inner) error {
 	}
 	return nil
 }
+
+// ValidEmotion reports whether s is a well-formed emotion: 1–24
+// characters of [a-z0-9-]. What it names is the sender's choice.
+func ValidEmotion(s string) bool { return validToken(s, 24) }
 
 // validToken reports whether s is 1–max characters of [a-z0-9-].
 func validToken(s string, max int) bool {

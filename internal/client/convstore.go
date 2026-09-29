@@ -89,8 +89,10 @@ func (s *store) selfPerson() (personRow, bool, error) {
 	return scanPerson(s.db.QueryRow(`SELECT `+personCols+` FROM persons WHERE state = ?`, personSelf))
 }
 
-func (s *store) personByID(id string) (personRow, bool, error) {
-	return scanPerson(s.db.QueryRow(`SELECT `+personCols+` FROM persons WHERE person = ?`, id))
+func (s *store) personByID(id string) (personRow, bool, error) { return personByIDIn(s.db, id) }
+
+func personByIDIn(q querier, id string) (personRow, bool, error) {
+	return scanPerson(q.QueryRow(`SELECT `+personCols+` FROM persons WHERE person = ?`, id))
 }
 
 func (s *store) personByAddress(address string) (personRow, bool, error) {
@@ -172,8 +174,12 @@ type ConversationInfo struct {
 }
 
 func (s *store) conversation(id string) (protocol.ConvRoot, []byte, bool, error) {
+	return conversationIn(s.db, id)
+}
+
+func conversationIn(q querier, id string) (protocol.ConvRoot, []byte, bool, error) {
 	var raw string
-	err := s.db.QueryRow(`SELECT root FROM conversations WHERE id = ?`, id).Scan(&raw)
+	err := q.QueryRow(`SELECT root FROM conversations WHERE id = ?`, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return protocol.ConvRoot{}, nil, false, nil
 	}
@@ -390,15 +396,41 @@ func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Env
 }
 
 // addConvOutbox records a sealed conversation message as queued (to send)
-// or waiting (kept until the recipient can read it), with why.
-func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, why string) error {
+// or waiting (kept until the recipient can read it), with why, in one
+// transaction with claim (if any), which decides that it may be stored.
+// jobKey, if set, also records the message as a local request to this
+// device's own agent (agentjob.go), verified by that key: one message in
+// the conversation, one job, both or neither.
+func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, why string, claim func(*sql.Tx, string) error, jobKey string) error {
 	data, _ := json.Marshal(env)
 	now := time.Now()
-	_, err := s.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if claim != nil {
+		if err := claim(tx, env.ID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
 		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''))`,
 		env.ID, env.To, in.Body, string(data), state, why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
-		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub)
-	return s.done(err)
+		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub); err != nil {
+		return err
+	}
+	if jobKey != "" {
+		// Read and acknowledged: it was never received, only asked here.
+		if _, err := tx.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, state, verified_by,
+			conv, lid, origin, target, content_hash, received_ms, pid, local, acked, read_at)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, 1, 1, ?)`,
+			env.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), stateAgentWaiting, jobKey,
+			in.Conv, in.LID, in.Origin, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, now.Unix()); err != nil {
+			return err
+		}
+	}
+	return s.done(tx.Commit())
 }
 
 // convWaiting returns the ids and recipients of waiting conversation
@@ -443,20 +475,29 @@ type ConvMessage struct {
 	Target  *envelope.Target `json:"target,omitempty"`
 	PID     string           `json:"pid,omitempty"` // the agent participation it is for, from or about
 	Key     string           `json:"key"`           // the sender's key fingerprint (received: the key that verified it)
-	State   string           `json:"state"`         // inbox: its response state; outbox: queued, waiting, custody, delivered, …
+	State   string           `json:"state"`         // inbox: its response state; outbox: queued, waiting, custody, delivered, not_delivered, …
 	Detail  string           `json:"detail,omitempty"`
 	At      int64            `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
+
+	// A request this device's agent runs (received, or asked here by this
+	// device's own person): the job's state and detail here (agentjob.go).
+	Job       string `json:"job,omitempty"`
+	JobDetail string `json:"job_detail,omitempty"`
 }
 
+// convMessages lists conv's messages; a local request to this device's own
+// agent is listed once, as the message sent, with its job.
 func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 	rows, err := s.db.Query(`
 		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
-		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, '')
-		  FROM inbox WHERE conv = ?
+		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
+		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END
+		  FROM inbox WHERE conv = ? AND local = 0
 		UNION ALL
-		SELECT id, lid, 'out', ?, ?, kind, body, coalesce(reply_to, ''), coalesce(sub, ''), 0, coalesce(origin, ''),
-		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(error, ''), created_at, created_ms, coalesce(pid, '')
-		  FROM outbox WHERE conv = ?
+		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
+		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
+		       coalesce(j.state, ''), coalesce(j.detail, '')
+		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ?
 		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
 		return nil, err
@@ -468,7 +509,7 @@ func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 		var target string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail); err != nil {
 			return nil, err
 		}
 		if target != "" {
@@ -585,7 +626,11 @@ func storeParticipationEvent(tx *sql.Tx, ev protocol.ParticipationEvent, raw []b
 
 // participationEvents returns the events held for a participation.
 func (s *store) participationEvents(conv, pid string) ([]protocol.ParticipationEvent, error) {
-	rows, err := s.db.Query(`SELECT event FROM participation_events WHERE conv = ? AND pid = ? ORDER BY hash`, conv, pid)
+	return participationEventsIn(s.db, conv, pid)
+}
+
+func participationEventsIn(q dbq, conv, pid string) ([]protocol.ParticipationEvent, error) {
+	rows, err := q.Query(`SELECT event FROM participation_events WHERE conv = ? AND pid = ? ORDER BY hash`, conv, pid)
 	if err != nil {
 		return nil, err
 	}

@@ -53,6 +53,7 @@ type Agent struct {
 	members    memberState // the Hub's member list from the push stream (members.go)
 	session    string      // this run's session id (Run); "" outside Run
 	convWork   convWork    // conversation upkeep due on the next sync (conv.go)
+	agentSweep agentSweep  // the worker's look at requests to its agent (agentjob.go)
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
@@ -439,6 +440,9 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 
 // FlushOutbox retries every queued message once.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
+	if err := a.holdEndedOutputs(); err != nil {
+		return err
+	}
 	envs, err := a.store.queued()
 	if err != nil {
 		return err
