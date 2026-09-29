@@ -416,7 +416,8 @@ unless you ask, but in that session your own tool permissions still apply.`,
 Remind me later about received message ID (a direct message, question or
 task, or a DM message; ids from inbox or dm show). WHEN is local time: a
 duration (30m, 2h, 1h30m, 2d), a clock time (15:00: today, or else
-tomorrow) or a date and time (2026-09-30 09:00). Setting it again moves it.
+tomorrow) or a date and time (2026-09-30 09:00), within ten years. Setting
+it again moves it.
 
 At that time the running daemon shows one notification without content (on
 Linux a click opens the message's thread, or the DM on the page served with

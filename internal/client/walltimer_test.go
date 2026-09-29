@@ -57,6 +57,17 @@ func TestWallTimers(t *testing.T) {
 			if !fired(time.Second) {
 				t.Fatal("a past time did not fire at once")
 			}
+			// Far future (past 2262, where nanoseconds since 1970 overflow
+			// int64): armed for then, or refused; never fired now.
+			if err := w.Arm(time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)); err == nil && fired(300*time.Millisecond) {
+				t.Fatal("a year-2300 time fired at once")
+			}
+			if err := w.Arm(time.Now().Add(100 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			if !fired(2 * time.Second) {
+				t.Fatal("no longer fires after a far-future time")
+			}
 		})
 	}
 }

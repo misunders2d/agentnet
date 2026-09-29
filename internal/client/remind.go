@@ -52,6 +52,9 @@ type Reminder struct {
 // ErrNoReminder means there is no pending reminder on that message.
 var ErrNoReminder = errors.New("no pending reminder on that message")
 
+// maxReminderAhead bounds how far ahead a reminder may be set.
+const maxReminderAhead = 10 * 365 * 24 * time.Hour
+
 // SetReminder sets the reminder on received message id to due, or moves an
 // existing one (a new revision: its attention is asked for again at the new
 // time). due must be in the future.
@@ -59,6 +62,9 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	now := time.Now()
 	if !due.After(now) {
 		return Reminder{}, errors.New("choose a time in the future")
+	}
+	if due.Sub(now) > maxReminderAhead {
+		return Reminder{}, errors.New("choose a time within ten years")
 	}
 	if !protocol.ValidID(id) {
 		return Reminder{}, fmt.Errorf("invalid message id %q", id)

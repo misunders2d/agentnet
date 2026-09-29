@@ -242,6 +242,27 @@ func TestReminderOverdueAtStart(t *testing.T) {
 	}
 }
 
+// A reminder is for the next ten years at most (the far future is refused
+// before it is stored); one years ahead is stored and not due.
+func TestReminderRange(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	id := receiveAt(t, w, envelope.KindMessage, "someday")
+	for _, far := range []time.Time{time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().Add(maxReminderAhead + time.Hour)} {
+		if _, err := w.bob.SetReminder(id, far); err == nil {
+			t.Fatalf("a reminder at %s", far)
+		}
+	}
+	if _, ok, _ := w.bob.Reminder(id); ok {
+		t.Fatal("a refused reminder was stored")
+	}
+	r, err := w.bob.SetReminder(id, time.Now().AddDate(9, 0, 0))
+	if err != nil || r.Overdue || r.Alerted {
+		t.Fatalf("nine years ahead: %+v %v", r, err)
+	}
+}
+
 // Only a received message takes a reminder.
 func TestReminderOnlyOnReceivedMessages(t *testing.T) {
 	w := newWorld(t, "")

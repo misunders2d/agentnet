@@ -56,7 +56,17 @@ func (t *fdWallTimer) C() <-chan struct{} { return t.c }
 func (t *fdWallTimer) Arm(at time.Time) error {
 	var spec unix.ItimerSpec
 	if !at.IsZero() {
-		spec.Value = unix.NsecToTimespec(max(1, at.UnixNano())) // a past time fires at once; zero would disarm
+		// Seconds and nanoseconds apart: at.UnixNano would overflow after
+		// 2262 and fire at once. A time the platform's timespec cannot hold
+		// (after 2038 where it is 32-bit) is refused, never armed as "now".
+		v, err := unix.TimeToTimespec(at)
+		if err != nil {
+			return err
+		}
+		if v.Sec < 0 || v.Sec == 0 && v.Nsec == 0 {
+			v = unix.Timespec{Nsec: 1} // a past time fires at once; zero would disarm
+		}
+		spec.Value = v
 	}
 	sc, err := t.f.SyscallConn()
 	if err != nil {
