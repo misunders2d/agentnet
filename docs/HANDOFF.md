@@ -314,13 +314,13 @@ If a local database or key file is damaged:
   `agentnet dm`), explicit single-device persons, signed DM roots, envelope v2, capability records, admission
   dedupe, and holds every conversation question/task (nothing runs). Root review defects R1, R2, C1, C2 and the
   frozen-person deferred send are fixed (`9f5bea1`, `5da7fa1`, `7247759`); root accepted `7247759` with focused
-  race tests, closing the core correction gate. Not built: agent participation/execution, Zoom human–agent
-  links, device linking, groups, browser devices. Human DMs are not complete.
+  race tests, closing the core correction gate. Agent participation and execution, Zoom's links and the browser
+  device were built since (items below); not built: device linking, groups.
 - **Human DMs on the page (`4a0659c`, accepted after Agy's review)**: person setup by hand, people listed by their claimed name until checked,
   separate persistent DMs, a message-only DM composer with receipts, held questions/tasks (nothing runs), frozen
   DMs; apart from device history. `9c1d4b4` (candidate, review pending) adds people search and DMs in Comic and
-  Zoom (no person–agent links: they wait for participation data). Not built: agent invitation, Zoom human–agent
-  links, device linking, relay browser DMs.
+  Zoom. Agent invitation, Zoom's person–agent links and browser DMs were built since (items below); not built:
+  device linking.
 - **Release gate (owner request, 2026-09-29)**: a whole-team pre-release review of a stable candidate SHA
   (inventory, per-area and cross-area review, one or two challenge rounds, fix and recheck per confirmed defect,
   Codex synthesis, only genuine product decisions to Sergey). Rows R1–R12 are listed in
@@ -335,6 +335,12 @@ If a local database or key file is damaged:
   write the shared contract with platform evidence first; then core builds relay and desktop delivery and frontend
   Claude the browser service worker, subscription, settings, mutes and clicks. Not built yet. See
   [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
+- **Agents in DMs (2026-09-29, local commits)**: core records and execution (`1c35ad4`, `fc87c3f`, `85af6a8`, accepted
+  for UI use; assembled/platform gates open); daemon pages invite, decide (host only), ask, dismiss and act on requests
+  (`78b172f`, `fa9ccc0`), with people linked to their agents in Classic/Comic/Zoom (`3c61430`); the browser device
+  invites, asks and dismisses the other person's agent and never runs one (`061faaf`). See
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status). Notifications: core contract
+  [`docs/revival/NOTIFY.md`](revival/NOTIFY.md); nothing built yet.
 - **Browser device (2026-09-29, local commits, review in progress)**: `hub serve --web` serves the page at the Hub
   origin (`7a97aaf`), `admin invite --link` prints browser invite links (`3a588c3`); the human-only browser engine,
   plain join page and installable manifest are `6061c11`, `9ecd3c8`, `2d05b2c`, `e971c16`, `1cab993`. The app icon

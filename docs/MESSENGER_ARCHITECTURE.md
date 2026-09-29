@@ -53,11 +53,8 @@
   fixed in `7247759`. Root accepted `7247759` (source checked; focused race
   tests of waiting, queued, fresh-conflict and normal-recovery sends passed),
   which closes the core's correction gate. The tests are core Claude's and
-  root's evidence. Not built yet:
-  - agent participation (invite, allowed context, follow-ups, dismissal) and
-    execution;
-  - Zoom's human–agent links;
-  - linking devices, groups, browser devices.
+  root's evidence. Not built at that point (since built: agents in DMs and
+  Zoom's links, below): linking devices, groups.
 
   Human DMs are **not** complete.
 - **Human DMs on the page: accepted (2026-09-29).** `4a0659c` (Agy's review
@@ -73,9 +70,9 @@
   (candidate, review pending) adds people search (by the name they give or
   their device, and DMs by their lines), a DM as an issue in Comic (held and
   kept captions, no decision controls), and Zoom's People group, a person's
-  DMs, one DM and a write dialog that sends only to it. Not built: agent
-  invitation and participation, Zoom's human–agent links (they wait for real
-  participation data), linking devices, DMs on the relay's browser page.
+  DMs, one DM and a write dialog that sends only to it. Agent invitation,
+  Zoom's person–agent links and the browser device's DMs were built since
+  (below); linking devices is not.
 - **Release gate: a whole-team pre-release review (owner request,
   2026-09-29).** Before this release, Codex (synthesis), core Claude, frontend
   Claude and Agy review a stable candidate SHA against the owner's requested
@@ -129,6 +126,36 @@
   `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
   `docs/revival/M4.md`); the browser device's wire format and the relay's page
   handler (`306adaf`, `421f3b6`, `b61a494`).
+- **Agents in DMs (2026-09-29; local commits; execution core accepted for
+  UI use at `85af6a8`, final assembled and platform gates still open).**
+  Core: signed invite, accept, decline and dismiss records and their
+  resolution (`1c35ad4`, `4f08cca`); the host's worker runs an accepted
+  participation's requests with the host's own responder, deciding
+  authority when it claims (`fc87c3f`, `85af6a8`). Pages (`78b172f`,
+  `fa9ccc0`, `3c61430`):
+  - either person invites the agent on a member's device, choosing the
+    earlier messages it may be shown and the member keys whose tasks run
+    without asking (standing permission; anyone may still give it a task,
+    which then waits for the owner's accept); only the host's person
+    accepts or declines, seeing exactly what is agreed; either person asks
+    it and dismisses it (work already started may still finish);
+  - the host decides on requests to its agent (run a task, stop, run
+    again, close);
+  - records read as sentences; people are linked to the agents their
+    device runs (Classic, Comic, Zoom), by the invitation's host only.
+
+  The browser device (`061faaf`) resolves participations as the core does
+  and invites, asks and dismisses the other person's agent; it never
+  hosts, accepts or runs one. Evidence: live tests with real daemons (a
+  stand-in harness binary, no model), browser engine tests against a real
+  daemon, page checks, a Chrome pass of the daemon pages; the browser
+  device's agent controls have no real-browser pass yet.
+- **Notifications: contract written, not built.** Core contract
+  [`docs/revival/NOTIFY.md`](revival/NOTIFY.md) (`f678490`): envelope `attn`
+  and `chan`, Hub prefs/subscription/seen APIs, pending alerts with a grace
+  period, SSRF rules, desktop daemon alerts. The browser side (service
+  worker for push and click only, opt-in settings, per-DM mute, presented
+  acks, click to the exact DM) is frontend work on those types.
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a
