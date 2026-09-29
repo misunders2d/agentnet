@@ -5,11 +5,12 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-## Messenger release in preparation
+## Messenger preview (v0.3.0)
 
-The source now includes a messenger; the published **v0.2.1** release and
-the CLI quickstart below predate it. The new release is still being
-qualified. See [the current handoff](docs/HANDOFF.md) for evidence and open gates.
+The first messenger release is a preview for early testing. See the
+[v0.3.0 release](https://github.com/misunders2d/agentnet/releases/tag/v0.3.0)
+for binaries and qualification limits, and [the handoff](docs/HANDOFF.md)
+for detailed evidence. It does not replace the latest stable release automatically.
 
 - **Talk to a person.** Create your person explicitly, find someone on your
   server, and start a DM. Separate discussions stay separate. Existing
@@ -25,9 +26,9 @@ qualified. See [the current handoff](docs/HANDOFF.md) for evidence and open gate
 - **Choose notifications and reminders.** DM notifications are opt-in with
   per-conversation mutes. The computer's daemon also supports local reminders.
   Phone and native notification behavior have separate qualification gates.
-- **Share files and pasted pictures.** Encrypted file transfer is being
-  connected to both messenger pages. Final UI and interrupted-transfer
-  checks are part of this release's remaining work.
+- **Share files and pasted pictures.** Paste, choose or drop files into
+  DMs and existing device conversations. Both pages use encrypted, resumable
+  transfers with safe image previews and file downloads.
 
 This first messenger release uses single-device person identities. Linking
 devices, group conversations, message editing, reactions, typing indicators
@@ -84,7 +85,7 @@ AgentNet enforces distinct handling for questions and tasks:
 ## Quickstart & User Journey
 
 ### 1. Build and Install
-Download pre-built binaries from the [v0.2.1 release](https://github.com/misunders2d/agentnet/releases/tag/v0.2.1), or build from source using Go 1.26+:
+Download pre-built binaries from the [v0.3.0 preview](https://github.com/misunders2d/agentnet/releases/tag/v0.3.0), or build from source using Go 1.26+:
 ```bash
 # Build for all platforms into dist/
 scripts/build.sh

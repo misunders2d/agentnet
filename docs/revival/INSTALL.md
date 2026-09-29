@@ -3,7 +3,8 @@
 One program, `agentnet`, is both the laptop client and the Hub. Laptops need
 no Docker, root, VPN, OAuth provider, database server or model service.
 
-**Release binaries** (available since v0.2.0; current baseline v0.2.1): the
+**Release binaries**: v0.3.0 is the messenger preview; v0.2.1 remains the
+latest stable release. The
 [GitHub releases](https://github.com/misunders2d/agentnet/releases) have
 `agentnet-OS-ARCH` for Linux, macOS and Windows (amd64 and arm64) plus
 `SHA256SUMS`. Download yours and `SHA256SUMS` into one folder, check the
@@ -229,6 +230,12 @@ certificate, so laptops continue without any trust reset. Laptop homes can
 be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
+
+To choose the messenger preview explicitly, run `agentnet update v0.3.0`.
+If your installed version has no `update` command (v0.2.1 and older), use
+the download and checksum steps above, stop the daemon when no job is
+running, replace the binary, and start the daemon again with the same home.
+Keep your home: it contains your keys and message history.
 
 `agentnet update` installs the latest official release (or `agentnet update
 vX.Y.Z` a named one) over the program's file: it downloads this system's
