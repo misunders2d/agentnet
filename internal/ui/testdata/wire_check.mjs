@@ -73,6 +73,15 @@ async function handle(req) {
   }
   case "supports":
     return { supports: await wire.profileSupports(JSON.parse(req.profile), req.address, wire.unb64(req.key, "key"), req.name) };
+  case "event": {
+    const e = await wire.signEvent(keys, req.event);
+    return { json: wire.eventJSON(e), hash: await wire.eventHash(e) };
+  }
+  case "parseEvent": {
+    const e = wire.parseEvent(req.json);
+    await wire.verifyEvent(e, wire.unb64(req.key, "key"));
+    return { hash: await wire.eventHash(e) };
+  }
   case "open": {
     const from = await wire.parsePublic(JSON.parse(req.from));
     return { inner: await wire.open(req.envelope, keys, req.self || address, from) };

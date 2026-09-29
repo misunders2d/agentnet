@@ -365,6 +365,143 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			t.Fatalf("v1: %v", got)
 		}
 	})
+
+	t.Run("participation events", func(t *testing.T) {
+		conv := goRoot.ID()
+		fp := bob.Fingerprint()
+		author := protocol.EventAuthor{Person: bobRoster.Person, Roster: bobRoster.Hash(), Address: bob.Address, Fingerprint: fp}
+		invite := func() protocol.ParticipationEvent {
+			e := protocol.ParticipationEvent{V: 1, Conv: conv, PID: protocol.NewID(), Type: protocol.EventInvite, Author: author, TS: time.Now().Unix(),
+				Host:     &protocol.ParticipationHost{Person: danaRoster.Person, Address: dana, Fingerprint: pub.Fingerprint()},
+				Grant:    []protocol.GrantRef{{LID: protocol.NewID(), Fingerprint: fp}, {LID: protocol.NewID(), Fingerprint: pub.Fingerprint()}},
+				Audience: protocol.AudienceConversation, TaskKeys: []string{fp}, Note: "check the deploy <&>\nthen report"}
+			e.Sign(bobID.Sign)
+			return e
+		}
+		// Go's events in the device.
+		inv := invite()
+		acc := protocol.ParticipationEvent{V: 1, Conv: conv, PID: inv.PID, Type: protocol.EventAccept, Prev: inv.Hash(), Author: author, TS: time.Now().Unix()}
+		acc.Sign(bobID.Sign)
+		for _, e := range []protocol.ParticipationEvent{inv, acc} {
+			got := w.ok(map[string]any{"op": "parseEvent", "json": marshal(t, e), "key": b64(bob.SignKey)})
+			if got["hash"] != e.Hash() {
+				t.Fatalf("%s: hash %v, want %s", e.Type, got["hash"], e.Hash())
+			}
+		}
+		// The device's own: an invite of the other member's agent, and a dismissal.
+		me := map[string]any{"person": danaRoster.Person, "roster": danaRoster.Hash(), "address": dana, "fingerprint": pub.Fingerprint()}
+		pid := protocol.NewID()
+		for _, ev := range []map[string]any{
+			{"conv": conv, "pid": pid, "type": "invite", "author": me, "ts": time.Now().Unix(),
+				"host":  map[string]any{"person": bobRoster.Person, "address": bob.Address, "fingerprint": fp},
+				"grant": []any{map[string]any{"lid": protocol.NewID(), "fingerprint": pub.Fingerprint()}}, "audience": "conversation",
+				"task_keys": []any{pub.Fingerprint()}, "note": "please look <&>"},
+			{"conv": conv, "pid": pid, "type": "dismiss", "prev": inv.Hash(), "author": me, "ts": time.Now().Unix()},
+		} {
+			v := w.ok(map[string]any{"op": "event", "event": ev})
+			e, err := protocol.ParseParticipationEvent([]byte(v["json"].(string)))
+			if err != nil || e.Verify(pub.SignKey) != nil || e.Hash() != v["hash"] || marshal(t, e) != v["json"] {
+				t.Fatalf("Go refuses or differs from the device's %s: %v\n%s\n%s", ev["type"], err, v["json"], marshal(t, e))
+			}
+		}
+		// Refused alike.
+		many := func(n int, f func() string) []string {
+			var out []string
+			for range n {
+				out = append(out, f())
+			}
+			return out
+		}
+		for what, change := range map[string]func(*protocol.ParticipationEvent){
+			"invite with prev":    func(e *protocol.ParticipationEvent) { e.Prev = strings.Repeat("a", 64) },
+			"invite without host": func(e *protocol.ParticipationEvent) { e.Host = nil },
+			"other audience":      func(e *protocol.ParticipationEvent) { e.Audience = "owner" },
+			"grant repeated":      func(e *protocol.ParticipationEvent) { e.Grant = append(e.Grant, e.Grant[0]) },
+			"grant bad lid":       func(e *protocol.ParticipationEvent) { e.Grant[0].LID = "x" },
+			"grant too long": func(e *protocol.ParticipationEvent) {
+				e.Grant = nil
+				for range protocol.MaxGrant + 1 {
+					e.Grant = append(e.Grant, protocol.GrantRef{LID: protocol.NewID(), Fingerprint: fp})
+				}
+			},
+			"task keys repeated": func(e *protocol.ParticipationEvent) { e.TaskKeys = []string{fp, fp} },
+			"task key bad":       func(e *protocol.ParticipationEvent) { e.TaskKeys = []string{"x"} },
+			"task keys too many": func(e *protocol.ParticipationEvent) {
+				e.TaskKeys = many(protocol.MaxTaskKeys+1, func() string { return strings.Repeat("a", 8) + "-" + protocol.NewID()[:8] + "-00000000-00000000" })
+			},
+			"note control":     func(e *protocol.ParticipationEvent) { e.Note = "a\u0007b" },
+			"note too long":    func(e *protocol.ParticipationEvent) { e.Note = strings.Repeat("n", protocol.MaxInviteNote+1) },
+			"bad pid":          func(e *protocol.ParticipationEvent) { e.PID = "x" },
+			"no time":          func(e *protocol.ParticipationEvent) { e.TS = 0 },
+			"version":          func(e *protocol.ParticipationEvent) { e.V = 2 },
+			"bad author":       func(e *protocol.ParticipationEvent) { e.Author.Roster = "x" },
+			"unknown type":     func(e *protocol.ParticipationEvent) { e.Type = "promote" },
+			"accept with host": func(e *protocol.ParticipationEvent) { e.Type, e.Prev = protocol.EventAccept, inv.Hash() },
+		} {
+			e := invite()
+			change(&e)
+			e.Sign(bobID.Sign)
+			raw := marshal(t, e)
+			_, goErr := protocol.ParseParticipationEvent([]byte(raw))
+			both(t, what, "parseEvent", raw, bob.SignKey, goErr)
+		}
+		// An accept that carries an empty grant list: present, so refused.
+		raw := strings.TrimSuffix(marshal(t, acc), "}") + `,"grant":[]}`
+		_, goErr := protocol.ParseParticipationEvent([]byte(raw))
+		both(t, "accept with empty grant", "parseEvent", raw, bob.SignKey, goErr)
+		flipped := invite()
+		flipped.Sig[0] ^= 1
+		both(t, "flipped signature", "parseEvent", marshal(t, flipped), bob.SignKey, flipped.Verify(bob.SignKey))
+		widened := invite()
+		widened.Grant = append(widened.Grant, protocol.GrantRef{LID: protocol.NewID(), Fingerprint: fp}) // after signing
+		both(t, "widened grant", "parseEvent", marshal(t, widened), bob.SignKey, widened.Verify(bob.SignKey))
+		raw = strings.TrimSuffix(marshal(t, invite()), "}") + `,"run":true}`
+		_, goErr = protocol.ParseParticipationEvent([]byte(raw))
+		both(t, "unknown field", "parseEvent", raw, bob.SignKey, goErr)
+
+		// Participation ids on messages: the same rules in the device.
+		root := marshal(t, goRoot)
+		now := time.Now().Unix()
+		evMsg := map[string]any{"v": 2, "id": protocol.NewID(), "to": bob.Address, "ts": now, "kind": "message", "body": marshal(t, inv),
+			"conv": conv, "lid": protocol.NewID(), "root": root, "sub": "event", "pid": inv.PID}
+		v := w.ok(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": evMsg})
+		var env envelope.Envelope
+		strictJSON([]byte(v["envelope"].(string)), &env)
+		if in, err := envelope.Open(env, bobID, bob.Address, pub); err != nil || in.PID != inv.PID || in.Sub != envelope.SubEvent {
+			t.Fatalf("event message: %v %+v", err, in)
+		}
+		for what, extra := range map[string]map[string]any{
+			"pid on a plain message":          {"sub": "", "pid": inv.PID},
+			"pid on a request without target": {"sub": "", "kind": "question", "pid": inv.PID},
+			"bad pid":                         {"pid": "x"},
+		} {
+			m := map[string]any{}
+			for k, x := range evMsg {
+				m[k] = x
+			}
+			for k, x := range extra {
+				m[k] = x
+			}
+			goIn := envelope.Inner{V: 2, ID: protocol.NewID(), From: dana, To: bob.Address, TS: now, Kind: str(m["kind"]), Body: "x",
+				Conv: conv, LID: protocol.NewID(), Root: json.RawMessage(root), Sub: str(m["sub"]), PID: str(m["pid"])}
+			_, goErr := envelope.Seal(goIn, bobID.Sign, danaRecipient)
+			vv := w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": m})
+			if goErr == nil || vv["error"] == nil {
+				t.Errorf("%s: Go %v, device %v", what, goErr, vv["error"])
+			}
+		}
+		// An agent's answer with its pid, from Go, opens in the device.
+		ans := envelope.Inner{V: 2, ID: protocol.NewID(), From: bob.Address, To: dana, TS: now, Kind: "answer", Body: "done",
+			Conv: conv, LID: protocol.NewID(), Root: json.RawMessage(root), PID: inv.PID, Origin: "agent:claude", Emotion: "calm"}
+		aenv, err := envelope.Seal(ans, bobID.Sign, danaRecipient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := w.ok(map[string]any{"op": "open", "envelope": marshal(t, aenv), "from": publicJSON(t, bob)})["inner"].(map[string]any)
+		if got["pid"] != inv.PID || got["origin"] != "agent:claude" || got["emotion"] != "calm" {
+			t.Fatalf("agent answer: %v", got)
+		}
+	})
 	_ = age.X25519Recipient{}
 	_ = bytes.Equal
 }

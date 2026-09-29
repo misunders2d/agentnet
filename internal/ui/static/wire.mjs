@@ -701,3 +701,102 @@ export async function profileSupports(profile, address, signKey, name) {
   }
   return sessions.every((s) => has.has(s));
 }
+
+// ---- participation events (internal/protocol/participation.go) --------------------------------
+//
+// One signed step of an agent's participation in a DM, carried in a DM
+// message (sub "event", with its pid). A browser device is human-only: it
+// may invite another member's agent or dismiss one, never host one.
+
+export const MaxGrant = 200;
+export const MaxTaskKeys = 16;
+export const MaxInviteNote = 1024;
+export const MaxParticipationEvent = 8192;
+const participationDomain = "agentnet-participation-v1\n";
+const eventTypes = new Set(["invite", "accept", "decline", "dismiss"]);
+// Go's unicode.IsPrint, plus a newline (an invite's note).
+const noteText = /^[\p{L}\p{M}\p{N}\p{P}\p{S} \n]*$/u;
+
+function marshalEvent(e, withSig) {
+  const a = e.author;
+  let s = '{"v":' + goInt(e.v, "version") + ',"conv":' + goString(e.conv) + ',"pid":' + goString(e.pid) + ',"type":' + goString(e.type) +
+    ',"prev":' + goString(e.prev) + ',"author":{"person":' + goString(a.person) + ',"roster":' + goString(a.roster) +
+    ',"address":' + goString(a.address) + ',"fingerprint":' + goString(a.fingerprint) + '},"ts":' + goInt(e.ts, "time");
+  if (e.host) s += ',"host":{"person":' + goString(e.host.person) + ',"address":' + goString(e.host.address) + ',"fingerprint":' + goString(e.host.fingerprint) + "}";
+  if (e.grant && e.grant.length) s += ',"grant":[' + e.grant.map((g) => '{"lid":' + goString(g.lid) + ',"fingerprint":' + goString(g.fingerprint) + "}").join(",") + "]";
+  if (e.audience) s += ',"audience":' + goString(e.audience);
+  if (e.task_keys && e.task_keys.length) s += ',"task_keys":' + goStrings(e.task_keys);
+  if (e.note) s += ',"note":' + goString(e.note);
+  return s + sigJSON(e, withSig) + "}";
+}
+export const eventJSON = (e) => marshalEvent(e, true);
+const eventCanonical = (e) => utf8.encode(participationDomain + marshalEvent(e, false));
+export const eventHash = (e) => hashOf(eventCanonical(e));
+
+function uniqueList(items, max, valid, what) {
+  if (items.length > max) throw new Error("participation: " + what + ": more than " + max);
+  const seen = new Set();
+  for (const s of items) {
+    if (!valid(s) || seen.has(s)) throw new Error("participation: " + what + ": invalid or repeated " + s);
+    seen.add(s);
+  }
+}
+
+// validateEvent is ParticipationEvent.Validate. grant and task_keys are
+// null when absent, which matters: an accept, decline or dismiss may not
+// carry them even empty.
+export function validateEvent(e) {
+  if (e.v !== 1 || !validHash(e.conv) || !validID(e.pid) || !(e.ts > 0)) throw new Error("participation: invalid event");
+  const a = e.author;
+  if (!validID(a.person) || !validHash(a.roster) || !validFingerprint(a.fingerprint)) throw new Error("participation: invalid author");
+  if (!validAddress(a.address)) throw new Error("participation: invalid address " + a.address);
+  if (!eventTypes.has(e.type)) throw new Error("participation: unknown event type " + e.type);
+  if (e.type === "invite") {
+    if (e.prev !== "" || !e.host || e.audience !== "conversation") {
+      throw new Error("participation: an invite has no prev, and names a host and the conversation audience");
+    }
+    if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint)) throw new Error("participation: invalid host");
+    if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
+    for (const g of e.grant || []) if (!validID(g.lid) || !validFingerprint(g.fingerprint)) throw new Error("participation: grant: invalid message reference");
+    uniqueList((e.grant || []).map((g) => g.lid + "/" + g.fingerprint), MaxGrant, () => true, "grant");
+    uniqueList(e.task_keys || [], MaxTaskKeys, validFingerprint, "task keys");
+    if (!wellFormed(e.note) || utf8.encode(e.note).length > MaxInviteNote) throw new Error("participation: note too long or not text");
+    if (!noteText.test(e.note)) throw new Error("participation: note has a control character");
+    return;
+  }
+  if (!validHash(e.prev) || e.host || e.grant !== null || e.audience !== "" || e.task_keys !== null || e.note !== "") {
+    throw new Error("participation: an accept, decline or dismiss names only the event it follows");
+  }
+}
+
+// signEvent signs an event this device's person authors (an invite or a
+// dismissal): fields as the Go struct, author this device.
+export async function signEvent(keys, fields) {
+  const e = { v: 1, prev: "", audience: "", note: "", host: null, grant: null, task_keys: null, ...fields };
+  validateEvent(e);
+  e.sig = await signBytes(keys, eventCanonical(e));
+  fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
+  return e;
+}
+
+export function parseEvent(json) {
+  const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", sig: "string" });
+  const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string" });
+  const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string" }) : null;
+  if ((f.task_keys || []).some((k) => typeof k !== "string")) throw new Error("participation: task keys must be strings");
+  const e = { v: f.v || 0, conv: f.conv || "", pid: f.pid || "", type: f.type || "", prev: f.prev || "", ts: f.ts || 0,
+    author: { person: a.person || "", roster: a.roster || "", address: a.address || "", fingerprint: a.fingerprint || "" },
+    host: h ? { person: h.person || "", address: h.address || "", fingerprint: h.fingerprint || "" } : null,
+    grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
+      return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
+    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", sig: f.sig ? unb64(f.sig, "event signature") : null };
+  validateEvent(e);
+  fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
+  return e;
+}
+
+export async function verifyEvent(e, authorKey) {
+  validateEvent(e);
+  if (!(await verifyBytes(authorKey, eventCanonical(e), e.sig))) throw new Error("participation: signature invalid");
+}
