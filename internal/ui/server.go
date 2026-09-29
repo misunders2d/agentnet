@@ -10,9 +10,12 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -20,6 +23,7 @@ import (
 const (
 	cookieName = "agentnet_ui"
 	maxBody    = 64 << 10
+	maxUpload  = 101 << 20 // a file's bytes (the client refuses beyond its MaxFileSize)
 )
 
 // Server serves the page and its API for one Provider.
@@ -64,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
+	mux.HandleFunc("POST /api/upload", s.upload)
+	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
 	mux.HandleFunc("GET /events", s.events)
@@ -78,7 +84,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "+
-			"img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+			"img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
@@ -102,11 +108,16 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				http.Error(w, "cross-site request refused", http.StatusForbidden)
 				return
 			}
-			if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			limit := int64(maxBody)
+			switch {
+			case r.URL.Path == "/api/upload" && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet
+				limit = maxUpload
+			case mt != "application/json":
 				http.Error(w, "JSON only", http.StatusUnsupportedMediaType)
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -263,6 +274,49 @@ func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
 		err = NotFound("no such alert control")
 	}
 	writeResult(w, map[string]string{"note": note}, err)
+}
+
+// upload keeps the bytes of one file the page will send, privately, and
+// answers the id the send names. The name is the person's file name, shown
+// to the recipient (checked again when sent).
+func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Files)
+	if !ok {
+		writeErr(w, NotFound("files are not available here"))
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" || len(name) > 255 || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+		writeErr(w, Refuse("A file needs a name of at most 255 bytes, without control characters."))
+		return
+	}
+	id, err := p.StageFile(name, r.Body)
+	writeResult(w, map[string]string{"id": id}, err)
+}
+
+// file serves a received file, checked and decrypted, only as a download:
+// never a type the browser would run or render as a page.
+func (s *Server) file(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Files)
+	if !ok {
+		writeErr(w, NotFound("files are not available here"))
+		return
+	}
+	i, err := strconv.Atoi(r.PathValue("i"))
+	if err != nil || i < 0 {
+		writeErr(w, NotFound("no such file"))
+		return
+	}
+	rc, name, err := p.OpenFile(r.Context(), r.PathValue("id"), i)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rc.Close()
+	h := w.Header()
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	io.Copy(w, rc)
 }
 
 // remind sets (or moves) a reminder, or marks it done or cancels it.

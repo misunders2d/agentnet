@@ -18,6 +18,7 @@ type Live struct {
 	a *client.Agent
 	// timeout bounds each network request an action makes.
 	timeout time.Duration
+	staged  staged // files the page handed over, not sent yet
 }
 
 // NewLive returns the Provider for agent a. It is meant to run inside the
@@ -45,6 +46,7 @@ func (l *Live) Overview() (Overview, error) {
 	if rs, err := l.reminders(); err == nil {
 		o.Reminders, o.Remind = rs, true
 	}
+	o.Files = l.fileLimits()
 	if err := l.dmOverview(&o); err != nil {
 		return o, err
 	}

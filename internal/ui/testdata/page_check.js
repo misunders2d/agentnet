@@ -110,6 +110,8 @@ let down = false;
 let refreshReply = { text: "Connection unknown" }; // the one check made when a thread opens
 const dmThreads = {}; // DMs by id, for /api/dm
 const resolvable = {}; // notification channels this device resolves, for /api/notify/resolve
+let uploads = 0, uploadFails = false; // files handed to /api/upload
+const served = {}; // received files' bytes, by /api/files path
 const calls = [];
 const hold = {};
 const held = {};
@@ -117,7 +119,8 @@ function release(p) { const r = held[p].shift(); r(); }
 function fetch(url, opts) {
   if (down) return Promise.reject(new TypeError("Failed to fetch"));
   const u = new URL(url, "http://127.0.0.1");
-  const body = opts && opts.body ? JSON.parse(opts.body) : undefined;
+  const raw = opts && opts.headers && opts.headers["Content-Type"] === "application/octet-stream";
+  const body = opts && opts.body ? (raw ? { bytes: opts.body.size } : JSON.parse(opts.body)) : undefined;
   calls.push({ path: u.pathname, body });
   let data = {};
   if (u.pathname === "/api/thread") data = threads[u.searchParams.get("id")];
@@ -129,6 +132,13 @@ function fetch(url, opts) {
   else if (u.pathname === "/api/dm/new") data = { id: "d3" };
   else if (u.pathname.startsWith("/api/dm/agent/")) data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
   else if (u.pathname === "/api/notify/resolve") data = { conv: resolvable[u.searchParams.get("chan")] || "" };
+  else if (u.pathname === "/api/upload") {
+    if (uploadFails) return Promise.resolve({ ok: false, text: async () => "no space left for this file", statusText: "" });
+    data = { id: "up-" + (++uploads) };
+  } else if (u.pathname.startsWith("/api/files/")) {
+    const bytes = served[u.pathname] || new Uint8Array([1, 2, 3]);
+    return Promise.resolve({ ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) });
+  }
   else if (u.pathname.startsWith("/api/notify/")) data = { note: "" };
   else if (u.pathname === "/api/person") data = { person: { person: "p-me", label: body.label, address: "me/laptop", state: "self" }, note: "Your person is set up." };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
@@ -159,7 +169,7 @@ document.visibilityState = "visible";
 document.hasFocus = () => focused;
 let focused = true;
 const ctx = vm.createContext({
-  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage, Notification,
+  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage, Notification, Blob,
   window: { innerHeight: 800, matchMedia: () => ({ matches: false }), addEventListener() {} },
   localStorage: { getItem: () => null, setItem() {} },
   location: { reload() { reloads++; } },
@@ -691,7 +701,6 @@ const ev = { preventDefault() {} };
   check(!calls.some((c) => c.path === "/api/dm/agent/dismiss"), "dismissing waits for its button");
   await $("dialog-ok").onclick();
   check(calls.some((c) => c.path === "/api/dm/agent/dismiss" && c.body.pid === "pid2"), "either person can dismiss");
-
   // A person is linked to the agents their device runs, in Classic and Zoom.
   overview.people = [Object.assign({}, alice, { agents: [{ address: "alice/desk", dms: [{ conv: "d4", pid: "pid2", state: "active" }] }] })];
   await run("loadOverview()");
@@ -792,6 +801,76 @@ const ev = { preventDefault() {} };
   check(run("state.dm") === "d2", "a DM not here opens nothing else");
   delete overview.notify;
 
+  // Files (MEL-489): chosen, pasted or dropped into the open DM's draft;
+  // nothing leaves before Send; limits said before sending; a failed send
+  // keeps them; each DM keeps its own; received ones open only on request,
+  // pictures (by their bytes) in place, anything else as a download.
+  overview.files = { max_file: 1000, max_count: 2 };
+  await run("loadOverview()");
+  await run('openDM("d2")');
+  check($("attach").hidden === false, "a DM offers to attach files");
+  const fileOf = (name, size, type) => new File([new Uint8Array(size)], name, { type });
+  calls.length = 0;
+  run("addFiles")([fileOf("plan.pdf", 300, "application/pdf"), fileOf("image.png", 200, "image/png")], true);
+  let pend = JSON.stringify($("attach-list").children.map(textOf));
+  check(!$("attach-list").hidden && pend.includes("plan.pdf") && /pasted-image-\d{8}-\d{6}\.png/.test(pend) && pend.includes("300 B"),
+    "files wait with their names and sizes; a pasted picture gets a name: " + pend);
+  check(!calls.some((c) => c.path === "/api/upload" || c.path === "/api/dm/send"), "nothing leaves before Send");
+  run("addFiles")([fileOf("third.txt", 10, "text/plain")]);
+  check($("compose-error").textContent.includes("at most 2 files"), "too many files are said before sending: " + $("compose-error").textContent);
+  run("removeFile")(run("state.files")[2].key);
+  check(run("state.files").length === 2 && $("compose-error").textContent === "", "removing clears the complaint");
+  check(run("overLimit")([fileOf("huge.bin", 5000, "")]).includes("larger than"), "a file over the limit is said");
+  // Another DM starts empty, and this one keeps its files.
+  await run('openDM("d1")');
+  check(run("state.files").length === 0 && $("attach-list").hidden, "another DM has its own (empty) files");
+  await run('openDM("d2")');
+  check(run("state.files").length === 2, "coming back, the DM still has its files");
+  // A failed hand-over keeps text and files; a good one sends them by id.
+  uploadFails = true;
+  $("body").value = "";
+  calls.length = 0;
+  await run("send")(ev);
+  check(run("state.files").length === 2 && $("compose-error").textContent.includes("no space") && $("compose-error").textContent.includes("still here") &&
+    !calls.some((c) => c.path === "/api/dm/send"), "a failed hand-over sends nothing and keeps the files: " + $("compose-error").textContent);
+  uploadFails = false;
+  calls.length = 0;
+  await run("send")(ev);
+  const withFiles = calls.find((c) => c.path === "/api/dm/send");
+  check(withFiles && withFiles.body.body === "" && JSON.stringify(withFiles.body.files) === JSON.stringify(["up-" + (uploads - 1), "up-" + uploads]) &&
+    calls.filter((c) => c.path === "/api/upload").length === 2, "a file-only message names the handed-over files: " + JSON.stringify(withFiles && withFiles.body));
+  check(run("state.files").length === 0 && $("attach-list").hidden, "sent files leave the composer");
+  // Asking an agent takes no files.
+  dmThreads.d2.agents = [agentV("pidF", { state: "active", host: alice, host_here: false, inviter: me, can_ask: true })];
+  await run('openDM("d2")');
+  run("setDMAgent")(dmThreads.d2.agents[0]);
+  check($("attach").hidden === true, "asking an agent takes no files");
+  run("setDMAgent")(null);
+  dmThreads.d2.agents = [];
+  // Received files: a picture shown in place, anything else saved; sent ones not reopened.
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0]);
+  served["/api/files/m3/0"] = png;
+  served["/api/files/m3/1"] = new TextEncoder().encode("<svg onload=alert(1)>");
+  const m3f = dmThreads.d2.messages.find((x) => x.id === "m3");
+  m3f.attachments = [{ index: 0, name: "photo.png", size: 10 }, { index: 1, name: "logo.svg", size: 21 }];
+  dmThreads.d2.messages.find((x) => x.id === "m2").attachments = [{ index: 0, name: "mine.txt", size: 5 }];
+  await run('openDM("d2")');
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("photo.png") && tl.includes("logo.svg") && tl.includes("mine.txt") && (tl.match(/Open/g) || []).length === 2,
+    "received files offer Open; sent ones only their names: " + tl);
+  const slot0 = document.createElement("span"), btn0 = document.createElement("button");
+  await run("openFile")("m3", 0, "photo.png", btn0, slot0);
+  check(slot0.children.some((c) => c.tagName === "img" && String(c.attrs.src).startsWith("blob:")), "a PNG, by its bytes, is shown in place from a blob: URL");
+  const slot1 = document.createElement("span"), btn1 = document.createElement("button");
+  await run("openFile")("m3", 1, "logo.svg", btn1, slot1);
+  check(!slot1.children.some((c) => c.tagName === "img"), "an SVG is never shown as a picture: it is saved");
+  check(run("state.opened").length === 2, "opened files are tracked to be freed");
+  await run('openDM("d1")');
+  check(run("state.opened").length === 0, "leaving the conversation frees them");
+  delete m3f.attachments;
+  delete dmThreads.d2.messages.find((x) => x.id === "m2").attachments;
+  delete overview.files;
+
   // Reminders ("remind me later", the daemon's page): on received messages
   // only; a few times or one chosen, only in the future; listed with the
   // overdue first; done and cancel by the message's id.
@@ -870,6 +949,25 @@ const ev = { preventDefault() {} };
   check(comic.includes("DM · Alice via alice/desk") && comic.includes("1 held for you"), "the DM's cover names the person and the device: " + comic.slice(0, 300));
   await run('openDM("d3")');
   check(JSON.stringify($("comic").children.map(textOf)).includes("no messages yet"), "an empty DM has a cover, not an error");
+  // A DM's files in Comic: props on the panel, Open in the full read.
+  overview.files = { max_file: 1000, max_count: 2 };
+  await run("loadOverview()");
+  const m3c = dmThreads.d2.messages.find((x) => x.id === "m3");
+  m3c.attachments = [{ index: 0, name: "photo.png", size: 10 }];
+  await run('openDM("d2")');
+  run("Comic.turn(1)");
+  comic = JSON.stringify($("comic").children.map(textOf));
+  check(comic.includes("📎 photo.png"), "a comic panel shows the message's files: " + comic.slice(0, 300));
+  const readBtn = $("comic").children.map((c) => c.querySelector && c.querySelector("button.read-btn")).find(Boolean);
+  const panels = [];
+  const collect = (n) => { if (n && n.children) { if (n.tagName === "article" && String(n.attrs.id || "").startsWith("p-")) panels.push(n); n.children.forEach(collect); } };
+  $("comic").children.forEach(collect);
+  const m3panel = panels.find((n) => n.attrs.id === "p-m3");
+  check(!!readBtn && !!m3panel, "the comic page has a panel for the message with files");
+  m3panel.querySelector("button.read-btn").click();
+  const readBody = JSON.stringify($("dialog-body").children.map(textOf));
+  check($("dialog").open && readBody.includes("photo.png") && readBody.includes("Open"), "the full read offers to open a received file: " + readBody.slice(0, 300));
+  $("dialog").close();
 
   // Zoom: people apart from devices, then a person's DMs, then one DM.
   run('setLens("zoom")');
@@ -888,6 +986,40 @@ const ev = { preventDefault() {} };
   await $("dialog-ok").onclick();
   const zs = calls.filter((c) => c.path === "/api/dm/send");
   check(zs.length === 1 && zs[0].body.conv === "d2" && zs[0].body.body === "from zoom" && sends().length === 0, "writing in Zoom goes to that DM only");
+  // Files in Zoom: named in the DM's chat, openable in the message, and the
+  // write dialog takes this DM's draft files (the composer's own), no other's.
+  zoom = JSON.stringify($("zoom").children.map(textOf));
+  check(zoom.includes("📎 photo.png"), "Zoom's DM chat names a message's files: " + zoom.slice(0, 300));
+  await run('Zoom.go(3, { msg: "m3" })');
+  zoom = JSON.stringify($("zoom").children.map(textOf));
+  check(zoom.includes("photo.png") && zoom.includes("Open"), "Zoom's message offers to open its file: " + zoom.slice(0, 300));
+  await run('Zoom.go(2, { dm: "d3" })');
+  run("addFiles")([fileOf("other.txt", 7, "text/plain")]);
+  await run('Zoom.go(2, { dm: "d2" })');
+  run("addFiles")([fileOf("notes.txt", 5, "text/plain")]);
+  run("dmWriteDialog(state.dmData)");
+  let wd = JSON.stringify($("dialog-body").children.map(textOf));
+  check(wd.includes("notes.txt") && !wd.includes("other.txt") && wd.includes("Add files"), "the Zoom dialog holds this DM's files only: " + wd.slice(0, 300));
+  run("pushFiles")([fileOf("b.txt", 5, "text/plain"), fileOf("c.txt", 5, "text/plain")]);
+  run("dmWriteDialog(state.dmData)");
+  byId["write-body"].value = "";
+  calls.length = 0;
+  await $("dialog-ok").onclick();
+  check($("dialog").open && $("dialog-error").textContent.includes("at most 2 files") && !calls.some((c) => c.path === "/api/upload"),
+    "too many files are refused in Zoom before anything leaves: " + $("dialog-error").textContent);
+  run("removeFile")(run("state.files")[2].key);
+  run("removeFile")(run("state.files")[1].key);
+  calls.length = 0;
+  await $("dialog-ok").onclick();
+  const zf = calls.find((c) => c.path === "/api/dm/send");
+  check(zf && zf.body.conv === "d2" && zf.body.files.length === 1 && calls.filter((c) => c.path === "/api/upload").length === 1 && run("state.files").length === 0,
+    "a file-only message from Zoom sends this DM's file: " + JSON.stringify(zf && zf.body));
+  await run('Zoom.go(2, { dm: "d3" })');
+  check(run("state.files").length === 1 && run("state.files")[0].name === "other.txt", "the other DM still has its own file");
+  run("removeFile")(run("state.files")[0].key);
+  delete m3c.attachments;
+  delete overview.files;
+  await run("loadOverview()");
   dmThreads.d1.frozen = "Frozen.";
   await run('Zoom.go(2, { dm: "d1" })');
   const zoomWrite = (n) => n instanceof Object && n.children ? (n.tagName === "button" && /Nothing more can be sent/.test(textOf(n)) ? n : n.children.map(zoomWrite).find(Boolean)) : null;

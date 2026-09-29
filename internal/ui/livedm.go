@@ -194,7 +194,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, m := range msgs {
 			dm := DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, c.Peer.Address, m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID}
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments)}
 			if m.Target != nil {
 				dm.To = m.Target.Address
 			}
@@ -226,12 +226,17 @@ func (l *Live) DM(id string) (DMThread, error) {
 // older format and never a question or task.
 func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" {
-		return Sent{}, Refuse("Write a message first.")
+	if body == "" && len(d.Files) == 0 {
+		return Sent{}, Refuse("Write a message or add a file first.")
 	}
+	files, cleanup, err := l.takeStaged(d.Files)
+	if err != nil {
+		return Sent{}, err
+	}
+	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI})
+	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI, Files: files})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}

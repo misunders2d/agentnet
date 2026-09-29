@@ -1,0 +1,115 @@
+package ui
+
+import (
+	"context"
+	"errors"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
+)
+
+// Files in DMs on the daemon's page (MEL-489), through the client only. The
+// page hands this computer's AgentNet the bytes of a chosen or pasted file
+// (kept privately under the home until sent), then sends the message
+// naming them; SendConv encrypts each to the recipient before it returns,
+// and the staged copy is removed. A received file is opened only after the
+// client checked it against what its sender signed.
+
+// staged are files the page handed over and not sent yet, by id.
+type staged struct {
+	mu    sync.Mutex
+	files map[string]stagedFile
+}
+
+type stagedFile struct {
+	name, path string
+	cleanup    func()
+	at         time.Time
+}
+
+// maxStaged bounds the files waiting to be sent; older ones than stagedFor
+// are dropped when another comes (a page closed before sending).
+const (
+	maxStaged = 32
+	stagedFor = time.Hour
+)
+
+func (l *Live) fileLimits() *FileLimits {
+	return &FileLimits{MaxFile: client.MaxFileSize, MaxCount: envelope.MaxAttachments}
+}
+
+// StageFile implements Files.
+func (l *Live) StageFile(name string, r io.Reader) (string, error) {
+	l.staged.mu.Lock()
+	defer l.staged.mu.Unlock()
+	if l.staged.files == nil {
+		l.staged.files = map[string]stagedFile{}
+	}
+	for id, f := range l.staged.files {
+		if time.Since(f.at) > stagedFor {
+			f.cleanup()
+			delete(l.staged.files, id)
+		}
+	}
+	if len(l.staged.files) >= maxStaged {
+		return "", Refuse("Too many files are waiting to be sent: send or remove some first.")
+	}
+	path, cleanup, err := l.a.StageUpload(name, r)
+	if err != nil {
+		return "", Refuse(sentence(err))
+	}
+	id := protocol.NewID()
+	l.staged.files[id] = stagedFile{name: name, path: path, cleanup: cleanup, at: time.Now()}
+	return id, nil
+}
+
+// takeStaged hands over the staged files ids name, and the cleanup that
+// removes them (whatever the send did).
+func (l *Live) takeStaged(ids []string) ([]client.OutgoingFile, func(), error) {
+	l.staged.mu.Lock()
+	defer l.staged.mu.Unlock()
+	var out []client.OutgoingFile
+	var cleanups []func()
+	for _, id := range ids {
+		f, ok := l.staged.files[id]
+		if !ok {
+			return nil, nil, Refuse("A file to send is no longer here: add it again.")
+		}
+		out = append(out, client.OutgoingFile{Name: f.name, Path: f.path})
+		cleanups = append(cleanups, f.cleanup)
+	}
+	for _, id := range ids {
+		delete(l.staged.files, id)
+	}
+	return out, func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}, nil
+}
+
+// OpenFile implements Files: the received file, checked and decrypted, and
+// its name made safe.
+func (l *Live) OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error) {
+	r, f, err := l.a.OpenAttachment(ctx, msgID, index)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, "", err
+		}
+		return nil, "", Refuse(sentence(err))
+	}
+	return r, client.SafeName(f.Name), nil
+}
+
+// fileViews are a message's files for the page.
+func fileViews(files []client.FileInfo) []FileView {
+	var out []FileView
+	for i, f := range files {
+		out = append(out, FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath})
+	}
+	return out
+}

@@ -289,3 +289,69 @@ func TestRemindersAbsentWithoutProvider(t *testing.T) {
 		t.Fatalf("the overview offers reminders it does not have: %v", o["remind"])
 	}
 }
+
+// filesFixture is the demo provider with files: what the handlers do with
+// uploads and downloads, without a daemon.
+type filesFixture struct {
+	*Fixture
+	staged map[string][]byte
+}
+
+func (f *filesFixture) StageFile(name string, r io.Reader) (string, error) {
+	b, _ := io.ReadAll(r)
+	f.staged[name] = b
+	return "up-1", nil
+}
+
+func (f *filesFixture) OpenFile(ctx context.Context, id string, i int) (io.ReadCloser, string, error) {
+	if id != "m1" || i != 0 {
+		return nil, "", Refuse("received message has no such file")
+	}
+	return io.NopCloser(strings.NewReader("<html><script>alert(1)</script>")), `evil "name".html`, nil
+}
+
+// Files cross the page's guard only as bytes to /api/upload (with a
+// name), and come back only as downloads: octet-stream, attachment,
+// nosniff; pictures shown from blob: URLs are allowed by the CSP.
+func TestFileRoutes(t *testing.T) {
+	f := &filesFixture{Fixture: NewFixture(func() time.Time { return time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC) }), staged: map[string][]byte{}}
+	var s *Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
+	t.Cleanup(ts.Close)
+	s = New(f, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	raw := authed(ts, map[string]string{"Origin": ts.URL, "Content-Type": "application/octet-stream", "Sec-Fetch-Site": "same-origin"})
+	if r := do(t, ts, "POST", "/api/upload?name=a.png", "\x89PNG", raw); r.StatusCode != 200 || string(f.staged["a.png"]) != "\x89PNG" {
+		t.Fatalf("upload: %d %v", r.StatusCode, f.staged)
+	}
+	for name, c := range map[string]struct {
+		path string
+		hdr  map[string]string
+		want int
+	}{
+		"bytes to another route":   {"/api/dm/send", raw, http.StatusUnsupportedMediaType},
+		"an upload without name":   {"/api/upload", raw, http.StatusConflict},
+		"a control in the name":    {"/api/upload?name=a%0Ab", raw, http.StatusConflict},
+		"an upload cross-site":     {"/api/upload?name=a", authed(ts, map[string]string{"Origin": "http://evil.example", "Content-Type": "application/octet-stream"}), http.StatusForbidden},
+		"an upload with no cookie": {"/api/upload?name=a", map[string]string{"Origin": ts.URL, "Content-Type": "application/octet-stream"}, http.StatusUnauthorized},
+	} {
+		if r := do(t, ts, "POST", c.path, "x", c.hdr); r.StatusCode != c.want {
+			t.Errorf("%s: %d, want %d", name, r.StatusCode, c.want)
+		}
+	}
+	r := do(t, ts, "GET", "/api/files/m1/0", "", authed(ts, nil))
+	body, _ := io.ReadAll(r.Body)
+	h := r.Header
+	if r.StatusCode != 200 || h.Get("Content-Type") != "application/octet-stream" || h.Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.HasPrefix(h.Get("Content-Disposition"), "attachment;") || !strings.Contains(h.Get("Content-Security-Policy"), "img-src 'self' blob:") ||
+		!strings.Contains(string(body), "<html>") {
+		t.Fatalf("download: %d %v %q", r.StatusCode, h, body)
+	}
+	if r := do(t, ts, "GET", "/api/files/m1/9", "", authed(ts, nil)); r.StatusCode == 200 {
+		t.Fatal("a file that is not there was served")
+	}
+	var o map[string]any
+	json.NewDecoder(do(t, ts, "GET", "/api/overview", "", authed(ts, nil)).Body).Decode(&o)
+	if _, ok := o["files"]; ok {
+		t.Fatal("the demo overview offers files")
+	}
+}

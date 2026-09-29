@@ -82,8 +82,11 @@ async function handle(req) {
   case "stopStream": // no events come: the next change is seen only by asking
     engine.stop();
     return {};
-  case "outbox":
-    return { rec: (await store.get("outbox", req.id)) || null };
+  case "outbox": { // a kept message; a file's ciphertext as its length
+    const rec = (await store.get("outbox", req.id)) || null;
+    if (rec && rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: f.ct ? f.ct.length : null }));
+    return { rec };
+  }
   case "reload": { // the page is reloaded: a new engine over the same stored data
     engine.stop();
     engine = new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush });
@@ -107,6 +110,16 @@ async function handle(req) {
   }
   case "channel":
     return { chan: await wire.notifyChannel(req.conv, req.fp || engine.fp) };
+  case "sendFiles": { // a DM message with files, as the page gives File objects
+    const files = req.files.map((f) => { const bytes = new Uint8Array(Buffer.from(f.b64, "base64")); return { name: f.name, size: bytes.length, bytes }; });
+    return { v: await engine.api("/api/dm/send", { conv: req.conv, body: req.body || "", files }) };
+  }
+  case "convRoot":
+    return { root: (await store.get("convs", req.conv)).root };
+  case "openFile": {
+    const f = await engine.api("/api/file?id=" + req.id + "&i=" + req.i);
+    return { name: f.name, size: f.size, image: f.image, b64: Buffer.from(f.bytes).toString("base64") };
+  }
   case "notifyPrefs": // what the relay holds for this device
     return await engine.call("GET", "/v1/notify/prefs");
   case "inboxRec":

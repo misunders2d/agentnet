@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -534,5 +536,97 @@ func TestLiveReminders(t *testing.T) {
 	eventually("the reply ends the reminder", func() bool { o, _ = pb.Overview(); return len(o.Reminders) == 0 })
 	if r, ok, _ := bob.Reminder(q.ID); !ok || r.State != client.ReminderReplied {
 		t.Fatalf("after the reply: %+v %v", r, ok)
+	}
+}
+
+// Files in DMs from the daemon's page (MEL-489), through the client: the
+// page hands bytes over (kept privately until sent), sends a file-only
+// message naming them; the other page lists the file under a safe name and
+// opens it only as the sender signed it; sent files and unknown ids are
+// refused.
+func TestLiveFiles(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
+	bob, err := client.Join(ctx, filepath.Join(t.TempDir(), "bob"), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bob.Close() })
+	runDaemon(t, alice)
+	runDaemon(t, bob)
+	pa, pb := NewLive(alice), NewLive(bob)
+	pa.CreatePerson("Alice")
+	pb.CreatePerson("Bob")
+	eventually := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	var conv string
+	eventually("bob's DM with alice", func() bool { conv, err = pb.NewDM(alice.Address); return err == nil })
+	if o, _ := pb.Overview(); o.Files == nil || o.Files.MaxCount != 8 || o.Files.MaxFile != client.MaxFileSize {
+		t.Fatalf("limits: %+v", o.Files)
+	}
+	content := []byte("quarterly numbers\n")
+	id, err := pb.StageFile("../numbers.csv", bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{"nope"}}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("an unknown file: %v", err)
+	}
+	if _, err := pb.SendDM(DMDraft{Conv: conv}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("nothing to send: %v", err)
+	}
+	sent, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pb.staged.files) != 0 {
+		t.Fatalf("a sent file is still staged: %v", pb.staged.files)
+	}
+	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a file sent twice: %v", err)
+	}
+	var got DMMessage
+	eventually("the file at alice", func() bool {
+		d, err := pa.DM(conv)
+		if err == nil && len(d.Messages) == 1 {
+			got = d.Messages[0]
+		}
+		return got.ID != ""
+	})
+	if got.ID != sent.ID || got.Body != "" || len(got.Attachments) != 1 || got.Attachments[0].Name != "_numbers.csv" || got.Attachments[0].Size != int64(len(content)) {
+		t.Fatalf("alice's page: %+v", got)
+	}
+	r, name, err := pa.OpenFile(ctx, got.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, _ := io.ReadAll(r)
+	r.Close()
+	if !bytes.Equal(opened, content) || name != "_numbers.csv" {
+		t.Fatalf("opened %q as %q", opened, name)
+	}
+	if _, _, err := pa.OpenFile(ctx, got.ID, 1); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a file that is not there: %v", err)
+	}
+	if _, _, err := pb.OpenFile(ctx, sent.ID, 0); !errors.Is(err, ErrRefused) {
+		t.Fatalf("bob reopening what he sent: %v", err)
+	}
+	if d, _ := pb.DM(conv); len(d.Messages[0].Attachments) != 1 || d.Messages[0].Attachments[0].Name != "_numbers.csv" {
+		t.Fatalf("bob's page lists his sent file: %+v", d.Messages[0])
 	}
 }

@@ -28,7 +28,8 @@ function readDialog(m) {
   const d = m.dm ? dmDetails(m) : details(m);
   d.open = true;
   dialog({ title: (kindTag[m.kind] || "Message") + " · " + authorName(m), ok: "Close", run: async () => {},
-    body: [el("div", { class: "quote" }, m.body), m.summary && el("p", { class: "hint" }, "Your responder's summary: " + m.summary), d] });
+    body: [el("div", { class: "quote" }, m.body), fileChips(m, m.attachments || m.files),
+      m.summary && el("p", { class: "hint" }, "Your responder's summary: " + m.summary), d] });
 }
 
 // Writing without the composer (Zoom): an answer to m, or a new message in
@@ -52,17 +53,32 @@ function writeDialog(t, m) {
   state.dialogRestore = { type: "write", msg: m ? m.id : null };
 }
 
-// dmWriteDialog writes a message in DM d without the composer (Zoom).
+// dmWriteDialog writes a message in DM d without the composer (Zoom). Its
+// files are this DM's draft files, the same the composer shows.
 function dmWriteDialog(d) {
   const body = el("textarea", { id: "write-body", rows: "4" });
+  const canFiles = !!fileLimits() && !d.frozen;
+  const list = el("ul", { class: "attach-list", "aria-label": "Files to send" });
+  const input = el("input", { type: "file", id: "write-files", multiple: true, hidden: true });
+  const note = el("p", { class: "error", role: "alert" });
+  const show = () => { pendingChips(list, show); note.textContent = state.files.length ? overLimit(state.files) : ""; renderPending(); };
+  const add = (files, pasted) => { pushFiles(files, pasted); show(); };
+  input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
+  if (canFiles) body.addEventListener("paste", (e) => { const files = pastedFiles(e); if (files.length) add(files, true); });
+  show();
   dialog({
     title: "Write to " + d.peer.label,
     body: [el("label", { for: "write-body", class: "field-label" }, "Message"), body,
+      canFiles && [el("button", { type: "button", class: "btn write-attach", onclick: () => input.click() }, "Add files or pictures…"), input, list, note],
       el("p", { class: "hint" }, "It goes to this DM only. A DM is for the person; nothing runs it.")],
     ok: "Send", focus: body,
     run: async () => {
-      const r = await api("/api/dm/send", { conv: d.id, body: body.value });
-      announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.") : "Sent.");
+      const files = canFiles ? state.files.slice() : [];
+      if (files.length && overLimit(files)) throw new Error(overLimit(files));
+      const r = await api("/api/dm/send", { conv: d.id, body: body.value, files: await preparedFiles(files) });
+      dropFiles(files);
+      announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
+        : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     },
   });
   state.dialogRestore = { type: "dmwrite" };
@@ -247,7 +263,7 @@ const Comic = {
         el("div", { class: "balloons" },
           el("div", { class: "balloon speech " + (mine ? "mine" : "theirs") },
             el("p", { class: "balloon-text" }, m.body),
-            m.files && m.files.length && el("div", { class: "props" }, m.files.map((f) => el("span", { class: "prop" }, "📎 " + f.name)))),
+            (m.attachments || m.files || []).length > 0 && el("div", { class: "props" }, (m.attachments || m.files).map((f) => el("span", { class: "prop" }, "📎 " + f.name)))),
           m.summary && el("div", { class: "balloon thought mine" },
             el("p", { class: "thought-label" }, "Your responder's summary, only on this computer"),
             el("p", { class: "balloon-text" }, m.summary)))),
@@ -513,7 +529,8 @@ const Zoom = {
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
-          el("span", { class: "mc-text" }, m.body));
+          el("span", { class: "mc-text" }, m.body),
+          (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : d.peer.label || m.from, "sm"), bubble,
           m.state_text && el("p", { class: "narr" }, m.state_text));
@@ -532,6 +549,7 @@ const Zoom = {
       el("div", { class: "meta" }, avatar(m.dir === "out" ? me : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
       el("p", { class: "body" }, m.body),
+      fileChips(m, m.attachments),
       m.state_text && el("p", { class: "hint" }, m.state_text),
       det);
   },

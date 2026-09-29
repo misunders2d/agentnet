@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -523,6 +524,18 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 			t.Fatal("Go accepts an oversized envelope")
 		}
 		w.refuses("too large", open(huge, bob), "too large")
+	})
+
+	t.Run("file names made safe as Go makes them", func(t *testing.T) {
+		names := []string{"notes.txt", "../../evil<script>.png", `C:\Windows\system32\x.dll`, "a\x00b\x1fc\x7fd.txt", " .hidden. ", "...", "",
+			"CON", "con.txt", "Lpt9.tar.gz", "COM10.txt", "ok?*|\".md", "  spaced name .pdf", "naïve café 日本.txt", "emoji 😀.png",
+			strings.Repeat("é", 150) + ".txt", strings.Repeat("a", 199) + "😀", strings.Repeat("x", 300)}
+		got := w.ok(map[string]any{"op": "safeName", "names": names})["names"].([]any)
+		for i, n := range names {
+			if want := client.SafeName(n); got[i] != want {
+				t.Errorf("safeName(%q) = %q, Go says %q", n, got[i], want)
+			}
+		}
 	})
 
 	t.Run("keys after a reload", func(t *testing.T) {

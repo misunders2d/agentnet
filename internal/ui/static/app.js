@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null,
+  files: [], opened: [],
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -96,6 +97,179 @@ async function loadOverview() {
   renderQuarantine(o.quarantine);
   if (state.pendingOpen) retryOpen();
   return o;
+}
+
+// ---- files (MEL-489) ----------------------------------------------------------------------------
+//
+// A person adds files by choosing them, pasting an image or dropping them on
+// the composer. They wait in that conversation's draft, with their name and
+// size (a preview for a raster image), until Send: nothing leaves before.
+// They are encrypted to the recipient before they leave this device (the
+// browser device) or this computer's AgentNet (the daemon's page); the
+// server only ever holds ciphertext. A file received is fetched, checked
+// against what its sender signed and decrypted only when opened; only
+// PNG, JPEG, GIF and WebP, by their bytes, are shown as pictures.
+
+const rasterTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const fileLimits = () => (state.overview && state.overview.files) || null; // {max_file, max_message, max_count}
+let fileSeq = 0;
+
+// filesAllowed: a DM open, sendable, writing to the person (not asking an agent).
+const filesAllowed = () => !!(fileLimits() && state.dm && state.dmData && !state.dmData.frozen && !state.dmAgent);
+
+const fileExt = (name) => ((name.includes(".") ? name.split(".").pop() : "") || "FILE").slice(0, 4).toUpperCase();
+const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+
+// sniffImage is wire.sniffImage: a raster image type from the bytes only.
+function sniffImage(b) {
+  const at = (i, s) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
+  if (b.length >= 8 && b[0] === 0x89 && at(1, "PNG\r\n\x1a\n")) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 6 && (at(0, "GIF87a") || at(0, "GIF89a"))) return "image/gif";
+  if (b.length >= 12 && at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
+  return "";
+}
+
+// overLimit says why these files cannot go in one message ("" if they can).
+function overLimit(files) {
+  const lim = fileLimits();
+  if (!lim) return "Files cannot be sent here.";
+  if (files.length > lim.max_count) return "A message takes at most " + lim.max_count + " files.";
+  const big = files.find((f) => f.size > lim.max_file);
+  if (big) return big.name + " is larger than " + size(lim.max_file) + (state.overview.device ? ", this browser's limit: send it from a computer with AgentNet." : ".");
+  if (lim.max_message && files.reduce((n, f) => n + f.size, 0) > lim.max_message) {
+    return "Together these files are more than " + size(lim.max_message) + ", this browser's limit for one message: send fewer at a time.";
+  }
+  return "";
+}
+
+// pushFiles puts chosen, pasted or dropped files in the open DM's draft (a
+// pasted picture gets a name of its own); addFiles does it from the composer.
+function pushFiles(list, pasted) {
+  for (const f of list) {
+    if (!f.size) continue; // a folder or an empty file
+    const name = pasted && (!f.name || /^image\.(png|jpe?g|gif|webp)$/i.test(f.name))
+      ? "pasted-image-" + stamp() + "." + ((f.type.split("/")[1] || "png").replace("jpeg", "jpg")) : f.name || "file";
+    state.files.push({ key: ++fileSeq, file: f, name, size: f.size, url: rasterTypes.includes(f.type) ? URL.createObjectURL(f) : "" });
+  }
+}
+
+function addFiles(list, pasted) {
+  if (!filesAllowed()) { $("compose-error").textContent = "Files go in a DM with a person."; return; }
+  pushFiles(list, pasted);
+  $("compose-error").textContent = overLimit(state.files);
+  renderPending();
+  syncComposer();
+}
+
+// pastedFiles takes the files a paste carries (a picture alone is not
+// pasted as text too).
+function pastedFiles(e) {
+  const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+  if (files.length && !e.clipboardData.getData("text/plain")) e.preventDefault();
+  return files;
+}
+
+function removeFile(key) {
+  const f = state.files.find((x) => x.key === key);
+  if (f && f.url) URL.revokeObjectURL(f.url);
+  state.files = state.files.filter((x) => x.key !== key);
+  $("compose-error").textContent = state.files.length ? overLimit(state.files) : "";
+  renderPending();
+}
+
+// dropFiles removes the files a send took (others added meanwhile stay).
+function dropFiles(sent) {
+  for (const f of sent) if (f.url) URL.revokeObjectURL(f.url);
+  state.files = state.files.filter((x) => !sent.includes(x));
+  renderPending();
+}
+
+// pendingChips shows the draft's files in ul, each with its remove button.
+function pendingChips(ul, removed) {
+  ul.hidden = !state.files.length;
+  fill(ul, ...state.files.map((f) => el("li", { class: "attach-chip" },
+    f.url ? el("img", { src: f.url, alt: "", class: "attach-thumb" }) : el("span", { class: "file-icon", "aria-hidden": "true" }, fileExt(f.name)),
+    el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name), el("span", { class: "file-size" }, size(f.size))),
+    el("button", { type: "button", class: "icon-btn remove-file", "aria-label": "Remove " + f.name, title: "Remove",
+      onclick: () => { removeFile(f.key); if (removed) removed(); } }, "×"))));
+}
+
+function renderPending() { pendingChips($("attach-list")); }
+
+// preparedFiles hands the files to whatever sends them: the browser
+// device's engine encrypts them itself; this computer's page first gives
+// the bytes to its own AgentNet (never to the server), one at a time.
+async function preparedFiles(files) {
+  if (!files.length) return [];
+  if (window.agentnetEngine) return files.map((f) => ({ name: f.name, size: f.size, arrayBuffer: () => f.file.arrayBuffer() }));
+  const ids = [];
+  for (const [i, f] of files.entries()) {
+    $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
+    const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f.file });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    ids.push((await r.json()).id);
+  }
+  return ids;
+}
+
+// fileChips are a message's files: name and size, and Open for a received one.
+function fileChips(m, files) {
+  if (!files || !files.length) return null;
+  return el("div", { class: "files" }, files.map((f, i) => {
+    const idx = f.index === undefined ? i : f.index;
+    const slot = el("span", { class: "file-open" });
+    return el("span", { class: "file" }, el("span", { class: "file-icon", "aria-hidden": "true" }, fileExt(f.name)),
+      el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name),
+        el("span", { class: "file-size" }, f.saved ? "Saved: " + f.saved : size(f.size))),
+      m.dir === "in" && el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot) }, "Open"), slot);
+  }));
+}
+
+// fetchFile gets a received file checked and decrypted: by the browser
+// device itself, or by this computer's AgentNet.
+async function fetchFile(id, i) {
+  if (window.agentnetEngine) {
+    const f = await api("/api/file?id=" + encodeURIComponent(id) + "&i=" + i);
+    return { bytes: f.bytes, image: f.image };
+  }
+  const r = await fetch("/api/files/" + encodeURIComponent(id) + "/" + i);
+  if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  return { bytes, image: sniffImage(bytes) };
+}
+
+// openFile shows a received picture in place, or saves any other file
+// under its safe name; its object URL lives until the conversation changes.
+async function openFile(id, i, name, button, slot) {
+  button.disabled = true;
+  button.textContent = "Opening…";
+  try {
+    const { bytes, image } = await fetchFile(id, i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: image || "application/octet-stream" }));
+    state.opened.push(url);
+    if (image) {
+      fill(slot, el("img", { src: url, alt: name, class: "file-preview" }), el("a", { href: url, download: name, class: "text-btn" }, "Save"));
+      button.hidden = true;
+    } else {
+      const a = el("a", { href: url, download: name });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      button.textContent = "Open";
+    }
+  } catch (e) {
+    button.textContent = "Open";
+    announce("Could not open " + name + ": " + e.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// releaseOpened frees the pictures and files opened in the conversation left.
+function releaseOpened() {
+  state.opened.forEach((u) => URL.revokeObjectURL(u));
+  state.opened = [];
 }
 
 // ---- reminders ("remind me later") ---------------------------------------------------------
@@ -765,6 +939,9 @@ function beginDM(id) {
   const changed = state.dm !== id;
   if (changed) {
     keepDraft();
+    state.files = [];
+    renderPending();
+    releaseOpened();
     state.thread = null;
     state.data = null;
     state.dmData = null;
@@ -869,7 +1046,8 @@ function dmMsg(m, t, prev) {
       el("div", { class: "bubble", tabindex: "-1" },
         m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + firstLine(parent.body, 90))
           : el("span", { class: "replyref" }, "Reply to a message not shown here")),
-        el("p", { class: "body" }, m.body)),
+        m.body && el("p", { class: "body" }, m.body),
+        fileChips(m, m.attachments)),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
       acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
         m.job_detail && el("p", { class: "hint" }, m.job_detail),
@@ -1055,26 +1233,34 @@ function setDMAgent(a) {
 async function sendDM() {
   const t = state.dmData;
   if (state.sending || !t || t.frozen) return;
-  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent;
+  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = agent ? [] : state.files.slice();
+  if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
   try {
     const r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind: kindValue() === "task" ? "task" : "question", body: text })
-      : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "" });
+      : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: await preparedFiles(files) });
     announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (state.draftKey === key) {
       if ($("body").value === text) { $("body").value = ""; grow(); }
       if (state.dmReply === reply) setDMReply(null);
-    } else if (state.drafts[key] && state.drafts[key].text === text) {
-      delete state.drafts[key];
+      dropFiles(files);
+    } else if (state.drafts[key]) { // that DM's draft keeps only what was not sent
+      const d = state.drafts[key];
+      files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
+      d.files = (d.files || []).filter((x) => !files.includes(x));
+      if (d.text === text) d.text = "";
+      if (d.reply === reply) d.reply = null;
+      if (!d.text && !d.files.length && !d.answering && !d.reply && !d.agent) delete state.drafts[key];
     }
   } catch (e) {
-    if (state.draftKey === key) $("compose-error").textContent = e.message;
+    if (state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
     else announce("Not sent to " + t.peer.label + ": " + e.message + " Your text is kept in that DM.");
   } finally {
     state.sending = false;
+    kindHint();
     syncComposer();
     if (state.newVersion) updated(state.newVersion);
   }
@@ -1222,6 +1408,9 @@ function beginThread(id) {
   const changed = !!state.dm || !state.data || !state.data.messages.some((m) => m.id === id);
   if (changed) {
     keepDraft();
+    state.files = [];
+    renderPending();
+    releaseOpened();
     state.data = null;
     state.draftKey = null;
     $("body").value = "";
@@ -1385,12 +1574,7 @@ function renderMsg(m, byId, prev, t) {
       ? el("button", { type: "button", class: "replyref", onclick: () => flash(parent.id) }, refWord + firstLine(parent.body, 90))
       : el("span", { class: "replyref" }, "Reply to an earlier message not stored here")),
     el("p", { class: "body" }, m.body),
-    m.files && m.files.length && el("div", { class: "files" }, m.files.map((f) => {
-      const ext = (f.name.split(".").pop() || "").slice(0, 4).toUpperCase();
-      return el("span", { class: "file" }, el("span", { class: "file-icon", "aria-hidden": "true" }, ext || "FILE"),
-        el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name),
-          el("span", { class: "file-size" }, f.saved ? "Saved: " + f.saved : size(f.size) + (m.dir === "in" ? " · not saved yet" : ""))));
-    })));
+    fileChips(m, m.files));
 
   const meta = !cont && el("div", { class: "meta" },
     m.dir === "in" ? who(m.from) : el("span", { class: "who" }, m.author.label),
@@ -1647,8 +1831,8 @@ function setAnswering(m) {
 function keepDraft() {
   if (state.draftKey === null) return;
   const text = $("body").value;
-  if (text || state.answering || state.dmReply || state.dmAgent) {
-    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent };
+  if (text || state.answering || state.dmReply || state.dmAgent || state.files.length) {
+    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent, files: state.files };
   }
   else delete state.drafts[state.draftKey];
 }
@@ -1656,6 +1840,8 @@ function keepDraft() {
 function restoreDraft(key, t) {
   const d = state.drafts[key];
   $("body").value = d ? d.text : "";
+  state.files = (d && d.files) || [];
+  renderPending();
   grow();
   setKind(d ? d.kind : "message");
   // Answer only what can still be answered by hand.
@@ -1687,12 +1873,14 @@ function syncComposer() {
       if (l) l.hidden = !!a;
     }
     if (a && kindValue() === "message") setKind("question");
+    $("attach").hidden = !filesAllowed();
     $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation"
       : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + d.peer.label;
     kindHint();
     return;
   }
   $("kind").hidden = false;
+  $("attach").hidden = true; // files go in DMs; a device conversation takes them from the command line (agentnet send --file)
   for (const r of document.querySelectorAll('input[name="kind"]')) { const l = r.closest && r.closest("label"); if (l) l.hidden = false; }
   const t = state.data;
   const blocked = !t || !!t.key.pending;
@@ -1945,6 +2133,20 @@ function start() {
   $("kind").addEventListener("change", kindHint);
   kindHint();
   $("replying-cancel").addEventListener("click", () => { setAnswering(null); setDMReply(null); setDMAgent(null); });
+  // Files: chosen, pasted (an image in the clipboard) or dropped on the composer.
+  $("attach").addEventListener("click", () => $("file-input").click());
+  $("file-input").addEventListener("change", () => { addFiles([...$("file-input").files]); $("file-input").value = ""; });
+  $("body").addEventListener("paste", (e) => {
+    if (!filesAllowed()) return;
+    const files = pastedFiles(e);
+    if (files.length) addFiles(files, true);
+  });
+  $("composer").addEventListener("dragover", (e) => { if (filesAllowed() && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+  $("composer").addEventListener("drop", (e) => {
+    if (!filesAllowed() || !e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    addFiles([...e.dataTransfer.files]);
+  });
   $("review-btn").addEventListener("click", () => toggleReview());
   $("new-btn").addEventListener("click", () => newConversationDialog());
   $("search").addEventListener("input", () => { state.query = $("search").value; rerenderContacts(); });

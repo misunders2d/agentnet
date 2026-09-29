@@ -11,7 +11,9 @@
 package ui
 
 import (
+	"context"
 	"errors"
+	"io"
 	"strings"
 	"time"
 )
@@ -69,7 +71,8 @@ type Overview struct {
 	// Reminders are the pending "remind me later" reminders, soonest
 	// first (Reminders providers only; absent elsewhere).
 	Reminders []ReminderView `json:"reminders,omitempty"`
-	Remind    bool           `json:"remind"` // reminders can be set here
+	Remind    bool           `json:"remind"`          // reminders can be set here
+	Files     *FileLimits    `json:"files,omitempty"` // files can be sent in DMs here (Files providers)
 	Person    *PersonView    `json:"person,omitempty"`
 	People    []PersonView   `json:"people"`
 	DMs       []DMSummary    `json:"dms"`
@@ -153,22 +156,23 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
-	ID        string    `json:"id"`
-	Dir       string    `json:"dir"` // in or out
-	From      string    `json:"from"`
-	Kind      string    `json:"kind"`
-	Body      string    `json:"body"`
-	ReplyTo   string    `json:"reply_to,omitempty"`
-	Origin    string    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
-	State     string    `json:"state"`
-	StateText string    `json:"state_text"`
-	Detail    string    `json:"detail,omitempty"`
-	At        time.Time `json:"at"`
-	Unread    bool      `json:"unread,omitempty"`
-	Replica   bool      `json:"replica,omitempty"`
-	PID       string    `json:"pid,omitempty"`   // the agent participation it is for, from or about
-	To        string    `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
-	Event     string    `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	ID          string     `json:"id"`
+	Dir         string     `json:"dir"` // in or out
+	From        string     `json:"from"`
+	Kind        string     `json:"kind"`
+	Body        string     `json:"body"`
+	ReplyTo     string     `json:"reply_to,omitempty"`
+	Origin      string     `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State       string     `json:"state"`
+	StateText   string     `json:"state_text"`
+	Detail      string     `json:"detail,omitempty"`
+	At          time.Time  `json:"at"`
+	Unread      bool       `json:"unread,omitempty"`
+	Replica     bool       `json:"replica,omitempty"`
+	PID         string     `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Attachments []FileView `json:"attachments,omitempty"`
+	To          string     `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
+	Event       string     `json:"event,omitempty"` // a participation record, said in words (its body is the record)
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`
@@ -192,6 +196,32 @@ func AgentActions(kind, state string) []string {
 		return []string{DoAccept}
 	}
 	return nil
+}
+
+// FileLimits are what one DM message may carry here.
+type FileLimits struct {
+	MaxFile    int64 `json:"max_file"`              // bytes per file
+	MaxMessage int64 `json:"max_message,omitempty"` // bytes per message (the browser device only)
+	MaxCount   int   `json:"max_count"`
+}
+
+// FileView is one file of a message as the page lists it: its name made
+// safe, its size, where it was saved (received files saved from the
+// command line).
+type FileView struct {
+	Index int    `json:"index"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	Saved string `json:"saved,omitempty"`
+}
+
+// Files is implemented by providers that send files in DMs and open
+// received ones (MEL-489). Bytes the page hands over are kept privately
+// until sent; a received file is opened only after it matches what its
+// sender signed.
+type Files interface {
+	StageFile(name string, r io.Reader) (id string, err error)
+	OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error)
 }
 
 // ReminderView is a pending reminder on a received message (S-R): it only
@@ -290,11 +320,13 @@ type AgentView struct {
 }
 
 // DMDraft is a message the person writes in a DM. The page sends messages
-// only: a DM's question or task would run nowhere yet.
+// only: a DM's question or task would run nowhere yet. Files are the ids of
+// files the page handed over (Files.StageFile).
 type DMDraft struct {
-	Conv    string `json:"conv"`
-	Body    string `json:"body"`
-	ReplyTo string `json:"reply_to,omitempty"`
+	Conv    string   `json:"conv"`
+	Body    string   `json:"body"`
+	ReplyTo string   `json:"reply_to,omitempty"`
+	Files   []string `json:"files,omitempty"`
 }
 
 // DMStateText is what the page says about a DM message's state.

@@ -71,6 +71,8 @@ async function handle(req) {
     await wire.verifyCaps(c, wire.unb64(req.key, "key"));
     return { ok: true };
   }
+  case "safeName":
+    return { names: req.names.map((n) => wire.safeName(n)) };
   case "validChannel":
     return { valid: req.list.map((s) => wire.validChannel(s)) };
   case "verifyEnvelope": // an envelope made elsewhere, checked with that sender's signing key

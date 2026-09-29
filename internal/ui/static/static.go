@@ -131,7 +131,7 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 
 // relayCSP lets the page run only its own origin's files and talk only to
 // its own origin.
-const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
+const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // Relay serves the browser page and its files on a relay's origin, for GET

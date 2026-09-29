@@ -832,3 +832,71 @@ export async function verifyEvent(e, authorKey) {
   validateEvent(e);
   if (!(await verifyBytes(authorKey, eventCanonical(e), e.sig))) throw new Error("participation: signature invalid");
 }
+
+// ---- attachments (envelope.Attachment; client files.go) ---------------------------------------
+
+// ChunkSize is protocol.ChunkSize: the largest upload piece.
+export const ChunkSize = 512 << 10;
+
+// The browser device holds a file in memory and in IndexedDB until it is
+// sent, so it takes smaller files than a computer (client.MaxFileSize).
+export const BrowserMaxFile = 25 << 20;
+export const BrowserMaxMessage = 50 << 20;
+
+// encryptFile is spoolFile: bytes encrypted to the recipient as one age
+// file, with the manifest entry (the ciphertext's id, size and digest, the
+// name, the plaintext's size and digest) and the ciphertext itself.
+export async function encryptFile(bytes, name, recipient) {
+  if (!(bytes instanceof Uint8Array)) throw new Error("a file is bytes");
+  const e = new Encrypter();
+  e.addRecipient(recipient.box_recipient);
+  const ct = await e.encrypt(bytes);
+  const attachment = { blob: { id: newID(), size: ct.length, sha256: hex(await sha256(ct)) },
+    name: text(name, "attachment name"), size: bytes.length, sha256: hex(await sha256(bytes)) };
+  return { attachment, ct };
+}
+
+// decryptFile takes a file's ciphertext only if it is exactly what the
+// signed manifest names, decrypts it with this device's key, and returns
+// the plaintext only if it is exactly what the manifest describes.
+export async function decryptFile(ct, att, keys) {
+  if (!(ct instanceof Uint8Array) || ct.length !== att.blob.size || hex(await sha256(ct)) !== att.blob.sha256) {
+    throw new Error("the file is not the one the sender signed");
+  }
+  let pt;
+  try {
+    const d = new Decrypter();
+    d.addIdentity(keys.box);
+    pt = await d.decrypt(ct);
+  } catch (e) {
+    throw new Error("the file could not be decrypted here");
+  }
+  if (pt.length !== att.size || hex(await sha256(pt)) !== att.sha256) throw new Error("the decrypted file is not the one described");
+  return pt;
+}
+
+const windowsReserved = new Set(["CON", "PRN", "AUX", "NUL", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((n) => ["COM" + n, "LPT" + n])]);
+
+// safeName is client.SafeName: a sender-chosen name as a plain file name,
+// with no directory parts, control characters or characters Windows
+// forbids, never empty, "." or "..", at most 200 bytes.
+export function safeName(name) {
+  let s = [...String(name)].map((c) => { const cp = c.codePointAt(0); return cp < 0x20 || cp === 0x7f || '/\\:*?"<>|'.includes(c) ? "_" : c; }).join("");
+  s = s.replace(/^[ .]+|[ .]+$/g, "");
+  if (!s) return "attachment";
+  if (windowsReserved.has(s.split(".")[0].toUpperCase())) s = "_" + s;
+  while (utf8.encode(s).length > 200) s = [...s].slice(0, -1).join("");
+  return s;
+}
+
+// sniffImage names a raster image type from the bytes themselves (never a
+// name or a claimed type): PNG, JPEG, GIF or WebP; "" for anything else,
+// SVG and HTML included, which are never shown as images.
+export function sniffImage(b) {
+  const at = (i, s) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
+  if (b.length >= 8 && b[0] === 0x89 && at(1, "PNG\r\n\x1a\n")) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 6 && (at(0, "GIF87a") || at(0, "GIF89a"))) return "image/gif";
+  if (b.length >= 12 && at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
+  return "";
+}

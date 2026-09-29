@@ -230,6 +230,57 @@ export class Engine {
     return t ? JSON.parse(t) : null;
   }
 
+  // callBytes is call with a raw body (an upload chunk); getBytes fetches
+  // raw bytes (a file's ciphertext).
+  async callBytes(method, path, bytes) {
+    const headers = { "Content-Type": "application/octet-stream", ...(await wire.signRequest(this.keys, this.address, method, path, bytes)) };
+    let r;
+    try {
+      r = await this.fetch(this.base + path, { method, headers, body: bytes, cache: "no-store" });
+    } catch (e) {
+      throw new HubError(0, "", "cannot reach your server");
+    }
+    if (!r.ok) {
+      let j = {};
+      try { j = await r.json(); } catch (e) { /* no JSON body */ }
+      throw new HubError(r.status, j.code || "", j.error || r.statusText || "server error");
+    }
+    const t = await r.text();
+    return t ? JSON.parse(t) : null;
+  }
+
+  async getBytes(path) {
+    const headers = await wire.signRequest(this.keys, this.address, "GET", path, "");
+    let r;
+    try {
+      r = await this.fetch(this.base + path, { method: "GET", headers, cache: "no-store" });
+    } catch (e) {
+      throw new HubError(0, "", "cannot reach your server");
+    }
+    if (!r.ok) throw new HubError(r.status, "", r.status === 404 ? "the file is not on your server (any more)" : r.statusText || "server error");
+    return new Uint8Array(await r.arrayBuffer());
+  }
+
+  // uploadBlob sends one file's ciphertext to the relay for the recipient,
+  // resuming from wherever the relay's copy ends (client upload): every
+  // step is safe to repeat.
+  async uploadBlob(to, blob, ct) {
+    let st = await this.call("POST", "/v1/blobs", { id: blob.id, recipient: to, size: blob.size, sha256: blob.sha256 });
+    let stale = 0;
+    while (st.state !== "stored") {
+      const before = st.received;
+      try {
+        st = st.received < st.size
+          ? await this.callBytes("PUT", "/v1/blobs/" + blob.id + "?offset=" + st.received, ct.subarray(st.received, Math.min(st.size, st.received + wire.ChunkSize)))
+          : await this.call("POST", "/v1/blobs/" + blob.id + "/complete");
+      } catch (e) {
+        if (!(e instanceof HubError && e.status === 409) || ++stale > 3) throw e;
+        st = await this.call("GET", "/v1/blobs/" + blob.id); // our view of the offset was stale
+      }
+      if (st.received > before || st.state === "stored") stale = 0;
+    }
+  }
+
   async features() {
     if (this.featureList) return this.featureList;
     const v = await this.call("GET", "/v1/version", undefined, { signed: false });
@@ -463,22 +514,29 @@ export class Engine {
 
   // sendDM sends a message to the person. Never a question or task for
   // them, never v1.
-  async sendDM({ conv, body, reply_to: replyTo }) {
+  async sendDM({ conv, body, reply_to: replyTo, files = [] }) {
     body = String(body || "").trim();
-    if (!body) throw new Error("Write a message first.");
+    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (files.length > 8) throw new Error("A message takes at most 8 files.");
+    let total = 0;
+    for (const f of files) {
+      total += f.size;
+      if (f.size > wire.BrowserMaxFile) throw new Error(f.name + " is larger than this browser sends (" + (wire.BrowserMaxFile >> 20) + " MiB); send it from a computer with AgentNet.");
+    }
+    if (total > wire.BrowserMaxMessage) throw new Error("These files are more than this browser sends in one message (" + (wire.BrowserMaxMessage >> 20) + " MiB); send fewer at a time.");
     const c = await this.store.get("convs", conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
     if (replyTo) {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.conv !== conv) throw new Error("A reply stays within its conversation.");
     }
-    return this.sendConv(c, { kind: "message", body, reply_to: replyTo || "", origin: "ui" });
+    return this.sendConv(c, { kind: "message", body, reply_to: replyTo || "", origin: "ui", files });
   }
 
   // sendConv stores the sealed envelope before it is sent, and sends that
   // exact envelope on every retry: a message, a participation record (sub
   // "event") or a request to another device's agent (pid and target).
-  async sendConv(c, { kind, body, reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null }) {
+  async sendConv(c, { kind, body, reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null, files = [] }) {
     const { why: stop, peer, pin } = await this.gate(c);
     if (stop) throw new Error(stop);
     let ok = false, why = "", notify = false;
@@ -496,9 +554,19 @@ export class Engine {
     // channel for them, when their device and the relay read the hint.
     const attention = notify && origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
     const chan = attention ? await wire.notifyChannel(c.id, pin.fingerprint) : "";
+    // Each file is encrypted to the recipient here and kept, with the
+    // message, until the relay has both: the server never sees its bytes.
+    const recipient = await this.pubOf(pin);
+    const sealed = [];
+    for (const f of files) {
+      const bytes = f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer());
+      sealed.push({ ...(await wire.encryptFile(bytes, wire.safeName(f.name), recipient)), uploaded: false });
+    }
     const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind,
-      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan }, this.keys, await this.pubOf(pin));
+      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, attachments: sealed.map((f) => f.attachment) },
+    this.keys, recipient);
     const rec = { id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, at, to: peer.address, envelope,
+      attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined,
       state: ok ? "queued" : "waiting", detail: why };
     await put(this.store, "outbox", id, rec);
     this.changed();
@@ -508,15 +576,26 @@ export class Engine {
 
   async post(rec) {
     try {
+      // The files first, each resumable; the message names them only once
+      // the relay holds them.
+      for (const f of rec.files || []) {
+        if (f.uploaded) continue;
+        await this.uploadBlob(rec.to, f.attachment.blob, f.ct);
+        f.uploaded = true;
+        await put(this.store, "outbox", rec.id, rec);
+      }
       const r = await this.call("POST", "/v1/messages", rec.envelope);
       rec.state = (r && r.state) || "custody";
       rec.detail = "";
+      // The relay has everything: the ciphertext kept here is not needed.
+      if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (retryable(e)) {
         rec.detail = e.message;
       } else {
         rec.state = "failed";
-        rec.detail = e.code === "recipient_revoked" ? "that device was removed from the server" : e.message;
+        rec.detail = e.code === "recipient_revoked" ? "that device was removed from the server"
+          : e.status === 413 ? "your server refuses this file (its size limit or its space is reached): " + e.message : e.message;
       }
     }
     await put(this.store, "outbox", rec.id, rec);
@@ -665,7 +744,8 @@ export class Engine {
       }
       throw new Hold("invalid", err.message);
     }
-    const base = { id: env.id, from: env.from, kind: n.kind, body: n.body, reply_to: n.reply_to, at: this.now(), fp: pin.fingerprint, read: false };
+    const base = { id: env.id, from: env.from, kind: n.kind, body: n.body, reply_to: n.reply_to, at: this.now(), fp: pin.fingerprint, read: false,
+      attachments: n.attachments.length ? n.attachments : undefined };
     if (n.v === 1) return [{ s: "inbox", k: env.id, v: { ...base, v: 1, state: n.kind === "question" || n.kind === "task" ? "held" : "" } }];
     return this.admitConv(n, env, pin, base);
   }
@@ -972,6 +1052,7 @@ export class Engine {
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
       notify: await this.notifyView(),
+      files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
     };
@@ -992,6 +1073,7 @@ export class Engine {
         return { id: m.id, dir: out ? "out" : "in", from: out ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event,
+          attachments: (m.attachments || []).map((a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size })),
           state_text: event ? "" : out ? outText(m.state, peer ? peer.address : "", m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
   }
@@ -1322,6 +1404,20 @@ export class Engine {
       mutes: st.mutes, allowed: (await this.notifySenders(st)).map((s) => s.address) };
   }
 
+  // openFile fetches a received file's ciphertext, and returns it decrypted
+  // only if both match the signed manifest: its safe name, the image type
+  // its bytes show (never SVG or HTML), and the bytes. Files this device
+  // sent are not kept after sending.
+  async openFile(id, i) {
+    const m = await this.store.get("inbox", id);
+    if (!m) throw new Error((await this.store.get("outbox", id)) ? "Files you sent are not kept here after sending." : "No such message here.");
+    const att = (m.attachments || [])[i];
+    if (!att) throw new Error("That message has no such file.");
+    const bytes = wire.decryptFile(await this.getBytes("/v1/blobs/" + att.blob.id + "/data"), att, this.keys);
+    const plain = await bytes;
+    return { name: wire.safeName(att.name), size: att.size, image: wire.sniffImage(plain), bytes: plain };
+  }
+
   // eventText says what an agent participation record in a DM does, as
   // the laptop's page does. This browser only shows it: it never invites,
   // hosts or runs an agent.
@@ -1388,6 +1484,7 @@ export class Engine {
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
     case "/api/dm/agent/invite": return this.inviteAgent(body);
+    case "/api/file": return this.openFile(u.searchParams.get("id"), Number(u.searchParams.get("i")));
     case "/api/notify/enable": return this.enableNotify();
     case "/api/notify/disable": return this.disableNotify();
     case "/api/notify/mute": return this.muteDM(body.conv, !!body.muted);

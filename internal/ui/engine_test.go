@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -1016,5 +1021,264 @@ func TestBrowserEngineNotify(t *testing.T) {
 		if c.Method != "GET" {
 			t.Fatalf("a reconnect wrote to the relay with nothing pending: %+v", c)
 		}
+	}
+}
+
+// devicePublic is the browser device's directory entry.
+func (w *engineNode) devicePublic(t *testing.T) identity.Public {
+	var p identity.Public
+	if err := json.Unmarshal([]byte(w.ok(map[string]any{"op": "keys"})["public"].(string)), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// uploadBlob puts ciphertext on the Hub for recipient to, as the client does.
+func (r *rawAgent) uploadBlob(to string, ct []byte) envelope.Blob {
+	r.t.Helper()
+	sum := sha256.Sum256(ct)
+	b := envelope.Blob{ID: protocol.NewID(), Size: int64(len(ct)), SHA256: hex.EncodeToString(sum[:])}
+	if code, body := r.do("POST", "/v1/blobs", marshalBytes(r.t, protocol.BlobReserve{ID: b.ID, Recipient: to, Size: b.Size, SHA256: b.SHA256}), true); code >= 300 {
+		r.t.Fatalf("reserve: %d %s", code, body)
+	}
+	if code, body := r.do("PUT", "/v1/blobs/"+b.ID+"?offset=0", ct, true); code >= 300 {
+		r.t.Fatalf("chunk: %d %s", code, body)
+	}
+	if code, body := r.do("POST", "/v1/blobs/"+b.ID+"/complete", nil, true); code >= 300 {
+		r.t.Fatalf("complete: %d %s", code, body)
+	}
+	return b
+}
+
+// Files in DMs between the browser device and Go (MEL-489): the browser
+// encrypts to the recipient before anything leaves it and uploads through
+// the Hub's blob API before the message; Go's age decrypts what it sent.
+// A file Go sends is decrypted in the browser only if it matches the
+// signed manifest; a hostile name is made safe; only raster images are
+// images. A file written offline is kept with its message through a
+// reload and sent on return.
+func TestBrowserEngineFiles(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	base := "https://" + hub.Addr
+	aliceHome := filepath.Join(t.TempDir(), "alice")
+	alice, err := client.Join(ctx, aliceHome, testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	runDaemon(t, alice)
+	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	aliceID, err := identity.Load(filepath.Join(aliceHome, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pem, _ := os.ReadFile(filepath.Join(dir, "tls.crt"))
+	pool.AppendCertsFromPEM(pem)
+	aliceRaw := &rawAgent{t: t, id: aliceID, addr: alice.Address, hub: base,
+		http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, Timeout: 10 * time.Second}}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	code, _ := alice.Invite(ctx, "dana", time.Hour, false)
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	var conv string
+	w.until("alice's DM with dana", func() bool { conv, err = alice.CreateDM(ctx, "dana/phone"); return err == nil })
+	alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "hi"})
+	w.until("the DM in the browser", func() bool { return w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + conv})["error"] == nil })
+	file := func(name string, data []byte) map[string]any {
+		return map[string]any{"name": name, "b64": base64.StdEncoding.EncodeToString(data)}
+	}
+	// aliceGot fetches a blob as Alice and decrypts it with her key.
+	aliceGot := func(id string) []byte {
+		t.Helper()
+		code, ct := aliceRaw.do("GET", "/v1/blobs/"+id+"/data", nil, true)
+		if code != 200 {
+			t.Fatalf("blob %s at the Hub for alice: %d", id, code)
+		}
+		r, err := age.Decrypt(bytes.NewReader(ct), aliceID.Box)
+		if err != nil {
+			t.Fatalf("Go cannot decrypt the browser's file: %v", err)
+		}
+		pt, _ := io.ReadAll(r)
+		return pt
+	}
+
+	// Browser to Go: a file-only message; nothing to send refused.
+	w.refuses("an empty message", w.call(map[string]any{"op": "sendFiles", "conv": conv, "files": []any{}}), "Write a message or add a file")
+	notes := []byte("line one\nline two\n")
+	sent := w.ok(map[string]any{"op": "sendFiles", "conv": conv, "files": []any{file("notes.txt", notes)}})["v"].(map[string]any)
+	rec := w.ok(map[string]any{"op": "outbox", "id": sent["id"]})["rec"].(map[string]any)
+	w.until("custody", func() bool {
+		rec = w.ok(map[string]any{"op": "outbox", "id": sent["id"]})["rec"].(map[string]any)
+		return rec["state"] == "custody" || rec["state"] == "delivered"
+	})
+	atts := rec["attachments"].([]any)
+	if len(atts) != 1 || atts[0].(map[string]any)["name"] != "notes.txt" || rec["files"].([]any)[0].(map[string]any)["ct"] != nil {
+		t.Fatalf("the sent file's record: %v", rec)
+	}
+	blobID := atts[0].(map[string]any)["blob"].(map[string]any)["id"].(string)
+	if got := aliceGot(blobID); !bytes.Equal(got, notes) {
+		t.Fatalf("alice decrypted %q", got)
+	}
+	var env envelope.Envelope
+	strictJSON([]byte(rec["envelope"].(string)), &env)
+	in, err := envelope.Open(env, aliceID, alice.Address, w.devicePublic(t))
+	if err != nil || in.Body != "" || len(in.Attachments) != 1 || in.Attachments[0].Name != "notes.txt" || in.Attachments[0].Size != int64(len(notes)) {
+		t.Fatalf("the signed manifest as Go opens it: %+v %v", in.Attachments, err)
+	}
+	if sum := sha256.Sum256(notes); in.Attachments[0].SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatal("the manifest's plaintext digest is not the file's")
+	}
+	w.refuses("a sent file read back", w.call(map[string]any{"op": "openFile", "id": sent["id"], "i": 0}), "not kept")
+
+	// Go's own client reads the browser's file, checked against the digest
+	// the browser signed; a flipped ciphertext byte at the Hub is refused.
+	has := func(id string) bool {
+		msgs, _ := alice.ConversationMessages(conv)
+		for _, m := range msgs {
+			if m.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	w.until("alice holds the browser's file message", func() bool { return has(sent["id"].(string)) })
+	rc, info, err := alice.OpenAttachment(ctx, sent["id"].(string), 0)
+	if err != nil {
+		t.Fatalf("Go opens the browser's file: %v", err)
+	}
+	got0, _ := io.ReadAll(rc)
+	rc.Close()
+	if !bytes.Equal(got0, notes) || info.Name != "notes.txt" {
+		t.Fatalf("Go read %q as %q", got0, info.Name)
+	}
+	flip := func(id string) {
+		t.Helper()
+		p := filepath.Join(dir, "blobs", id+".blob")
+		os.Chmod(p, 0o600)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b[len(b)/2] ^= 1
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad := w.ok(map[string]any{"op": "sendFiles", "conv": conv, "files": []any{file("flip.txt", []byte("flip me"))}})["v"].(map[string]any)
+	w.until("the file to flip at the Hub", func() bool {
+		r := w.ok(map[string]any{"op": "outbox", "id": bad["id"]})["rec"].(map[string]any)
+		return r["state"] == "custody" || r["state"] == "delivered"
+	})
+	badRec := w.ok(map[string]any{"op": "outbox", "id": bad["id"]})["rec"].(map[string]any)
+	flip(badRec["attachments"].([]any)[0].(map[string]any)["blob"].(map[string]any)["id"].(string))
+	w.until("alice holds the flipped file's message", func() bool { return has(bad["id"].(string)) })
+	if rc, _, err := alice.OpenAttachment(ctx, bad["id"].(string), 0); err == nil {
+		rc.Close()
+		t.Fatal("Go opened a file whose ciphertext was changed at the Hub")
+	}
+	if left, _ := os.ReadDir(filepath.Join(aliceHome, "opened")); len(left) != 0 {
+		t.Fatalf("a refused file left %d opened copies", len(left))
+	}
+
+	// Go's own client sends files (SendConv); the browser decrypts them, and
+	// refuses one whose ciphertext was changed at the Hub.
+	photo := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{9}, 900)...)
+	photoPath := filepath.Join(t.TempDir(), "photo.png")
+	os.WriteFile(photoPath, photo, 0o600)
+	gs, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Files: []client.OutgoingFile{{Name: "photo.png", Path: photoPath}}})
+	if err != nil {
+		t.Fatalf("Go sends a file: %v", err)
+	}
+	w.until("Go's file in the browser", func() bool { return w.ok(map[string]any{"op": "inboxRec", "id": gs.ID})["rec"] != nil })
+	gp := w.ok(map[string]any{"op": "openFile", "id": gs.ID, "i": 0})
+	gotPhoto, _ := base64.StdEncoding.DecodeString(gp["b64"].(string))
+	if !bytes.Equal(gotPhoto, photo) || gp["image"] != "image/png" || gp["name"] != "photo.png" {
+		t.Fatalf("Go's PNG in the browser: name %v image %v equal %v", gp["name"], gp["image"], bytes.Equal(gotPhoto, photo))
+	}
+	gs2, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "and this", Files: []client.OutgoingFile{{Name: "photo.png", Path: photoPath}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := alice.ConversationMessages(conv)
+	for _, m := range msgs {
+		if m.ID == gs2.ID {
+			flip(m.Attachments[0].BlobID)
+		}
+	}
+	w.until("the flipped Go file in the browser", func() bool { return w.ok(map[string]any{"op": "inboxRec", "id": gs2.ID})["rec"] != nil })
+	w.refuses("a Go file changed at the Hub", w.call(map[string]any{"op": "openFile", "id": gs2.ID, "i": 0}), "not the one the sender signed")
+
+	// Go to browser: a PNG with a hostile name, and a file whose manifest
+	// lies about its plaintext.
+	dPub := w.devicePublic(t)
+	drc, _ := dPub.Recipient()
+	enc := func(pt []byte) []byte {
+		var b bytes.Buffer
+		wc, _ := age.Encrypt(&b, drc)
+		wc.Write(pt)
+		wc.Close()
+		return b.Bytes()
+	}
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{7}, 64)...)
+	lie := []byte("the real contents")
+	pngCT, lieCT := enc(png), enc(lie)
+	pngBlob, lieBlob := aliceRaw.uploadBlob("dana/phone", pngCT), aliceRaw.uploadBlob("dana/phone", lieCT)
+	pngSum, otherSum := sha256.Sum256(png), sha256.Sum256([]byte("something else"))
+	cr := json.RawMessage(w.ok(map[string]any{"op": "convRoot", "conv": conv})["root"].(string))
+	in2 := envelope.Inner{V: 2, ID: protocol.NewID(), From: alice.Address, To: "dana/phone", TS: time.Now().Unix(), Kind: "message", Body: "two files",
+		Conv: conv, LID: protocol.NewID(), Root: cr, Origin: "ui", Attachments: []envelope.Attachment{
+			{Blob: pngBlob, Name: "../../evil<script>.png", Size: int64(len(png)), SHA256: hex.EncodeToString(pngSum[:])},
+			{Blob: lieBlob, Name: "report.html", Size: int64(len(lie)), SHA256: hex.EncodeToString(otherSum[:])}}}
+	genv, err := envelope.Seal(in2, aliceID.Sign, drc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := aliceRaw.do("POST", "/v1/messages", marshalBytes(t, genv), true); code >= 300 {
+		t.Fatalf("post: %d %s", code, body)
+	}
+	w.until("the files in the browser", func() bool { return w.ok(map[string]any{"op": "inboxRec", "id": in2.ID})["rec"] != nil })
+	got := w.ok(map[string]any{"op": "openFile", "id": in2.ID, "i": 0})
+	gotPNG, _ := base64.StdEncoding.DecodeString(got["b64"].(string))
+	if !bytes.Equal(gotPNG, png) || got["image"] != "image/png" || got["name"] != "_.._evil_script_.png" {
+		t.Fatalf("the Go-sent PNG in the browser: name %v image %v", got["name"], got["image"])
+	}
+	w.refuses("a file unlike its manifest", w.call(map[string]any{"op": "openFile", "id": in2.ID, "i": 1}), "not the one described")
+	view := w.api("/api/dm?id="+conv, nil)["messages"].([]any)
+	last := view[len(view)-1].(map[string]any)["attachments"].([]any)
+	if len(last) != 2 || last[0].(map[string]any)["name"] != "_.._evil_script_.png" {
+		t.Fatalf("the DM view's files: %v", last)
+	}
+
+	// Offline, then a reload: the file is kept with its message and sent on return.
+	w.ok(map[string]any{"op": "offline", "on": true})
+	w.until("disconnected", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == false })
+	train := bytes.Repeat([]byte("x"), 700<<10) // more than one upload chunk
+	kept := w.ok(map[string]any{"op": "sendFiles", "conv": conv, "body": "from the train", "files": []any{file("big.bin", train)}})["v"].(map[string]any)
+	if kept["state"] != "waiting" {
+		t.Fatalf("offline send with a file: %v", kept)
+	}
+	w.ok(map[string]any{"op": "reload", "base": base})
+	w.ok(map[string]any{"op": "offline", "on": false})
+	w.until("the kept file sent", func() bool {
+		r := w.ok(map[string]any{"op": "outbox", "id": kept["id"]})["rec"].(map[string]any)
+		return r["state"] == "custody" || r["state"] == "delivered"
+	})
+	r := w.ok(map[string]any{"op": "outbox", "id": kept["id"]})["rec"].(map[string]any)
+	id2 := r["attachments"].([]any)[0].(map[string]any)["blob"].(map[string]any)["id"].(string)
+	if !bytes.Equal(aliceGot(id2), train) {
+		t.Fatal("the file kept offline is not what alice gets")
 	}
 }
