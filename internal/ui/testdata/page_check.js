@@ -717,6 +717,9 @@ const ev = { preventDefault() {} };
   overview.notify = { available: true, enabled: false, reason: "", mutes: [], allowed: [] };
   calls.length = 0;
   await run("loadOverview()");
+  const turnOn = $("notify-line").children[1];
+  await run("loadOverview()");
+  check($("notify-line").children[1] === turnOn, "an unchanged line keeps its button (a click is not lost to a redraw)");
   check(!$("notify-line").hidden && textOf($("notify-line")).includes("Notifications off") && Notification.asked === 0 &&
     !calls.some((c) => c.path.startsWith("/api/notify/")), "off, and nothing asked, when the page loads: " + textOf($("notify-line")));
   run("notifyDialog()");

@@ -110,6 +110,11 @@ function renderNotify(n) {
   const line = $("notify-line");
   line.hidden = !n;
   if (!n) return;
+  // Every change redraws the overview: an unchanged line keeps its button,
+  // so a click is never lost to a redraw under the pointer.
+  const key = JSON.stringify([n, notifyPermission()]);
+  if (line.dataset.key === key) return;
+  line.dataset.key = key;
   const iphone = typeof navigator !== "undefined" && /iPhone|iPad/.test(navigator.userAgent) &&
     !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
   if (!n.available) {
