@@ -2,6 +2,10 @@
 
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >
+> **Messenger preview — 2026-09-29:** [v0.3.0](https://github.com/misunders2d/agentnet/releases/tag/v0.3.0) is published as a prerelease, built from `200d97c`. [CI 36578074984](https://github.com/misunders2d/agentnet/actions/runs/36578074984) passed Linux (including race and real IndexedDB), macOS, Windows and container checks. Windows passed on its failed-job retry; first-attempt fixture timing failures remain recorded. Follow-up `6ea03da` widens those test budgets only. All seven release asset digests match the local build. Stable/latest remains v0.2.1; preview installation is explicit.
+>
+> **Live rollout:** `https://agentnet.bezosapp.uk` and the operator's Linux laptop run the v0.3.0 build. `agentnet ui` opens the laptop's existing device; the hosted page enrolls a separate browser device. Device linking is not built. The legacy pinned endpoint remains available. Physical Android join/install/files/background push/click is the next user test, not yet qualified. Real Windows banner clicks and physical suspend/resume remain unverified; macOS is banner-only. See the release notes for remaining limits.
+>
 > **Dated baseline — 2026-09-27:** [Client release v0.2.1](https://github.com/misunders2d/agentnet/releases/tag/v0.2.1) (Binary: `611b633`, prior evidence docs: `2395d11`, CI: `36341139910`), compatible with deployed Hub relay `v0.2.0`. Recheck current state before operations.
 >
 > **Linear Tracking:** Project [Agent Net Revived](https://linear.app/mellanni/project/agent-net-revived-c2f1212b3580) (Tickets `MEL-409` through `MEL-435`; this repository stands completely alone if Linear is inaccessible).
@@ -99,7 +103,7 @@ Every change to AgentNet must uphold these fundamental invariants:
 
 ## 3. Shipped State & Verification Matrix
 
-### 3.1 Current Release Baseline
+### 3.1 Stable Release Baseline (preview status above)
 - **Client Version:** `v0.2.1`
 - **Git Commits:** Code: `611b633`, Documentation baseline: `2395d11`
 - **Hub Version:** Compatible with `v0.2.0` and `v0.2.1`.
