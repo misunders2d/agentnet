@@ -1199,13 +1199,21 @@ const ev = { preventDefault() {} };
       { address: "me/laptop", name: "laptop", fingerprint: "SHA256:me", this: true }, { address: "me/phone", name: "phone", fingerprint: "SHA256:m2" }] }),
     people: [alicePerson, bobPerson2], links: [{ id: "L1", address: "me/tablet", name: "tablet", fingerprint: "SHA256:t1", requested_at: T, expires: T, state: "pending" }],
     history: [{ device: "me/phone", name: "phone", done: 3, total: 12, state: "running" }],
-    threads: [sum("b9", "bob/phone", { title: "phone hello" }), sum("h1", "hub/ops", { title: "service report" })] });
+    threads: [sum("b9", "bob/phone", { title: "phone hello" }), sum("h1", "hub/ops", { title: "service report" }), sum("m9", "me/phone", { title: "to my phone" })] });
   await run("loadOverview()");
   side = JSON.stringify($("conv-list").children.map(textOf));
   check(side.includes("on laptop (this one), phone") && side.includes("Your devices") && side.includes("A new device,  tablet , asks to join as you"),
     "you, your devices (this one marked) and a new device's request: " + side);
   check(side.includes("on desk, phone") && side.replace(/\s+/g, "").includes("hub/ops") && !side.replace(/\s+/g, "").includes("bob/phone"),
     "a person's devices are named under them; their device is not a row of its own; a service is: " + side);
+  // Your own devices' conversations are under you too, one click away.
+  const meTree = (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })($("conv-list"));
+  const mine = meTree.find((e) => e.tagName === "details" && textOf(e).includes("You on 2 devices"));
+  const toPhone = mine && (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })(mine)
+    .find((e) => e.tagName === "button" && textOf(e) === "1 device conversation");
+  check(!!toPhone && mine.attrs.open === undefined, "your devices, closed, each with its conversations: " + (mine ? JSON.stringify(textOf(mine)) : "none"));
+  toPhone.click();
+  check(run("state.hub.kind") === "device" && run("state.hub.key") === "me/phone", "one click opens your device's conversations");
   calls.length = 0;
   run("linkDialog")(overview.links[0]);
   const ask = JSON.stringify($("dialog-body").children.map(textOf));
@@ -1233,6 +1241,13 @@ const ev = { preventDefault() {} };
     "their device's conversations say whose device it is and link back: " + $("conv-topic").textContent);
   run("backOneLevel()");
   check(run("state.hub.kind") === "person" && run("state.hub.key") === "p-bob", "back from their device goes to the person");
+  // Your own device's conversations: yours, and back goes to the list (you
+  // have no DM page of your own to go back to).
+  run('openHub({ kind: "device", key: "me/phone" })');
+  check($("hub-back").hidden && $("conv-topic").textContent.startsWith("Your device") && !JSON.stringify($("hub").children.map(textOf)).includes("not on this computer"),
+    "your device's conversations say so and link back to nothing that is not there: " + $("conv-topic").textContent);
+  run("backOneLevel()");
+  check(!(run("state.hub") && run("state.hub.kind") === "person"), "back from your device goes to the list, not to a page of yours: " + JSON.stringify(run("state.hub")));
   // Zoom: one node for you (with a service present, no second "you" at the
   // devices' centre); each person's devices behind a closed disclosure.
   run('setLens("zoom")');

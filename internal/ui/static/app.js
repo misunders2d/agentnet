@@ -1043,11 +1043,12 @@ function renderHub() {
   const c = x.contact;
   const owner = deviceOwner(c.peer);
   fill($("conv-name"), who(c.peer));
-  if (owner) { // back to the person whose device it is
-    state.hubUp = { kind: "person", key: personKey(owner) };
-    $("hub-back").hidden = false;
-    $("hub-back").textContent = "\u2039 " + owner.label;
-  }
+  // Back to the person whose device it is; yours has no page of its own
+  // (you are no DM partner): back goes to the list.
+  const up = owner && owner.state !== "self";
+  state.hubUp = up ? { kind: "person", key: personKey(owner) } : null;
+  $("hub-back").hidden = !up;
+  if (up) $("hub-back").textContent = "\u2039 " + owner.label;
   $("conv-topic").textContent = (owner ? (owner.state === "self" ? "Your device" : owner.label + "'s device") : "Device") + " · " + [plural(c.conversations.length, "conversation", "conversations"),
     c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · ");
   $("conv-presence").textContent = peerPresence(c.peer) || "";
@@ -1182,6 +1183,8 @@ function meLine() {
     "You: ", el("strong", {}, p.label), " · ", p.published ? "others can start a DM with you" : "not on your server yet",
     devs.length > 1 && " · on " + devs.map((d) => d.name + (d.this ? " (this one)" : "")).join(", "),
     devicesHere() && [" · ", el("button", { type: "button", class: "text-btn", onclick: () => devicesDialog() }, "Your devices…")],
+    // Your other devices' conversations, as each person's are: behind one click.
+    devs.length > 1 && deviceDisclosure(p),
   ];
 }
 
