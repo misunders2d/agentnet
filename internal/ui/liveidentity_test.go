@@ -105,7 +105,8 @@ func TestLiveIdentity(t *testing.T) {
 	if !strings.HasPrefix(link.URL, "agentnet-link-v2:") || !link.Expires.After(time.Now()) {
 		t.Fatalf("the link: %q %v", link.URL, link.Expires)
 	}
-	phone, err := client.JoinAndLink(ctx, filepath.Join(t.TempDir(), "phone"), link.URL, "phone")
+	phoneHome := filepath.Join(t.TempDir(), "phone")
+	phone, err := client.JoinAndLink(ctx, phoneHome, link.URL, "phone")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,10 +152,17 @@ func TestLiveIdentity(t *testing.T) {
 		d, _ := pp.DM(before)
 		return d.Messages[1].Attachments[0].Availability == ""
 	})
-	if rc, name, err := pp.OpenFile(ctx, d.Messages[1].ID, 0); err != nil {
+	rc, name, err := pp.OpenFile(ctx, d.Messages[1].ID, 0)
+	if err != nil {
 		t.Fatal(err)
-	} else if got, _ := io.ReadAll(rc); string(got) != "the plan, from bob" || name != "plan.txt" {
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close() // the opened copy goes with it (an open one cannot be removed on Windows)
+	if string(got) != "the plan, from bob" || name != "plan.txt" {
 		t.Fatalf("the file: %q %q", got, name)
+	}
+	if left, _ := os.ReadDir(filepath.Join(phoneHome, "opened")); len(left) != 0 {
+		t.Fatalf("an opened file left %d copies", len(left))
 	}
 	eventually("the laptop's copy of it done", func() bool {
 		o := over(pl)
