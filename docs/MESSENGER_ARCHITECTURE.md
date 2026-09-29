@@ -118,10 +118,13 @@
   - mutes, and a click that opens the right conversation;
   - each platform that cannot do this says so plainly.
 
-  Root and Agy prepare a bounded shared contract with official platform
-  evidence first. Then core owns relay and desktop delivery, and frontend
-  Claude the browser's service worker, push subscription, opt-in settings,
-  mutes and click handling. Nothing of it is built yet.
+  Root and Agy prepared the shared contract with official platform evidence
+  ([`docs/revival/NOTIFY.md`](revival/NOTIFY.md)); core owns relay and
+  desktop delivery, frontend Claude the browser's service worker, push
+  subscription, opt-in settings, mutes and click handling. Built since, in
+  local commits: the Hub's side and the browser device's (Notifications,
+  below) and the daemon's desktop alerts with the page's controls (Desktop
+  alerts, below); what each has been shown to do and not is stated there.
 - **Also built since the design was written:** the People directory (`aec4d4f`,
   `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
   `docs/revival/M4.md`); the browser device's wire format and the relay's page
@@ -138,7 +141,10 @@
     without asking (standing permission; anyone may still give it a task,
     which then waits for the owner's accept); only the host's person
     accepts or declines, seeing exactly what is agreed; either person asks
-    it and dismisses it (work already started may still finish);
+    it and dismisses it (work already started may still finish); a draft
+    for an agent that is dismissed stays addressed to it, Send waits and
+    the page says why, and only the person's own choice sends the text to
+    the other person instead (`81792ef`);
   - the host decides on requests to its agent (run a task, stop, run
     again, close);
   - records read as sentences; people are linked to the agents their
@@ -205,8 +211,11 @@
   in view; a muted DM and "off" raised nothing; the click's page route was
   checked by opening the exact `#conv=` address in the test browser (the
   native banner itself was not clicked, since that opens the person's
-  default browser). macOS and Windows alerts have no click; not shown
-  there.
+  default browser). A click that reaches a tab already open on the page
+  changes only its fragment: `81792ef` takes `#conv=` on that change too
+  (same-tab regression in the page checks). macOS alerts have no click;
+  Windows clicks came later from core and root (`b08e65b`, `ab440c7`;
+  their evidence, not shown here).
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a
@@ -223,9 +232,11 @@
     tasks are held and nothing runs;
   - a plain join page (`e971c16`; one name field with a usable link, one
     recovery message otherwise, "Privacy and storage" one click away);
-  - install as an app (`1cab993`): a manifest and 192/512 icons drawn from
-    the current two-dot mark. They are **provisional**: the owner has not
-    chosen a logo, and the final favicon and app icon are a release gate.
+  - install as an app (`1cab993`): a manifest and 192/512 icons. Since
+    `ae7f7ea` every icon is the owner's chosen logo (`ant.png`, a dark teal
+    ant) on a light rounded tile that reads on dark and light tabs, drawn
+    at each size (favicon and header mark on both pages, the installed
+    app's icons); seen in Chrome on the demo page, light and dark.
 
   Evidence: Node journeys against a real test Hub, an opt-in real IndexedDB
   test (`AGENTNET_CHROME=google-chrome-stable go test ./internal/ui/static`),
@@ -234,6 +245,47 @@
   standalone launch of the same device). Not shown: a deployed HTTPS relay, a
   phone, Firefox or Safari; storage persistence was denied in the test
   browser, and the page says so.
+
+- **Files and pictures (MEL-489; local commits; core `e6a3048`, `960ceda`,
+  `423e937`; pages `8e1c64b`, `6ddb450`, `fdca26f`; browser gate
+  `2a86600`).** In a DM on both pages, and in a device conversation (v1) on
+  the daemon's page, the composer takes files chosen, pasted (a picture gets
+  a name of its own) or dropped, shows each with name, size and remove, and
+  sends only on Send, with or without text. Each conversation keeps its own
+  draft files (Classic, Comic and Zoom share them); limits are said before
+  anything leaves (8 files; 100 MiB each from the daemon's page, 25 MiB each
+  and 50 MiB a message from a browser); asking an agent or answering takes
+  none (the page says so, never drops them); a failed send keeps them.
+  - Received files open only on request, after the checks: PNG, JPEG, GIF or
+    WebP, known by their bytes, are shown in place from `blob:` URLs;
+    anything else, SVG and HTML included, is saved under its safe name; the
+    URLs are freed when the conversation changes. An agent in the DM is told
+    a message had files, never given them.
+  - The browser device encrypts each file to the recipient's device (binary
+    age), uploads it resumably, posts the message only after every file is
+    stored and after the conversation's gate is checked again (a person
+    conflict seen during the upload keeps it queued, `2a86600`), and keeps
+    the ciphertext in IndexedDB until the server holds it; opening checks
+    the signed digest, decrypts, then checks the manifest.
+  - The daemon's page hands the bytes only to this computer's AgentNet
+    (`POST /api/upload`, kept privately until sent); each draft file keeps
+    its id until a send names it (a retry hands over only the rest), a
+    removed one is discarded, a send takes every file it names, sent or
+    refused, what is never sent goes after an hour, and a new run removes
+    an earlier run's leftovers.
+
+  Evidence: Go and browser interop both ways with the real client (a byte
+  changed at the Hub refused on both sides, a lying manifest refused,
+  hostile names made safe as `client.SafeName` does), live tests of the
+  page's provider, page checks for all three views, and one real Chrome
+  journey on loopback with synthetic homes: the daemon's page in a device
+  conversation and a DM, and the browser device (files chosen and pasted,
+  received pictures shown and other files only saved, a file-only message,
+  offline, a reload with the server unreachable, back online, 390 px width,
+  a second tab kept idle); every received file matched its sender's digest.
+  Not shown: a phone's picker, drag and drop in a real browser (checked in
+  page checks only), a deployed relay; unsent draft files live in the open
+  page only (a reload loses them, and nothing claims they are saved).
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and

@@ -272,7 +272,7 @@ If a local database or key file is damaged:
 - Use `conversation ID` for durable two-way history without changing read state. Ordinary `inbox` marks listed messages read; `inbox --review` does not. Read state never proves a model or person understood the message.
 - The daemon's service environment can differ from an interactive shell. Resolve the actual harness on its PATH and its canonical credential bootstrap. In the live Pi task, an AgentNet-only wrapper reused the host's existing secret runner for the child; the daemon received no injected Telegram secret. This was host configuration, not a mandatory Infisical dependency. Preserve the host's non-poller setting and AgentNet background-hook isolation.
 - A timeout does not prove an external effect failed. Before retrying an effectful task, check its provider/ledger evidence and any human confirmation needed to rule out duplicates. The successful Telegram acceptance was independently verified once; it did not prove the person read it.
-- `review-to ADDRESS` forwards count-only attention to a chosen installation; both ends need the feature. It neither grants remote acceptance nor forwards request content. Today only review items notify the human and ordinary replies stay quiet; optional notifications for ordinary messages are now required for this release (see the notifications item above).
+- `review-to ADDRESS` forwards count-only attention to a chosen installation; both ends need the feature. It neither grants remote acceptance nor forwards request content. Optional notifications for ordinary messages are separate and built in local commits (desktop alerts from the daemon, browser push; see the notifications item below).
 - On an existing host, discover the actual service, home, responder directory, private stopped backups and rollback record locally with authorized access. Never assume another machine has the operator's paths or credentials. The repository deliberately contains no private deployment inventory or recovery secrets.
 
 ---
@@ -331,10 +331,10 @@ If a local database or key file is damaged:
   people. optionally, of course." Optional notifications for ordinary messages on desktop and mobile, also with
   the app or page closed; opt-in only (no permission request on page load; denied or off leaves a fully usable
   messenger); no polling, no plaintext to the relay or a push service, no model calls; mutes and click to the
-  conversation; platform limits stated plainly. This supersedes the S-P deferral (release row R13). Root and Agy
-  write the shared contract with platform evidence first; then core builds relay and desktop delivery and frontend
-  Claude the browser service worker, subscription, settings, mutes and clicks. Not built yet. See
-  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
+  conversation; platform limits stated plainly. This supersedes the S-P deferral (release row R13). Contract
+  [`docs/revival/NOTIFY.md`](revival/NOTIFY.md); built in local commits (Hub and browser device, daemon desktop
+  alerts and page controls; evidence and what is not shown are in the next item and in
+  [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status)).
 - **Agents in DMs (2026-09-29, local commits)**: core records and execution (`1c35ad4`, `fc87c3f`, `85af6a8`, accepted
   for UI use; assembled/platform gates open); daemon pages invite, decide (host only), ask, dismiss and act on requests
   (`78b172f`, `fa9ccc0`), with people linked to their agents in Classic/Comic/Zoom (`3c61430`); the browser device
@@ -344,15 +344,24 @@ If a local database or key file is damaged:
   (Linux) implementer-observed pass through Google's push service showed opt-in (permission answered by the test),
   presented suppression, closed-page alerts, click to the exact DM, per-DM mute and off (loopback, synthetic; no
   provider 2xx log). Desktop daemon alerts: core `a85b84c`/`99b2559`, page controls `cd54168`, one Linux pass (native
-  banner, suppression, mute, off; click route opened directly). Not shown: deployed HTTPS, phone/iPhone, other
-  browsers, macOS/Windows clicks.
+  banner, suppression, mute, off; click route opened directly; a click reaching an already open tab is taken too,
+  `81792ef`). Windows clicks: core/root `b08e65b`, `ab440c7` (their evidence). Not shown: deployed HTTPS,
+  phone/iPhone, other browsers, macOS clicks.
+- **Files and pictures (MEL-489, local commits)**: core `e6a3048`, `960ceda`, `423e937`; pages `8e1c64b`, `6ddb450`,
+  `fdca26f`; browser gate `2a86600`. DMs on both pages and device conversations (v1) on the daemon's page: choose,
+  paste or drop, pending name/size/remove, explicit Send (file-only allowed), per-conversation drafts in all three
+  views, limits said first; received pictures (PNG/JPEG/GIF/WebP by their bytes) shown in place, anything else only
+  saved under its safe name; agents are told files exist, never given them. Evidence: Go/browser interop both ways
+  (tampered blob and lying manifest refused, hostile names), provider/page tests, one real Chrome journey on loopback
+  (both pages, offline, reload, back online, phone width, second tab). Not shown: a phone's picker, a deployed relay;
+  unsent draft files live only in the open page.
 - **Remind me later (S-R, local commits)**: core `ac517b5`, daemon page `0474bda` (set/move/done/cancel on received
   messages, overdue first in the list and Zoom); one Linux pass: banner at the chosen minute, due shown live, a reply
   ended it. Not on the browser device.
 - **Browser device (2026-09-29, local commits, review in progress)**: `hub serve --web` serves the page at the Hub
   origin (`7a97aaf`), `admin invite --link` prints browser invite links (`3a588c3`); the human-only browser engine,
   plain join page and installable manifest are `6061c11`, `9ecd3c8`, `2d05b2c`, `e971c16`, `1cab993`. The app icon
-  is **provisional** (current two-dot mark) until the owner chooses a logo. Verified: Node journeys against a real
+  is the owner's chosen ant on a light tile (`ae7f7ea`: favicon, header mark and the installed app's icons, both pages). Verified: Node journeys against a real
   test Hub, the opt-in real IndexedDB test (`AGENTNET_CHROME=google-chrome-stable go test ./internal/ui/static`), a
   real Chrome 154 journey on loopback including install and standalone launch. Not verified: deployed HTTPS relay,
   phone, Firefox, Safari. See [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
@@ -368,7 +377,7 @@ If a local database or key file is damaged:
   never merged; grouped remote notices; no remote approval), and one search for agents and
   conversations (kinds shown, opens exactly the chosen item, grants no trust; people are not searchable yet). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome install: the relay page's
-  manifest is built (`1cab993`, provisional icon) and was installed and launched in Chrome 154 on loopback, not
+  manifest is built (`1cab993`; the ant icon since `ae7f7ea`) and was installed and launched in Chrome 154 on loopback, not
   on a deployed relay; S-R reminders unchanged. One-command `agentnet update` (latest stable,
   same home, daemon and page switch safely): in source, not released; Windows switches only a daemon
   started by the scheduled task `\agentnet` (native test passed in Actions run 36458378377; a standalone
@@ -378,7 +387,7 @@ If a local database or key file is damaged:
   persons (human-DM core above). Linking devices, roster changes across devices, recovery and history transfer are not
   built. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
-- **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
+- **Notification Click Focus (`MEL-435`)**: a click opens its conversation: the browser device's service worker, the daemon's Linux alert (`#conv=`, also in an open tab since `81792ef`), Windows (`b08e65b`, `ab440c7`); macOS alerts have no click.
 - **Owner requests for later (2026-09-29; backlog, not this release)**:
   - custom visual plugins, [MEL-475](https://linear.app/mellanni/issue/MEL-475/secure-custom-messenger-ui-plugins):
     each user bundles presentations like Classic/Comic/Zoom; isolated, least permission, no secret access or silent
@@ -395,8 +404,8 @@ If a local database or key file is damaged:
   share one Provider and the same decision dialogs. Threads are derived v1 reply links;
   every action is an existing `Agent` operation with its CLI gates; changes are pushed (store writes and
   the local kick socket), never polled. It is a page on this computer only: no relay hosting, phone or
-  browser devices, groups, file sending from the page, or push (S-W, S-C, S-P and later); human DMs (v2) are the
-  page candidate above.
+  browser devices, groups, or push (S-W, S-C, S-P and later); human DMs (v2), files (MEL-489), the browser
+  device and notifications were built since (items above).
   Tests: `internal/ui`, `internal/client/uiview_test.go`, `itest/ui_test.go` (two synthetic homes, real binary).
 - **Group Messaging & Federation**: Deferred from initial slice.
 - **Automated Task Execution**: Tasks run only after `agentnet accept ID` or under a local, per-key task grant (`approve --tasks`, `accept --always`; see docs/revival/M4.md). No other path may run a task: nothing received, no name match and no policy engine grants it.
