@@ -157,6 +157,12 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 // asset serves one embedded file; there are no directory listings.
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if name == "icon-192.png" { // the favicon and the header's mark
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(static.AppIcon(192))
+		return
+	}
 	types := map[string]string{"app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {

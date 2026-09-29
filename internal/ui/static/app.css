@@ -88,14 +88,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--line); }
 .side-head { padding: 18px 16px 12px; display: grid; gap: 14px; }
 .brand { display: flex; align-items: center; gap: 10px; }
-.brand-mark {
-  width: 30px; height: 30px; border-radius: 9px; background: var(--accent); position: relative; flex: none;
-}
-.brand-mark::before, .brand-mark::after {
-  content: ""; position: absolute; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-ink);
-}
-.brand-mark::before { left: 6px; top: 6px; }
-.brand-mark::after { right: 6px; bottom: 6px; opacity: .6; }
+.brand-mark { width: 30px; height: 30px; flex: none; } /* the app icon: the ant on its light tile */
 .brand-name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
 .brand-me { color: var(--muted); font-size: 13px; }
 .side-actions { display: flex; gap: 8px; align-items: stretch; }

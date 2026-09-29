@@ -63,7 +63,7 @@ func TestRelayServesThePage(t *testing.T) {
 		want[p] = data
 	}
 	for p, size := range relayIcons {
-		want[p] = provisionalIcon(size)
+		want[p] = AppIcon(size)
 	}
 	for p, data := range want {
 		resp := serve("GET", p)
@@ -216,19 +216,30 @@ func TestRelayManifest(t *testing.T) {
 	if page := string(devicePage()); !strings.Contains(page, `<link rel="manifest" href="/manifest.webmanifest">`) {
 		t.Fatal("the device page does not link its manifest")
 	}
-	// The icon is the mark: an indigo tile, a white dot, clear corners.
-	img, _ := png.Decode(bytes.NewReader(provisionalIcon(192)))
-	at := func(x, y int) [4]uint32 {
-		r, g, b, a := img.At(x, y).RGBA()
-		return [4]uint32{r >> 8, g >> 8, b >> 8, a >> 8}
+	if page := string(devicePage()); strings.Count(page, `rel="icon"`) != 1 || !strings.Contains(page, `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
+		t.Fatal("the device page does not name its icon once")
 	}
-	if c := at(0, 0); c[3] != 0 {
-		t.Errorf("corner not clear: %v", c)
-	}
-	if c := at(96, 50); c != [4]uint32{0x4b, 0x45, 0xd6, 255} {
-		t.Errorf("tile: %v", c)
-	}
-	if c := at(70, 70); c != [4]uint32{255, 255, 255, 255} {
-		t.Errorf("dot: %v", c)
+	// The icon is the ant (dark teal) on a light tile, with clear corners
+	// and room around the ant, at each size.
+	for _, size := range []int{192, 512} {
+		img, err := png.Decode(bytes.NewReader(AppIcon(size)))
+		if err != nil || img.Bounds().Dx() != size || img.Bounds().Dy() != size {
+			t.Fatalf("icon %d: %v %v", size, err, img.Bounds())
+		}
+		at := func(fx, fy float64) [4]uint32 {
+			r, g, b, a := img.At(int(fx*float64(size)), int(fy*float64(size))).RGBA()
+			return [4]uint32{r >> 8, g >> 8, b >> 8, a >> 8}
+		}
+		if c := at(0, 0); c[3] != 0 {
+			t.Errorf("%d: corner not clear: %v", size, c)
+		}
+		for _, p := range [][2]float64{{.5, .06}, {.06, .5}, {.94, .5}, {.5, .94}} { // the margin: tile only
+			if c := at(p[0], p[1]); c != [4]uint32{iconTileR, iconTileG, iconTileB, 255} {
+				t.Errorf("%d: margin at %v: %v", size, p, c)
+			}
+		}
+		if c := at(.5, .56); c[3] != 255 || c[0] > 40 || c[1] > 90 || c[2] > 100 { // the ant's middle
+			t.Errorf("%d: ant: %v", size, c)
+		}
 	}
 }

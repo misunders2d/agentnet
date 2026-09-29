@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs manifest.webmanifest sw.js
+//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs manifest.webmanifest sw.js ant.png
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -51,55 +51,80 @@ var relayIcons = map[string]int{"/assets/icon-192.png": 192, "/assets/icon-512.p
 const daemonScripts = `<script src="/assets/lenses.js" defer></script>
 <script src="/assets/app.js" defer></script>`
 
-// pageStyle is where the device page adds its manifest and icon.
+// pageStyle is where the device page adds its manifest.
 const pageStyle = `<link rel="stylesheet" href="/assets/app.css">`
 
 // devicePage is index.html with its scripts replaced by device.mjs, and
-// the manifest and icon that let a browser install it as an app.
+// the manifest that lets a browser install it as an app.
 func devicePage() []byte {
 	page, err := fs.ReadFile(files, "index.html")
 	if err != nil || !bytes.Contains(page, []byte(daemonScripts)) || !bytes.Contains(page, []byte(pageStyle)) {
 		panic("static: index.html has no view scripts or style to replace") // a build error
 	}
 	page = bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/device.mjs"></script>`), 1)
-	return bytes.Replace(page, []byte(pageStyle), []byte(pageStyle+"\n"+
-		`<link rel="manifest" href="/manifest.webmanifest">`+"\n"+`<link rel="icon" type="image/png" href="/assets/icon-192.png">`), 1)
+	return bytes.Replace(page, []byte(pageStyle), []byte(pageStyle+"\n"+`<link rel="manifest" href="/manifest.webmanifest">`), 1)
 }
 
-// provisionalIcon draws the page's current mark (.brand-mark in app.css:
-// two dots on an indigo tile) as a size×size PNG. It stands in for the app
-// icon until a logo is chosen; it is not the logo.
-func provisionalIcon(size int) []byte {
-	const unit, samples = 30.0, 4 // the mark's CSS size; samples per pixel side
-	scale := float64(size) / unit
-	inTile := func(x, y float64) bool { // a 30-unit square with 9-unit corners
-		dx := math.Max(math.Max(9-x, x-21), 0)
-		dy := math.Max(math.Max(9-y, y-21), 0)
-		return x >= 0 && y >= 0 && x <= unit && y <= unit && dx*dx+dy*dy <= 81
+// The app icon is the logo (ant.png: a dark teal ant, the owner's choice)
+// on a light rounded tile, so it reads on dark and light tabs alike. The
+// ant is fitted into the middle 70% of the tile, clear of the edges.
+const (
+	iconTileR, iconTileG, iconTileB = 0xf2, 0xf7, 0xf6 // light, a trace of the ant's teal
+	iconCorner                      = .22              // the tile's corner radius, of its size
+	iconAnt                         = .70              // the ant's longer side, of the tile's size
+)
+
+// AppIcon is the app icon as a size×size PNG (the favicon, the header's
+// mark and the installed app's icon), made once per size.
+func AppIcon(size int) []byte {
+	iconsMu.Lock()
+	defer iconsMu.Unlock()
+	if b, ok := icons[size]; ok {
+		return b
 	}
+	b := drawIcon(size)
+	icons[size] = b
+	return b
+}
+
+var (
+	iconsMu sync.Mutex
+	icons   = map[int][]byte{}
+)
+
+func drawIcon(size int) []byte {
+	src := ant()
+	box := opaqueBounds(src)
+	n := float64(size)
+	// The ant's box, scaled to fit iconAnt of the tile and centred.
+	scale := iconAnt * n / float64(max(box.Dx(), box.Dy()))
+	ox := (n - float64(box.Dx())*scale) / 2
+	oy := (n - float64(box.Dy())*scale) / 2
+	r := iconCorner * n
+	inTile := func(x, y float64) bool {
+		dx := math.Max(math.Max(r-x, x-(n-r)), 0)
+		dy := math.Max(math.Max(r-y, y-(n-r)), 0)
+		return dx*dx+dy*dy <= r*r
+	}
+	const samples = 4 // per pixel side, for the tile's rounded edge
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for py := 0; py < size; py++ {
 		for px := 0; px < size; px++ {
-			var tile, white float64
+			var cover float64
 			for s := 0; s < samples*samples; s++ {
-				x := (float64(px) + (float64(s%samples)+.5)/samples) / scale
-				y := (float64(py) + (float64(s/samples)+.5)/samples) / scale
-				if !inTile(x, y) {
-					continue
-				}
-				tile++
-				if math.Hypot(x-11, y-11) <= 5 {
-					white++
-				} else if math.Hypot(x-19, y-19) <= 5 {
-					white += .6
+				if inTile(float64(px)+(float64(s%samples)+.5)/samples, float64(py)+(float64(s/samples)+.5)/samples) {
+					cover++
 				}
 			}
-			if tile == 0 {
+			if cover == 0 {
 				continue
 			}
-			w := white / tile
-			mix := func(c float64) uint8 { return uint8(c*(1-w) + 255*w + .5) }
-			img.SetNRGBA(px, py, color.NRGBA{mix(0x4b), mix(0x45), mix(0xd6), uint8(255*tile/(samples*samples) + .5)})
+			// The ant over this pixel: the source area it covers, averaged
+			// (premultiplied), then laid over the tile.
+			x0, y0 := float64(box.Min.X)+(float64(px)-ox)/scale, float64(box.Min.Y)+(float64(py)-oy)/scale
+			ar, ag, ab, aa := area(src, x0, y0, x0+1/scale, y0+1/scale)
+			mix := func(tile float64, c float64) uint8 { return uint8(tile*(1-aa) + c + .5) }
+			img.SetNRGBA(px, py, color.NRGBA{mix(iconTileR, ar), mix(iconTileG, ag), mix(iconTileB, ab), uint8(255*cover/(samples*samples) + .5)})
 		}
 	}
 	var b bytes.Buffer
@@ -107,6 +132,65 @@ func provisionalIcon(size int) []byte {
 		panic(err)
 	}
 	return b.Bytes()
+}
+
+// ant is the logo, decoded once.
+var ant = sync.OnceValue(func() *image.NRGBA {
+	data, err := fs.ReadFile(files, "ant.png")
+	if err != nil {
+		panic(err) // a build error
+	}
+	m, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		panic(err)
+	}
+	out := image.NewNRGBA(m.Bounds())
+	for y := m.Bounds().Min.Y; y < m.Bounds().Max.Y; y++ {
+		for x := m.Bounds().Min.X; x < m.Bounds().Max.X; x++ {
+			out.Set(x, y, m.At(x, y))
+		}
+	}
+	return out
+})
+
+// opaqueBounds is the smallest rectangle holding every visible pixel.
+func opaqueBounds(m *image.NRGBA) image.Rectangle {
+	b := image.Rectangle{Min: m.Bounds().Max, Max: m.Bounds().Min}
+	for y := m.Bounds().Min.Y; y < m.Bounds().Max.Y; y++ {
+		for x := m.Bounds().Min.X; x < m.Bounds().Max.X; x++ {
+			if m.NRGBAAt(x, y).A > 8 {
+				b = b.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	return b
+}
+
+// area averages m over [x0,x1)×[y0,y1) in its pixels, each weighted by how
+// much of it the area covers: premultiplied colour (0-255) and alpha (0-1).
+// Outside the image counts as clear.
+func area(m *image.NRGBA, x0, y0, x1, y1 float64) (r, g, b, a float64) {
+	var w float64
+	for y := int(math.Floor(y0)); float64(y) < y1; y++ {
+		wy := math.Min(y1, float64(y+1)) - math.Max(y0, float64(y))
+		for x := int(math.Floor(x0)); float64(x) < x1; x++ {
+			wx := math.Min(x1, float64(x+1)) - math.Max(x0, float64(x))
+			w += wx * wy
+			if !(image.Point{x, y}.In(m.Bounds())) {
+				continue
+			}
+			c := m.NRGBAAt(x, y)
+			al := float64(c.A) / 255 * wx * wy
+			r += float64(c.R) * al
+			g += float64(c.G) * al
+			b += float64(c.B) * al
+			a += al
+		}
+	}
+	if w == 0 {
+		return 0, 0, 0, 0
+	}
+	return r / w, g / w, b / w, a / w
 }
 
 // relayContent is every answer Relay gives: each path's bytes and type,
@@ -124,7 +208,7 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 		out[p] = [2]string{string(data), contentType(name)}
 	}
 	for p, size := range relayIcons {
-		out[p] = [2]string{string(provisionalIcon(size)), "image/png"}
+		out[p] = [2]string{string(AppIcon(size)), "image/png"}
 	}
 	return out
 })

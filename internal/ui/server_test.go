@@ -119,6 +119,16 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
 		}
 	}
+	// The app icon: the favicon and the header's mark.
+	icon := do(t, ts, "GET", "/assets/icon-192.png", "", authed(ts, nil))
+	ib, _ := io.ReadAll(icon.Body)
+	if icon.StatusCode != 200 || icon.Header.Get("Content-Type") != "image/png" || string(ib) != string(static.AppIcon(192)) ||
+		!strings.Contains(string(body), `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) || !strings.Contains(string(body), `class="brand-mark" src="/assets/icon-192.png"`) {
+		t.Errorf("icon: %d %q", icon.StatusCode, icon.Header.Get("Content-Type"))
+	}
+	if r := do(t, ts, "GET", "/assets/icon-512.png", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
+		t.Errorf("another icon size: %d", r.StatusCode)
+	}
 	csp := page.Header.Get("Content-Security-Policy")
 	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
