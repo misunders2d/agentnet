@@ -23,9 +23,9 @@ func vecInvite() ParticipationEvent {
 // that answers it (key from an all-zero seed).
 func TestParticipationVectors(t *testing.T) {
 	inv := vecInvite()
-	want := "agentnet-participation-v1\n" + `{"v":1,"conv":"e0758d3e1872da6abc62304e16423c9ae8782d39be3517e4503df4b6ac88b75a",` +
+	want := "agentnet-participation-v1\n" + `{"v":1,"conv":"2618a06e39982409d2effa23e5570480598e4727c1b6d81b36d43d420b96a3b9",` +
 		`"pid":"00112233445566778899aabbccddeeff","type":"invite","prev":"","author":{"person":"0123456789abcdef0123456789abcdef",` +
-		`"roster":"57cbbb8dd8d82a48e8949e376f4b8f75f4945ac496f770790554d55a78065a04","address":"vitalii/desk",` +
+		`"roster":"f78b94d0e4bf9f75df8a53076cb188f257acf1b660df845f0da670fdeef9f755","address":"vitalii/desk",` +
 		`"fingerprint":"01234567-89abcdef-01234567-89abcdef"},"ts":1790000000,"host":{"person":"fedcba9876543210fedcba9876543210",` +
 		`"address":"sergey/laptop","fingerprint":"01234567-89abcdef-01234567-89abcdef"},"grant":[{"lid":"11111111111111111111111111111111",` +
 		`"fingerprint":"01234567-89abcdef-01234567-89abcdef"},{"lid":"22222222222222222222222222222222",` +
@@ -34,18 +34,18 @@ func TestParticipationVectors(t *testing.T) {
 	if got := string(inv.Canonical()); got != want {
 		t.Fatalf("invite bytes:\n got %q\nwant %q", got, want)
 	}
-	if inv.Hash() != "f8f1666eb4184ec2e81cdb8483c4702a63c45a3c05f76339a2f092afc4f2d818" ||
-		hex.EncodeToString(inv.Sig) != "5f8a2a8b5144cc66a9d13b06daa46810d82a74922bccf7b14a84a1c2992ce2c18c5eac6062f91562c2ef942f49c4538e6c1617382d3c197ae354f9deebfcac05" {
+	if inv.Hash() != "e3664a7cce67553fd370fc8d5659d9a1102139dbf7e5ce5e1216e051173da383" ||
+		hex.EncodeToString(inv.Sig) != "72901c7427971cc3c8ea2edbec49480c0e1f6e1fffefacd4329d81d5123f0b080feaba0a5979d93548f6bf6ff8b2a72fa4241bf4f0258459d46555f5f336c90f" {
 		t.Fatalf("invite hash %s sig %x", inv.Hash(), inv.Sig)
 	}
 	acc := ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventAccept, Prev: inv.Hash(), TS: 1790000100,
 		Author: EventAuthor{Person: vecOther, Roster: vecRoster().Hash(), Address: "sergey/laptop", Fingerprint: vecFP}}
 	acc.Sign(vecKey())
-	wantAcc := "agentnet-participation-v1\n" + `{"v":1,"conv":"e0758d3e1872da6abc62304e16423c9ae8782d39be3517e4503df4b6ac88b75a",` +
-		`"pid":"00112233445566778899aabbccddeeff","type":"accept","prev":"f8f1666eb4184ec2e81cdb8483c4702a63c45a3c05f76339a2f092afc4f2d818",` +
-		`"author":{"person":"fedcba9876543210fedcba9876543210","roster":"57cbbb8dd8d82a48e8949e376f4b8f75f4945ac496f770790554d55a78065a04",` +
+	wantAcc := "agentnet-participation-v1\n" + `{"v":1,"conv":"2618a06e39982409d2effa23e5570480598e4727c1b6d81b36d43d420b96a3b9",` +
+		`"pid":"00112233445566778899aabbccddeeff","type":"accept","prev":"e3664a7cce67553fd370fc8d5659d9a1102139dbf7e5ce5e1216e051173da383",` +
+		`"author":{"person":"fedcba9876543210fedcba9876543210","roster":"f78b94d0e4bf9f75df8a53076cb188f257acf1b660df845f0da670fdeef9f755",` +
 		`"address":"sergey/laptop","fingerprint":"01234567-89abcdef-01234567-89abcdef"},"ts":1790000100}`
-	if string(acc.Canonical()) != wantAcc || acc.Hash() != "8c77bf7bc19c7a372d13cc86fca4c433bcc407ffbebd94a5044c7ee8973d4cd2" {
+	if string(acc.Canonical()) != wantAcc || acc.Hash() != "fcc180b43f7bb73caa2dd4bd84f143e001622598dfbfeb2ade5507a41e5d6877" {
 		t.Fatalf("accept bytes:\n got %s\nhash %s", acc.Canonical(), acc.Hash())
 	}
 	pub := vecKey().Public().(ed25519.PublicKey)

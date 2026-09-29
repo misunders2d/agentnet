@@ -13,19 +13,33 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
-// runPerson shows or creates this installation's person (agentnet help person).
+// runPerson shows or sets up this installation's person and its devices
+// (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	switch {
-	case len(args) == 0:
+	usage := errors.New("usage: person | person create NAME | person service | person link | person links | person approve ID | person refuse ID | person remove ADDRESS (see agentnet help person)")
+	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return errors.New("no person on this installation (agentnet person create NAME)")
+			if role, _ := a.Role(); role == "service" {
+				fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+				return nil
+			}
+			return errors.New("no person on this installation (agentnet person create NAME, or link this device from your other one)")
 		}
-		fmt.Fprintf(stdout, "%s  %q  on %s (%s)\n", p.Person, p.Label, p.Address, p.Fingerprint)
+		fmt.Fprintf(stdout, "%s  %q  roster %d\n", p.Person, p.Label, p.Seq)
+		for _, d := range p.Devices {
+			this := ""
+			if d.This {
+				this = "  (this device)"
+			}
+			fmt.Fprintf(stdout, "  %s  %s%s\n", d.Address, d.Fingerprint, this)
+		}
 		return nil
+	}
+	switch {
 	case args[0] == "create" && len(args) == 2:
 		p, err := a.CreatePerson(ctx, args[1])
 		if errors.Is(err, client.ErrNotPublished) {
@@ -37,8 +51,43 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		}
 		fmt.Fprintf(stdout, "%s  %q  on %s\n", p.Person, p.Label, p.Address)
 		return nil
+	case args[0] == "service" && len(args) == 1:
+		if err := a.SetService(); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		return nil
+	case args[0] == "link" && len(args) == 1:
+		o, err := a.NewDeviceLink(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Device link code (one use, until %s; show it only to yourself):\n%s\n", o.Expires.Format("15:04"), o.Code)
+		fmt.Fprintln(stdout, "Join your new device with it; then approve it here: agentnet person links, agentnet person approve ID")
+		return nil
+	case args[0] == "links" && len(args) == 1:
+		links, err := a.PendingLinks()
+		if err != nil {
+			return err
+		}
+		for _, l := range links {
+			fmt.Fprintf(stdout, "%s  %s  %s  key %s  asked %s\n", l.ID, l.State, l.Address, l.Fingerprint, time.Unix(l.RequestedAt, 0).Format("2006-01-02 15:04"))
+		}
+		return nil
+	case (args[0] == "approve" || args[0] == "refuse") && len(args) == 2:
+		if err := a.DecideLink(ctx, args[1], args[0] == "approve"); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%sd\n", args[0])
+		return nil
+	case args[0] == "remove" && len(args) == 2:
+		if err := a.RemoveDevice(ctx, args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed %s from your person\n", args[1])
+		return nil
 	}
-	return errors.New("usage: person | person create NAME (see agentnet help person)")
+	return usage
 }
 
 // runDM handles two-person conversations (agentnet help dm).
@@ -77,6 +126,9 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		}
 		for _, m := range msgs {
 			who := m.From
+			if m.Via != "" {
+				who = "you on " + m.Via
+			}
 			if m.Origin != "" && m.Emotion != "" {
 				who += " [" + m.Origin + ", " + m.Emotion + "]"
 			} else if m.Origin != "" {

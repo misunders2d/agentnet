@@ -122,6 +122,7 @@ func HashSecret(secret string) string {
 type JoinRequest struct {
 	Secret string          `json:"secret"`
 	Public identity.Public `json:"public"`
+	Link   *JoinLink       `json:"link,omitempty"` // required with a device invite (link.go)
 	Sig    []byte          `json:"sig"`
 }
 
@@ -420,9 +421,17 @@ type Member struct {
 	Address  string `json:"address"`
 	Presence string `json:"presence"` // PresenceConnected, PresenceReconnecting or PresenceOffline
 	Joined   int64  `json:"joined"`   // enrollment time, unix seconds
-	// Person is the signed person roster this device published, if any,
-	// exactly as signed; a receiver verifies it against the device's key.
-	Person json.RawMessage `json:"person,omitempty"`
+	// Person names the person roster this device speaks for, if any: the
+	// newest step the Hub holds. A receiver fetches and verifies the chain
+	// (GET /v1/persons/{id}/chain) only when it is newer than its own pin.
+	Person *PersonRef `json:"person,omitempty"`
+}
+
+// PersonRef names one step of a person's roster chain.
+type PersonRef struct {
+	ID   string `json:"id"`
+	Seq  int64  `json:"seq"`
+	Hash string `json:"hash"`
 }
 
 // Members is the Hub's member list (GET /v1/agents, and the "members" push
@@ -433,8 +442,8 @@ type Members struct {
 	Truncated bool     `json:"truncated"`
 }
 
-// MaxMembers bounds one member list, keeping it below MaxBody even when
-// every member carries a person record of MaxPersonRecord bytes.
+// MaxMembers bounds one member list, keeping it below MaxBody (a member
+// entry is at most a few hundred bytes: person records are not in it).
 const MaxMembers = 1000
 
 // MembersHeader, set to "1" on a push stream, says the Hub sends the member
@@ -462,8 +471,8 @@ func (m Members) Valid() error {
 		default:
 			return fmt.Errorf("%s: unknown presence %q", e.Address, e.Presence)
 		}
-		if len(e.Person) > MaxPersonRecord {
-			return fmt.Errorf("%s: person record too large", e.Address)
+		if p := e.Person; p != nil && (!ValidID(p.ID) || p.Seq < 0 || !ValidHash(p.Hash)) {
+			return fmt.Errorf("%s: malformed person reference", e.Address)
 		}
 	}
 	return nil

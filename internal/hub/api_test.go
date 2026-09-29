@@ -27,7 +27,7 @@ func testHub(t *testing.T) (*Hub, *identity.Identity, string) {
 	if err := h.store.createInvite("s", "admin", false, time.Hour, "x"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.enroll("s", id.Public(addr), "admin"); err != nil {
+	if _, _, err := h.store.enroll("s", id.Public(addr), "admin", nil); err != nil {
 		t.Fatal(err)
 	}
 	return h, id, addr
@@ -148,7 +148,7 @@ func enrollOther(t *testing.T, h *Hub) string {
 	if err := h.store.createInvite("o", "other", false, time.Hour, "admin/test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.enroll("o", id.Public("other/x"), "other"); err != nil {
+	if _, _, err := h.store.enroll("o", id.Public("other/x"), "other", nil); err != nil {
 		t.Fatal(err)
 	}
 	return "other/x"
@@ -177,7 +177,7 @@ func TestBrowserInviteRefusedBeforeMinting(t *testing.T) {
 			if err := h.store.createInvite("s", "admin", true, time.Hour, "x"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := h.store.enroll("s", id.Public("admin/test"), "admin"); err != nil {
+			if _, _, err := h.store.enroll("s", id.Public("admin/test"), "admin", nil); err != nil {
 				t.Fatal(err)
 			}
 			invites := func() int {

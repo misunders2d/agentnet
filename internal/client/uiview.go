@@ -284,36 +284,6 @@ func (a *Agent) MarkRead(ids []string) error {
 	return nil
 }
 
-// KnownPersons lists the persons pinned here, other than this
-// installation's own, for the page.
-func (a *Agent) KnownPersons() ([]PersonInfo, error) {
-	rows, err := a.store.db.Query(`SELECT person, label, address, fingerprint, hash, state FROM persons WHERE state != ? ORDER BY label, person`, personSelf)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []PersonInfo
-	for rows.Next() {
-		var p PersonInfo
-		if err := rows.Scan(&p.Person, &p.Label, &p.Address, &p.Fingerprint, &p.Roster, &p.State); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// PersonPublished reports whether this installation's person, as it is
-// now, was sent to the Hub.
-func (a *Agent) PersonPublished() bool {
-	me, ok, err := a.store.selfPerson()
-	if err != nil || !ok {
-		return false
-	}
-	done, _ := a.store.config("person_published")
-	return done == me.info.Roster
-}
-
 // ConvUnread lists, per conversation, the received messages not yet read.
 func (a *Agent) ConvUnread() (map[string][]string, error) {
 	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox WHERE conv IS NOT NULL AND read_at IS NULL`)

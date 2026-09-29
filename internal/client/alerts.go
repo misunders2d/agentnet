@@ -229,8 +229,8 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 	rows, err := tx.Query(`SELECT l.conv,
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
 		AND NOT EXISTS (SELECT 1 FROM alert_mutes m WHERE m.conv = l.conv)
-		AND EXISTS (SELECT 1 FROM alert_senders s JOIN persons p ON p.address = s.address AND p.fingerprint = s.fingerprint
-		            WHERE s.address = l.sender AND p.state = ?)
+		AND EXISTS (SELECT 1 FROM alert_senders s JOIN person_devices d ON d.address = s.address AND d.fingerprint = s.fingerprint
+		            JOIN persons p ON p.person = d.person WHERE s.address = l.sender AND p.state = ?)
 		FROM alerts l WHERE l.due_ms <= ?`, personPinned, now.UnixMilli())
 	if err != nil {
 		return time.Time{}, err

@@ -4,34 +4,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
-	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// relabelled publishes, from a's own key, a person record like its current
-// one with another label, as a real (re)publication would.
-func relabelled(t *testing.T, a *Agent, label string) {
+// relabel publishes, from a's own device, the next step of its person's
+// roster with another label (an honest change) and pins it at a.
+func relabel(t *testing.T, a *Agent, label string) {
 	t.Helper()
-	me, _, err := a.store.selfPerson()
+	me, _, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := me.roster
-	other.Label = label
-	other.Sign(a.id.Sign)
-	raw, _ := json.Marshal(other)
+	r := protocol.PersonRoster{Person: me.info.Person, Label: label, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: me.roster.Devices, By: a.Self().Fingerprint()}
+	r.Sign(a.id.Sign)
+	raw, _ := json.Marshal(r)
 	if err := a.hub.doBytes(tctx(t), "PUT", "/v1/person", raw, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.pinChain(r.Person, [][]byte{raw}, a.Self(), false); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// R1 as root reproduced it: bob pinned alice's person; alice publishes a
-// different, validly signed record; the member list bob receives carries it
-// and bob freezes alice's person, keeping the one he pinned.
-func TestPublishedPersonConflictFromMemberList(t *testing.T) {
+// A person's next roster step, named by the member list, is fetched and
+// pinned (verified against the step before it); a validly signed other
+// step at a pinned seq freezes the person, keeping what was pinned.
+func TestRosterStepsFromMemberList(t *testing.T) {
 	w := newWorld(t, "")
 	persons(t, w.alice, w.bob)
 	pub := w.alice.id.Public(w.alice.Address)
@@ -39,7 +41,7 @@ func TestPublishedPersonConflictFromMemberList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relabelled(t, w.alice, "Different signed roster")
+	relabel(t, w.alice, "Alice (new label)")
 	var members protocol.Members
 	if err := w.bob.hub.do(tctx(t), "GET", "/v1/agents", nil, &members); err != nil {
 		t.Fatal(err)
@@ -48,18 +50,22 @@ func TestPublishedPersonConflictFromMemberList(t *testing.T) {
 	w.bob.onMembers(data)
 	w.bob.convSync(tctx(t))
 	got, err := w.bob.personOfKey(tctx(t), w.alice.Address, pub)
-	if !errors.Is(err, errPersonConflict) {
-		t.Fatalf("published conflicting signed roster ignored: state=%s err=%v", got.info.State, err)
+	if err != nil || got.info.Person != before.info.Person || got.info.Seq != 1 || got.info.Label != "Alice (new label)" || got.info.State != personPinned {
+		t.Fatalf("after the step: %+v %v", got.info, err)
 	}
-	if got.info.Person != before.info.Person || got.info.Roster != before.info.Roster || got.info.Label != before.info.Label {
-		t.Fatalf("the pinned identity changed: %+v, was %+v", got.info, before.info)
+	if !w.bob.store.inChain(before.info.Person, before.info.Roster) {
+		t.Fatal("the earlier step left the chain")
+	}
+	freeze(t, w.bob, w.alice) // alice's key signs another step 1
+	got, err = w.bob.personOfKey(tctx(t), w.alice.Address, pub)
+	if !errors.Is(err, errPersonConflict) || got.info.Label != "Alice (new label)" || got.info.Seq != 1 {
+		t.Fatalf("a verified fork: state=%s %+v %v", got.info.State, got.info, err)
 	}
 }
 
-// R1 through the running daemons: the Hub's push after alice republishes
-// freezes her person at bob; bob can no longer send in their DM, and a new
+// A frozen person freezes the DM: bob can no longer send in it, and a new
 // message from alice is held as a conflict, not admitted.
-func TestPublishedPersonConflictFreezesDM(t *testing.T) {
+func TestFrozenPersonFreezesDM(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
@@ -69,11 +75,7 @@ func TestPublishedPersonConflictFreezesDM(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to pin alice by admitting her message", func() bool { return len(convBodies(t, w.bob, conv)) == 1 })
-	relabelled(t, w.alice, "Alice (new label)")
-	eventually(t, "bob to freeze alice's person on the push", func() bool {
-		p, _, _ := w.bob.store.personByAddress(w.alice.Address)
-		return p.info.State == personConflict
-	})
+	freeze(t, w.bob, w.alice)
 	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "still there?"}); !errors.Is(err, errPersonConflict) {
 		t.Fatalf("bob sent into a frozen DM: %v", err)
 	}
@@ -87,44 +89,39 @@ func TestPublishedPersonConflictFreezesDM(t *testing.T) {
 	}
 }
 
-// Evidence that does not verify against the pinned key, a member without a
-// record, and members nobody pinned change nothing: no conflict is made up
-// and nobody is pinned for being listed.
+// Member references the Hub cannot back (another hash at the pinned seq, a
+// seq it does not hold), members without one, and members nobody pinned
+// change nothing: no conflict is made up and nobody is pinned for being
+// listed.
 func TestMemberListNeverFabricatesOrPins(t *testing.T) {
 	w := newWorld(t, "")
 	carol := mustJoin(t, t.TempDir(), w.aliceInvites("carol"), "desk")
 	persons(t, w.alice, w.bob, carol)
 	pub := w.alice.id.Public(w.alice.Address)
-	if _, err := w.bob.personOfKey(tctx(t), w.alice.Address, pub); err != nil {
+	pinned, err := w.bob.personOfKey(tctx(t), w.alice.Address, pub)
+	if err != nil {
 		t.Fatal(err)
 	}
-	me, _, _ := w.alice.store.selfPerson()
-	stranger, _ := identity.Generate()
-	forged := me.roster
-	forged.Label = "Mallory"
-	forged.Sign(stranger.Sign) // not alice's key
-	forgedRaw, _ := json.Marshal(forged)
-	elsewhere := me.roster
-	elsewhere.Label = "Elsewhere"
-	elsewhere.Devices = []protocol.RosterDevice{{Address: w.alice.Address, Fingerprint: stranger.Public(w.alice.Address).Fingerprint()}}
-	elsewhere.Sign(w.alice.id.Sign) // alice's key, but naming another device key
-	elsewhereRaw, _ := json.Marshal(elsewhere)
 	var members protocol.Members
 	if err := w.bob.hub.do(tctx(t), "GET", "/v1/agents", nil, &members); err != nil {
 		t.Fatal(err)
 	}
-	for _, blob := range []json.RawMessage{forgedRaw, elsewhereRaw, nil, json.RawMessage(`{"person":"x"}`)} {
+	for _, ref := range []*protocol.PersonRef{
+		{ID: pinned.info.Person, Seq: 0, Hash: strings.Repeat("a", 64)},
+		{ID: pinned.info.Person, Seq: 7, Hash: strings.Repeat("b", 64)},
+		nil,
+	} {
 		for i := range members.Members {
 			if members.Members[i].Address == w.alice.Address {
-				members.Members[i].Person = blob
+				members.Members[i].Person = ref
 			}
 		}
 		data, _ := json.Marshal(members)
 		w.bob.onMembers(data)
 		w.bob.convSync(tctx(t))
 		p, _, _ := w.bob.store.personByAddress(w.alice.Address)
-		if p.info.State != personPinned {
-			t.Fatalf("record %.40s made a conflict", blob)
+		if p.info.State != personPinned || p.info.Roster != pinned.info.Roster {
+			t.Fatalf("reference %+v changed the pinned person: %+v", ref, p.info)
 		}
 	}
 	if _, ok, _ := w.bob.store.personByAddress(carol.Address); ok {

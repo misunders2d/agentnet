@@ -58,19 +58,21 @@ type ParticipationInfo struct {
 	Invited     int64               `json:"invited,omitempty"`   // the inviter's claim, unix seconds
 }
 
-// dmMembers are a DM's member persons as pinned here now, by person id;
-// a person frozen, missing or with another roster than the root names is
-// left out.
+// dmMembers are a DM's member persons as pinned here now, by person id: a
+// person frozen or missing, or whose pinned chain does not contain the
+// roster the root binds it to, is left out. Their devices are the current
+// ones; chains holds each person's pinned roster steps.
 type dmMembers struct {
 	root    protocol.ConvRoot
 	persons map[string]personRow
+	chains  map[string]map[string]bool
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
 
 // membersIn reads a DM's members from q (the store, or a transaction that
 // must decide on the members as they are within it).
-func membersIn(q querier, conv string) (dmMembers, error) {
+func membersIn(q dbq, conv string) (dmMembers, error) {
 	root, _, found, err := conversationIn(q, conv)
 	if err != nil {
 		return dmMembers{}, err
@@ -78,46 +80,67 @@ func membersIn(q querier, conv string) (dmMembers, error) {
 	if !found {
 		return dmMembers{}, fmt.Errorf("no conversation %s here", conv)
 	}
-	m := dmMembers{root: root, persons: map[string]personRow{}}
+	m := dmMembers{root: root, persons: map[string]personRow{}, chains: map[string]map[string]bool{}}
 	for _, mem := range root.Members {
 		p, ok, err := personByIDIn(q, mem.Person)
 		if err != nil {
 			return dmMembers{}, err
 		}
-		if ok && (p.info.State == personSelf || p.info.State == personPinned) && p.info.Roster == mem.Roster {
-			m.persons[mem.Person] = p
+		if !ok || p.info.State != personSelf && p.info.State != personPinned {
+			continue
+		}
+		chain := map[string]bool{}
+		rows, err := q.Query(`SELECT hash FROM person_chain WHERE person = ?`, mem.Person)
+		if err != nil {
+			return dmMembers{}, err
+		}
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				rows.Close()
+				return dmMembers{}, err
+			}
+			chain[h] = true
+		}
+		rows.Close()
+		if chain[mem.Roster] {
+			m.persons[mem.Person], m.chains[mem.Person] = p, chain
 		}
 	}
 	return m, nil
 }
 
+// author reports whether au names a current device of a member person,
+// with a roster step of its pinned chain.
 func (m dmMembers) author(au protocol.EventAuthor) (personRow, bool) {
 	p, ok := m.persons[au.Person]
-	return p, ok && p.info.Roster == au.Roster && p.info.Address == au.Address && p.info.Fingerprint == au.Fingerprint
+	return p.at(au.Address), ok && m.chains[au.Person][au.Roster] && p.has(au.Address, au.Fingerprint)
 }
 
+// host reports whether h names a current device of a member person.
 func (m dmMembers) host(h *protocol.ParticipationHost) (personRow, bool) {
 	if h == nil {
 		return personRow{}, false
 	}
 	p, ok := m.persons[h.Person]
-	return p, ok && p.info.Address == h.Address && p.info.Fingerprint == h.Fingerprint
+	return p.at(h.Address), ok && p.has(h.Address, h.Fingerprint)
 }
 
-// device reports whether address with key fingerprint fp is the device of
-// a member person as pinned here now.
+// device reports whether address with key fingerprint fp is a current
+// device of a member person as pinned here now.
 func (m dmMembers) device(address, fp string) bool {
 	for _, p := range m.persons {
-		if p.info.Address == address && p.info.Fingerprint == fp {
+		if p.has(address, fp) {
 			return true
 		}
 	}
 	return false
 }
 
+// memberKey reports whether fp is the key of a current device of a member.
 func (m dmMembers) memberKey(fp string) bool {
 	for _, p := range m.persons {
-		if p.info.Fingerprint == fp {
+		if _, ok := p.roster.Device(fp); ok {
 			return true
 		}
 	}
@@ -286,7 +309,7 @@ func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
-	me, ok, err := a.store.selfPerson()
+	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
@@ -295,8 +318,8 @@ func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant
 	}
 	var host *protocol.ParticipationHost
 	for _, p := range m.persons {
-		if p.info.Address == hostAddress {
-			host = &protocol.ParticipationHost{Person: p.info.Person, Address: p.info.Address, Fingerprint: p.info.Fingerprint}
+		if d, ok := p.device(hostAddress); ok {
+			host = &protocol.ParticipationHost{Person: p.info.Person, Address: d.Address, Fingerprint: d.Fingerprint()}
 		}
 	}
 	if host == nil {
@@ -387,7 +410,7 @@ func (a *Agent) DismissParticipation(ctx context.Context, pid string) (Participa
 	if err != nil {
 		return info, err
 	}
-	me, ok, err := a.store.selfPerson()
+	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return info, err
 	}
@@ -411,7 +434,7 @@ func (a *Agent) DismissParticipation(ctx context.Context, pid string) (Participa
 // sign makes this installation's event of typ following prev, stores it and
 // sends it.
 func (a *Agent) sign(ctx context.Context, info ParticipationInfo, typ, prev string) (ParticipationInfo, error) {
-	me, _, err := a.store.selfPerson()
+	me, _, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return info, err
 	}

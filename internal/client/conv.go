@@ -34,12 +34,6 @@ import (
 // the message, and new evidence (a members push, a new connection) looks
 // again; nothing polls.
 
-// ErrNoPerson means an installation has not created a person.
-var ErrNoPerson = errors.New("that installation has not created a person (agentnet person create)")
-
-// errPersonRecord means a published person record did not verify.
-var errPersonRecord = errors.New("person record does not verify")
-
 // ErrNotPublished means a person was created here but the Hub does not hold
 // it yet; the daemon publishes it when it connects.
 var ErrNotPublished = errors.New("not yet published on the Hub (the daemon publishes it when it connects)")
@@ -78,6 +72,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		return
 	}
 	if work&convPublish != 0 {
+		a.retryApprovedLinks(ctx)
 		if err := a.publishOwn(ctx, feats); err != nil {
 			a.Logf("publishing person and capabilities: %v", err)
 			if retryable(err) {
@@ -86,7 +81,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		}
 	}
 	if work&convPersons != 0 { // before retrying held messages: a conflict must hold them
-		a.checkPersons(a.MemberView().Members)
+		a.checkPersons(ctx, a.MemberView().Members)
 	}
 	if work&(convRetry|convRetryMore) != 0 {
 		if work&convRetry != 0 {
@@ -120,173 +115,16 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // this installation's person.
 func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 	if slices.Contains(feats, protocol.FeatureCaps) && a.session != "" {
-		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: []string{protocol.CapEnv2, protocol.CapNotify}, TS: time.Now().Unix()}
+		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: []string{protocol.CapEnv2, protocol.CapNotify, protocol.CapPerson}, TS: time.Now().Unix()}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
 			return err
 		}
 	}
 	if slices.Contains(feats, protocol.FeaturePerson) {
-		return a.publishPerson(ctx, false)
+		return a.publishPerson(ctx)
 	}
 	return nil
-}
-
-// publishPerson sends this installation's person record to the Hub, unless
-// this exact record was sent already (or force).
-func (a *Agent) publishPerson(ctx context.Context, force bool) error {
-	me, ok, err := a.store.selfPerson()
-	if err != nil || !ok {
-		return err
-	}
-	if done, _ := a.store.config("person_published"); done == me.info.Roster && !force {
-		return nil
-	}
-	if err := a.hub.doBytes(ctx, "PUT", "/v1/person", me.raw, nil); err != nil {
-		return err
-	}
-	return a.store.setConfig(map[string]string{"person_published": me.info.Roster})
-}
-
-// Person returns this installation's person, if one was created here.
-func (a *Agent) Person() (PersonInfo, bool, error) {
-	me, ok, err := a.store.selfPerson()
-	return me.info, ok, err
-}
-
-// CreatePerson creates this installation's person, with label as the name
-// it shows (its own claim), and publishes it. It is the only way a person
-// comes to exist: never from an enrollment, address, label or migration.
-// There is at most one per installation. A returned ErrNotPublished means
-// the person exists but the Hub does not hold it yet.
-func (a *Agent) CreatePerson(ctx context.Context, label string) (PersonInfo, error) {
-	if me, ok, err := a.store.selfPerson(); err != nil {
-		return PersonInfo{}, err
-	} else if ok {
-		return me.info, fmt.Errorf("this installation already speaks for %q (%s); a second person is not created", me.info.Label, me.info.Person)
-	}
-	pub := a.id.Public(a.Address)
-	r := protocol.PersonRoster{Person: protocol.NewID(), Label: label, Devices: []protocol.RosterDevice{{Address: a.Address, Fingerprint: pub.Fingerprint()}}}
-	if err := r.Validate(); err != nil {
-		return PersonInfo{}, err
-	}
-	r.Sign(a.id.Sign)
-	raw, _ := json.Marshal(r)
-	if len(raw) > protocol.MaxPersonRecord {
-		return PersonInfo{}, errors.New("person: the record is too large; use a shorter label")
-	}
-	if err := a.store.setSelfPerson(r, raw); err != nil {
-		return PersonInfo{}, err
-	}
-	me, _, err := a.store.selfPerson()
-	if err != nil {
-		return PersonInfo{}, err
-	}
-	feats, err := a.relayFeatures(ctx)
-	if err == nil && !slices.Contains(feats, protocol.FeaturePerson) {
-		err = errors.New("the Hub does not hold persons (it needs an update)")
-	}
-	if err == nil {
-		err = a.publishPerson(ctx, true)
-	}
-	if err != nil {
-		return me.info, fmt.Errorf("%w: %v", ErrNotPublished, err)
-	}
-	return me.info, nil
-}
-
-// personOfKey returns the person that the device at address speaks for,
-// pinning its published record first if needed, verified against key, the
-// device's verified key. A record that does not name that key is refused.
-func (a *Agent) personOfKey(ctx context.Context, address string, key identity.Public) (personRow, error) {
-	p, ok, err := a.store.personByAddress(address)
-	if err != nil {
-		return p, err
-	}
-	if ok {
-		if p.info.State == personConflict {
-			return p, errPersonConflict
-		}
-		return p, nil
-	}
-	label, name, err := protocol.SplitAddress(address)
-	if err != nil {
-		return p, err
-	}
-	var prof protocol.Profile
-	err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof)
-	var he *HubError
-	if errors.As(err, &he) && he.Status == 404 {
-		return p, ErrNoPerson
-	}
-	if err != nil {
-		return p, err
-	}
-	if len(prof.Person) == 0 {
-		return p, ErrNoPerson
-	}
-	r, err := protocol.ParsePersonRoster(prof.Person)
-	if err == nil {
-		err = r.Verify(key.SignKey)
-	}
-	if err == nil && (r.Devices[0].Address != address || r.Devices[0].Fingerprint != key.Fingerprint()) {
-		err = errors.New("person: the record does not name this device's key")
-	}
-	if err != nil {
-		return p, fmt.Errorf("%w: %s: %v", errPersonRecord, address, err)
-	}
-	if err := a.store.pinPerson(r, prof.Person, key); err != nil {
-		return p, err
-	}
-	p, _, err = a.store.personByAddress(address)
-	return p, err
-}
-
-// checkPersons compares the person records in a member list with the
-// persons pinned here (observePerson); members not pinned here are left
-// alone: listing someone never pins or trusts them.
-func (a *Agent) checkPersons(ms protocol.Members) {
-	for _, m := range ms.Members {
-		if len(m.Person) > 0 {
-			a.observePerson(m.Address, m.Person)
-		}
-	}
-}
-
-// observePerson checks a person record published for address against the
-// person pinned for it. Only a record that verifies against the very key
-// the pinned person was verified with, and names that device, counts as
-// evidence; if it then differs, the pinned person is frozen as a conflict
-// (it keeps its identity; nothing is replaced). A record that does not
-// verify, or nothing pinned, changes nothing: it is no proof of a conflict.
-func (a *Agent) observePerson(address string, blob json.RawMessage) {
-	p, ok, err := a.store.personByAddress(address)
-	if err != nil || !ok || p.info.State != personPinned {
-		return
-	}
-	pub := p.pub
-	if pub == nil { // pinned before keys were kept: the address's pinned key
-		pinned, _, found, err := a.store.peer(address)
-		if err != nil || !found || pinned.Fingerprint() != p.info.Fingerprint {
-			return
-		}
-		pub = &pinned
-	}
-	r, err := protocol.ParsePersonRoster(blob)
-	if err != nil || r.Verify(pub.SignKey) != nil {
-		return
-	}
-	if d := r.Devices[0]; d.Address != address || d.Fingerprint != p.info.Fingerprint {
-		return
-	}
-	if r.Hash() == p.info.Roster {
-		return
-	}
-	if err := a.store.pinPerson(r, blob, *pub); errors.Is(err, errPersonConflict) {
-		a.Logf("%s published a different person record than the one pinned here: frozen (conversations with %q hold)", address, p.info.Label)
-	} else if err != nil {
-		a.Logf("person record of %s: %v", address, err)
-	}
 }
 
 // convSupport reports whether a conversation message can go to the device
@@ -306,11 +144,11 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
 		return false, "cannot ask the Hub what " + address + " can read: " + err.Error(), false
 	}
-	if len(prof.Person) > 0 {
-		a.observePerson(address, prof.Person) // fresh evidence, checked before anything is sent
+	if r, err := protocol.ParsePersonRoster(prof.Person); err == nil { // fresh evidence, checked before anything is sent
+		a.observeRef(ctx, &protocol.PersonRef{ID: r.Person, Seq: r.Seq, Hash: r.Hash()})
 	}
-	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) {
-		return false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)", false
+	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) || !prof.Supports(address, key.SignKey, protocol.CapPerson) {
+		return false, address + " needs to update AgentNet before it can take part in conversations (an older program, or it has not connected since updating)", false
 	}
 	return true, "", slices.Contains(feats, protocol.FeatureNotify) && prof.Supports(address, key.SignKey, protocol.CapNotify)
 }
@@ -335,12 +173,12 @@ func asksAttention(in envelope.Inner) bool {
 // CreateDM starts a new two-person conversation with the person that the
 // device at address speaks for. Each call starts a separate conversation.
 func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
-	me, ok, err := a.store.selfPerson()
+	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		return "", errors.New("create your person first (agentnet person create NAME)")
+		return "", errors.New("set up your person first (agentnet person create NAME, or link this device to it)")
 	}
 	feats, err := a.relayFeatures(ctx)
 	if err != nil {
@@ -375,7 +213,7 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 		}
 		return 1
 	})
-	root := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM,
+	root := protocol.ConvRoot{V: protocol.ConvRootVersion, Kind: protocol.ConvKindDM,
 		Creator: protocol.ConvCreator{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint},
 		Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix()}
 	root.Sign(a.id.Sign)
@@ -394,7 +232,7 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) { return a.store.con
 
 // ConversationMessages lists a conversation's messages here, oldest first.
 func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
-	return a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint())
+	return a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint(), a.ownDevices())
 }
 
 // ConvOutgoing is a message to send in a conversation.
@@ -415,16 +253,37 @@ type ConvOutgoing struct {
 	selfJob bool                                   // a request to this device's own agent: its job is recorded with it
 }
 
-// ConvSent is what became of a conversation message.
+// ConvSent is what became of a conversation message: one copy per device
+// (the other member's devices, and this person's other devices).
 type ConvSent struct {
-	ID, LID string
-	State   string // custody, delivered, queued, or waiting (kept: the recipient cannot read it now)
+	ID, LID string // ID: the first copy's envelope
+	State   string // the least advanced copy's: custody, delivered, queued, or waiting (kept: that device cannot read it now)
 	Detail  string
+	Copies  []ConvCopy
 }
 
-// SendConv sends m in conversation conv. If the recipient's device cannot
-// read conversations now, the message is kept as waiting and goes out when
-// it can; it is never sent as version 1.
+// ConvCopy is one device's copy of a sent conversation message.
+type ConvCopy struct {
+	ID     string `json:"id"`
+	To     string `json:"to"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// outCopy is one device's copy being stored.
+type outCopy struct {
+	env   envelope.Envelope
+	in    envelope.Inner
+	state string
+	why   string
+}
+
+// SendConv sends m in conversation conv: one copy to each current device of
+// the other member and of this person's other devices, all with one
+// logical id. A device that cannot read conversations now gets its copy
+// kept as waiting, sent when it can; none is ever sent as version 1. Copies
+// to this person's own devices are replicas (history: never executed),
+// except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
 	root, raw, found, err := a.store.conversation(conv)
 	if err != nil {
@@ -433,11 +292,11 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if !found {
 		return ConvSent{}, fmt.Errorf("no conversation %s here", conv)
 	}
-	me, ok, err := a.store.selfPerson()
+	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return ConvSent{}, err
 	}
-	if r, member := root.Member(me.info.Person); !ok || !member || r != me.info.Roster {
+	if r, member := root.Member(me.info.Person); !ok || !member || !a.store.inChain(me.info.Person, r) {
 		return ConvSent{}, errors.New("this installation does not speak for a member of that conversation")
 	}
 	var peerID string
@@ -445,28 +304,6 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if mem.Person != me.info.Person {
 			peerID = mem.Person
 		}
-	}
-	peer, ok, err := a.store.personByID(peerID)
-	if err != nil {
-		return ConvSent{}, err
-	}
-	if !ok {
-		return ConvSent{}, errors.New("the other member's person record is not pinned here")
-	}
-	if peer.info.State == personConflict {
-		return ConvSent{}, errPersonConflict
-	}
-	dev := peer.roster.Devices[0]
-	key, err := a.sendKey(ctx, dev.Address)
-	if err != nil {
-		return ConvSent{}, err
-	}
-	if key.Fingerprint() != dev.Fingerprint {
-		return ConvSent{}, fmt.Errorf("%s's key is no longer the one its person record names; the conversation is frozen", dev.Address)
-	}
-	recipient, err := key.Recipient()
-	if err != nil {
-		return ConvSent{}, err
 	}
 	if m.Kind == "" {
 		m.Kind = envelope.KindMessage
@@ -481,19 +318,59 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			return ConvSent{}, fmt.Errorf("message %s is not in this conversation: a reply stays within its conversation", m.ReplyTo)
 		}
 	}
-	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: protocol.NewID(), Root: raw,
-		Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status}
 	if len(m.Files) > 0 {
-		// Files go with a turn a person sends; the ciphertext waits in the
-		// private spool until the Hub holds the message (files.go). Cleanup
-		// must not see it before the outbox refers to it.
 		if m.sub != "" || m.PID != "" || m.claim != nil || m.selfJob {
 			return ConvSent{}, errors.New("files go only with a message, question or task a person sends")
 		}
 		if len(m.Files) > envelope.MaxAttachments {
 			return ConvSent{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 		}
+	} else if m.Body == "" && m.sub == "" {
+		return ConvSent{}, errors.New("nothing to send: no text and no files")
+	}
+	// Fresh evidence first: newer roster steps of both persons decide the
+	// devices, and each device's profile what it can read.
+	feats, ferr := a.relayFeatures(ctx)
+	if ferr == nil {
+		for _, id := range []string{peerID, me.info.Person} {
+			if _, err := a.refreshPerson(ctx, id, false); errors.Is(err, errPersonConflict) {
+				return ConvSent{}, errPersonConflict
+			} else if err != nil && !retryable(err) {
+				a.Logf("person %s: %v", id, err)
+			}
+		}
+	}
+	if me, ok, err = a.store.selfPerson(a.Address); err != nil || !ok {
+		return ConvSent{}, errors.New("this installation no longer speaks for a member of that conversation")
+	}
+	peer, ok, err := a.store.personByID(peerID)
+	if err != nil {
+		return ConvSent{}, err
+	}
+	if !ok {
+		return ConvSent{}, errors.New("the other member's person record is not pinned here")
+	}
+	if peer.info.State == personConflict {
+		return ConvSent{}, errPersonConflict
+	}
+	fan := []envelope.Fan{{Person: me.info.Person, Roster: me.info.Roster}, {Person: peer.info.Person, Roster: peer.info.Roster}}
+	var devices []identity.Public
+	own := map[string]bool{}
+	for _, d := range peer.roster.Devices {
+		devices = append(devices, d)
+	}
+	for _, d := range me.roster.Devices {
+		if d.Address != a.Address {
+			devices, own[d.Address] = append(devices, d), true
+		}
+	}
+	lid := protocol.NewID()
+	var copies []outCopy
+	if len(m.Files) > 0 {
+		// Files go with a turn a person sends, encrypted to each device; the
+		// ciphertext waits in the private spool until the Hub holds the
+		// message (files.go). Cleanup must not see it before the outbox
+		// refers to it.
 		release, err := lockfile.Wait(a.spoolLockPath())
 		if err != nil {
 			return ConvSent{}, err
@@ -501,75 +378,127 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		stored := false
 		defer func() {
 			if !stored {
-				a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
+				for _, c := range copies {
+					a.releaseSpool(envelope.Envelope{ID: c.in.ID, Blobs: blobsOf(c.in.Attachments)})
+				}
 			}
 			release()
 		}()
+		m.stored = func() { stored = true; release() } // idempotent release, before delivery
+	}
+	for _, dev := range devices {
+		key, err := a.sendKey(ctx, dev.Address)
+		if err == nil && key.Fingerprint() != dev.Fingerprint() {
+			err = fmt.Errorf("%s's key is not the one its person's roster names", dev.Address)
+		}
+		if err != nil {
+			a.Logf("conversation copy for %s not sent: %v", dev.Address, err)
+			continue
+		}
+		recipient, err := key.Recipient()
+		if err != nil {
+			return ConvSent{}, err
+		}
+		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
+		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan}
+		copies = append(copies, outCopy{in: in}) // listed before spooling, so a failure releases what it spooled
+		c := &copies[len(copies)-1]
 		for _, f := range m.Files {
 			att, err := a.spoolNamed(f, recipient)
 			if err != nil {
 				return ConvSent{}, err
 			}
-			in.Attachments = append(in.Attachments, att)
+			c.in.Attachments = append(c.in.Attachments, att)
 		}
-		m.stored = func() { stored = true; release() } // idempotent release, before delivery
-	} else if m.Body == "" && m.sub == "" {
-		return ConvSent{}, errors.New("nothing to send: no text and no files")
-	}
-	env, err := envelope.Seal(in, a.id.Sign, recipient)
-	if err != nil {
-		return ConvSent{}, err
-	}
-	feats, ferr := a.relayFeatures(ctx)
-	supported, why, notify := false, "", false
-	if ferr != nil {
-		why = "cannot reach the Hub: " + ferr.Error()
-	} else {
-		supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
-	}
-	if notify && asksAttention(in) { // sealed again, now with the recipient's channel
-		if env, err = envelope.SealAttention(in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint)); err != nil {
+		supported, why, notify := false, "cannot reach the Hub", false
+		if ferr == nil {
+			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
+		} else {
+			why += ": " + ferr.Error()
+		}
+		if notify && !own[dev.Address] && asksAttention(c.in) {
+			c.env, err = envelope.SealAttention(c.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint()))
+		} else {
+			c.env, err = envelope.Seal(c.in, a.id.Sign, recipient)
+		}
+		if err != nil {
 			return ConvSent{}, err
 		}
+		c.state, c.why = stateQueued, ""
+		if !supported {
+			c.state, c.why = stateConvWaiting, why
+		}
+	}
+	if len(copies) == 0 && !m.selfJob {
+		return ConvSent{}, errors.New("no device of the conversation can be sent a copy now")
 	}
 	if now, _, err := a.store.personByID(peerID); err != nil {
 		return ConvSent{}, err
-	} else if now.info.State == personConflict { // the profile just showed a different record
+	} else if now.info.State == personConflict { // a profile just showed a different record
 		return ConvSent{}, errPersonConflict
-	}
-	state := stateQueued
-	if !supported {
-		state = stateConvWaiting
 	}
 	jobKey := ""
 	if m.selfJob {
 		jobKey = me.info.Fingerprint
 	}
-	if err := a.store.addConvOutbox(env, in, state, why, m.claim, jobKey); err != nil {
+	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
+		Kind: m.Kind, Body: m.Body, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan}
+	if err := a.store.addConvOutbox(copies, local, m.claim, jobKey); err != nil {
 		return ConvSent{}, err
 	}
 	if m.stored != nil {
 		m.stored()
 	}
 	defer notifyDaemon(a.home)
-	if !supported {
-		return ConvSent{ID: env.ID, LID: in.LID, State: stateConvWaiting, Detail: why}, nil
+	sent := ConvSent{LID: lid, State: protocol.StateDelivered}
+	if len(copies) > 0 {
+		sent.ID = copies[0].env.ID
+	} else {
+		sent.ID = local.ID
 	}
-	res, err := a.deliver(ctx, env, nil)
-	if err != nil {
-		if retryable(err) {
-			return ConvSent{ID: env.ID, LID: in.LID, State: stateQueued, Detail: err.Error()}, nil
+	for _, c := range copies {
+		cp := ConvCopy{ID: c.env.ID, To: c.in.To, State: c.state, Detail: c.why}
+		if c.state == stateQueued {
+			res, err := a.deliver(ctx, c.env, nil)
+			switch {
+			case err == nil:
+				cp.State, cp.Detail = res.State, res.Detail
+			case retryable(err):
+				cp.Detail = err.Error()
+			default:
+				cp.State, cp.Detail = stateFailed, err.Error()
+			}
 		}
-		return ConvSent{ID: env.ID, LID: in.LID}, err
+		sent.Copies = append(sent.Copies, cp)
+		if rank(cp.State) < rank(sent.State) {
+			sent.State, sent.Detail = cp.State, cp.Detail
+		}
 	}
-	return ConvSent{ID: env.ID, LID: in.LID, State: res.State, Detail: res.Detail}, nil
+	return sent, nil
+}
+
+// rank orders copy states from least to most advanced.
+func rank(state string) int {
+	switch state {
+	case stateFailed:
+		return 0
+	case stateConvWaiting:
+		return 1
+	case stateQueued:
+		return 2
+	case protocol.StateCustody:
+		return 3
+	}
+	return 4 // delivered, or a later state
 }
 
 // personSendable reports whether the person on the device at address is
 // pinned and not frozen (and, if roster is given, still that roster).
 func (a *Agent) personSendable(address, roster string) bool {
 	p, ok, err := a.store.personByAddress(address)
-	return err == nil && ok && p.info.State == personPinned && (roster == "" || p.info.Roster == roster)
+	return err == nil && ok && (p.info.State == personPinned || p.info.State == personSelf) && (roster == "" || p.info.Roster == roster)
 }
 
 // releaseConv queues waiting conversation messages whose recipient can now
@@ -669,46 +598,49 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		// Only a hint for the Hub's alerts; nothing here routes by it.
 		a.Logf("conversation message %s from %s: its notification channel is not this conversation's", env.ID, env.From)
 	}
-	me, ok, err := a.store.selfPerson()
+	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return hold(reasonInvalid, "this installation has no person")
 	}
-	if r, member := root.Member(me.info.Person); !member || r != me.info.Roster {
+	if r, member := root.Member(me.info.Person); !member {
 		return hold(reasonInvalid, "this installation's person is not a member")
-	}
-	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
-		return err
-	} else if !found {
-		// Only the creator's own device introduces a root.
-		if env.From != root.Creator.Address || sender.Fingerprint() != root.Creator.Fingerprint {
-			return hold(reasonProof, "the conversation is not known here yet, and only its creator's device can introduce it")
-		}
-		if err := root.Verify(sender.SignKey); err != nil {
-			return hold(reasonInvalid, err.Error())
-		}
-		creator, err := a.personOfKey(ctx, env.From, sender)
-		if err != nil {
-			return personErr(err)
-		}
-		if creator.info.Person != root.Creator.Person || creator.info.Roster != root.Creator.Roster {
-			return hold(reasonConflict, "the creator's person record differs from the one its root names")
-		}
-		if err := a.store.addConversation(root, in.Root, creator.info.Person); err != nil {
-			return err
-		}
+	} else if ok, err := a.boundIn(ctx, me.info.Person, r); err != nil {
+		return personErr(err)
+	} else if !ok {
+		return hold(reasonInvalid, "the root binds this person to a roster step it never had")
 	}
 	sp, err := a.personOfKey(ctx, env.From, sender)
 	if err != nil {
 		return personErr(err)
 	}
-	if sp.info.Fingerprint != sender.Fingerprint() {
-		return hold(reasonConflict, "the sender's key is not the one its person record names")
-	}
-	if r, member := root.Member(sp.info.Person); !member || r != sp.info.Roster {
+	if r, member := root.Member(sp.info.Person); !member {
 		return hold(reasonInvalid, "the sender is not a member of this conversation")
+	} else if ok, err := a.boundIn(ctx, sp.info.Person, r); err != nil {
+		return personErr(err)
+	} else if !ok {
+		return hold(reasonInvalid, "the root binds the sender's person to a roster step its chain does not have")
+	}
+	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
+		return err
+	} else if !found {
+		// Any member device may bring the root; it must verify under the
+		// creator device's key as its person's chain lists it at the step
+		// the root names.
+		if err := a.verifyRoot(ctx, root, sp); errors.Is(err, errRootInvalid) {
+			return hold(reasonInvalid, err.Error())
+		} else if err != nil {
+			return personErr(err)
+		}
+		peer := root.Members[0].Person
+		if peer == me.info.Person {
+			peer = root.Members[1].Person
+		}
+		if err := a.store.addConversation(root, in.Root, peer); err != nil {
+			return err
+		}
 	}
 	if in.ReplyTo != "" { // a reply may name only a message of its own conversation
 		c, err := a.store.convOf(in.ReplyTo)
@@ -736,6 +668,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			if err := event(tx); err != nil {
 				return err
 			}
+		}
+		if sp.info.Person == me.info.Person {
+			return nil // this person's own message, from another of its devices: never an alert
 		}
 		return queueAlert(tx, in, sender.Fingerprint(), now)
 	}
@@ -765,4 +700,82 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		a.wakeAlerts()
 	}
 	return nil
+}
+
+// boundIn reports whether hash, the roster step a root binds person to, is
+// in person's pinned chain, fetching newer steps once if it is not.
+func (a *Agent) boundIn(ctx context.Context, person, hash string) (bool, error) {
+	if a.store.inChain(person, hash) {
+		return true, nil
+	}
+	if _, err := a.refreshPerson(ctx, person, false); err != nil {
+		return false, err
+	}
+	return a.store.inChain(person, hash), nil
+}
+
+// verifyRoot checks root under its creator device's key, as the creator
+// person's pinned chain lists that device at the step the root names; the
+// creator person is pinned first if needed (sender is the device that
+// brought the root, pinned already).
+func (a *Agent) verifyRoot(ctx context.Context, root protocol.ConvRoot, sender personRow) error {
+	c := root.Creator
+	if sender.info.Person != c.Person {
+		if _, ok, err := a.store.personByID(c.Person); err != nil {
+			return err
+		} else if !ok {
+			key, err := a.sendKey(ctx, c.Address)
+			if err != nil {
+				return err
+			}
+			if _, err := a.personOfKey(ctx, c.Address, key); err != nil {
+				return err
+			}
+		}
+	}
+	if ok, err := a.boundIn(ctx, c.Person, c.Roster); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("%w: the root's creator step is not in its person's chain", errRootInvalid)
+	}
+	step, _, err := a.store.chainStep(c.Person, c.Roster)
+	if err != nil {
+		return err
+	}
+	dev, ok := step.Device(c.Fingerprint)
+	if !ok || dev.Address != c.Address {
+		return fmt.Errorf("%w: the root's creator device is not in that step", errRootInvalid)
+	}
+	if err := root.Verify(dev.SignKey); err != nil {
+		return fmt.Errorf("%w: %v", errRootInvalid, err)
+	}
+	return nil
+}
+
+// errRootInvalid means a conversation root does not verify.
+var errRootInvalid = errors.New("conversation root invalid")
+
+// ownDevices names every device of this installation's person, in any
+// step of its pinned chain.
+func (a *Agent) ownDevices() map[string]bool {
+	own := map[string]bool{}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok {
+		return own
+	}
+	rows, err := a.store.db.Query(`SELECT record FROM person_chain WHERE person = ?`, me.info.Person)
+	if err != nil {
+		return own
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		var r protocol.PersonRoster
+		if rows.Scan(&raw) == nil && json.Unmarshal([]byte(raw), &r) == nil {
+			for _, d := range r.Devices {
+				own[d.Address] = true
+			}
+		}
+	}
+	return own
 }

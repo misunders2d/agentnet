@@ -103,6 +103,15 @@ type Inner struct {
 	Emotion string          `json:"emotion,omitempty"` // the agent's chosen emotion; required on agent-origin turns
 	Target  *Target         `json:"target,omitempty"`  // the one execution recipient of a question or task
 	PID     string          `json:"pid,omitempty"`     // the agent participation a request is for, an output is from, or an event is about
+	Fan     []Fan           `json:"fan,omitempty"`     // the member persons' rosters the sender sent copies to (one per device)
+}
+
+// Fan names a member person and the roster step whose devices the sender
+// sent this message's copies to. A device of that person that knows a newer
+// step forwards the message to the devices it adds (client).
+type Fan struct {
+	Person string `json:"person"`
+	Roster string `json:"roster"`
 }
 
 // Kinds of messages. The kind is signed and encrypted; it states intent,
@@ -165,7 +174,7 @@ func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAg
 // version 1).
 func checkVersion2(in Inner) error {
 	if in.V != Version2 {
-		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Sub != "" || in.Replica || in.Origin != "" || in.Emotion != "" || in.Target != nil || in.PID != "" {
+		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Sub != "" || in.Replica || in.Origin != "" || in.Emotion != "" || in.Target != nil || in.PID != "" || in.Fan != nil {
 			return errors.New("conversation fields in a version 1 message")
 		}
 		return nil
@@ -186,6 +195,14 @@ func checkVersion2(in Inner) error {
 	}
 	if in.Emotion != "" && !ValidEmotion(in.Emotion) {
 		return fmt.Errorf("invalid emotion %q", in.Emotion)
+	}
+	if len(in.Fan) > 2 {
+		return errors.New("a conversation message names at most its two member persons")
+	}
+	for i, f := range in.Fan {
+		if !validID(f.Person) || !protocol.ValidHash(f.Roster) || i > 0 && f.Person == in.Fan[0].Person {
+			return errors.New("invalid fan")
+		}
 	}
 	if t := in.Target; t != nil {
 		if in.Kind != KindQuestion && in.Kind != KindTask {

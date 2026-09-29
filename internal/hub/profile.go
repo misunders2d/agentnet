@@ -8,44 +8,12 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Person rosters and capability records (human DMs). A device publishes
-// its own, signed by its key; the Hub checks that signature and that the
+// Capability records and profiles (human DMs). A device publishes its own
+// records, signed by its key; the Hub checks that signature and that the
 // record names the calling device, stores it, and serves it as signed. It
 // never makes or changes one, so it can withhold a record but not forge
 // one. Which sessions are live is the Hub's own statement (see
-// protocol.Profile).
-
-// handlePutPerson stores the caller's signed person roster.
-func (h *Hub) handlePutPerson(w http.ResponseWriter, r *http.Request) {
-	caller, body, ok := h.authenticateBody(w, r)
-	if !ok {
-		return
-	}
-	roster, err := protocol.ParsePersonRoster(body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "", err.Error())
-		return
-	}
-	a, err := h.store.agent(caller)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
-		return
-	}
-	if d := roster.Devices[0]; d.Address != caller || d.Fingerprint != a.Public.Fingerprint() {
-		writeError(w, http.StatusBadRequest, "", "the roster's device must be the caller's own key")
-		return
-	}
-	if err := roster.Verify(a.Public.SignKey); err != nil {
-		writeError(w, http.StatusBadRequest, "", err.Error())
-		return
-	}
-	if err := h.store.setPerson(caller, body); err != nil {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
-		return
-	}
-	h.membersChanged()
-	w.WriteHeader(http.StatusNoContent)
-}
+// protocol.Profile). Person rosters are persons.go's.
 
 // handlePutCaps stores a capability record of one of the caller's sessions.
 // An older record for the same session never replaces a newer one.

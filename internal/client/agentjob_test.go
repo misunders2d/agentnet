@@ -159,7 +159,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ans := replyAt(t, w.alice, conv, q.ID)
-	bob, _, _ := w.bob.store.selfPerson()
+	bob, _, _ := w.bob.store.selfPerson(w.bob.Address)
 	if ans.Kind != envelope.KindAnswer || ans.PID != pid || ans.Origin != "agent:agentstub" || ans.Emotion != "concerned" ||
 		ans.Body != "the deploy failed at step 3" || ans.From != w.bob.Address || ans.Key != bob.info.Fingerprint || ans.Target != nil {
 		t.Fatalf("answer at alice: %+v", ans)
@@ -460,14 +460,7 @@ func TestAgentStopsWhenAMemberFreezes(t *testing.T) {
 // freezeAlice shows bob a different person record from alice's device.
 func freezeAlice(t *testing.T, w *world) {
 	t.Helper()
-	me, _, _ := w.alice.store.selfPerson()
-	pub := w.alice.id.Public(w.alice.Address)
-	r := protocol.PersonRoster{Person: me.info.Person, Label: "someone else", Devices: []protocol.RosterDevice{{Address: w.alice.Address, Fingerprint: pub.Fingerprint()}}}
-	r.Sign(w.alice.id.Sign)
-	raw, _ := json.Marshal(r)
-	if err := w.bob.store.pinPerson(r, raw, pub); !errors.Is(err, errPersonConflict) {
-		t.Fatalf("freeze: %v", err)
-	}
+	freeze(t, w.bob, w.alice)
 }
 
 // E5, E7: nothing runs while a record of the participation is held (a
@@ -528,7 +521,7 @@ func TestAgentHeldAndEmotion(t *testing.T) {
 
 func stateAuthor(t *testing.T, a *Agent) protocol.EventAuthor {
 	t.Helper()
-	p, _, _ := a.store.selfPerson()
+	p, _, _ := a.store.selfPerson(a.Address)
 	return protocol.EventAuthor{Person: p.info.Person, Roster: p.info.Roster, Address: a.Address, Fingerprint: p.info.Fingerprint}
 }
 
@@ -673,7 +666,7 @@ func TestAgentClaimIsAtomic(t *testing.T) {
 	}
 	defer other.Close()
 
-	alicePerson, _, _ := w.alice.store.selfPerson()
+	alicePerson, _, _ := w.alice.store.selfPerson(w.alice.Address)
 	author := stateAuthor(t, w.alice)
 	// Each write is made ready first: the hook runs within bob's claim
 	// transaction, where bob's own store cannot be read.

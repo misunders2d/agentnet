@@ -96,6 +96,18 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		}
 		return nil
 	}
+	if a.LinkState().State == LinkPending {
+		// This device joined to be linked: it is no member until its person
+		// approves it on their other device; it waits on its only stream.
+		a.Logf("waiting for approval of this device on %s", a.LinkState().Approver)
+		if _, err := a.AwaitLink(ctx); err != nil {
+			if ctx.Err() != nil {
+				return stopped()
+			}
+			return err
+		}
+		a.Logf("this device is linked to its person")
+	}
 	for {
 		healthy, err := a.streamOnce(ctx)
 		if ctx.Err() != nil {
@@ -226,6 +238,8 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		}
 	case "members":
 		a.onMembers([]byte(data)) // the Hub's member list (members.go)
+	case "link":
+		a.onLinkEvent([]byte(data)) // a device asks to join this person (link.go)
 	case "ping":
 		a.wakeWorker()
 		// Prove this connection is alive; the Hub drops unanswered streams.

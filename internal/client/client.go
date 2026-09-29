@@ -5,6 +5,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -50,6 +51,7 @@ type Agent struct {
 	kick       func()                     // wakes the current stream's retry worker
 	wakeWorker func()                     // wakes the question/task worker; a no-op outside Run
 	changes    *changeFeed                // local state changed (changes.go)
+	listed     listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members    memberState                // the Hub's member list from the push stream (members.go)
 	session    string                     // this run's session id (Run); "" outside Run
 	convWork   convWork                   // conversation upkeep due on the next sync (conv.go)
@@ -85,6 +87,13 @@ func paths(home string) (identityPath, dbPath string) {
 // the Hub's answer is lost, running Join again with the same invite and name
 // re-sends the identical request, which the Hub accepts as a replay.
 func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
+	return join(ctx, home, code, agentName, nil)
+}
+
+// join enrolls with the invite code; with link, the join request carries
+// what link makes from this device's entry (a device link), and the state
+// it returns is saved with the enrollment.
+func join(ctx context.Context, home, code, agentName string, link func(identity.Public, ed25519.PrivateKey) (*protocol.JoinLink, map[string]string)) (*Agent, error) {
 	inv, err := protocol.DecodeInvite(code)
 	if err != nil {
 		return nil, err
@@ -129,10 +138,21 @@ func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
 		return nil, fmt.Errorf("the Hub speaks protocol %d and this agentnet %d; update the older one", v.Protocol, protocol.ProtocolVersion)
 	}
 	req := protocol.JoinRequest{Secret: inv.Secret, Public: id.Public(address)}
+	saved := map[string]string{"enrolled": "1"}
+	if link != nil {
+		var state map[string]string
+		req.Link, state = link(req.Public, id.Sign)
+		for k, v := range state {
+			saved[k] = v
+		}
+	}
 	protocol.SignJoin(&req, id.Sign)
 	if err := conn.do(ctx, "POST", "/v1/join", req, nil); err != nil {
 		var he *HubError
-		if errors.As(err, &he) && he.Status == http.StatusConflict {
+		if errors.As(err, &he) && he.Code == protocol.CodeRosterStale {
+			return nil, fmt.Errorf("%w (nothing was enrolled)", ErrLinkStale)
+		}
+		if errors.As(err, &he) && he.Status == http.StatusConflict && he.Code == protocol.CodeAddressTaken {
 			// A definite refusal: nothing was enrolled. Never pick another
 			// name here; the person confirms the address they want.
 			return nil, fmt.Errorf("%s: %w; nothing was enrolled, and this invitation and this computer's key are still valid. "+
@@ -141,7 +161,7 @@ func Join(ctx context.Context, home, code, agentName string) (*Agent, error) {
 		}
 		return nil, fmt.Errorf("enrollment not confirmed: %w (run the same join command again to retry)", err)
 	}
-	if err := st.setConfig(map[string]string{"enrolled": "1"}); err != nil {
+	if err := st.setConfig(saved); err != nil {
 		return nil, err
 	}
 	if err := st.deleteConfig("join_secret"); err != nil {

@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -284,12 +283,8 @@ func TestDMFilesFreezeDuringUpload(t *testing.T) {
 	path, _ := writeFile(t, t.TempDir(), "report.txt", 1000)
 	h := &fileGate{base: w.alice.hub.http.Transport}
 	h.after = func() {
-		me, _, _ := w.bob.store.selfPerson()
-		other := me.roster
-		other.Label = "changed claim"
-		other.Sign(w.bob.id.Sign)
-		raw, _ := json.Marshal(other)
-		if err := w.alice.store.pinPerson(other, raw, w.bob.id.Public(w.bob.Address)); !errors.Is(err, errPersonConflict) {
+		person, raw := forkedStep(t, w.bob, "changed claim")
+		if _, err := w.alice.store.pinChain(person, [][]byte{raw}, w.alice.Self(), false); !errors.Is(err, errPersonConflict) {
 			t.Errorf("freeze: %v", err)
 		}
 	}

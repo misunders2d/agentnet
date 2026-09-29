@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -124,11 +125,10 @@ func TestPersonIsExplicit(t *testing.T) {
 	if _, ok, _ := w.bob.Person(); ok {
 		t.Fatal("pinning someone else's person created one here")
 	}
-	other := protocol.PersonRoster{Person: protocol.NewID(), Label: "Alice",
-		Devices: []protocol.RosterDevice{{Address: w.alice.Address, Fingerprint: alicePub.Fingerprint()}}}
+	other := protocol.PersonRoster{Person: protocol.NewID(), Label: "Alice", Devices: []identity.Public{alicePub}}
 	other.Sign(w.alice.id.Sign)
 	raw, _ := json.Marshal(other)
-	if err := w.bob.store.pinPerson(other, raw, alicePub); !errors.Is(err, errPersonConflict) {
+	if _, err := w.bob.store.pinChain(other.Person, [][]byte{raw}, w.bob.Self(), false); !errors.Is(err, errPersonConflict) {
 		t.Fatalf("another person for a pinned address: %v", err)
 	}
 	if _, err := w.bob.personOfKey(tctx(t), w.alice.Address, alicePub); !errors.Is(err, errPersonConflict) {
@@ -184,9 +184,9 @@ func TestDMsStaySeparate(t *testing.T) {
 	}
 }
 
-// DM2: a root is pinned only from its creator's own device, with its
-// signature; a member must be a pinned person of the root. What cannot be
-// proven yet is held, never admitted, and looked at again later.
+// DM2: a root is pinned only from a member's device, verified under its
+// creator device's key as its person's chain lists it; a member must be a
+// pinned person of the root. Nothing else is admitted.
 func TestConversationProof(t *testing.T) {
 	w := newWorld(t, "")
 	carol := mustJoin(t, t.TempDir(), w.aliceInvites("carol"), "desk")
@@ -196,17 +196,17 @@ func TestConversationProof(t *testing.T) {
 	conv := newDM(t, w.alice, w.bob)
 	root, raw := rootOf(t, w.alice, conv)
 
-	// Carol has a copy of the root and delivers it first: not its creator's
-	// device, so it is held, and nothing is admitted.
+	// Carol has a copy of the root and delivers it first: no member's
+	// device, so it is refused, and the root is not pinned from it.
 	fromCarol := craft(t, carol, w.bob, envelope.Inner{Kind: envelope.KindMessage, Body: "let me in", Conv: conv, LID: protocol.NewID(), Root: raw, Origin: envelope.OriginUI})
 	if err := w.bob.verifyAndStore(tctx(t), fromCarol); err != nil {
 		t.Fatal(err)
 	}
-	if r := heldReason(t, w.bob, fromCarol.ID); r != reasonProof {
-		t.Fatalf("root from a non-creator: held %q", r)
+	if r := heldReason(t, w.bob, fromCarol.ID); r != reasonInvalid {
+		t.Fatalf("root from a non-member: held %q", r)
 	}
 	if _, _, found, _ := w.bob.store.conversation(conv); found {
-		t.Fatal("the root was pinned from someone other than its creator")
+		t.Fatal("the root was pinned from someone who is no member")
 	}
 
 	// The creator's own message pins it; looking again, carol is no member.
@@ -271,10 +271,10 @@ func TestProofArrivesLater(t *testing.T) {
 			prof.Supports(w.alice.Address, pub.SignKey, protocol.CapEnv2)
 	})
 	// Alice's person exists here but is not published yet.
-	r := protocol.PersonRoster{Person: protocol.NewID(), Label: "Alice", Devices: []protocol.RosterDevice{{Address: w.alice.Address, Fingerprint: pub.Fingerprint()}}}
+	r := protocol.PersonRoster{Person: protocol.NewID(), Label: "Alice", Devices: []identity.Public{pub}}
 	r.Sign(w.alice.id.Sign)
 	raw, _ := json.Marshal(r)
-	if err := w.alice.store.setSelfPerson(r, raw); err != nil {
+	if _, err := w.alice.store.pinChain(r.Person, [][]byte{raw}, w.alice.Self(), true); err != nil {
 		t.Fatal(err)
 	}
 	conv := newDM(t, w.alice, w.bob)
@@ -283,7 +283,7 @@ func TestProofArrivesLater(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to hold it for proof", func() bool { return heldReason(t, w.bob, s.ID) == reasonProof })
-	if err := w.alice.publishPerson(tctx(t), true); err != nil {
+	if err := w.alice.publishPerson(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to admit it once alice's person is published", func() bool {
@@ -385,14 +385,14 @@ func TestConversationWaitsForSupport(t *testing.T) {
 	}
 	publish(time.Now().Unix() + 100) // no conversations
 	s, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "kept for later"})
-	if err != nil || s.State != stateConvWaiting || !strings.Contains(s.Detail, "cannot read conversations") {
+	if err != nil || s.State != stateConvWaiting || !strings.Contains(s.Detail, "needs to update AgentNet") {
 		t.Fatalf("send while unsupported: %+v %v", s, err)
 	}
 	time.Sleep(200 * time.Millisecond)
 	if n := inboxCount(t, w.bob, `body = ?`, "kept for later"); n != 0 {
 		t.Fatal("sent while the recipient could not read it")
 	}
-	publish(time.Now().Unix()+200, protocol.CapEnv2)
+	publish(time.Now().Unix()+200, protocol.CapEnv2, protocol.CapPerson)
 	eventually(t, "the kept message to go out once supported", func() bool {
 		return strings.Join(convBodies(t, w.bob, conv), "|") == "in:kept for later"
 	})

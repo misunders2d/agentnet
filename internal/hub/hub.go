@@ -75,6 +75,7 @@ type Hub struct {
 	releaseGen int64
 	presence   presence
 	membersGen atomic.Int64 // changes with the member list (see members.go)
+	linksGen   atomic.Int64 // changes when a device joins to be linked (persons.go)
 	push       pushKeys     // VAPID key pair (push.go)
 	notifier   *notifier    // sends due notification alerts (notify.go)
 	waiters    waiters

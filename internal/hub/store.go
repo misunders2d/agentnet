@@ -113,6 +113,29 @@ CREATE TABLE notify_pending(
 CREATE INDEX notify_pending_due ON notify_pending(due_ms);
 `, `
 ALTER TABLE notify_pending ADD COLUMN channels TEXT NOT NULL DEFAULT '';
+`, `
+CREATE TABLE persons(
+  person TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  record TEXT NOT NULL);
+CREATE TABLE person_chain(
+  person TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  record TEXT NOT NULL,
+  PRIMARY KEY(person, seq));
+ALTER TABLE agents ADD COLUMN person_id TEXT;
+ALTER TABLE agents ADD COLUMN linked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agents ADD COLUMN pending_person TEXT;
+ALTER TABLE agents ADD COLUMN pending_inviter TEXT;
+ALTER TABLE agents ADD COLUMN pending_until INTEGER;
+ALTER TABLE agents ADD COLUMN pending_event TEXT;
+ALTER TABLE agents ADD COLUMN revoked_reason TEXT;
+CREATE INDEX agents_person ON agents(person_id) WHERE person_id IS NOT NULL;
+CREATE INDEX agents_pending ON agents(pending_inviter) WHERE pending_person IS NOT NULL;
+ALTER TABLE invites ADD COLUMN person TEXT;
+ALTER TABLE invites ADD COLUMN offer TEXT;
 `}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
@@ -195,37 +218,49 @@ func openStore(path string) (*store, error) {
 }
 
 type agent struct {
-	Public  identity.Public
-	Admin   bool
-	Revoked bool
+	Public        identity.Public
+	Admin         bool
+	Revoked       bool
+	RevokedReason string // "refused" or "expired" for a device link nobody approved; "removed" from its person
+	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
+	PendingUntil  int64  // unix seconds: after this nobody can approve it any more
+	Person        string // the person it speaks for, if any
 }
 
-func (s *store) agent(address string) (agent, error) {
+func (s *store) agent(address string) (agent, error) { return agentIn(s.db, address) }
+
+func agentIn(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, address string) (agent, error) {
 	var a agent
 	var pub string
 	var revoked sql.NullInt64
-	err := s.db.QueryRow(`SELECT public, admin, revoked_at FROM agents WHERE address = ?`, address).Scan(&pub, &a.Admin, &revoked)
+	var reason, pending, person sql.NullString
+	var until sql.NullInt64
+	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
+		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound
 	}
 	if err != nil {
 		return a, err
 	}
-	a.Revoked = revoked.Valid
+	a.Revoked, a.RevokedReason, a.Pending, a.PendingUntil, a.Person = revoked.Valid, reason.String, pending.Valid, until.Int64, person.String
 	return a, json.Unmarshal([]byte(pub), &a.Public)
 }
 
 // enrolledMember is one unrevoked agent for the member list.
 type enrolledMember struct {
 	address string
-	joined  int64  // unix seconds
-	person  string // its signed person roster, if published
+	joined  int64               // unix seconds
+	person  *protocol.PersonRef // the newest roster step of its person, if any
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
 // and whether more exist.
 func (s *store) members(limit int) ([]enrolledMember, bool, error) {
-	rows, err := s.db.Query(`SELECT address, created_at, coalesce(person, '') FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?`, limit+1)
+	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash FROM agents a LEFT JOIN persons p ON p.person = a.person_id
+		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -233,8 +268,13 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		if err := rows.Scan(&m.address, &m.joined, &m.person); err != nil {
+		var person, hash sql.NullString
+		var seq sql.NullInt64
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash); err != nil {
 			return nil, false, err
+		}
+		if person.Valid {
+			m.person = &protocol.PersonRef{ID: person.String, Seq: seq.Int64, Hash: hash.String}
 		}
 		out = append(out, m)
 	}
@@ -245,12 +285,6 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 		return out[:limit], true, nil
 	}
 	return out, false, nil
-}
-
-// setPerson stores the signed person roster address published.
-func (s *store) setPerson(address string, roster []byte) error {
-	_, err := s.db.Exec(`UPDATE agents SET person = ? WHERE address = ? AND revoked_at IS NULL`, string(roster), address)
-	return err
 }
 
 // setLastSession records the session that connected last for address, so
@@ -289,7 +323,8 @@ func (s *store) putCaps(address, session string, ts int64, record []byte) error 
 // session and the capability records of sessions.
 func (s *store) profileRows(address string, sessions []string) (person, last string, caps map[string]string, err error) {
 	var p, l sql.NullString
-	if err = s.db.QueryRow(`SELECT person, last_session FROM agents WHERE address = ? AND revoked_at IS NULL`, address).Scan(&p, &l); err != nil {
+	if err = s.db.QueryRow(`SELECT p.record, a.last_session FROM agents a LEFT JOIN persons p ON p.person = a.person_id
+		WHERE a.address = ? AND a.revoked_at IS NULL AND a.pending_person IS NULL`, address).Scan(&p, &l); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = errNotFound
 		}
@@ -339,60 +374,69 @@ func (s *store) dropBootstrapInvites() error {
 // enroll consumes the invite and registers the agent atomically. Replaying
 // the exact same enrollment (same invite, address and keys) succeeds again so
 // a client that lost the response can finish; any other reuse is refused.
-// It reports whether the invite was the Hub-issued bootstrap invite.
-func (s *store) enroll(secret string, pub identity.Public, label string) (bootstrap bool, err error) {
+// It reports whether the invite was the Hub-issued bootstrap invite, and
+// for a device invite the inviting device (the new one is then PENDING:
+// linkPending).
+func (s *store) enroll(secret string, pub identity.Public, label string, link *protocol.JoinLink) (bootstrap bool, inviter string, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer tx.Rollback()
 	data, err := json.Marshal(pub)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	var invLabel string
 	var admin bool
 	var expires int64
-	var createdBy, usedBy sql.NullString
-	err = tx.QueryRow(`SELECT label, admin, expires_at, created_by, used_by FROM invites WHERE secret_hash = ?`,
-		protocol.HashSecret(secret)).Scan(&invLabel, &admin, &expires, &createdBy, &usedBy)
+	var createdBy, usedBy, person, offer sql.NullString
+	err = tx.QueryRow(`SELECT label, admin, expires_at, created_by, used_by, person, offer FROM invites WHERE secret_hash = ?`,
+		protocol.HashSecret(secret)).Scan(&invLabel, &admin, &expires, &createdBy, &usedBy, &person, &offer)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && invLabel != label) {
-		return false, errInviteInvalid
+		return false, "", errInviteInvalid
 	}
 	if err != nil {
-		return false, err
+		return false, "", err
+	}
+	if person.Valid != (link != nil) || person.Valid && link.Offer != offer.String {
+		return false, "", errInviteInvalid // a device invite needs its link; no other invite takes one
 	}
 	if usedBy.Valid {
 		var stored string
 		var revoked sql.NullInt64
 		err := tx.QueryRow(`SELECT public, revoked_at FROM agents WHERE address = ?`, usedBy.String).Scan(&stored, &revoked)
 		if err == nil && usedBy.String == pub.Address && stored == string(data) && !revoked.Valid {
-			return !createdBy.Valid, nil // exact replay
+			return !createdBy.Valid, createdBy.String, nil // exact replay
 		}
-		return false, errInviteInvalid
+		return false, "", errInviteInvalid
 	}
 	if expires <= time.Now().Unix() {
-		return false, errInviteInvalid
+		return false, "", errInviteInvalid
 	}
 	var exists int
 	if err := tx.QueryRow(`SELECT count(*) FROM agents WHERE address = ?`, pub.Address).Scan(&exists); err != nil {
-		return false, err
+		return false, "", err
 	}
 	if exists > 0 { // revoked addresses stay taken
 		free, err := freeAddress(tx, label, pub.Address)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return false, &addressTakenError{address: pub.Address, free: free}
+		return false, "", &addressTakenError{address: pub.Address, free: free}
 	}
-	if _, err := tx.Exec(`INSERT INTO agents(address, label, public, admin, created_at) VALUES(?, ?, ?, ?, ?)`,
+	if person.Valid {
+		if err := enrollPending(tx, person.String, createdBy.String, pub, data, label, link, expires); err != nil {
+			return false, "", err
+		}
+	} else if _, err := tx.Exec(`INSERT INTO agents(address, label, public, admin, created_at) VALUES(?, ?, ?, ?, ?)`,
 		pub.Address, label, string(data), admin, time.Now().Unix()); err != nil {
-		return false, err
+		return false, "", err
 	}
 	if _, err := tx.Exec(`UPDATE invites SET used_by = ? WHERE secret_hash = ?`, pub.Address, protocol.HashSecret(secret)); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return !createdBy.Valid, tx.Commit()
+	return !createdBy.Valid, createdBy.String, tx.Commit()
 }
 
 func (s *store) revoke(address string) error {

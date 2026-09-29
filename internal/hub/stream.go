@@ -121,8 +121,8 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err == nil && ad.Address != caller {
 		err = errors.New("session ad is for another agent")
 	}
+	var a agent
 	if err == nil {
-		var a agent
 		if a, err = h.store.agent(caller); err == nil {
 			err = ad.Verify(a.Public.SignKey)
 		}
@@ -135,16 +135,20 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	sub := h.streams.add(caller, cancel)
 	defer h.streams.remove(caller, sub)
-	if err := h.store.setLastSession(caller, ad.Session); err != nil {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
-		return
+	if !a.Pending { // a pending device is no member: no session, no presence
+		if err := h.store.setLastSession(caller, ad.Session); err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
+		h.presence.connect(caller, ad)
+		defer h.presence.disconnect(caller, ad.Session)
 	}
-	h.presence.connect(caller, ad)
-	defer h.presence.disconnect(caller, ad.Session)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set(protocol.MembersHeader, "1")
+	if !a.Pending {
+		w.Header().Set(protocol.MembersHeader, "1")
+	}
 	w.WriteHeader(http.StatusOK)
 	http.NewResponseController(w).Flush()
 
@@ -165,9 +169,15 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	ping := time.NewTicker(h.heartbeat)
 	defer ping.Stop()
 	lease := 2 * h.heartbeat
+	if a.Pending {
+		h.holdPending(ctx, caller, sub, ping, lease, write)
+		return
+	}
 	var lastSeq int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
+	sentLinks := int64(-1)   // and the devices waiting for this one's approval
+	linked := map[string]bool{}
 	for {
 		if rel, gen := h.currentRelease(); gen != sentRelease {
 			data, _ := json.Marshal(rel)
@@ -188,6 +198,21 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			sentMembers = gen
+		}
+		if gen := h.linksGen.Load(); gen != sentLinks {
+			links, err := h.store.pendingLinks(caller)
+			if err != nil {
+				return
+			}
+			for device, ev := range links {
+				if !linked[device] {
+					if !write("event: link\ndata: %s\n\n", ev) {
+						return
+					}
+					linked[device] = true
+				}
+			}
+			sentLinks = gen
 		}
 		msgs, err := h.store.pendingFor(caller, ad.Session, lastSeq)
 		if err != nil {
@@ -232,4 +257,39 @@ func (h *Hub) handleStreamAck(w http.ResponseWriter, r *http.Request) {
 	}
 	h.stats.Acks.Add(1)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// holdPending keeps the stream of a device waiting for its person's
+// approval: pings only (it has nothing else to receive). When a device of
+// the person admits it, it hears "linked" and the stream ends, so it
+// reconnects as a member; when it is refused or expires, the stream ends
+// and its next request says why.
+func (h *Hub) holdPending(ctx context.Context, caller string, sub *subscriber, ping *time.Ticker, lease time.Duration, write func(string, ...any) bool) {
+	for {
+		select {
+		case <-sub.wake:
+			a, err := h.store.agent(caller)
+			if err != nil || a.Revoked {
+				return
+			}
+			if !a.Pending {
+				write("event: linked\ndata: {}\n\n")
+				return
+			}
+		case <-ping.C:
+			if time.Since(time.Unix(0, sub.lastAck.Load())) > lease {
+				return
+			}
+			if a, err := h.store.agent(caller); err != nil || a.Revoked || a.PendingUntil <= time.Now().Unix() {
+				return
+			}
+			if !write("event: ping\ndata: {\"conn\":%q}\n\n", sub.id) {
+				return
+			}
+		case <-ctx.Done():
+			return
+		case <-h.done:
+			return
+		}
+	}
 }

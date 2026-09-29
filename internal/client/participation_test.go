@@ -164,7 +164,7 @@ type eventMaker struct {
 
 func newEventMaker(t *testing.T, w *world, conv string) *eventMaker {
 	me := func(a *Agent) protocol.EventAuthor {
-		p, _, _ := a.store.selfPerson()
+		p, _, _ := a.store.selfPerson(a.Address)
 		return protocol.EventAuthor{Person: p.info.Person, Roster: p.info.Roster, Address: a.Address, Fingerprint: p.info.Fingerprint}
 	}
 	return &eventMaker{t: t, w: w, conv: conv, pid: protocol.NewID(), alice: me(w.alice), bob: me(w.bob), ts: 1790000000}
@@ -266,12 +266,7 @@ func TestParticipationResolution(t *testing.T) {
 	}
 
 	// An author frozen here no longer counts: nothing it signed has effect.
-	me, _, _ := w.alice.store.selfPerson()
-	other := me.roster
-	other.Label = "someone else"
-	other.Sign(w.alice.id.Sign)
-	raw, _ := json.Marshal(other)
-	w.bob.store.pinPerson(other, raw, w.alice.id.Public(w.alice.Address))
+	freeze(t, w.bob, w.alice)
 	frozen, _ := w.bob.dmMembers(conv)
 	if p := resolve(conv, e.pid, []protocol.ParticipationEvent{inv, acc}, frozen); p.State != PartPending || p.Claimable() {
 		t.Fatalf("events of a frozen person counted: %+v", p)

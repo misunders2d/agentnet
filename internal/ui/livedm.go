@@ -45,15 +45,14 @@ func (l *Live) dmOverview(o *Overview) error {
 	}
 	// Someone the server lists with a person record, not checked here yet:
 	// shown with the name they claim and their device, without an id.
-	for _, m := range l.a.MemberView().Members.Members {
-		if len(m.Person) == 0 || byAddress[m.Address] {
-			continue
+	listed, err := l.a.ListedPersons()
+	if err != nil {
+		return err
+	}
+	for _, p := range listed {
+		if !byAddress[p.Address] {
+			o.People = append(o.People, PersonView{Label: p.Label, Address: p.Address, State: PersonListed})
 		}
-		r, err := protocol.ParsePersonRoster(m.Person)
-		if err != nil || len(r.Devices) == 0 || r.Devices[0].Address != m.Address {
-			continue
-		}
-		o.People = append(o.People, PersonView{Label: r.Label, Address: m.Address, State: PersonListed})
 	}
 	convs, err := l.a.Conversations()
 	if err != nil {

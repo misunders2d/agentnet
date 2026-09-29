@@ -20,7 +20,7 @@ func enrollAdmin(t *testing.T, h *Hub, label string) member {
 	if err := h.store.createInvite(secret, label, true, time.Hour, "admin/test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.enroll(secret, id.Public(label+"/x"), label); err != nil {
+	if _, _, err := h.store.enroll(secret, id.Public(label+"/x"), label, nil); err != nil {
 		t.Fatal(err)
 	}
 	return member{id, label + "/x"}

@@ -9,20 +9,12 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
-	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Local state for human DMs: persons (this installation's own and pinned
 // ones), conversation roots, and conversation messages in the inbox and
 // outbox (schema step 13).
-
-// Person states.
-const (
-	personSelf     = "self"     // created on this installation
-	personPinned   = "pinned"   // verified against its device's key and pinned
-	personConflict = "conflict" // a different record was seen for it: frozen
-)
 
 // Quarantine reasons of conversation messages.
 const (
@@ -40,129 +32,6 @@ const stateConvWaiting = "waiting"
 // conversation message: nothing runs it until agent participation exists,
 // and it is answered in its conversation.
 var ErrConversationItem = errors.New("this message belongs to a conversation: answer it there (agentnet dm send); nothing runs it automatically yet")
-
-var errPersonConflict = errors.New("this person's record conflicts with the one pinned here; it is frozen")
-
-// PersonInfo is a person as this installation knows it.
-type PersonInfo struct {
-	Person      string `json:"person"`
-	Label       string `json:"label"` // the person's own claim, not verified
-	Address     string `json:"address"`
-	Fingerprint string `json:"fingerprint"`
-	Roster      string `json:"roster"` // hash of the pinned roster
-	State       string `json:"state"`  // self, pinned or conflict
-}
-
-type personRow struct {
-	info   PersonInfo
-	roster protocol.PersonRoster
-	raw    []byte
-	pub    *identity.Public // the device key it was verified against when pinned (nil for rows pinned before that was kept)
-}
-
-func scanPerson(row interface{ Scan(...any) error }) (personRow, bool, error) {
-	var p personRow
-	var raw, public string
-	err := row.Scan(&p.info.Person, &p.info.Address, &p.info.Fingerprint, &p.info.Roster, &raw, &p.info.Label, &p.info.State, &public)
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, false, nil
-	}
-	if err != nil {
-		return p, false, err
-	}
-	p.raw = []byte(raw)
-	if err := json.Unmarshal(p.raw, &p.roster); err != nil {
-		return p, false, err
-	}
-	if public != "" {
-		p.pub = &identity.Public{}
-		if err := json.Unmarshal([]byte(public), p.pub); err != nil {
-			return p, false, err
-		}
-	}
-	return p, true, nil
-}
-
-const personCols = `person, address, fingerprint, hash, roster, label, state, coalesce(public, '')`
-
-func (s *store) selfPerson() (personRow, bool, error) {
-	return scanPerson(s.db.QueryRow(`SELECT `+personCols+` FROM persons WHERE state = ?`, personSelf))
-}
-
-func (s *store) personByID(id string) (personRow, bool, error) { return personByIDIn(s.db, id) }
-
-func personByIDIn(q querier, id string) (personRow, bool, error) {
-	return scanPerson(q.QueryRow(`SELECT `+personCols+` FROM persons WHERE person = ?`, id))
-}
-
-func (s *store) personByAddress(address string) (personRow, bool, error) {
-	return scanPerson(s.db.QueryRow(`SELECT `+personCols+` FROM persons WHERE address = ?`, address))
-}
-
-// setSelfPerson stores this installation's own person; there is at most one.
-func (s *store) setSelfPerson(r protocol.PersonRoster, raw []byte) error {
-	d := r.Devices[0]
-	_, err := s.db.Exec(`INSERT INTO persons(person, address, fingerprint, hash, roster, label, state, pinned_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM persons WHERE state = ? OR address = ?)`,
-		r.Person, d.Address, d.Fingerprint, r.Hash(), string(raw), r.Label, personSelf, time.Now().Unix(), personSelf, d.Address)
-	return s.done(err)
-}
-
-// pinPerson pins a roster verified against pub, keeping pub to check later
-// records against. A different record for a pinned person id, or another
-// person for a pinned address, freezes the pinned one as a conflict
-// (errPersonConflict); nothing is replaced.
-func (s *store) pinPerson(r protocol.PersonRoster, raw []byte, pub identity.Public) error {
-	d := r.Devices[0]
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var hash, state string
-	err = tx.QueryRow(`SELECT hash, state FROM persons WHERE person = ?`, r.Person).Scan(&hash, &state)
-	switch {
-	case err == nil && hash == r.Hash() && state != personConflict:
-		return nil
-	case err == nil:
-		if state == personSelf {
-			return errPersonConflict // someone else's record claims this installation's person
-		}
-		if _, err := tx.Exec(`UPDATE persons SET state = ?, conflict = coalesce(conflict, ?) WHERE person = ?`, personConflict, string(raw), r.Person); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		s.changed()
-		return errPersonConflict
-	case !errors.Is(err, sql.ErrNoRows):
-		return err
-	}
-	var other string
-	err = tx.QueryRow(`SELECT person, state FROM persons WHERE address = ?`, d.Address).Scan(&other, &state)
-	switch {
-	case err == nil:
-		if state != personSelf {
-			if _, err := tx.Exec(`UPDATE persons SET state = ?, conflict = coalesce(conflict, ?) WHERE person = ?`, personConflict, string(raw), other); err != nil {
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-			s.changed()
-		}
-		return errPersonConflict
-	case !errors.Is(err, sql.ErrNoRows):
-		return err
-	}
-	public, _ := json.Marshal(pub)
-	if _, err := tx.Exec(`INSERT INTO persons(person, address, fingerprint, hash, roster, label, state, pinned_at, public) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Person, d.Address, d.Fingerprint, r.Hash(), string(raw), r.Label, personPinned, time.Now().Unix(), string(public)); err != nil {
-		return err
-	}
-	return s.done(tx.Commit())
-}
 
 // ConversationInfo is one conversation this installation holds.
 type ConversationInfo struct {
@@ -198,27 +67,37 @@ func (s *store) addConversation(root protocol.ConvRoot, raw []byte, peer string)
 }
 
 func (s *store) conversations() ([]ConversationInfo, error) {
-	rows, err := s.db.Query(`SELECT c.id, c.root, p.person, p.address, p.fingerprint, p.hash, p.roster, p.label, p.state
-		FROM conversations c JOIN persons p ON p.person = c.peer ORDER BY c.pinned_at DESC, c.id`)
+	rows, err := s.db.Query(`SELECT id, root, peer FROM conversations ORDER BY pinned_at DESC, id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ConversationInfo
+	type row struct{ id, raw, peer string }
+	var rs []row
 	for rows.Next() {
-		var c ConversationInfo
-		var raw, roster string
-		var root protocol.ConvRoot
-		if err := rows.Scan(&c.ID, &raw, &c.Peer.Person, &c.Peer.Address, &c.Peer.Fingerprint, &c.Peer.Roster, &roster, &c.Peer.Label, &c.Peer.State); err != nil {
+		var r row
+		if err := rows.Scan(&r.id, &r.raw, &r.peer); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(raw), &root); err != nil {
-			return nil, err
-		}
-		c.Kind, c.Created, c.Creator = root.Kind, root.Created, root.Creator.Address
-		out = append(out, c)
+		rs = append(rs, r)
 	}
-	return out, rows.Err()
+	rows.Close()
+	var out []ConversationInfo
+	for _, r := range rs {
+		var root protocol.ConvRoot
+		if err := json.Unmarshal([]byte(r.raw), &root); err != nil {
+			return nil, err
+		}
+		peer, ok, err := s.personByID(r.peer)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		out = append(out, ConversationInfo{ID: r.id, Kind: root.Kind, Peer: peer.info, Created: root.Created, Creator: root.Creator.Address})
+	}
+	return out, nil
 }
 
 // contentHash identifies what a conversation message says, independently
@@ -401,45 +280,58 @@ func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Env
 // jobKey, if set, also records the message as a local request to this
 // device's own agent (agentjob.go), verified by that key: one message in
 // the conversation, one job, both or neither.
-func (s *store) addConvOutbox(env envelope.Envelope, in envelope.Inner, state, why string, claim func(*sql.Tx, string) error, jobKey string) error {
-	data, _ := json.Marshal(env)
+func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string) error {
 	now := time.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	first := local.ID
+	if len(copies) > 0 {
+		first = copies[0].env.ID
+	}
 	if claim != nil {
-		if err := claim(tx, env.ID); err != nil {
+		if err := claim(tx, first); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''))`,
-		env.ID, env.To, in.Body, string(data), state, why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
-		in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub); err != nil {
-		return err
-	}
-	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
-		return err
-	}
-	for _, a := range in.Attachments { // as addOutbox: what was sent, and what must be uploaded first
-		if _, err := tx.Exec(`INSERT INTO sent_attachments(message_id, blob_id, name, size, sha256) VALUES(?, ?, ?, ?, ?)`,
-			env.ID, a.Blob.ID, a.Name, a.Size, a.SHA256); err != nil {
+	for i, c := range copies {
+		env, in := c.env, c.in
+		data, _ := json.Marshal(env)
+		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''))`,
+			env.ID, env.To, in.Body, string(data), c.state, c.why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
+			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub); err != nil {
 			return err
 		}
-	}
-	for _, b := range env.Blobs {
-		if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
-			return err
+		if i == 0 {
+			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
+				return err
+			}
+		}
+		for _, a := range in.Attachments { // as addOutbox: what was sent, and what must be uploaded first
+			if _, err := tx.Exec(`INSERT INTO sent_attachments(message_id, blob_id, name, size, sha256) VALUES(?, ?, ?, ?, ?)`,
+				env.ID, a.Blob.ID, a.Name, a.Size, a.SHA256); err != nil {
+				return err
+			}
+		}
+		for _, b := range env.Blobs {
+			if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
+				return err
+			}
 		}
 	}
 	if jobKey != "" {
+		in := local
+		if len(copies) > 0 {
+			in = copies[0].in
+		}
 		// Read and acknowledged: it was never received, only asked here.
 		if _, err := tx.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, state, verified_by,
 			conv, lid, origin, target, content_hash, received_ms, pid, local, acked, read_at)
 			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, 1, 1, ?)`,
-			env.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), stateAgentWaiting, jobKey,
+			first, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), stateAgentWaiting, jobKey,
 			in.Conv, in.LID, in.Origin, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, now.Unix()); err != nil {
 			return err
 		}
@@ -501,20 +393,29 @@ type ConvMessage struct {
 	// Its files: received ones with where they were saved, sent ones as
 	// sent (the sender keeps no plaintext to open).
 	Attachments []FileInfo `json:"attachments,omitempty"`
+
+	// Sent by this person: Via names the device it was sent from when that
+	// is not this one; Copies are the copies this device sent, one per
+	// device (State is then the least advanced one's).
+	Via    string     `json:"via,omitempty"`
+	Copies []ConvCopy `json:"copies,omitempty"`
 }
 
 // convMessages lists conv's messages; a local request to this device's own
 // agent is listed once, as the message sent, with its job.
-func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
+// own names the devices of this installation's person (any step of its
+// chain): received messages from them are this person's own, sent from
+// another device.
+func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]ConvMessage, error) {
 	rows, err := s.db.Query(`
 		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
-		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END
+		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, ''
 		  FROM inbox WHERE conv = ? AND local = 0
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, '')
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ?
 		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
@@ -522,19 +423,41 @@ func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 	}
 	defer rows.Close()
 	var out []ConvMessage
+	sent := map[string]int{} // logical id of a message sent here: its index in out
 	for rows.Next() {
 		var m ConvMessage
-		var target string
+		var target, to string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to); err != nil {
 			return nil, err
 		}
 		if target != "" {
 			m.Target = &envelope.Target{}
 			json.Unmarshal([]byte(target), m.Target)
 		}
+		switch {
+		case m.Dir == "out":
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail}
+			if i, ok := sent[m.LID]; ok {
+				out[i].Copies = append(out[i].Copies, c)
+				if rank(c.State) < rank(out[i].State) {
+					out[i].State, out[i].Detail = c.State, c.Detail
+				}
+				continue
+			}
+			m.Copies = []ConvCopy{c}
+			sent[m.LID] = len(out)
+		case own[m.From]:
+			m.Dir, m.Via = "out", m.From
+		}
 		out = append(out, m)
+	}
+	fileKey := func(m ConvMessage) string {
+		if m.Via != "" {
+			return "in/" + m.ID // received from another device of this person
+		}
+		return m.Dir + "/" + m.ID
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -545,7 +468,7 @@ func (s *store) convMessages(conv, self, selfFP string) ([]ConvMessage, error) {
 		return nil, err
 	}
 	for i := range out {
-		out[i].Attachments = files[out[i].Dir+"/"+out[i].ID]
+		out[i].Attachments = files[fileKey(out[i])]
 	}
 	return out, nil
 }

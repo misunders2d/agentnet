@@ -27,6 +27,9 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/profile", h.handleProfile)
 	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
+	mux.HandleFunc("POST /v1/person/device-invite", h.handleDeviceInvite)
+	mux.HandleFunc("POST /v1/person/device-refuse", h.handleDeviceRefuse)
+	mux.HandleFunc("GET /v1/persons/{id}/chain", h.handleChain)
 	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
@@ -80,21 +83,39 @@ func (h *Hub) authenticate(w http.ResponseWriter, r *http.Request) (string, bool
 
 // authenticateBody is authenticate that also returns the verified body.
 func (h *Hub) authenticateBody(w http.ResponseWriter, r *http.Request) (string, []byte, bool) {
-	revoked := false
+	var a agent
 	sr, err := protocol.ReadSignedRequest(r, func(address string) (ed25519.PublicKey, error) {
-		a, err := h.store.agent(address)
-		if err != nil {
+		var err error
+		if a, err = h.store.agent(address); err != nil {
 			return nil, errors.New("unknown agent")
 		}
-		revoked = a.Revoked
 		return a.Public.SignKey, nil
 	})
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "", err.Error())
 		return "", nil, false
 	}
-	if revoked {
+	switch {
+	case a.Revoked && a.RevokedReason == "refused":
+		writeError(w, http.StatusForbidden, protocol.CodeLinkRefused, "the device link was refused")
+		return "", nil, false
+	case a.Revoked && a.RevokedReason == "expired":
+		writeError(w, http.StatusForbidden, protocol.CodeLinkExpired, "nobody approved the device link in time")
+		return "", nil, false
+	case a.Revoked:
 		writeError(w, http.StatusForbidden, protocol.CodeRevoked, "agent revoked")
+		return "", nil, false
+	case a.Pending && a.PendingUntil <= time.Now().Unix():
+		// Nobody approved it in time: it is revoked on its next request.
+		if _, err := h.store.endPending(`address = ?`, "expired", a.Public.Address); err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return "", nil, false
+		}
+		writeError(w, http.StatusForbidden, protocol.CodeLinkExpired, "nobody approved the device link in time")
+		return "", nil, false
+	case a.Pending && r.Pattern != "GET /v1/stream" && r.Pattern != "POST /v1/stream/ack":
+		// A device waiting for its person's approval holds only its stream.
+		writeError(w, http.StatusForbidden, protocol.CodeLinkPending, "this device waits for approval on its person's other device")
 		return "", nil, false
 	}
 	fresh, err := h.store.useNonce(sr.Agent, sr.Nonce, time.Now())
@@ -141,10 +162,16 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", err.Error())
 		return
 	}
-	bootstrap, err := h.store.enroll(req.Secret, req.Public, label)
+	bootstrap, inviter, err := h.store.enroll(req.Secret, req.Public, label, req.Link)
 	switch {
 	case errors.Is(err, errInviteInvalid):
 		writeError(w, http.StatusForbidden, "", err.Error())
+		return
+	case errors.Is(err, errRosterStale):
+		writeError(w, http.StatusConflict, protocol.CodeRosterStale, err.Error())
+		return
+	case errors.Is(err, errTooManyDevices):
+		writeError(w, http.StatusConflict, "", err.Error())
 		return
 	case errors.Is(err, errAddressTaken):
 		writeError(w, http.StatusConflict, protocol.CodeAddressTaken, err.Error())
@@ -156,8 +183,14 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 	if bootstrap {
 		os.Remove(filepath.Join(h.cfg.DataDir, BootstrapFile))
 	}
-	h.cfg.Logf("enrolled %s", req.Public.Address)
-	h.membersChanged()
+	if req.Link != nil {
+		h.cfg.Logf("%s joined to be linked; waiting for %s", req.Public.Address, inviter)
+		h.linksGen.Add(1)
+		h.streams.notify(inviter)
+	} else {
+		h.cfg.Logf("enrolled %s", req.Public.Address)
+		h.membersChanged()
+	}
 	writeJSON(w, http.StatusCreated, protocol.DirectoryEntry{Public: req.Public})
 }
 
@@ -166,7 +199,7 @@ func (h *Hub) handleDirectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := h.store.agent(protocol.Address(r.PathValue("label"), r.PathValue("agent")))
-	if err != nil {
+	if err != nil || a.Pending {
 		writeError(w, http.StatusNotFound, "", "unknown agent")
 		return
 	}
@@ -197,7 +230,7 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recipient, err := h.store.agent(env.To)
-	if err != nil {
+	if err != nil || recipient.Pending {
 		writeError(w, http.StatusNotFound, "", "unknown recipient")
 		return
 	}
@@ -321,7 +354,7 @@ func (h *Hub) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	address := protocol.Address(r.PathValue("label"), r.PathValue("agent"))
-	if a, err := h.store.agent(address); err != nil || a.Revoked {
+	if a, err := h.store.agent(address); err != nil || a.Revoked || a.Pending {
 		writeError(w, http.StatusNotFound, "", "unknown agent")
 		return
 	}

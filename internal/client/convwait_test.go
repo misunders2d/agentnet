@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -39,8 +38,8 @@ func TestWaitingNotReleasedToFrozenPerson(t *testing.T) {
 	var body, reason string
 	w.alice.store.db.QueryRow(`SELECT body, error FROM outbox WHERE id = ?`, sent.ID).Scan(&body, &reason)
 
-	relabelled(t, w.bob, "Conflicting Bob")
-	publish(time.Now().Unix()+200, protocol.CapEnv2)
+	freeze(t, w.alice, w.bob)
+	publish(time.Now().Unix()+200, protocol.CapEnv2, protocol.CapPerson)
 	feats, err := w.alice.relayFeatures(tctx(t))
 	if err != nil {
 		t.Fatal(err)
@@ -81,17 +80,10 @@ func TestQueuedNotSentToFrozenPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.alice.store.addConvOutbox(env, in, stateQueued, "", nil, ""); err != nil {
+	if err := w.alice.store.addConvOutbox([]outCopy{{env: env, in: in, state: stateQueued}}, envelope.Inner{}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	me, _, _ := w.bob.store.selfPerson()
-	other := me.roster
-	other.Label = "Someone else"
-	other.Sign(w.bob.id.Sign)
-	otherRaw, _ := json.Marshal(other)
-	if err := w.alice.store.pinPerson(other, otherRaw, w.bob.id.Public(w.bob.Address)); !errors.Is(err, errPersonConflict) {
-		t.Fatalf("setup conflict: %v", err)
-	}
+	freeze(t, w.alice, w.bob)
 	plain, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "a plain message still goes"})
 	if err != nil {
 		t.Fatal(err)
@@ -107,14 +99,13 @@ func TestQueuedNotSentToFrozenPerson(t *testing.T) {
 	}
 }
 
-// Starting a DM reads the person's profile afresh; if that shows a
-// different record, the person is frozen and no DM is started.
+// No DM is started with a frozen person.
 func TestCreateDMRefusesFreshConflict(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	newDM(t, w.alice, w.bob) // pins bob's person at alice
-	relabelled(t, w.bob, "Conflicting Bob")
+	freeze(t, w.alice, w.bob)
 	if _, err := w.alice.CreateDM(tctx(t), w.bob.Address); !errors.Is(err, errPersonConflict) {
 		t.Fatalf("a DM was started with a person whose record changed: %v", err)
 	}

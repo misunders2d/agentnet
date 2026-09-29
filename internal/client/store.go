@@ -225,6 +225,57 @@ CREATE TABLE reminders(
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL);
 CREATE INDEX reminders_due ON reminders(due_at) WHERE state = 'pending';
+`, `
+ALTER TABLE persons RENAME TO persons_v1;
+ALTER TABLE conversations RENAME TO conversations_v1;
+CREATE TABLE persons(
+  person TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  record TEXT NOT NULL,
+  state TEXT NOT NULL,
+  conflict TEXT,
+  pinned_at INTEGER NOT NULL);
+CREATE TABLE person_chain(
+  person TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  record TEXT NOT NULL,
+  PRIMARY KEY(person, seq));
+CREATE INDEX person_chain_hash ON person_chain(person, hash);
+CREATE TABLE person_devices(
+  address TEXT PRIMARY KEY,
+  person TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  added INTEGER NOT NULL);
+CREATE INDEX person_devices_person ON person_devices(person);
+CREATE TABLE conversations(
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  peer TEXT NOT NULL,
+  pinned_at INTEGER NOT NULL);
+CREATE TABLE link_offers(
+  offer TEXT PRIMARY KEY,
+  secret BLOB NOT NULL,
+  person TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  roster TEXT NOT NULL,
+  expires INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL);
+CREATE TABLE device_links(
+  offer TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  public TEXT NOT NULL,
+  join_sig BLOB NOT NULL,
+  requested_at INTEGER NOT NULL,
+  expires INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  roster TEXT,
+  detail TEXT,
+  updated_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
@@ -449,7 +500,7 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 func (s *store) queued() ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT address FROM persons WHERE state = ?)) ORDER BY created_at`, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at`, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}

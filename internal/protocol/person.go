@@ -12,64 +12,75 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/misunders2d/agentnet/internal/identity"
 )
 
 // Signed records for human DMs: a person's roster, a conversation's root
 // (E0) and a device's capabilities. Each is signed by one device key over
 // canonical bytes: a domain line, then the JSON encoding (encoding/json, the
-// field order of the struct below) of the record without its signature.
+// field order of the struct below) of the record without its signatures.
 // That encoding has no spaces, keeps other UTF-8 as is, and escapes <, >
 // and & as \u003c, \u003e and \u0026; another implementation must produce
 // the same bytes (person_test.go has exact vectors). Hashes are the
 // lowercase hex SHA-256 of those same bytes.
 
-// Person roster (this checkpoint: one device, no transitions).
+// Person roster (version 2).
 //
 // A person is created explicitly on one device and never inferred from an
-// enrollment, address, label or migration. The record names a stable random
+// enrollment, address, label or migration. Its roster names a stable random
 // person id, a display label that is only the person's own claim, and the
-// one device (address and key fingerprint) that speaks for it; that
-// device's key signs it.
+// devices that speak for it, each by its public directory entry (address
+// and keys), so old roots, events and history stay verifiable after a
+// device is removed or revoked. Rosters form a chain:
 //
-// Canonical bytes:
+//   - seq 0: exactly one device, signed by it; no by, no join.
+//   - seq n > 0: prev is the hash of seq n-1; by is the fingerprint of the
+//     device of seq n-1 that signed it. At most one device is added per
+//     step; an added device consents with join, its signature over
+//     JoinBytes (the person, seq, prev and its own entry), which it can make
+//     before the roster exists. Removing devices needs no join. A device
+//     keeps its address and keys: anything else is a removal and an
+//     addition.
 //
-//	agentnet-person-v1\n{"person":"<32 hex>","label":"<label>","seq":0,"prev":"",
-//	"devices":[{"address":"<person/agent>","fingerprint":"<fingerprint>"}]}
+// Canonical bytes (one line; sig and join are not part of them):
 //
-// (one line; JSON string escaping as encoding/json does it). Limits: seq 0
-// and prev "" (linking, retirement and recovery will append transitions);
-// exactly one device; a label of 1–64 bytes of printable UTF-8; the signed
-// record at most MaxPersonRecord bytes. A different record for a person id
-// or an address that is already pinned is a conflict, and is frozen.
+//	agentnet-person-v2\n{"person":"<32 hex>","label":"<label>","seq":<n>,"prev":"<64 hex or empty>",
+//	"devices":[{"address":…,"sign_key":…,"box_recipient":…,"box_sig":…},…],"by":"<fingerprint, omitted at seq 0>"}
+//
+// Limits: 1–MaxPersonDevices devices with distinct addresses and keys; a
+// label of 1–64 bytes of printable UTF-8; the signed record at most
+// MaxPersonRecord bytes. A different record for a person id at a seq already
+// pinned is a conflict, and freezes the person.
 
 // PersonDomain starts a person roster's canonical bytes.
-const PersonDomain = "agentnet-person-v1\n"
+const PersonDomain = "agentnet-person-v2\n"
+
+// PersonJoinDomain starts the bytes an added device signs to join.
+const PersonJoinDomain = "agentnet-person-join-v2\n"
 
 // Bounds of a person record.
 const (
-	MaxPersonLabel  = 64
-	MaxPersonRecord = 768 // the signed record as JSON (a worst-case roster is about 700)
+	MaxPersonLabel   = 64
+	MaxPersonDevices = 8
+	MaxPersonRecord  = 4096 // the signed record as JSON (8 devices are about 3.3 KiB)
 )
 
-// RosterDevice is a device that speaks for a person.
-type RosterDevice struct {
-	Address     string `json:"address"`
-	Fingerprint string `json:"fingerprint"`
-}
-
-// PersonRoster is a person's signed roster.
+// PersonRoster is one signed step of a person's roster chain.
 type PersonRoster struct {
-	Person  string         `json:"person"`
-	Label   string         `json:"label"`
-	Seq     int64          `json:"seq"`
-	Prev    string         `json:"prev"`
-	Devices []RosterDevice `json:"devices"`
-	Sig     []byte         `json:"sig,omitempty"`
+	Person  string            `json:"person"`
+	Label   string            `json:"label"`
+	Seq     int64             `json:"seq"`
+	Prev    string            `json:"prev"`
+	Devices []identity.Public `json:"devices"`
+	By      string            `json:"by,omitempty"`
+	Sig     []byte            `json:"sig,omitempty"`
+	Join    []byte            `json:"join,omitempty"`
 }
 
-// Canonical returns the bytes the device signs.
+// Canonical returns the bytes the signing device signs.
 func (r PersonRoster) Canonical() []byte {
-	r.Sig = nil
+	r.Sig, r.Join = nil, nil
 	data, _ := json.Marshal(r)
 	return append([]byte(PersonDomain), data...)
 }
@@ -77,10 +88,38 @@ func (r PersonRoster) Canonical() []byte {
 // Hash identifies this exact roster.
 func (r PersonRoster) Hash() string { return hashHex(r.Canonical()) }
 
-// Sign signs r with the key of its one device.
+// Sign signs r with the key of the device r.By names (seq 0: its device).
 func (r *PersonRoster) Sign(key ed25519.PrivateKey) { r.Sig = ed25519.Sign(key, r.Canonical()) }
 
-// Validate checks the shape and bounds of r (not its signature).
+// Device returns the device of r with key fingerprint fp.
+func (r PersonRoster) Device(fp string) (identity.Public, bool) {
+	for _, d := range r.Devices {
+		if d.Fingerprint() == fp {
+			return d, true
+		}
+	}
+	return identity.Public{}, false
+}
+
+// Has reports whether the device at address with fingerprint fp is in r.
+func (r PersonRoster) Has(address, fp string) bool {
+	d, ok := r.Device(fp)
+	return ok && d.Address == address
+}
+
+// JoinBytes are what a device signs to join person at seq, after the roster
+// whose hash is prev, as the entry dev.
+func JoinBytes(person string, seq int64, prev string, dev identity.Public) []byte {
+	data, _ := json.Marshal(struct {
+		Person string          `json:"person"`
+		Seq    int64           `json:"seq"`
+		Prev   string          `json:"prev"`
+		Device identity.Public `json:"device"`
+	}{person, seq, prev, dev})
+	return append([]byte(PersonJoinDomain), data...)
+}
+
+// Validate checks the shape and bounds of r (not its signatures or chain).
 func (r PersonRoster) Validate() error {
 	if !ValidID(r.Person) {
 		return errors.New("person: invalid id")
@@ -88,30 +127,88 @@ func (r PersonRoster) Validate() error {
 	if err := validLabel(r.Label); err != nil {
 		return err
 	}
-	if r.Seq != 0 || r.Prev != "" {
-		return errors.New("person: only a first roster (seq 0) is supported")
+	switch {
+	case r.Seq < 0:
+		return errors.New("person: invalid seq")
+	case r.Seq == 0 && (r.Prev != "" || r.By != "" || len(r.Join) > 0 || len(r.Devices) != 1):
+		return errors.New("person: a first roster has one device and nothing before it")
+	case r.Seq > 0 && (!ValidHash(r.Prev) || !ValidFingerprint(r.By)):
+		return errors.New("person: a later roster names the roster before it and its signer")
 	}
-	if len(r.Devices) != 1 {
-		return errors.New("person: exactly one device is supported")
+	if len(r.Devices) == 0 || len(r.Devices) > MaxPersonDevices {
+		return fmt.Errorf("person: 1-%d devices", MaxPersonDevices)
 	}
-	if _, _, err := SplitAddress(r.Devices[0].Address); err != nil {
-		return fmt.Errorf("person: %w", err)
-	}
-	if !ValidFingerprint(r.Devices[0].Fingerprint) {
-		return errors.New("person: invalid device fingerprint")
+	addrs, fps := map[string]bool{}, map[string]bool{}
+	for _, d := range r.Devices {
+		if _, _, err := SplitAddress(d.Address); err != nil {
+			return fmt.Errorf("person: %w", err)
+		}
+		if err := d.Verify(); err != nil {
+			return fmt.Errorf("person: device %s: %w", d.Address, err)
+		}
+		fp := d.Fingerprint()
+		if addrs[d.Address] || fps[fp] {
+			return errors.New("person: a device is listed twice")
+		}
+		addrs[d.Address], fps[fp] = true, true
 	}
 	return nil
 }
 
-// Verify checks r and that signKey, the device's key, signed it.
-func (r PersonRoster) Verify(signKey ed25519.PublicKey) error {
+// VerifyFirst checks r as the first roster of its person: signed by its
+// one device.
+func (r PersonRoster) VerifyFirst() error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	if len(signKey) != ed25519.PublicKeySize || !ed25519.Verify(signKey, r.Canonical(), r.Sig) {
+	if r.Seq != 0 {
+		return errors.New("person: not a first roster")
+	}
+	if !ed25519.Verify(r.Devices[0].SignKey, r.Canonical(), r.Sig) {
 		return errors.New("person: signature invalid")
 	}
 	return nil
+}
+
+// VerifyNext checks r as the roster that follows prev (itself verified):
+// the chain link, the signer, and the consent of an added device. It
+// returns the added device, if any.
+func (r PersonRoster) VerifyNext(prev PersonRoster) (added *identity.Public, err error) {
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	if r.Person != prev.Person || r.Seq != prev.Seq+1 || r.Prev != prev.Hash() {
+		return nil, errors.New("person: not the next roster of that chain")
+	}
+	signer, ok := prev.Device(r.By)
+	if !ok {
+		return nil, errors.New("person: signed by a device that is not in the roster before it")
+	}
+	if !ed25519.Verify(signer.SignKey, r.Canonical(), r.Sig) {
+		return nil, errors.New("person: signature invalid")
+	}
+	for _, d := range r.Devices {
+		old, kept := prev.Device(d.Fingerprint())
+		switch {
+		case kept && old.Address != d.Address:
+			return nil, errors.New("person: a device changed its address")
+		case !kept && added != nil:
+			return nil, errors.New("person: more than one device added in one step")
+		case !kept:
+			d := d
+			added = &d
+		}
+	}
+	if added == nil {
+		if len(r.Join) > 0 {
+			return nil, errors.New("person: a join without an added device")
+		}
+		return nil, nil
+	}
+	if !ed25519.Verify(added.SignKey, JoinBytes(r.Person, r.Seq, r.Prev, *added), r.Join) {
+		return nil, errors.New("person: the added device did not consent (join signature invalid)")
+	}
+	return added, nil
 }
 
 // ParsePersonRoster decodes a signed roster strictly and checks its shape.
@@ -141,14 +238,16 @@ func validLabel(s string) error {
 // Conversation root (E0) of a DM.
 //
 // The creator's device makes and signs it; its members are two persons,
-// each bound to the hash of the roster the creator had pinned. The
+// each bound to the hash of the roster the creator had pinned; a later
+// device of a member speaks in it once its roster follows that one in the
+// member's chain. The
 // conversation id is the hash of the canonical bytes, which therefore do
 // not contain it: a conversation cannot be claimed without its root, and two
 // DMs with the same person differ by their random nonce.
 //
 // Canonical bytes:
 //
-//	agentnet-conv-root-v1\n{"v":1,"kind":"dm","creator":{"person":"<32 hex>",
+//	agentnet-conv-root-v2\n{"v":2,"kind":"dm","creator":{"person":"<32 hex>",
 //	"roster":"<64 hex>","address":"<person/agent>","fingerprint":"<fp>"},
 //	"members":[{"person":"<32 hex>","roster":"<64 hex>"},{…}],
 //	"nonce":"<32 hex>","created":<unix seconds>}
@@ -158,7 +257,10 @@ func validLabel(s string) error {
 // bytes. A DM never changes members: there are no later epochs here.
 
 // ConvRootDomain starts a conversation root's canonical bytes.
-const ConvRootDomain = "agentnet-conv-root-v1\n"
+const ConvRootDomain = "agentnet-conv-root-v2\n"
+
+// ConvRootVersion is the root version (persons with roster chains).
+const ConvRootVersion = 2
 
 // MaxConvRoot bounds a signed conversation root as JSON.
 const MaxConvRoot = 2048
@@ -216,7 +318,7 @@ func (c ConvRoot) Member(person string) (roster string, ok bool) {
 
 // Validate checks the shape of c (not its signature or rosters).
 func (c ConvRoot) Validate() error {
-	if c.V != 1 || c.Kind != ConvKindDM {
+	if c.V != ConvRootVersion || c.Kind != ConvKindDM {
 		return errors.New("conversation: unsupported root")
 	}
 	if !ValidID(c.Creator.Person) || !ValidHash(c.Creator.Roster) || !ValidFingerprint(c.Creator.Fingerprint) {
@@ -286,6 +388,11 @@ const CapsDomain = "agentnet-caps-v1\n"
 
 // CapEnv2 means the device reads envelope version 2 (conversations).
 const CapEnv2 = "env2"
+
+// CapPerson means the device reads person roster chains, conversation
+// roots of version 2, fan-out sends and history (a device without it is
+// asked to update, never sent a partial conversation).
+const CapPerson = "person2"
 
 // Bounds of a capability record.
 const (
@@ -402,7 +509,7 @@ func (p Profile) Supports(address string, signKey ed25519.PublicKey, name string
 const (
 	FeatureMembers = "members" // GET /v1/agents and the members push
 	FeatureEnv2    = "env2"    // accepts envelope version 2
-	FeaturePerson  = "person"  // PUT /v1/person, profiles, person in member lists
+	FeaturePerson  = "person2" // person roster chains: PUT /v1/person, chains, device links, profiles
 	FeatureCaps    = "caps"    // PUT /v1/caps, profiles
 )
 

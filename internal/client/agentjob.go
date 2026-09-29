@@ -511,7 +511,7 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	var state, pid, origin string
 	var frozen bool
 	err := a.store.db.QueryRow(`SELECT o.state, coalesce(o.pid, ''), coalesce(o.origin, ''),
-		EXISTS (SELECT 1 FROM persons p WHERE p.address = o.recipient AND p.state = ?)
+		EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person WHERE d.address = o.recipient AND p.state = ?)
 		FROM outbox o WHERE o.id = ?`, personConflict, env.ID).Scan(&state, &pid, &origin, &frozen)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -546,7 +546,9 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 	}
 	names := map[string]string{}
 	for _, p := range m.persons {
-		names[p.info.Address] = p.info.Label
+		for _, d := range p.roster.Devices {
+			names[d.Address] = p.info.Label
+		}
 	}
 	c := ParticipationContext{PID: info.PID, Note: info.Note, State: info.State, Grant: info.Grant, Limit: limit}
 	granted := map[protocol.GrantRef]bool{}

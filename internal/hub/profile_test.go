@@ -15,11 +15,15 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-func rosterFor(m member, label string) []byte {
-	r := protocol.PersonRoster{Person: protocol.NewID(), Label: label,
-		Devices: []protocol.RosterDevice{{Address: m.addr, Fingerprint: m.id.Public(m.addr).Fingerprint()}}}
+// firstRoster is m's person's first roster.
+func firstRoster(m member, label string) protocol.PersonRoster {
+	r := protocol.PersonRoster{Person: protocol.NewID(), Label: label, Devices: []identity.Public{m.id.Public(m.addr)}}
 	r.Sign(m.id.Sign)
-	data, _ := json.Marshal(r)
+	return r
+}
+
+func rosterFor(m member, label string) []byte {
+	data, _ := json.Marshal(firstRoster(m, label))
 	return data
 }
 
@@ -46,31 +50,38 @@ func supportsEnv2(p protocol.Profile, m member) bool {
 	return p.Supports(m.addr, m.id.Public(m.addr).SignKey, protocol.CapEnv2)
 }
 
-// A device publishes only its own person record, signed by its own key;
-// the Hub serves it as signed, in profiles and member lists.
+// A device starts its person with a first roster naming only itself, signed
+// by its own key; the Hub serves the newest step in profiles, a reference
+// to it in member lists, and the chain on request.
 func TestPersonPublished(t *testing.T) {
 	h, _, _ := testHub(t)
 	bob, vit := joinMember(t, h, "bob"), joinMember(t, h, "vitalii")
-	own := rosterFor(vit, "Vitalii")
+	first := firstRoster(vit, "Vitalii")
+	own, _ := json.Marshal(first)
 	if c, b := vit.call(t, h, "PUT", "/v1/person", own); c != http.StatusNoContent {
 		t.Fatalf("publish: %d %s", c, b)
+	}
+	if c, b := vit.call(t, h, "PUT", "/v1/person", own); c != http.StatusNoContent {
+		t.Fatalf("the same step again: %d %s", c, b)
 	}
 	if p := profileOf(t, h, bob, vit); string(p.Person) != string(own) {
 		t.Fatalf("profile person %s", p.Person)
 	}
-	var listed json.RawMessage
+	var listed *protocol.PersonRef
 	for _, m := range listMembers(t, h, bob).Members {
 		if m.Address == vit.addr {
 			listed = m.Person
 		}
 	}
-	if string(listed) != string(own) {
-		t.Fatalf("member list person %s", listed)
+	if listed == nil || *listed != (protocol.PersonRef{ID: first.Person, Seq: 0, Hash: first.Hash()}) {
+		t.Fatalf("member list person %+v", listed)
+	}
+	if page := chainOf(t, h, bob, first.Person, -1); len(page.Records) != 1 || string(page.Records[0]) != string(own) || page.More {
+		t.Fatalf("chain %+v", page)
 	}
 	// Someone else's device, someone else's key, or a bad record: refused.
 	other, _ := identity.Generate()
-	forged := protocol.PersonRoster{Person: protocol.NewID(), Label: "Vitalii",
-		Devices: []protocol.RosterDevice{{Address: vit.addr, Fingerprint: vit.id.Public(vit.addr).Fingerprint()}}}
+	forged := protocol.PersonRoster{Person: protocol.NewID(), Label: "Vitalii", Devices: []identity.Public{vit.id.Public(vit.addr)}}
 	forged.Sign(other.Sign)
 	forgedData, _ := json.Marshal(forged)
 	for what, body := range map[string][]byte{
@@ -83,9 +94,23 @@ func TestPersonPublished(t *testing.T) {
 			t.Errorf("%s: %d", what, c)
 		}
 	}
+	if c, _ := vit.call(t, h, "PUT", "/v1/person", rosterFor(vit, "Second")); c != http.StatusConflict {
+		t.Errorf("a second person for one device: %d", c)
+	}
 	if p := profileOf(t, h, bob, vit); string(p.Person) != string(own) {
 		t.Fatal("a refused record replaced the published one")
 	}
+}
+
+func chainOf(t *testing.T, h *Hub, asker member, person string, after int64) protocol.PersonChain {
+	t.Helper()
+	c, body := asker.call(t, h, "GET", fmt.Sprintf("/v1/persons/%s/chain?after=%d", person, after), nil)
+	if c != http.StatusOK {
+		t.Fatalf("chain: %d %s", c, body)
+	}
+	var page protocol.PersonChain
+	json.Unmarshal(body, &page)
+	return page
 }
 
 // What a device can read is decided by its live sessions (all must support
