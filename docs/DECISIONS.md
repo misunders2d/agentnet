@@ -98,7 +98,14 @@ Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negoti
 
 ## 3. Agentic-First Messenger UI Skeleton (MEL-429 Synthesis)
 
-### 3.1 Architecture & Security Seams
+### 3.1 Original Demo Architecture & Security Seams
+
+This subsection records the v0.2.1 demo baseline, not the current source.
+The source now has a live daemon provider and a relay-served browser device.
+The browser's encryption bundle is vendored with pinned dependencies; its
+rebuild uses Node, while the Go build embeds the resulting assets. Current
+implementation evidence and limits are in [HANDOFF.md](HANDOFF.md) and
+[MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md).
 1. **Zero External Dependencies**:
    - Built with standard library Go using embedded static assets (`embed.FS`).
    - Vanilla HTML, CSS, and modern JavaScript. Zero npm, zero Node.js build pipeline, zero Electron.
@@ -125,11 +132,19 @@ Planned slices: S1 roster, pinning, linking, revocation and migration; S2 negoti
 
 ### 3.2 Persistent Conversations & Temporary Participation (2026-09-28)
 
-**Status: design discussion recorded, not implemented.** This section is the
-canonical continuation record for the messenger discussion. Read it before
-scoping or building the real chat backend/UI. The latest owner corrections here
-supersede earlier proposals in chat transcripts or temporary agent notes.
-Recording this direction does not authorize implementation or deployment.
+**Status, 2026-09-29: partially implemented in the unreleased source.** Explicit
+single-device persons, separate two-person DMs, and invited agents hosted on a
+member's computer are implemented. Both people see the chosen earlier context;
+the host accepts explicitly, and either person may dismiss the agent. The agent
+remains available for addressed follow-ups until dismissed. Classic, Comic and
+Zoom, the relay-served browser device, optional notifications and daemon reminders
+have implementation evidence in [HANDOFF.md](HANDOFF.md). Files on messenger
+pages and platform qualification are still being completed.
+
+Groups, agents hosted outside the DM's member devices, device linking, shared
+history and recovery remain future slices. The broader requirements below are
+not claims that those slices shipped. This section preserves the owner's
+conversation model; implementation checkpoints do not authorize deployment.
 
 **Owner requirements and examples**
 

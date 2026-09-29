@@ -1,9 +1,41 @@
 # AgentNet
 
-> **End-to-end encrypted communicator for AI coding agents across colleagues' laptops and servers.**
+> **A self-hosted messenger for people and their coding agents, with end-to-end encrypted messages and files.**
 
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+## Messenger release in preparation
+
+The source now includes a messenger; the published **v0.2.1** release and
+the CLI quickstart below predate it. The new release is still being
+qualified. See [the current handoff](docs/HANDOFF.md) for evidence and open gates.
+
+- **Talk to a person.** Create your person explicitly, find someone on your
+  server, and start a DM. Separate discussions stay separate. Existing
+  device conversations remain available and are never silently merged into DMs.
+- **Bring an agent into a DM.** Choose earlier messages to share; the agent's
+  owner accepts. Ask follow-up questions until either person dismisses it.
+  Tasks still require permission. Classic, Comic and Zoom show people and
+  their agents separately.
+- **Open the messenger on a computer or in a browser.** The local daemon
+  serves its page; a Hub with `--web` can serve a browser device over trusted
+  HTTPS. The browser device chats and can invite the other person's agent;
+  it never runs an agent itself.
+- **Choose notifications and reminders.** DM notifications are opt-in with
+  per-conversation mutes. The computer's daemon also supports local reminders.
+  Phone and native notification behavior have separate qualification gates.
+- **Share files and pasted pictures.** Encrypted file transfer is being
+  connected to both messenger pages. Final UI and interrupted-transfer
+  checks are part of this release's remaining work.
+
+This first messenger release uses single-device person identities. Linking
+devices, group conversations, message editing, reactions, typing indicators
+and custom visual plugins are later work. A browser must reach its server
+to load the page; an already open page can queue messages while offline.
+Browser storage can be cleared or lost, and there is no browser-device
+backup or recovery yet. The browser code comes from the server operator,
+so use a server you trust.
 
 ## What is AgentNet?
 
@@ -11,14 +43,14 @@ Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate
 
 **AgentNet connects AI coding agents across laptops and servers through a secure, self-hosted communication layer.**
 
-- 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores and relays only ciphertext.
+- 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores ciphertext and routing metadata. Optional browser push adds subscription, attention-channel and presentation metadata; notification payloads contain no message text.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
 - 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
 - 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; read-only tool subset for Pi). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks run only with your permission.** They wait in your inbox as `awaiting` until you run one with `agentnet accept <id>` or reject it with `agentnet decline <id>`, unless you granted that sender's exact key standing permission (`agentnet approve --tasks <address>` or `agentnet accept --always <id>`; `agentnet unapprove --tasks <address>` revokes, `agentnet approvals` lists). A grant never follows a changed key and never reruns failed work.
 - 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
-- 🪶 **Self-Hosted & Single Binary**: Written in pure Go with embedded SQLite (WAL mode). One single binary serves as both laptop client and Hub server. No Docker or root required on laptops; zero external brokers, databases, or cloud services.
+- 🪶 **Self-Hosted & Single Binary**: Written in Go with embedded SQLite (WAL mode). One binary serves as both laptop client and Hub server. No Docker or root required on laptops, and no external database or message broker. Optional browser notifications use the browser vendor's push service.
 
 > 🧭 **Agent Handoff & Architecture Docs**: Incoming coding agents should start with [`docs/HANDOFF.md`](docs/HANDOFF.md) for current scope, verification evidence, operations, and next tasks. Architectural decision records and roadmap notes are maintained in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
