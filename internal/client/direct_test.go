@@ -299,17 +299,19 @@ func TestIdleDaemonsDoNotPoll(t *testing.T) {
 	}
 }
 
-// A browser invitation from an installation that reaches its Hub through a
-// certificate pin is refused before any request: no invite is created.
-func TestBrowserInviteRefusedBeforeAnyRequest(t *testing.T) {
+// The Hub, not the admin's connection pin, decides whether its advertised
+// endpoint can issue browser invitations. A pinned-only Hub still refuses.
+func TestBrowserInvitePinnedOnlyHubRefuses(t *testing.T) {
 	w := newWorld(t, "")
 	rec := &requestLog{}
 	w.alice.hub.http.Transport = recordingRT{w.alice.hub.http.Transport, rec}
-	if code, err := w.alice.BrowserInvite(tctx(t), "carol", time.Hour, false); !errors.Is(err, ErrPinnedHub) || code != "" {
+	code, err := w.alice.BrowserInvite(tctx(t), "carol", time.Hour, false)
+	var he *HubError
+	if !errors.As(err, &he) || he.Status != http.StatusConflict || code != "" {
 		t.Fatalf("browser invite from a pinned Hub: %q %v", code, err)
 	}
-	if acks, others := rec.snapshot(); acks != 0 || len(others) != 0 {
-		t.Fatalf("requests made: %v", others)
+	if acks, others := rec.snapshot(); acks != 0 || len(others) != 1 || others[0] != "POST /v1/admin/invites" {
+		t.Fatalf("browser capability request: %v", others)
 	}
 }
 

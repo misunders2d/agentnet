@@ -150,6 +150,20 @@ Railway. Railway volumes may be owned by root; if the Hub cannot write
 `/data`, Railway's `RAILWAY_RUN_UID=0` setting is the documented workaround
 (unverified here).
 
+To serve the browser messenger, also set `AGENTNET_WEB=1` and use
+`agentnet admin invite --link LABEL`. The Hub checks that its advertised
+endpoint supports browser invitations before creating one. An existing
+admin may still connect through an older pinned endpoint.
+
+When moving an enrolled Hub behind a HTTPS proxy, keep its data volume.
+Existing clients retain their original URL and certificate pin: preserve
+that listener and certificate at the proxy while adding the new trusted
+HTTPS endpoint, and route both to the same private Hub backend. Do not
+replace the old certificate or expose the plain HTTP backend. The local
+transition test preserves existing clients and an offline attachment, then
+joins a new device through the new endpoint; this is not production or
+physical-phone qualification.
+
 ### Settings
 
 | Flag | Environment | Default |
