@@ -310,6 +310,10 @@ treated the same way (frozen, never replaced).`,
        agentnet dm list
        agentnet dm show ID
        agentnet dm send [--question|--task] ID TEXT
+       agentnet dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
+       agentnet dm agents ID
+       agentnet dm accept-agent|decline-agent|dismiss-agent PID
+       agentnet dm ask-agent [--task] PID TEXT
 
 A DM is a conversation between two persons (see agentnet help person), with
 its own id: each dm new starts a separate one, even with the same person,
@@ -324,7 +328,16 @@ decline do not apply to it; answer with dm send. If the other installation
 cannot read conversations right now, dm send keeps the message as waiting
 and sends it when it can; it is never sent in the older format. dm show
 lists the messages and their states; an origin shown (ui, agent:NAME) is
-what the sending installation says, not proof.`,
+what the sending installation says, not proof.
+
+An agent joins a DM only when invited: dm invite names the device it runs
+on (a member's own installation, whose person accepts or declines with
+dm accept-agent / dm decline-agent, all or nothing), the earlier messages it
+may be shown (--grant, logical ids from dm show; nothing else earlier) and
+who may give it follow-up tasks (--tasks). Both people see the invite.
+Either person can end it with dm dismiss-agent; inviting again starts a new
+participation. dm ask-agent sends it a question or task, but nothing runs
+agents in DMs yet: the host holds it for its person.`,
 
 	"members": `Usage: agentnet members
 
