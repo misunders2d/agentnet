@@ -114,6 +114,26 @@ async function handle(req) {
     const files = req.files.map((f) => { const bytes = new Uint8Array(Buffer.from(f.b64, "base64")); return { name: f.name, size: bytes.length, bytes }; });
     return { v: await engine.api("/api/dm/send", { conv: req.conv, body: req.body || "", files }) };
   }
+  case "holdUploads": { // uploads wait for releaseUploads; the start of one is awaited by sendFilesLater
+    const orig = engine.uploadBlob.bind(engine);
+    held = {};
+    held.gate = new Promise((r) => { held.open = r; });
+    held.started = new Promise((r) => { held.start = r; });
+    engine.uploadBlob = async (...args) => { held.start(); await held.gate; return orig(...args); };
+    return {};
+  }
+  case "sendFilesLater": { // sendFiles, answered once its first upload is under way
+    const files = req.files.map((f) => { const bytes = new Uint8Array(Buffer.from(f.b64, "base64")); return { name: f.name, size: bytes.length, bytes }; });
+    held.send = engine.api("/api/dm/send", { conv: req.conv, body: req.body || "", files });
+    held.send.catch(() => {});
+    await held.started;
+    return {};
+  }
+  case "releaseUploads":
+    held.open();
+    return { v: await held.send };
+  case "hubStatus": // what the relay says of a message this device sent
+    return { v: await engine.call("GET", "/v1/messages/" + req.id) };
   case "convRoot":
     return { root: (await store.get("convs", req.conv)).root };
   case "openFile": {
@@ -137,6 +157,7 @@ async function handle(req) {
   throw new Error("unknown op " + req.op);
 }
 
+let held = null; // holdUploads
 const rl = createInterface({ input: process.stdin });
 for await (const line of rl) {
   let out;

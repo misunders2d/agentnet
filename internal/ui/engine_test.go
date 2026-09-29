@@ -690,6 +690,8 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	alice, aliceRaw := agent(testhub.BootstrapCode(t, dir), "laptop", "Alice")
 	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
 	_, bobRaw := agent(code, "desk", "Bob")
+	code, _ = alice.Invite(ctx, "erin", time.Hour, false)
+	_, erinRaw := agent(code, "box", "Erin")
 	code, _ = alice.Invite(ctx, "dana", time.Hour, false)
 	w := startEngineNode(t, dir)
 	w.ok(map[string]any{"op": "init", "base": base})
@@ -702,7 +704,8 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	})
 	toAlice := w.api("/api/dm/new", map[string]any{"address": alice.Address})["id"].(string)
 	toBob := w.api("/api/dm/new", map[string]any{"address": bobRaw.addr})["id"].(string)
-	for _, r := range []*rawAgent{aliceRaw, bobRaw} {
+	toErin := w.api("/api/dm/new", map[string]any{"address": erinRaw.addr})["id"].(string)
+	for _, r := range []*rawAgent{aliceRaw, bobRaw, erinRaw} {
 		w.until(r.addr+" reads conversations", func() bool { return aliceRaw.supports(r.addr) })
 	}
 
@@ -731,6 +734,22 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	w.refuses("send after the profile read", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toAlice, "body": "x"}}), "conflicts")
 	if ms := w.api("/api/dm?id="+toAlice, nil)["messages"].([]any); len(ms) != 0 {
 		t.Fatalf("messages kept for alice: %v", ms)
+	}
+
+	// A conflict seen while a file is still uploading (here another send's
+	// profile read) stops the message before the relay is given it: it
+	// stays queued, saying why.
+	w.ok(map[string]any{"op": "holdUploads"})
+	w.ok(map[string]any{"op": "sendFilesLater", "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
+	erinRaw.roster("Erin again")
+	w.refuses("a send that reads Erin's new person", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toErin, "body": "y"}}), "conflicts")
+	late := w.ok(map[string]any{"op": "releaseUploads"})["v"].(map[string]any)
+	rec = w.ok(map[string]any{"op": "outbox", "id": late["id"]})["rec"].(map[string]any)
+	if rec["state"] != "queued" || !strings.Contains(rec["detail"].(string), "conflicts") || late["state"] != "queued" {
+		t.Fatalf("a file message after a conflict seen during its upload: %v %q (answered %v)", rec["state"], rec["detail"], late["state"])
+	}
+	if st := w.call(map[string]any{"op": "hubStatus", "id": late["id"]}); st["error"] == nil {
+		t.Fatalf("the relay holds the message: %v", st)
 	}
 }
 

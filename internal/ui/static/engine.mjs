@@ -584,6 +584,18 @@ export class Engine {
         f.uploaded = true;
         await put(this.store, "outbox", rec.id, rec);
       }
+      // Uploads take time: a conflict seen meanwhile (another send's
+      // profile read, a message received) stops the handover here, and the
+      // message stays queued, saying why.
+      if (rec.conv) {
+        const { why } = await this.gate(await this.store.get("convs", rec.conv));
+        if (why) {
+          rec.detail = why;
+          await put(this.store, "outbox", rec.id, rec);
+          this.changed();
+          return;
+        }
+      }
       const r = await this.call("POST", "/v1/messages", rec.envelope);
       rec.state = (r && r.state) || "custody";
       rec.detail = "";
