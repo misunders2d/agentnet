@@ -32,11 +32,13 @@ const limits = () => [
 
 async function main() {
   // An invitation in the link is taken once and removed from the address
-  // at once, so it is not kept in history or shown again. It is not logged.
-  let code = "";
+  // before anything else is done with it, so it is not kept in history or
+  // shown again, even when it is damaged. It is not logged.
+  let code = "", damaged = false;
   if (location.hash.startsWith(invitePrefix)) {
-    code = decodeURIComponent(location.hash.slice(1));
+    const raw = location.hash.slice(1);
     history.replaceState(null, "", location.pathname + location.search);
+    try { code = decodeURIComponent(raw); } catch (e) { damaged = true; }
   }
   document.querySelector(".app").hidden = true;
   panel = el("main", { id: "device-setup", class: "relay-page" });
@@ -56,12 +58,12 @@ async function main() {
       show("AgentNet is already open in another tab of this browser. Use that tab: this one does nothing, so nothing is sent or received twice.");
       return;
     }
-    await run(code);
+    await run(code, damaged);
     await new Promise(() => {}); // the lock is held while this tab is open
   });
 }
 
-async function run(code) {
+async function run(code, damaged) {
   let store;
   try {
     store = await openIDB();
@@ -72,10 +74,10 @@ async function run(code) {
   }
   const engine = new Engine({ store, base: location.origin });
   if (await engine.load()) start(engine);
-  else joinScreen(engine, code);
+  else joinScreen(engine, code, damaged);
 }
 
-function joinScreen(engine, code) {
+function joinScreen(engine, code, damaged) {
   const invite = el("textarea", { id: "join-code", rows: "3", autocomplete: "off", spellcheck: "false", placeholder: "agentnet-invite-v1:…" });
   const name = el("input", { id: "join-name", type: "text", autocomplete: "off", spellcheck: "false", maxlength: "32", placeholder: "phone" });
   const error = el("p", { class: "error", role: "alert" });
@@ -97,7 +99,8 @@ function joinScreen(engine, code) {
     }
   });
   show(el("p", {}, "Join this server with this browser as one of your devices. It is for you, the person: nothing runs in it, and questions and tasks sent to it wait for you."),
-    code ? el("p", {}, "An invitation came with the link.") : [el("label", { for: "join-code", class: "field-label" }, "Invitation"), invite],
+    code ? el("p", {}, "An invitation came with the link.") : [damaged && el("p", { class: "error" }, "The invitation in the link is damaged. Paste the invitation instead."),
+      el("label", { for: "join-code", class: "field-label" }, "Invitation"), invite],
     el("label", { for: "join-name", class: "field-label" }, "A name for this device (lowercase, such as phone)"), name,
     limits(), error, button);
   name.focus();

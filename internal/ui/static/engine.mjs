@@ -17,6 +17,8 @@ import * as wire from "./wire.mjs";
 const HEARTBEAT = 90_000;
 const MAX_BACKOFF = 60_000;
 const stores = ["kv", "pins", "persons", "convs", "inbox", "outbox", "held", "lids", "receipts"];
+// heldPage bounds the held messages read in one step (the Go client's proofPage).
+const heldPage = 50;
 
 // ---- storage -------------------------------------------------------------------------------
 
@@ -41,6 +43,8 @@ export async function openIDB(name = "agentnet") {
   return {
     get: (s, k) => request(db.transaction(s).objectStore(s).get(k)),
     all: (s) => request(db.transaction(s).objectStore(s).getAll()),
+    // after returns up to n values whose keys follow k, in key order ("" is the start).
+    after: (s, k, n) => request(db.transaction(s).objectStore(s).getAll(k === "" ? null : IDBKeyRange.lowerBound(k, true), n)),
     async write(ops) {
       const t = db.transaction([...new Set(ops.map((o) => o.s))], "readwrite", { durability: "strict" });
       for (const o of ops) {
@@ -60,6 +64,7 @@ export function memoryStore() {
   return {
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
+    after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
     async write(ops) {
       for (const o of ops) {
         if (o.v === undefined) data[o.s].delete(o.k);
@@ -237,6 +242,10 @@ export class Engine {
   async join(code, agentName) {
     if (this.joined) throw new Error("This browser already holds a device.");
     const inv = wire.decodeInvite(code);
+    // An invitation that pins the server's own certificate is for the
+    // command line: a browser cannot apply that pin, and its own trust is
+    // not a substitute. Refused before anything is sent.
+    if (inv.cert) throw new Error("This invitation pins its server's own certificate, which a browser cannot use. Ask your admin for an invitation for the browser, from a server with a certificate browsers trust.");
     sameOrigin(inv.hub, this.base);
     const address = inv.label + "/" + String(agentName || "").trim();
     if (!wire.validAddress(address)) throw new Error("Choose a device name of lowercase letters, digits and dashes, such as phone.");
@@ -442,15 +451,12 @@ export class Engine {
     if (!body) throw new Error("Write a message first.");
     const c = await this.store.get("convs", conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
-    const peer = await this.store.get("persons", c.peer);
-    if (!peer) throw new Error("The other member's person record is not kept here.");
-    if (peer.state === "conflict") throw new Error("This person's record conflicts with the one kept here; the conversation is frozen.");
     if (replyTo) {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.conv !== conv) throw new Error("A reply stays within its conversation.");
     }
-    const pin = await this.pinned(peer.address);
-    if (pin.pending || pin.fingerprint !== peer.fingerprint) throw new Error(peer.address + "'s key is no longer the one its person record names; the conversation is frozen.");
+    const { why: stop, peer, pin } = await this.gate(c);
+    if (stop) throw new Error(stop);
     let ok = false, why = "";
     try {
       [ok, why] = await this.supports(peer.address, pin);
@@ -458,7 +464,8 @@ export class Engine {
       if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
       why = "cannot reach your server";
     }
-    if ((await this.store.get("persons", c.peer)).state === "conflict") throw new Error("This person's record conflicts with the one kept here; the conversation is frozen.");
+    const again = (await this.gate(c)).why; // the profile just read may have frozen the person
+    if (again) throw new Error(again);
     const id = wire.newID();
     const at = this.now();
     const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind: "message",
@@ -503,22 +510,45 @@ export class Engine {
     this.changed();
   }
 
+  // gate says why nothing may be sent in conversation c now ("" when it
+  // may), with the other member's person and pin: their person must be
+  // kept and not in conflict, and the key pinned for their device must be
+  // the one that person names, with no change waiting. A new message and
+  // every kept one pass it before they are sent.
+  async gate(c) {
+    const peer = c && (await this.store.get("persons", c.peer));
+    if (!peer) return { why: "The other member's person record is not kept here." };
+    if (peer.state === "conflict") return { why: "This person's record conflicts with the one kept here; the conversation is frozen.", peer };
+    const pin = await this.pinned(peer.address);
+    if (pin.pending || pin.fingerprint !== peer.fingerprint) return { why: peer.address + "'s key is no longer the one its person record names; the conversation is frozen.", peer, pin };
+    return { why: "", peer, pin };
+  }
+
+  // flushOutbox sends what is kept: queued messages, and waiting ones once
+  // the recipient can read them. Each passes the gate first, again after a
+  // profile read that may freeze the person; what does not pass is kept
+  // and never sent.
   async flushOutbox() {
     for (const rec of await this.store.all("outbox")) {
       if (!this.connected) return;
-      if (rec.state === "queued") {
-        await this.post(rec);
-      } else if (rec.state === "waiting") {
-        const c = await this.store.get("convs", rec.conv);
-        const peer = c && (await this.store.get("persons", c.peer));
-        if (!peer || peer.state !== "pinned") continue;
-        const pin = await this.store.get("pins", peer.address);
-        if (!pin || pin.pending) continue;
+      if (rec.state !== "queued" && rec.state !== "waiting") continue;
+      const c = await this.store.get("convs", rec.conv);
+      let g;
+      try { g = await this.gate(c); } catch (e) { continue; }
+      if (!g.why && rec.state === "waiting") {
         let ok = false;
-        try { [ok] = await this.supports(peer.address, pin); } catch (e) { continue; }
-        if ((await this.store.get("persons", peer.person)).state !== "pinned") continue; // frozen meanwhile: kept, never sent
-        if (ok) await this.post({ ...rec, state: "queued", detail: "" });
+        try { [ok] = await this.supports(g.peer.address, g.pin); } catch (e) { continue; }
+        if (!ok) continue;
+        g = await this.gate(c);
       }
+      if (g.why) {
+        if (rec.detail !== g.why) {
+          await put(this.store, "outbox", rec.id, { ...rec, detail: g.why });
+          this.changed();
+        }
+        continue;
+      }
+      await this.post({ ...rec, state: "queued", detail: "" });
     }
   }
 
@@ -661,15 +691,38 @@ export class Engine {
   }
 
   // retryHeld looks again at messages held for missing proof, when new
-  // evidence may have come (a connection, a member list). Bounded.
-  async retryHeld() {
-    const held = (await this.store.all("held")).filter((h) => h.reason === "proof_pending").slice(0, 100);
-    for (const h of held) {
-      try {
-        await this.admit(h.envelope, wire.parseEnvelope(h.envelope), true);
-      } catch (e) {
-        return; // the server is not reachable; next time
+  // evidence may have come (a connection, a member list). One pass reads
+  // a bounded page at a time, in key order, and continues to the end, so
+  // messages that stay unproven never keep later ones from being looked
+  // at. Evidence that comes during a pass adds a pass from the beginning
+  // once this one ends; an unreachable server ends it (the next connection
+  // looks again).
+  retryHeld() {
+    this.retryAgain = true;
+    if (!this.retrying) this.retrying = this.retryPasses();
+    return this.retrying;
+  }
+
+  async retryPasses() {
+    try {
+      this.retryAgain = false;
+      let pos = "";
+      for (;;) {
+        const page = await this.store.after("held", pos, heldPage);
+        for (const h of page) {
+          if (h.reason !== "proof_pending") continue;
+          try {
+            await this.admit(h.envelope, wire.parseEnvelope(h.envelope), true);
+          } catch (e) {
+            return;
+          }
+        }
+        if (page.length === heldPage) pos = page[page.length - 1].id;
+        else if (this.retryAgain) [this.retryAgain, pos] = [false, ""];
+        else return;
       }
+    } finally {
+      this.retrying = null;
     }
   }
 

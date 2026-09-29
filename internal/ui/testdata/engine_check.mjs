@@ -8,10 +8,12 @@ import { createInterface } from "node:readline";
 
 let store = memoryStore();
 let engine = null;
-let offline = false;
+let offline = false, dropPosts = false;
 const realFetch = globalThis.fetch.bind(globalThis);
-// A network that can be switched off, as a phone on a train.
-const fetchImpl = (url, opts) => (offline ? Promise.reject(new TypeError("fetch failed")) : realFetch(url, opts));
+// A network that can be switched off, as a phone on a train, or that
+// loses only the messages posted.
+const fetchImpl = (url, opts) => (offline || (dropPosts && opts && opts.method === "POST" && url.endsWith("/v1/messages"))
+  ? Promise.reject(new TypeError("fetch failed")) : realFetch(url, opts));
 
 async function handle(req) {
   switch (req.op) {
@@ -36,6 +38,22 @@ async function handle(req) {
     if (offline) engine.offline();
     else engine.online();
     return {};
+  case "dropPosts":
+    dropPosts = req.on;
+    return {};
+  case "flush": // what a ping or a connection does with the kept messages
+    if (req.connected) { // as a connection does before its member list has come
+      engine.connected = true;
+      try { await engine.flushOutbox(); } finally { engine.connected = false; }
+    } else {
+      await engine.flushOutbox();
+    }
+    return {};
+  case "stopStream": // no events come: the next change is seen only by asking
+    engine.stop();
+    return {};
+  case "outbox":
+    return { rec: (await store.get("outbox", req.id)) || null };
   case "reload": { // the page is reloaded: a new engine over the same stored data
     engine.stop();
     engine = new Engine({ store, base: req.base, fetch: fetchImpl });

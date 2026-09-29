@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -125,14 +126,51 @@ func (r *rawAgent) do(method, path string, body []byte, signed bool) (int, []byt
 	return resp.StatusCode, data
 }
 
+// roster makes and publishes a person for this device.
 func (r *rawAgent) roster(label string) protocol.PersonRoster {
+	p := r.newRoster(label)
+	r.publish(p)
+	return p
+}
+
+// newRoster makes a signed person for this device without publishing it.
+func (r *rawAgent) newRoster(label string) protocol.PersonRoster {
 	p := protocol.PersonRoster{Person: protocol.NewID(), Label: label,
 		Devices: []protocol.RosterDevice{{Address: r.addr, Fingerprint: r.id.Public(r.addr).Fingerprint()}}}
 	p.Sign(r.id.Sign)
+	return p
+}
+
+func (r *rawAgent) publish(p protocol.PersonRoster) {
+	r.t.Helper()
 	if code, body := r.do("PUT", "/v1/person", marshalBytes(r.t, p), true); code >= 300 {
 		r.t.Fatalf("publish person: %d %s", code, body)
 	}
-	return p
+}
+
+// dmRoot is a DM between r's person own and the person peer names (at
+// peerPub's device), made by r, with its JSON.
+func (r *rawAgent) dmRoot(own protocol.PersonRoster, peerPub identity.Public, peer protocol.PersonRoster) (protocol.ConvRoot, []byte) {
+	members := []protocol.ConvMember{{Person: own.Person, Roster: own.Hash()}, {Person: peer.Person, Roster: peer.Hash()}}
+	if members[0].Person > members[1].Person {
+		members[0], members[1] = members[1], members[0]
+	}
+	root := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
+		Creator: protocol.ConvCreator{Person: own.Person, Roster: own.Hash(), Address: r.addr, Fingerprint: r.id.Public(r.addr).Fingerprint()}}
+	root.Sign(r.id.Sign)
+	return root, marshalBytes(r.t, root)
+}
+
+// browserCode is code without its pinned certificate: a browser trusts
+// the Hub through its own certificate authorities (here the test Hub's
+// certificate, through NODE_EXTRA_CA_CERTS), never through an invitation.
+func browserCode(t *testing.T, code string) string {
+	inv, err := protocol.DecodeInvite(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.CertPEM = ""
+	return inv.Encode()
 }
 
 // peer reads address's directory entry and published person.
@@ -222,7 +260,11 @@ func TestBrowserEngineJourney(t *testing.T) {
 	for _, c := range [][2]string{{"https://relay.example", "https://relay.example"}, {"https://127.0.0.1:8443", "http://127.0.0.1:8443"}} {
 		w.ok(map[string]any{"op": "sameOrigin", "hub": c[0], "base": c[1]})
 	}
-	if v := w.ok(map[string]any{"op": "join", "code": code, "name": "phone"}); v["address"] != "dana/phone" {
+	// An invitation that pins the Hub's own certificate is refused before
+	// anything is sent: the join that follows, with the same single-use
+	// secret and name, proves nothing was enrolled.
+	w.refuses("invitation with a pinned certificate", w.call(map[string]any{"op": "join", "code": code, "name": "phone"}), "certificate")
+	if v := w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"}); v["address"] != "dana/phone" {
 		t.Fatalf("join: %v", v)
 	}
 	keys := w.ok(map[string]any{"op": "keys"})
@@ -377,10 +419,30 @@ func TestBrowserEngineJourney(t *testing.T) {
 	eve.send(dPub, msg(protocol.NewID(), "after the change"))
 	w.until("held after the change", func() bool { return held() == h0+3 })
 
-	// Alice's key "changes" (the pin now names Eve's key): her next message
-	// is held, not opened with a key that is not hers.
+	// Alice's key "changes" (the pin now names Eve's key). What Dana kept
+	// for her before, one message queued (its post was lost) and one
+	// waiting (written offline), is not sent after the change.
+	w.ok(map[string]any{"op": "dropPosts", "on": true})
+	queued := w.api("/api/dm/send", map[string]any{"conv": c1, "body": "queued before the change"})
+	w.ok(map[string]any{"op": "offline", "on": true})
+	w.until("disconnected again", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == false })
+	waiting := w.api("/api/dm/send", map[string]any{"conv": c2, "body": "waiting before the change"})
+	if queued["state"] != "queued" || waiting["state"] != "waiting" {
+		t.Fatalf("kept: %v, %v", queued, waiting)
+	}
 	evePub := eve.id.Public(eve.addr)
 	alicePin := w.ok(map[string]any{"op": "tamperPin", "address": alice.Address, "json": publicJSON(t, evePub), "fingerprint": evePub.Fingerprint()})
+	w.ok(map[string]any{"op": "dropPosts", "on": false})
+	w.ok(map[string]any{"op": "offline", "on": false})
+	w.until("connected after the change", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == true })
+	w.ok(map[string]any{"op": "flush"})
+	for _, m := range []map[string]any{queued, waiting} {
+		rec := w.ok(map[string]any{"op": "outbox", "id": m["id"]})["rec"].(map[string]any)
+		if rec["state"] != m["state"] || !strings.Contains(rec["detail"].(string), "no longer the one") {
+			t.Fatalf("kept message after the change: %v", rec)
+		}
+	}
+	// Her next message is held, not opened with a key that is not hers.
 	if _, err := alice.SendConv(ctx, c1, client.ConvOutgoing{Body: "is this still me?"}); err != nil {
 		t.Fatal(err)
 	}
@@ -420,4 +482,158 @@ func TestBrowserEngineJourney(t *testing.T) {
 	}
 	w.refuses("send after revoke", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": c1, "body": "x"}}), "removed")
 	_ = danaPub
+}
+
+// Messages that stay unproven never keep later ones from being looked at
+// again: more than a page of them come first (by id), then one whose
+// proof comes later, which is admitted when it does.
+func TestBrowserEngineRetriesEveryHeld(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	invite := func(label string) string {
+		code, err := alice.Invite(ctx, label, time.Hour, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code
+	}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": "https://" + hub.Addr})
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, invite("dana")), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	held := func() float64 { return w.ok(map[string]any{"op": "count", "store": "held"})["n"].(float64) }
+
+	// Neither Gus nor Fay has published a person yet: their DMs cannot be
+	// proven here. Gus's messages sort first and stay unproven.
+	gus, fay := newRawAgent(t, invite("gus"), "lab"), newRawAgent(t, invite("fay"), "lab")
+	dPub, dRoster := gus.peer("dana/phone")
+	gusRoot, gusJSON := gus.dmRoot(gus.newRoster("Gus"), dPub, dRoster)
+	const unproven = 101 // past the old limit of 100, over three pages
+	for i := 0; i < unproven; i++ {
+		gus.send(dPub, envelope.Inner{ID: fmt.Sprintf("00%030x", i), V: 2, Kind: "message", Body: "unproven",
+			Conv: gusRoot.ID(), LID: protocol.NewID(), Root: gusJSON, Origin: "ui"})
+	}
+	fayRoster := fay.newRoster("Fay")
+	fayRoot, fayJSON := fay.dmRoot(fayRoster, dPub, dRoster)
+	fay.send(dPub, envelope.Inner{ID: "ff" + strings.Repeat("0", 30), V: 2, Kind: "message", Body: "proven later",
+		Conv: fayRoot.ID(), LID: protocol.NewID(), Root: fayJSON, Origin: "ui"})
+	w.until("everything held", func() bool { return held() == unproven+1 })
+
+	// Fay publishes her person: the member list that follows is new
+	// evidence, and her message is admitted past all of Gus's.
+	fay.publish(fayRoster)
+	w.until("fay's message admitted", func() bool {
+		return w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + fayRoot.ID()})["error"] == nil &&
+			dmBodies(w.api("/api/dm?id="+fayRoot.ID(), nil)) == "in:proven later"
+	})
+	if n := held(); n != unproven {
+		t.Fatalf("%v held, want Gus's %d", n, unproven)
+	}
+}
+
+// A person record that changed is found only by the profile read before a
+// send: a new message and a kept one are both refused after that read,
+// not sent to the device the changed record names.
+func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	base := "https://" + hub.Addr
+	pool := x509.NewCertPool()
+	if pem, err := os.ReadFile(filepath.Join(dir, "tls.crt")); err != nil || !pool.AppendCertsFromPEM(pem) {
+		t.Fatalf("hub certificate: %v", err)
+	}
+	// agent joins a Go agent with a person and a running daemon, and
+	// returns it as a raw agent too, to publish another person for it.
+	agent := func(code, name, label string) (*client.Agent, *rawAgent) {
+		home := filepath.Join(t.TempDir(), name)
+		a, err := client.Join(ctx, home, code, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { a.Close() })
+		runDaemon(t, a)
+		if _, err := a.CreatePerson(ctx, label); err != nil {
+			t.Fatal(err)
+		}
+		id, err := identity.Load(filepath.Join(home, "identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, &rawAgent{t: t, id: id, addr: a.Address, hub: base,
+			http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, Timeout: 10 * time.Second}}
+	}
+	alice, aliceRaw := agent(testhub.BootstrapCode(t, dir), "laptop", "Alice")
+	code, _ := alice.Invite(ctx, "bob", time.Hour, false)
+	_, bobRaw := agent(code, "desk", "Bob")
+	code, _ = alice.Invite(ctx, "dana", time.Hour, false)
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	toAlice := w.api("/api/dm/new", map[string]any{"address": alice.Address})["id"].(string)
+	toBob := w.api("/api/dm/new", map[string]any{"address": bobRaw.addr})["id"].(string)
+	for _, r := range []*rawAgent{aliceRaw, bobRaw} {
+		w.until(r.addr+" reads conversations", func() bool { return aliceRaw.supports(r.addr) })
+	}
+
+	// Offline, Dana keeps a message for Bob; then no events come.
+	w.ok(map[string]any{"op": "offline", "on": true})
+	kept := w.api("/api/dm/send", map[string]any{"conv": toBob, "body": "kept for bob"})
+	if kept["state"] != "waiting" {
+		t.Fatalf("offline send: %v", kept)
+	}
+	w.ok(map[string]any{"op": "stopStream"})
+	w.ok(map[string]any{"op": "offline", "on": false})
+
+	// Each device publishes another person; only a profile read shows it.
+	aliceRaw.roster("Alice again")
+	bobRaw.roster("Bob again")
+	for _, r := range []*rawAgent{aliceRaw, bobRaw} {
+		if !aliceRaw.supports(r.addr) {
+			t.Fatalf("%s no longer reads conversations", r.addr)
+		}
+	}
+	w.ok(map[string]any{"op": "flush", "connected": true})
+	rec := w.ok(map[string]any{"op": "outbox", "id": kept["id"]})["rec"].(map[string]any)
+	if rec["state"] != "waiting" || !strings.Contains(rec["detail"].(string), "conflicts") {
+		t.Fatalf("kept message after the profile read: %v", rec)
+	}
+	w.refuses("send after the profile read", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toAlice, "body": "x"}}), "conflicts")
+	if ms := w.api("/api/dm?id="+toAlice, nil)["messages"].([]any); len(ms) != 0 {
+		t.Fatalf("messages kept for alice: %v", ms)
+	}
+}
+
+// supports reads address's profile and says whether it reads conversations.
+func (r *rawAgent) supports(address string) bool {
+	r.t.Helper()
+	label, agent, _ := protocol.SplitAddress(address)
+	_, data := r.do("GET", "/v1/agents/"+label+"/"+agent, nil, true)
+	var d protocol.DirectoryEntry
+	json.Unmarshal(data, &d)
+	_, data = r.do("GET", "/v1/agents/"+label+"/"+agent+"/profile", nil, true)
+	var p protocol.Profile
+	json.Unmarshal(data, &p)
+	return p.Supports(address, d.Public.SignKey, protocol.CapEnv2)
 }
