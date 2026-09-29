@@ -5,7 +5,8 @@ activity on desktop and mobile, in this release, off until the person turns
 them on. This file is the core side (protocol, envelope, Hub, desktop
 daemon). The browser device's service worker, permission prompt, settings,
 mutes and click handling are the frontend's, built on the types here.
-Status: contract; nothing below is built yet unless marked.
+Status: §2-7 built for the Hub, protocol and Go sender (checkpoint 2);
+the desktop daemon (§8) and the browser device are not built yet.
 
 ## 1. Model
 
@@ -145,33 +146,47 @@ type PushPayload struct {
 
 ## 4. Pending alerts and dispatch (Hub)
 
+Built: `internal/hub/notify.go`, `push.go`; schema step 6.
+
 - Stored in the same transaction as the envelope, persisted (a Hub restart
-  loses nothing), keyed by (recipient, channel): the first message sets the
-  deadline `now + grace`; later ones of that channel count and replace
-  `last_msg`, never extending the deadline.
-- `POST /v1/notify/seen` cancels the channel's pending alert when its
-  `last_msg` is among the ids (newer, unseen activity keeps it). A stream
-  connection, stream acks and delivery receipts never cancel anything.
+  loses nothing), keyed by (device, channel, sender): the first message
+  sets the deadline `now + grace`; later ones count, replace `last_msg` and
+  bump a generation, never extending the deadline.
+- **Provenance:** every alert keeps its sender. A sender gets at most 16
+  exact channels pending per device; beyond that, one summary per sender
+  (no channel). So removing, re-keying or revoking a sender stops even its
+  summary; a channel mute applies to exact channels (a sender spraying
+  channels is the documented honest-sender limit).
+- `POST /v1/notify/seen` cancels the channel's pending alerts (and its
+  senders' summaries) whose `last_msg` is among the ids: newer, unseen
+  activity keeps them. A stream connection, stream acks and delivery
+  receipts never cancel anything.
 - One scheduler goroutine: a timer on the earliest deadline, woken by
   changes; no polling, no timer or goroutine per message. At a deadline it
-  checks again: enabled, subscription, not revoked, channel not muted, and
-  the last sender still allowed with its current key; then it sends through
-  the push client (§5) with `Topic` = the channel (or `summary`), `TTL`
-  24 h, `Urgency: high`, and the §3 payload padded to one 1024-byte record
-  (every push the same size, well under the 4 KiB service limits).
+  checks every due alert of a device again: enabled, device not revoked,
+  not expired, channel not muted, the sender still allowed with the key the
+  Hub has enrolled for it now and not revoked. Then ONE push for the device:
+  `chan` = the conversation if exactly one is due, else a summary (`""`);
+  `Topic` = that channel or `summary`; `TTL` 24 h; `Urgency: high`; the §3
+  payload padded to one 1024-byte record.
+- **Generation-safe completion:** the push is built from a snapshot (each
+  alert's generation, the subscription's identity) and completes only
+  that: an alert that gained activity while the push was out stays, due
+  again after the grace; a 404/410 removes the subscription only if it is
+  still the one the push went to (a replacement made meanwhile stays, and
+  the alerts go to it).
 - Outcomes: 2xx = accepted by the push service (queued there; not shown,
-  not read) → the alert is done. 404/410 → that subscription is deleted
-  (and its alerts). 429/5xx/network → retried with backoff honouring
-  `Retry-After`, at most 6 attempts within 24 h, then dropped and counted in
-  the log (no endpoint). Other 4xx → dropped, logged by status only.
-- Bounds (operational constants, named in code, tested):
-  - grace 5 s;
-  - at most 64 channel rows per device; beyond, one summary row
-    (`chan` empty) takes the rest; never unbounded per-channel records;
-  - per device, a token bucket of 3 pushes, refilled one per 10 s; a
-    limited alert stays pending with the next finite deadline (never
-    dropped silently);
-  - one send at a time, 10 s per request, response bodies read ≤ 4 KiB.
+  not read). 404/410 → that subscription and the device's alerts are
+  removed. 429/5xx/network → retried after `Retry-After` (else 10 s, 20 s,
+  … up to 1 h), at most 6 attempts within the 24 h lifetime, then dropped
+  and counted in the log (never the endpoint). Other statuses (including a
+  redirect, never followed) → dropped, logged by status only. A failure
+  inside the Hub reschedules that device a minute later (no spin).
+- Bounds (named constants in `notify.go`): grace 5 s; lifetime 24 h; 16
+  channels per sender and device plus one summary; 32 devices per round;
+  per device a token bucket of 3 pushes refilled one per 10 s (a limited
+  alert keeps a finite next deadline, never dropped silently); one push at
+  a time, 10 s each, response bodies read ≤ 4 KiB.
 
 ## 5. Outbound safety (SSRF)
 
@@ -234,23 +249,31 @@ The Hub makes HTTPS requests to URLs an enrolled device supplied.
 - Not learned: plaintext, the conversation id, labels, history, who the
   other member is beyond the existing sender/recipient.
 
-## 8. Desktop daemon
+## 8. Desktop daemon (not built yet)
 
 - Preferences are local (on/off, allowed sender keys, per-conversation
   mutes by conversation id), in the client store; no Hub API.
 - On admitting a DM turn that asks for attention (decided from the
   decrypted message, §1; the outer hint is not needed), from a pinned
   member whose key is allowed, in a conversation not muted: a local pending
-  alert (persisted, same grace, coalesced per conversation, one earliest
-  deadline timer, no polling). The local page reports presented messages
-  (same shape as `NotifySeen`, conversation id instead of channel) through
-  the daemon's local API; nothing else cancels.
-- At the deadline: a native notification "AgentNet" / "New activity",
-  replacing the previous one; a click opens the local page on that
-  conversation where the platform supports clicks (Linux today). Each
-  message alerts at most once (recorded), so a restart does not repeat.
-- Platforms: Linux (freedesktop, with click), Windows and macOS (shown, no
-  click yet); proof per OS is a native run, not a cross-compile.
+  alert, written in the message's admission transaction (persisted), same
+  grace, coalesced per conversation, one earliest-deadline timer, no
+  polling. The local page reports presented messages (same shape as
+  `NotifySeen`, conversation id instead of channel) through the daemon's
+  local API; nothing else cancels.
+- At the deadline the alert is marked shown in the store, then the native
+  notification is asked for. Order and limits, plainly: a crash between the
+  mark and the OS call loses that alert (it is not repeated); the OS may
+  drop, delay or hide it (Focus, permissions, no notification server); on
+  Linux a new alert replaces the previous one of this daemon; Windows and
+  macOS keep their own stacking. Nothing claims exactly-once display.
+- **Click:** Linux (freedesktop, `notify-send` actions) can open the local
+  page on that conversation. macOS (osascript) and Windows (the shell
+  notification icon) have no click callback in `internal/notify`: there the
+  alert is a banner only, an interim state that does not close the
+  click-to-chat release acceptance. That gap stays open and explicit until
+  a supported click route exists; proof per OS is a native run, not a
+  cross-compile.
 
 ## 9. Tests the core owns
 

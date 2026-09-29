@@ -68,7 +68,14 @@ type Envelope struct {
 	// with Fallback it goes to the agent's inbox instead.
 	Session  string `json:"session,omitempty"`
 	Fallback bool   `json:"fallback,omitempty"`
-	Sig      []byte `json:"sig,omitempty"`
+	// Version 2 only: the sender asks for the recipient's attention (a hint;
+	// the recipient's preferences decide), on the recipient's notification
+	// channel for the conversation (protocol.NotifyChannel). Both or
+	// neither; set only for recipients whose capabilities include
+	// protocol.CapNotify, since an older reader would refuse the signature.
+	Attn bool   `json:"attn,omitempty"`
+	Chan string `json:"chan,omitempty"`
+	Sig  []byte `json:"sig,omitempty"`
 }
 
 // Inner is the encrypted content.
@@ -242,6 +249,19 @@ func (e Envelope) signed() []byte {
 // in.V selects the version: Version2 for a conversation message, anything
 // else version 1. An agent-origin version 2 turn must carry an emotion.
 func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelope, error) {
+	return sealEnvelope(in, sender, recipient, "")
+}
+
+// SealAttention is Seal for a version 2 turn that asks for the recipient's
+// attention on its notification channel.
+func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
+	if in.V != Version2 || !protocol.ValidNotifyChannel(channel) {
+		return Envelope{}, errors.New("attention needs a version 2 message and a notification channel")
+	}
+	return sealEnvelope(in, sender, recipient, channel)
+}
+
+func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
 	if !validKind(in.Kind) {
 		return Envelope{}, fmt.Errorf("unknown message kind %q", in.Kind)
 	}
@@ -273,7 +293,7 @@ func Seal(in Inner, sender ed25519.PrivateKey, recipient age.Recipient) (Envelop
 		return Envelope{}, fmt.Errorf("message too large (%d bytes encrypted, max %d)", ct.Len(), MaxCiphertext)
 	}
 	env := Envelope{V: in.V, ID: in.ID, From: in.From, To: in.To, TS: in.TS, Kind: in.Kind, CT: ct.Bytes(),
-		Session: in.Session, Fallback: in.Fallback}
+		Session: in.Session, Fallback: in.Fallback, Attn: channel != "", Chan: channel}
 	for _, a := range in.Attachments {
 		env.Blobs = append(env.Blobs, a.Blob)
 	}
@@ -300,6 +320,9 @@ func (e Envelope) VerifySig(senderKey ed25519.PublicKey) error {
 	}
 	if e.Session != "" && !validID(e.Session) {
 		return errors.New("invalid session id")
+	}
+	if e.Attn != (e.Chan != "") || (e.Attn && (e.V != Version2 || !protocol.ValidNotifyChannel(e.Chan))) {
+		return errors.New("invalid attention hint")
 	}
 	seen := map[string]bool{}
 	for _, b := range e.Blobs {

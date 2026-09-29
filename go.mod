@@ -4,6 +4,7 @@ go 1.26.8
 
 require (
 	filippo.io/age v1.3.2
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.59.0
@@ -12,6 +13,7 @@ require (
 require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

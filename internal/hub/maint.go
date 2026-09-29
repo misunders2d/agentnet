@@ -195,7 +195,8 @@ func (m *Maintenance) Backup(w io.Writer) error {
 
 // backupEntry is the exact set of names a backup may contain, so nothing
 // can be written outside the restore directory on any platform.
-var backupEntry = regexp.MustCompile(`^(hub\.db|tls\.crt|tls\.key|` + regexp.QuoteMeta(BootstrapFile) + `|blobs/[0-9a-f]{32}\.(blob|part))$`)
+var backupEntry = regexp.MustCompile(`^(hub\.db|tls\.crt|tls\.key|` + regexp.QuoteMeta(pushKeyFile) + `|` + regexp.QuoteMeta(BootstrapFile) +
+	`|blobs/[0-9a-f]{32}\.(blob|part))$`)
 
 // RestoreSummary describes a restored data directory.
 type RestoreSummary struct {

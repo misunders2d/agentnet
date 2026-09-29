@@ -53,6 +53,11 @@ type Config struct {
 	// Web serves the browser messenger on this Hub's origin. The default is
 	// API-only. Browsers need publicly trusted HTTPS (normally PlatformTLS).
 	Web bool
+
+	// PushHosts are the host suffixes of the push services this Hub sends
+	// Web Push to (default protocol.DefaultPushHosts): the explicit list a
+	// device's subscription must match.
+	PushHosts []string
 }
 
 // Hub serves the AgentNet Hub API.
@@ -70,6 +75,8 @@ type Hub struct {
 	releaseGen int64
 	presence   presence
 	membersGen atomic.Int64 // changes with the member list (see members.go)
+	push       pushKeys     // VAPID key pair (push.go)
+	notifier   *notifier    // sends due notification alerts (notify.go)
 	waiters    waiters
 	stats      Stats
 	heartbeat  time.Duration
@@ -144,10 +151,15 @@ func Open(cfg Config) (*Hub, error) {
 	if err == nil {
 		err = h.prepareBlobs()
 	}
+	if err == nil {
+		h.push, err = loadOrCreatePushKey(cfg.DataDir)
+	}
 	if err != nil {
 		h.Close()
 		return nil, err
 	}
+	h.notifier = newNotifier(h)
+	h.notifier.send = webPusher(h.push, cfg.PublicURL, newPushClient())
 	return h, nil
 }
 
@@ -221,6 +233,10 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 		ErrorLog:          log.New(logWriter{h.cfg.Logf}, "", 0),
 	}
 	defer ln.Close()
+	notifyCtx, stopNotify := context.WithCancel(ctx)
+	notifyDone := make(chan struct{})
+	go func() { defer close(notifyDone); h.notifier.run(notifyCtx) }()
+	defer func() { stopNotify(); <-notifyDone }()
 	errc := make(chan error, 1)
 	go func() {
 		if h.cfg.PlatformTLS {

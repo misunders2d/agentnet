@@ -119,7 +119,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // this installation's person.
 func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 	if slices.Contains(feats, protocol.FeatureCaps) && a.session != "" {
-		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: []string{protocol.CapEnv2}, TS: time.Now().Unix()}
+		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: []string{protocol.CapEnv2, protocol.CapNotify}, TS: time.Now().Unix()}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
 			return err
@@ -290,26 +290,45 @@ func (a *Agent) observePerson(address string, blob json.RawMessage) {
 
 // convSupport reports whether a conversation message can go to the device
 // at address now: the relay carries version 2 and the device's signed
-// capabilities, for every session the relay lists, include it.
-func (a *Agent) convSupport(ctx context.Context, address string, key identity.Public, feats []string) (bool, string) {
+// capabilities, for every session the relay lists, include it. notify
+// reports that the attention hint may go too: the relay takes it and every
+// listed session reads it.
+func (a *Agent) convSupport(ctx context.Context, address string, key identity.Public, feats []string) (ok bool, why string, notify bool) {
 	if !slices.Contains(feats, protocol.FeatureEnv2) || !slices.Contains(feats, protocol.FeatureCaps) {
-		return false, "your Hub cannot carry conversations (it needs an update)"
+		return false, "your Hub cannot carry conversations (it needs an update)", false
 	}
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), false
 	}
 	var prof protocol.Profile
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
-		return false, "cannot ask the Hub what " + address + " can read: " + err.Error()
+		return false, "cannot ask the Hub what " + address + " can read: " + err.Error(), false
 	}
 	if len(prof.Person) > 0 {
 		a.observePerson(address, prof.Person) // fresh evidence, checked before anything is sent
 	}
 	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) {
-		return false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)"
+		return false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)", false
 	}
-	return true, ""
+	return true, "", slices.Contains(feats, protocol.FeatureNotify) && prof.Supports(address, key.SignKey, protocol.CapNotify)
+}
+
+// asksAttention reports whether in is a turn meant for its recipient's
+// attention (docs/revival/NOTIFY.md §1): a message, question or task a
+// person typed, or an invited agent's answer or result. Events, excerpts,
+// replicas and everything else stay quiet.
+func asksAttention(in envelope.Inner) bool {
+	if in.V != envelope.Version2 || in.Sub != "" || in.Replica {
+		return false
+	}
+	switch {
+	case in.Origin == envelope.OriginUI:
+		return in.Kind == envelope.KindMessage || in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask
+	case envelope.AgentOrigin(in.Origin):
+		return in.PID != "" && (in.Kind == envelope.KindAnswer || in.Kind == envelope.KindResult)
+	}
+	return false
 }
 
 // CreateDM starts a new two-person conversation with the person that the
@@ -342,7 +361,7 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 	if them.info.Person == me.info.Person {
 		return "", errors.New("that is your own person")
 	}
-	if ok, why := a.convSupport(ctx, address, key, feats); !ok {
+	if ok, why, _ := a.convSupport(ctx, address, key, feats); !ok {
 		return "", errors.New(why)
 	}
 	if !a.personSendable(address, them.info.Roster) { // the profile just read may have frozen it
@@ -467,11 +486,16 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		return ConvSent{}, err
 	}
 	feats, ferr := a.relayFeatures(ctx)
-	supported, why := false, ""
+	supported, why, notify := false, "", false
 	if ferr != nil {
 		why = "cannot reach the Hub: " + ferr.Error()
 	} else {
-		supported, why = a.convSupport(ctx, dev.Address, key, feats)
+		supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
+	}
+	if notify && asksAttention(in) { // sealed again, now with the recipient's channel
+		if env, err = envelope.SealAttention(in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint)); err != nil {
+			return ConvSent{}, err
+		}
 	}
 	if now, _, err := a.store.personByID(peerID); err != nil {
 		return ConvSent{}, err
@@ -528,7 +552,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		if !seen {
 			key, _, found, err := a.store.peer(to)
 			if err == nil && found {
-				ok, _ = a.convSupport(ctx, to, key, feats)
+				ok, _, _ = a.convSupport(ctx, to, key, feats)
 			}
 			// Support alone is not enough: the profile just read may have
 			// frozen the person, and a frozen person gets nothing.
@@ -602,6 +626,10 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	root, err := protocol.ParseConvRoot(in.Root)
 	if err != nil || root.ID() != in.Conv {
 		return hold(reasonInvalid, "its conversation root does not match the conversation")
+	}
+	if env.Attn && env.Chan != protocol.NotifyChannel(in.Conv, a.id.Public(a.Address).Fingerprint()) {
+		// Only a hint for the Hub's alerts; nothing here routes by it.
+		a.Logf("conversation message %s from %s: its notification channel is not this conversation's", env.ID, env.From)
 	}
 	me, ok, err := a.store.selfPerson()
 	if err != nil {

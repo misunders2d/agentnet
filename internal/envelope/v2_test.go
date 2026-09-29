@@ -1,9 +1,12 @@
 package envelope
 
 import (
+	"encoding/hex"
+
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"strings"
 	"testing"
 	"time"
@@ -150,5 +153,77 @@ func TestAgentTurnEmotion(t *testing.T) {
 	human := v2Inner(alice, bob, KindMessage)
 	if _, err := Seal(human, alice.id.Sign, r); err != nil {
 		t.Fatalf("a person's turn needs no emotion: %v", err)
+	}
+}
+
+// The attention hint and channel are version 2 outer fields covered by the
+// signature: both or neither, a channel's shape, never on version 1; an
+// envelope without them signs exactly as before.
+func TestAttentionSigned(t *testing.T) {
+	alice, bob := newParty(t, "alice/a"), newParty(t, "bob/b")
+	r, _ := bob.pub.Recipient()
+	ch := protocol.NotifyChannel(testConv, bob.pub.Fingerprint())
+	env, err := SealAttention(v2Inner(alice, bob, KindMessage), alice.id.Sign, r, ch)
+	if err != nil || !env.Attn || env.Chan != ch {
+		t.Fatalf("SealAttention = %+v, %v", env, err)
+	}
+	if err := env.VerifySig(alice.pub.SignKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(env, bob.id, bob.pub.Address, alice.pub); err != nil {
+		t.Fatal(err)
+	}
+	for name, mut := range map[string]func(*Envelope){
+		"hint removed":    func(e *Envelope) { e.Attn, e.Chan = false, "" },
+		"channel changed": func(e *Envelope) { e.Chan = protocol.NotifyChannel(testConv, alice.pub.Fingerprint()) },
+	} {
+		e := env
+		mut(&e)
+		if e.VerifySig(alice.pub.SignKey) == nil {
+			t.Errorf("%s: still verifies", name)
+		}
+	}
+	for name, e := range map[string]Envelope{
+		"attn without channel": {Attn: true},
+		"channel without attn": {Chan: ch},
+		"bad channel":          {Attn: true, Chan: "x"},
+	} {
+		base := env
+		base.Attn, base.Chan = e.Attn, e.Chan
+		base.Sig = ed25519.Sign(alice.id.Sign, base.signed())
+		if base.VerifySig(alice.pub.SignKey) == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	v1 := seal(t, alice, bob, "old")
+	v1.Attn, v1.Chan = true, ch
+	v1.Sig = ed25519.Sign(alice.id.Sign, v1.signed())
+	if v1.VerifySig(alice.pub.SignKey) == nil {
+		t.Fatal("attention on a version 1 envelope accepted")
+	}
+	if _, err := SealAttention(Inner{V: Version, ID: "m", From: "alice/a", To: "bob/b", Kind: KindMessage}, alice.id.Sign, r, ch); err == nil {
+		t.Fatal("SealAttention made a version 1 envelope")
+	}
+	plain, _ := Seal(v2Inner(alice, bob, KindMessage), alice.id.Sign, r)
+	if strings.Contains(string(plain.signed()), "attn") || strings.Contains(string(plain.signed()), "chan") {
+		t.Fatal("an envelope without attention signs new fields")
+	}
+}
+
+// Canonical bytes and signature of an envelope with attention, for other
+// implementations (the browser device): key from an all-zero seed.
+func TestAttentionVector(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	fp := "01234567-89abcdef-01234567-89abcdef"
+	env := Envelope{V: Version2, ID: testLID, From: "alice/a", To: "bob/b", TS: 1790000000, Kind: KindMessage, CT: []byte("ciphertext"),
+		Attn: true, Chan: protocol.NotifyChannel(testConv, fp)}
+	env.Sig = ed25519.Sign(key, env.signed())
+	want := "agentnet-envelope-v2\n" + `{"v":2,"id":"00112233445566778899aabbccddeeff","from":"alice/a","to":"bob/b","ts":1790000000,` +
+		`"kind":"message","ct":"Y2lwaGVydGV4dA==","attn":true,"chan":"CRTkM8HtV3rVNaVsnOnalw"}`
+	if got := string(env.signed()); got != want {
+		t.Fatalf("canonical bytes:\n got %s\nwant %s", got, want)
+	}
+	if hex.EncodeToString(env.Sig) != "71e8952944d3efcadea155cf5a53e05fd50b7f19c31895fa2f3918f1fc6ada109b77c1ba0e3aa23ce34c70cba00359db052e4eab7324b6372315d75e009d3705" {
+		t.Fatalf("signature %x", env.Sig)
 	}
 }

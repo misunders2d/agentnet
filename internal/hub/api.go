@@ -43,6 +43,12 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
+	mux.HandleFunc("GET /v1/notify", h.handleNotifyInfo)
+	mux.HandleFunc("GET /v1/notify/prefs", h.handleNotifyPrefsGet)
+	mux.HandleFunc("PUT /v1/notify/prefs", h.handleNotifyPrefsPut)
+	mux.HandleFunc("PUT /v1/notify/subscription", h.handlePushSubscribe)
+	mux.HandleFunc("DELETE /v1/notify/subscription", h.handlePushUnsubscribe)
+	mux.HandleFunc("POST /v1/notify/seen", h.handleNotifySeen)
 	if h.cfg.Web {
 		mux.Handle("/", static.Relay())
 	}
@@ -205,7 +211,7 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Store a canonical re-encoding so identical retries compare equal.
 	canonical, _ := json.Marshal(env)
-	state, err := h.store.putMessage(env, canonical)
+	state, err := h.store.putMessage(env, canonical, sender.Public.Fingerprint(), time.Now())
 	if errors.Is(err, errIDConflict) || errors.Is(err, errBlobNotReady) {
 		writeError(w, http.StatusConflict, "", err.Error())
 		return
@@ -216,6 +222,9 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	h.stats.Messages.Add(1)
 	h.streams.notify(env.To)
+	if env.Attn {
+		h.notifier.wake()
+	}
 	writeJSON(w, http.StatusAccepted, protocol.Receipt{ID: env.ID, State: state})
 }
 

@@ -78,6 +78,39 @@ CREATE TABLE caps(
   record TEXT NOT NULL,
   ts INTEGER NOT NULL,
   PRIMARY KEY(address, session));
+`, `
+CREATE TABLE notify_prefs(
+  address TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL);
+CREATE TABLE notify_senders(
+  address TEXT NOT NULL,
+  sender TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  PRIMARY KEY(address, sender));
+CREATE TABLE notify_mutes(
+  address TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  PRIMARY KEY(address, channel));
+CREATE TABLE push_subs(
+  address TEXT PRIMARY KEY,
+  sub_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL);
+CREATE TABLE notify_pending(
+  address TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  sender TEXT NOT NULL,
+  gen INTEGER NOT NULL,
+  count INTEGER NOT NULL,
+  last_msg TEXT NOT NULL,
+  due_ms INTEGER NOT NULL,
+  expires_ms INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(address, channel, sender));
+CREATE INDEX notify_pending_due ON notify_pending(due_ms);
 `}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
@@ -361,14 +394,22 @@ func (s *store) enroll(secret string, pub identity.Public, label string) (bootst
 }
 
 func (s *store) revoke(address string) error {
-	res, err := s.db.Exec(`UPDATE agents SET revoked_at = ? WHERE address = ? AND revoked_at IS NULL`, time.Now().Unix(), address)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE agents SET revoked_at = ? WHERE address = ? AND revoked_at IS NULL`, time.Now().Unix(), address)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errNotFound
 	}
-	return nil
+	if err := dropNotify(tx, address); err != nil { // its notification state goes with it
+		return err
+	}
+	return tx.Commit()
 }
 
 // useNonce records a request nonce and reports false if it was already seen.
@@ -389,7 +430,7 @@ func (s *store) useNonce(agent, nonce string, now time.Time) (bool, error) {
 // complete uploads by the sender for the same recipient with the signed size
 // and digest. A retry with identical bytes returns the existing state; reuse
 // of the id for other content is a conflict.
-func (s *store) putMessage(env envelope.Envelope, canonical []byte) (string, error) {
+func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP string, now time.Time) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
@@ -419,8 +460,13 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte) (string, err
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?)`,
-		env.ID, env.From, env.To, canonical, protocol.StateCustody, time.Now().Unix(), env.Session, env.Fallback); err != nil {
+		env.ID, env.From, env.To, canonical, protocol.StateCustody, now.Unix(), env.Session, env.Fallback); err != nil {
 		return "", err
+	}
+	if env.Attn { // stored with the message, or not at all (notify.go)
+		if err := enqueueAttention(tx, env, senderFP, now); err != nil {
+			return "", err
+		}
 	}
 	return protocol.StateCustody, tx.Commit()
 }
